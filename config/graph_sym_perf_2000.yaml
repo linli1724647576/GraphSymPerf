@@ -1,0 +1,87 @@
+# GraphSymPerf 2000-query GDsmith mining configuration.
+#
+# This keeps the default v1 thresholds but raises the GDsmith process timeout
+# because 2000 real Neo4j queries can exceed the 500-case default budget.
+
+project:
+  name: GraphSymPerf
+  stage: v1-2000
+
+paths:
+  artifact_dir: logs/{run_id}
+
+systems:
+  targets:
+    - neo4j
+    - memgraph
+    - kuzu
+  env:
+    neo4j:
+      required:
+        - GRAPHSYMPERF_NEO4J_URI
+        - GRAPHSYMPERF_NEO4J_USER
+        - GRAPHSYMPERF_NEO4J_PASSWORD
+      optional:
+        database: GRAPHSYMPERF_NEO4J_DATABASE
+    memgraph:
+      required:
+        - GRAPHSYMPERF_MEMGRAPH_HOST
+        - GRAPHSYMPERF_MEMGRAPH_PORT
+      optional:
+        username: GRAPHSYMPERF_MEMGRAPH_USER
+        password: GRAPHSYMPERF_MEMGRAPH_PASSWORD
+    kuzu:
+      required:
+        - GRAPHSYMPERF_KUZU_DATABASE_PATH
+      optional: {}
+  settings:
+    neo4j: {}
+    memgraph: {}
+    kuzu:
+      require_dedicated_path: true
+
+query_generation:
+  source: gdsmith
+  max_cases: 2000
+  result_limit: 100
+  include_variable_length: true
+  gdsmith:
+    jar_env: GRAPHSYMPERF_GDSMITH_JAR
+    algorithm: compared3
+    num_tries: 1
+    num_queries: 2000
+    random_seed: 20260522
+    allow_destructive_env: GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE
+    timeout_seconds: 1800
+
+equivalence:
+  max_result_rows: 1000
+  timeout_seconds: 30
+
+oracle:
+  enable_structural_diff: true
+  enable_profile_metrics: true
+
+transforms:
+  enabled_rules:
+    - node_order_symmetry
+    - edge_notation_symmetry
+    - predicate_order_symmetry
+    - pattern_order_symmetry
+    - path_endpoint_symmetry
+    - label_order_symmetry
+    - property_map_order_symmetry
+    - alpha_renaming_symmetry
+    - exploratory_pattern_order_symmetry
+    - exploratory_predicate_order_symmetry
+    - exploratory_optional_match_order_symmetry
+  gdsmith_safe_only: true
+
+confirmation:
+  warmup: 1
+  repeats: 5
+  timeout_seconds: 30
+  min_latency_ratio: 10.0
+  min_latency_delta_ms: 50.0
+  min_db_hits_ratio: 5.0
+  min_rows_ratio: 5.0
