@@ -53,3 +53,10 @@ The GDsmith-backed local replay smoke manifest is:
 graph-sym-perf doctor --config config/experiments/local_multidb_gdsmith_smoke.yaml --strict
 graph-sym-perf experiment run --manifest config/experiments/local_multidb_gdsmith_smoke.yaml --shard 0 --num-shards 1
 ```
+
+Known-issue replay and report export are available from the main CLI:
+
+```bash
+graph-sym-perf replay --all-known --config config/experiments/replay_known.yaml --dry-run
+graph-sym-perf report --run-dir runs/main_effectiveness_2026_01
+```

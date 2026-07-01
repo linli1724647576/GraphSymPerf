@@ -167,8 +167,8 @@ graph-sym-perf validate \
 
 Notes:
 
-- Current `source.kind: gdsmith` experiment manifests support `neo4j` targets only, matching the existing GDsmith integration.
-- `config/experiments/local_multidb_gdsmith_smoke.yaml` lifts this to five local targets by using `neo4j` as the GDsmith generator and replaying the same graph plus accepted read queries on `memgraph`, `falkordb`, `arcadedb`, and `apache_age`.
+- Direct GDsmith generation still depends on one chosen generator backend, configured through `generator_target` (default `neo4j`).
+- `config/experiments/local_multidb_gdsmith_smoke.yaml` runs a five-database replay experiment by using `neo4j` as the GDsmith generator and replaying the same graph plus accepted read queries on `memgraph`, `falkordb`, `arcadedb`, and `apache_age`.
 - For local multi-database validation, use `config/experiments/local_multidb_smoke.yaml`, which runs the deterministic mini-LDBC loader instead of GDsmith.
 - `config/experiments/replay_known.yaml` is a scaffold. Populate `config/experiments/replay_known_cases.jsonl` with real replayable `QueryCase` records before running known-issue replay.
 - Shards currently execute serially within one process; large-scale execution is expected to come from launching many shards in parallel on the server.

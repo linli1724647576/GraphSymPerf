@@ -6,13 +6,24 @@ output_root: runs/calibration_2026_01
 systems:
   targets:
     - neo4j
+    - memgraph
+    - falkordb
+    - arcadedb
+    - apache_age
 
 source:
-  kind: gdsmith
+  enabled:
+    - gdsmith
+    - ldbc_templates
+  generator_target: neo4j
   base_run_config: config/graph_sym_perf.yaml
-  max_cases: 200
   gdsmith:
+    max_seed_queries_per_shard: 200
     num_queries: 200
+    num_tries: 1
+  ldbc_templates:
+    enabled: true
+    max_seed_queries_per_shard: 50
 
 transforms:
   enabled_families:

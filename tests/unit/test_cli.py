@@ -74,3 +74,36 @@ def test_cli_experiment_run_flags_are_forwarded(monkeypatch) -> None:
     assert captured["manifest_path"] == "config/experiments/main_effectiveness.yaml"
     assert captured["shard"] == 1
     assert captured["num_shards"] == 16
+
+
+def test_cli_replay_dry_run(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_known_replay(config_path, *, case_ids=(), dry_run=False):
+        captured["config_path"] = config_path
+        captured["case_ids"] = case_ids
+        captured["dry_run"] = dry_run
+        return 0, {"case_count": 0}
+
+    monkeypatch.setattr("graph_sym_perf.cli.__main__.run_known_replay", fake_run_known_replay)
+
+    exit_code = main(["replay", "--all-known", "--config", "config/experiments/replay_known.yaml", "--dry-run"])
+
+    assert exit_code == 0
+    assert captured["config_path"] == "config/experiments/replay_known.yaml"
+    assert captured["dry_run"] is True
+
+
+def test_cli_report_exports(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_export_run_report(run_dir):
+        captured["run_dir"] = run_dir
+        return {"run_dir": run_dir}
+
+    monkeypatch.setattr("graph_sym_perf.cli.__main__.export_run_report", fake_export_run_report)
+
+    exit_code = main(["report", "--run-dir", "runs/main_effectiveness_2026_01"])
+
+    assert exit_code == 0
+    assert captured["run_dir"] == "runs/main_effectiveness_2026_01"

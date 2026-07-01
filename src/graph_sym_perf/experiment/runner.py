@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
+import tempfile
 from typing import Any, Mapping
+import yaml
 
 from graph_sym_perf.adapters import create_adapter
 from graph_sym_perf.app.gdsmith_mining import _write_gdsmith_artifacts
@@ -86,7 +88,13 @@ def run_experiment(
                 adapter.load_mini_ldbc(graph)
 
         source_payload = _query_cases_from_source(manifest, run_config, writer, env)
-        if manifest.source_kind == "gdsmith" and source_payload.graph_statements:
+        if "ldbc" in manifest.source_modes:
+            graph = generate_mini_ldbc(run_config.dataset)
+            writer.write_json("synthetic_graph_spec.json", graph)
+            for adapter in adapters:
+                adapter.ensure_schema()
+                adapter.load_mini_ldbc(graph)
+        if "gdsmith" in manifest.source_modes and source_payload.graph_statements:
             for adapter in adapters:
                 if adapter.target is source_payload.generator_target:
                     continue
@@ -216,15 +224,38 @@ def run_experiment(
 
 
 def _query_cases_from_source(manifest, run_config, writer: ArtifactWriter, env: Mapping[str, str]) -> SourcePayload:
-    kind = manifest.source_kind
-    if kind == "ldbc":
-        return SourcePayload(query_cases=generate_query_cases(run_config.dataset, run_config.query_generation))
-    if kind == "cases_jsonl":
+    modes = manifest.source_modes
+    if modes == ("ldbc",):
+        return SourcePayload(query_cases=generate_query_cases(run_config.dataset, _ldbc_query_generation(run_config, manifest)))
+    if modes == ("cases_jsonl",):
         source_path = _resolve_source_path(manifest, str(manifest.source.get("cases_path") or ""))
         return SourcePayload(query_cases=_load_query_cases_jsonl(source_path))
-    if kind != "gdsmith":
-        raise ConfigError(f"unsupported source.kind: {kind}")
-    generator = TargetSystem.parse(str(manifest.source.get("generator_target", "neo4j")))
+    payloads: list[QueryCase] = []
+    graph_statements: tuple[str, ...] = ()
+    generator: TargetSystem | None = None
+    if "gdsmith" in modes:
+        generator = TargetSystem.parse(str(manifest.source.get("generator_target", "neo4j")))
+        gdsmith_payload = _gdsmith_source_payload(manifest, run_config, writer, env, generator)
+        payloads.extend(gdsmith_payload.query_cases)
+        graph_statements = gdsmith_payload.graph_statements
+    if "ldbc" in modes:
+        payloads.extend(generate_query_cases(run_config.dataset, _ldbc_query_generation(run_config, manifest)))
+    if not payloads:
+        raise ConfigError(f"unsupported source.kind/source.enabled: {modes}")
+    return SourcePayload(
+        query_cases=tuple(payloads),
+        graph_statements=graph_statements,
+        generator_target=generator,
+    )
+
+
+def _gdsmith_source_payload(
+    manifest,
+    run_config,
+    writer: ArtifactWriter,
+    env: Mapping[str, str],
+    generator: TargetSystem,
+) -> SourcePayload:
     gdsmith_status = check_gdsmith_tooling(run_config.query_generation.gdsmith, env)
     writer.write_json("gdsmith_tool_status.json", gdsmith_status)
     if not gdsmith_status.ready:
@@ -251,10 +282,21 @@ def _query_cases_from_source(manifest, run_config, writer: ArtifactWriter, env: 
     )
 
 
+def _ldbc_query_generation(run_config, manifest) -> object:
+    ldbc_mapping = manifest.source.get("ldbc_templates") or {}
+    if not isinstance(ldbc_mapping, Mapping):
+        ldbc_mapping = {}
+    max_cases = int(ldbc_mapping.get("max_seed_queries_per_shard", run_config.query_generation.max_cases))
+    result_limit = int(ldbc_mapping.get("result_limit", run_config.query_generation.result_limit))
+    return replace(run_config.query_generation, max_cases=max_cases, result_limit=result_limit)
+
+
 def _resolve_source_path(manifest, raw_path: str) -> Path:
     path = Path(raw_path)
     if path.is_absolute():
         return path
+    if path.exists():
+        return path.resolve()
     manifest_path = Path(str(manifest.metadata.get("manifest_path") or "."))
     return manifest_path.parent / path
 
@@ -285,6 +327,123 @@ def _load_query_cases_jsonl(path: Path) -> tuple[QueryCase, ...]:
         except KeyError as exc:
             raise ConfigError(f"invalid cases_jsonl record at {path}:{line_number}: missing {exc}") from exc
     return tuple(cases)
+
+
+def load_known_replay_cases(
+    manifest_path: str | Path,
+    *,
+    case_ids: tuple[str, ...] = (),
+) -> tuple[QueryCase, ...]:
+    manifest = load_experiment_manifest(manifest_path)
+    if "cases_jsonl" not in manifest.source_modes:
+        raise ConfigError("replay manifest must use source.kind = cases_jsonl")
+    source_path = _resolve_source_path(manifest, str(manifest.source.get("cases_path") or ""))
+    cases = _load_query_cases_jsonl(source_path)
+    if not case_ids:
+        return cases
+    wanted = set(case_ids)
+    return tuple(case for case in cases if case.case_id in wanted)
+
+
+def run_known_replay(
+    manifest_path: str | Path,
+    *,
+    case_ids: tuple[str, ...] = (),
+    dry_run: bool = False,
+) -> tuple[int, Mapping[str, Any]]:
+    cases = load_known_replay_cases(manifest_path, case_ids=case_ids)
+    payload = {
+        "manifest": str(Path(manifest_path)),
+        "case_count": len(cases),
+        "case_ids": [case.case_id for case in cases],
+        "dry_run": dry_run,
+    }
+    if dry_run:
+        return 0, payload
+
+    manifest = load_experiment_manifest(manifest_path)
+    source_path = _resolve_source_path(manifest, str(manifest.source.get("cases_path") or ""))
+    with tempfile.TemporaryDirectory(prefix="graphsymperf-replay-") as tmp_dir:
+        tmp_cases = Path(tmp_dir) / source_path.name
+        tmp_cases.write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "case_id": case.case_id,
+                        "template_name": case.template_name,
+                        "query": case.query,
+                        "parameters": case.parameters,
+                        "base_predicate": case.base_predicate,
+                        "safe_expression": case.safe_expression,
+                        "source": case.source,
+                        "generator_case_id": case.generator_case_id,
+                        "raw_query": case.raw_query,
+                        "skip_reason": case.skip_reason,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+                for case in cases
+            ),
+            encoding="utf-8",
+        )
+        patched = dict(manifest.source)
+        patched["cases_path"] = str(tmp_cases)
+        temp_manifest = Path(tmp_dir) / "replay_manifest.yaml"
+        temp_manifest.write_text(
+            yaml.safe_dump(
+                {
+                    "experiment_id": manifest.experiment_id,
+                    "description": manifest.description,
+                    "seed": manifest.seed,
+                    "output_root": str(manifest.output_root),
+                    "systems": {"targets": [system.target.value for system in manifest.systems]},
+                    "source": patched,
+                    "transforms": dict(manifest.transforms),
+                    "coverage": {
+                        "enabled": manifest.coverage.enabled,
+                        "include_transformation_context": manifest.coverage.include_transformation_context,
+                        "write_per_case_evidence": manifest.coverage.write_per_case_evidence,
+                        "ratio_buckets": list(manifest.coverage.ratio_buckets),
+                        "novelty_weights": dict(manifest.coverage.novelty_weights),
+                    },
+                    "feedback": {
+                        "enabled": manifest.feedback.enabled,
+                        "exploration_rate": manifest.feedback.exploration_rate,
+                        "seed": manifest.feedback.seed,
+                        "min_rules_per_case": manifest.feedback.min_rules_per_case,
+                        "max_rules_per_case": manifest.feedback.max_rules_per_case,
+                        "reward_weights": dict(manifest.feedback.reward_weights),
+                    },
+                    "oracle": dict(manifest.oracle),
+                    "clustering": {
+                        "enabled": manifest.clustering.enabled,
+                        "write_signatures": manifest.clustering.write_signatures,
+                        "representative_policy": manifest.clustering.representative_policy,
+                        "include_plan_only": manifest.clustering.include_plan_only,
+                        "include_exploratory": manifest.clustering.include_exploratory,
+                    },
+                    "reducer": dict(manifest.reducer),
+                    "execution": {
+                        "shards": manifest.execution.shards,
+                        "workers_per_shard": manifest.execution.workers_per_shard,
+                        "cases_per_shard": manifest.execution.cases_per_shard,
+                        "per_query_timeout_seconds": manifest.execution.per_query_timeout_seconds,
+                        "per_case_timeout_seconds": manifest.execution.per_case_timeout_seconds,
+                        "resume": manifest.execution.resume,
+                        "fail_fast": manifest.execution.fail_fast,
+                        "isolate_system_per_worker": manifest.execution.isolate_system_per_worker,
+                        "write_every_n_cases": manifest.execution.write_every_n_cases,
+                    },
+                    "artifacts": dict(manifest.artifacts),
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        exit_code = run_experiment(temp_manifest, shard=0, num_shards=1)
+    return exit_code, payload
 
 
 def _update_checkpoint(checkpoint: CheckpointState, record, local_index: int, feedback_state, pmc_state, manifest, shard_spec) -> None:

@@ -65,7 +65,22 @@ class ExperimentManifest:
 
     @property
     def source_kind(self) -> str:
+        if self.source.get("enabled") is not None:
+            return "multi"
         return str(self.source.get("kind", "gdsmith"))
+
+    @property
+    def source_modes(self) -> tuple[str, ...]:
+        enabled = self.source.get("enabled")
+        if enabled is None:
+            return (self.source_kind,)
+        if not isinstance(enabled, list | tuple) or not enabled:
+            raise ConfigError("source.enabled must be a non-empty list")
+        normalized = []
+        for item in enabled:
+            value = str(item)
+            normalized.append("ldbc" if value == "ldbc_templates" else value)
+        return tuple(normalized)
 
     @property
     def base_run_config_path(self) -> Path:
@@ -76,6 +91,13 @@ class ExperimentManifest:
         explicit = self.source.get("max_cases")
         if explicit is not None:
             return max(0, int(explicit))
+        if self.source.get("enabled") is not None:
+            gdsmith_mapping = _mapping(self.source.get("gdsmith"), "source.gdsmith")
+            ldbc_mapping = _mapping(self.source.get("ldbc_templates"), "source.ldbc_templates")
+            return (
+                max(0, int(gdsmith_mapping.get("max_seed_queries_per_shard", 0)))
+                + max(0, int(ldbc_mapping.get("max_seed_queries_per_shard", 0)))
+            )
         shards = num_shards if num_shards is not None else self.execution.shards
         return max(0, int(self.execution.cases_per_shard) * max(1, int(shards)))
 
@@ -169,8 +191,9 @@ def _validate_manifest(manifest: ExperimentManifest) -> None:
         raise ConfigError("execution.cases_per_shard must be greater than 0")
     if not manifest.systems:
         raise ConfigError("systems.targets must contain at least one target")
-    if manifest.source_kind not in {"gdsmith", "ldbc", "cases_jsonl"}:
-        raise ConfigError("source.kind must be one of: gdsmith, ldbc, cases_jsonl")
+    valid_modes = {"gdsmith", "ldbc", "cases_jsonl"}
+    if any(mode not in valid_modes for mode in manifest.source_modes):
+        raise ConfigError("source.kind/source.enabled must use only: gdsmith, ldbc_templates, cases_jsonl")
 
 
 def _load_manifest_systems(raw: Any) -> tuple[SystemConfig, ...]:

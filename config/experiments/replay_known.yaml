@@ -6,6 +6,10 @@ output_root: runs/replay_known_2026_01
 systems:
   targets:
     - neo4j
+    - memgraph
+    - falkordb
+    - arcadedb
+    - apache_age
 
 source:
   kind: cases_jsonl

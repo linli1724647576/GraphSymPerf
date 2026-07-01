@@ -7,7 +7,16 @@ import argparse
 from graph_sym_perf.app import EXIT_CONFIG_ERROR, run_gdsmith_mining, run_ldbc_mining
 from graph_sym_perf.cluster import write_clustered_summary
 from graph_sym_perf.core import ConfigError
-from graph_sym_perf.experiment import aggregate_run_root, run_doctor, run_experiment, run_triage, validate_triage
+from graph_sym_perf.experiment import (
+    aggregate_run_root,
+    export_run_report,
+    load_known_replay_cases,
+    run_doctor,
+    run_experiment,
+    run_known_replay,
+    run_triage,
+    validate_triage,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     mine.add_argument("--run-id", default=None)
     mine.add_argument("--seed", type=int, default=None)
     mine.add_argument("--max-rules-per-case", type=int, default=None)
+    mine.add_argument("--generator-target", default="neo4j")
     mine.add_argument(
         "--transform-family",
         choices=("auto", "bool_redundancy", "symmetry"),
@@ -72,6 +82,15 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("--triage", required=True)
     validate.add_argument("--runtime-repeats", type=int, default=15)
     validate.add_argument("--reduce", action="store_true")
+
+    replay = subparsers.add_parser("replay", help="Replay known issue cases from a manifest.")
+    replay.add_argument("--config", required=True)
+    replay.add_argument("--all-known", action="store_true")
+    replay.add_argument("--case", dest="case_ids", action="append", default=[])
+    replay.add_argument("--dry-run", action="store_true")
+
+    report = subparsers.add_parser("report", help="Export a reader-facing report from an aggregated run dir.")
+    report.add_argument("--run-dir", required=True)
     args = parser.parse_args(argv)
 
     if args.command == "run-ldbc-mining":
@@ -100,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
                 feedback_enabled=args.feedback_enabled,
                 max_rules_per_case=args.max_rules_per_case,
                 transform_family=args.transform_family,
+                generator_target=args.generator_target,
             )
         except ConfigError as exc:
             print(f"configuration error: {exc}")
@@ -145,10 +165,28 @@ def main(argv: list[str] | None = None) -> int:
             f"{payload['validated']} total, {payload['passed']} equivalence-passing"
         )
         return 0
+    if args.command == "replay":
+        try:
+            case_ids = tuple(args.case_ids or ())
+            if not args.all_known and not case_ids:
+                raise ConfigError("replay requires --all-known or at least one --case")
+            exit_code, payload = run_known_replay(args.config, case_ids=case_ids, dry_run=args.dry_run)
+            if args.dry_run:
+                print(f"replay dry-run enumerated {payload['case_count']} cases")
+            else:
+                print(f"replay executed {payload['case_count']} cases")
+            return exit_code
+        except ConfigError as exc:
+            print(f"configuration error: {exc}")
+            return EXIT_CONFIG_ERROR
+    if args.command == "report":
+        payload = export_run_report(args.run_dir)
+        print(f"exported report: {payload['run_dir']}/report.md")
+        return 0
 
     print(
         "GraphSymPerf is installed. Use: "
-        "graph-sym-perf run-ldbc-mining | run-gdsmith-mining | cluster | doctor | experiment | triage | validate"
+        "graph-sym-perf run-ldbc-mining | run-gdsmith-mining | cluster | doctor | experiment | triage | validate | replay | report"
     )
     return 0
 
