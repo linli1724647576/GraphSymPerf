@@ -1,4 +1,11 @@
 # **GraphSymPerf: Detecting Symmetry-Violation Performance Bugs in Graph DBMSs via Query Symmetry Testing**
+GraphSymPerf: Finding Graph Query Optimizer Performance Anomalies via Semantics-Preserving Boolean Transformations
+
+
+or
+
+
+Finding Performance Anomalies in Graph Database Engines via Semantics-Preserving Boolean Transformations
 
 ## 1. Introduction（引言）
 
@@ -838,3 +845,24 @@ Q4: 18 s
 ```
 
 此时 `Q4` 是明显异常点。
+
+------
+
+## 9. Implementation Note（实现注记）
+
+当前工程实现已将研究主线进一步结构化为三类产物：
+
+1. **Plan Metamorphic Coverage（PMC）**
+   对每个结果等价的 query pair 提取 `CoverageUnit`，覆盖 `structural`、`operator_delta`、`access_delta`、`predicate_delta`、`barrier_delta`、`cardinality_delta` 与 `work_delta` 等维度，并在 run 级维护 `pmc_summary.json` / `pmc_evidence.jsonl`。
+
+2. **Feedback-guided Equivalent Transformation Selection**
+   对 `bool_redundancy` 与 `symmetry` 两个变换族的 rule 维护 `RuleStats`，使用可解释 reward 组合 `equivalence_passed`、`candidate_count`、`pmc_new_units`、`timeouts` 等信号，输出 `feedback_summary.json` 与 `rule_stats.json`。当 `feedback.enabled=false` 时保持近似静态顺序；启用后则优先选择高 reward、高 novelty 的 rule。
+
+3. **Candidate Classification, Signature, Clustering and Deduplication**
+   对候选样本生成 root-cause label、plan signature、metric signature 与 PMC signature，并据此形成 `issue_family_key`、`unique_issue_key` 与 `duplicate_key`。运行结束后输出 `candidate_signatures.jsonl`、`issue_families.json`、`unique_issues.json`、`duplicate_groups.json` 与 `clustered_summary.json`。
+
+这些实现使论文中的三个问题可以直接落到 artifact 上回答：
+
+- 哪些 transform rule 真正贡献了新的 plan-level coverage；
+- 哪些候选只是重复触发同一个根因；
+- 哪些候选具有更高支持级别，应优先进入人工复核或 issue 报告。
