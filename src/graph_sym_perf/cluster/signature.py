@@ -98,6 +98,9 @@ def build_candidate_signature(
         "pmc_new_units": pmc_evidence.new_unit_count if pmc_evidence is not None else 0,
         "max_work_ratio": _max_work_ratio(confirmation),
         "developer_status": str(confirmation.developer_status) if confirmation is not None else str(record.developer_status),
+        "db_hits_ratio": _metric_ratio(confirmation, "db_hits"),
+        "rows_ratio": _metric_ratio(confirmation, "rows"),
+        "memory_ratio": _metric_ratio(confirmation, "memory_bytes"),
     }
     if extra_metadata:
         metadata.update(dict(extra_metadata))
@@ -192,6 +195,15 @@ def _max_work_ratio(confirmation: ConfirmationRecord | None) -> float | None:
     if confirmation.latency_ratio is not None:
         ratios.append(float(confirmation.latency_ratio))
     return max(ratios) if ratios else None
+
+
+def _metric_ratio(confirmation: ConfirmationRecord | None, metric: str) -> float | None:
+    if confirmation is None:
+        return None
+    for delta in confirmation.metric_deltas:
+        if delta.metric == metric:
+            return delta.ratio
+    return None
 
 
 def _metric_bucket(delta: MetricDelta | None) -> str:

@@ -84,6 +84,48 @@ Cluster an existing run directory from the main CLI:
 graph-sym-perf cluster --run-dir logs/<run_id>
 ```
 
+## Experiment Manifests
+
+The repository now includes YAML-driven experiment presets under [config/experiments](/Users/sakuraq/Documents/科研实习/GraphSymPerf/config/experiments).
+
+Preflight a manifest before uploading or launching long server runs:
+
+```bash
+graph-sym-perf doctor --config config/experiments/main_effectiveness.yaml
+```
+
+Run one shard of a resumable experiment:
+
+```bash
+graph-sym-perf experiment run \
+  --manifest config/experiments/main_effectiveness.yaml \
+  --shard 0 \
+  --num-shards 16
+```
+
+Aggregate shard outputs after the full sweep finishes:
+
+```bash
+graph-sym-perf experiment aggregate --run-root runs/main_effectiveness_2026_01
+```
+
+Rank top representatives and replay them:
+
+```bash
+graph-sym-perf triage --run-dir runs/main_effectiveness_2026_01 --top 100
+
+graph-sym-perf validate \
+  --triage runs/main_effectiveness_2026_01/triage_top100.json \
+  --runtime-repeats 15 \
+  --reduce
+```
+
+Notes:
+
+- Current `source.kind: gdsmith` experiment manifests support `neo4j` targets only, matching the existing GDsmith integration.
+- `config/experiments/replay_known.yaml` is a scaffold. Populate `config/experiments/replay_known_cases.jsonl` with real replayable `QueryCase` records before running known-issue replay.
+- Shards currently execute serially within one process; large-scale execution is expected to come from launching many shards in parallel on the server.
+
 ## Artifact Semantics
 
 - `pmc_summary.*` summarizes plan-level metamorphic coverage over all dynamically equivalent cases.

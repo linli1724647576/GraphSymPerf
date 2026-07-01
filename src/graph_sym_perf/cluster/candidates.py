@@ -358,7 +358,10 @@ def _candidate_bundle(
         pmc_evidence=pmc,
         extra_metadata={
             "artifacts": _artifact_links(record.artifacts, prefix=prefix),
+            "artifact_paths": dict(record.artifacts),
             "query_length": _query_length(record, variant),
+            "case_dir": str(case_dir),
+            "run_id": run_dir.name,
         },
     )
     return {

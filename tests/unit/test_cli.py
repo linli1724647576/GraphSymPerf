@@ -44,3 +44,33 @@ def test_cli_gdsmith_flags_are_forwarded(monkeypatch) -> None:
     assert captured["feedback_enabled"] is True
     assert captured["max_rules_per_case"] == 3
     assert captured["transform_family"] == "bool_redundancy"
+
+
+def test_cli_experiment_run_flags_are_forwarded(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_experiment(manifest_path, *, shard=None, num_shards=None):
+        captured["manifest_path"] = manifest_path
+        captured["shard"] = shard
+        captured["num_shards"] = num_shards
+        return 0
+
+    monkeypatch.setattr("graph_sym_perf.cli.__main__.run_experiment", fake_run_experiment)
+
+    exit_code = main(
+        [
+            "experiment",
+            "run",
+            "--manifest",
+            "config/experiments/main_effectiveness.yaml",
+            "--shard",
+            "1",
+            "--num-shards",
+            "16",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["manifest_path"] == "config/experiments/main_effectiveness.yaml"
+    assert captured["shard"] == 1
+    assert captured["num_shards"] == 16

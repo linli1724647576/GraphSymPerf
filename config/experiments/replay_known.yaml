@@ -1,0 +1,52 @@
+experiment_id: replay_known_2026_01
+description: Known issue replay scaffold. Populate replay_known_cases.jsonl with real replayable QueryCase records before running.
+seed: 20260522
+output_root: runs/replay_known_2026_01
+
+systems:
+  targets:
+    - neo4j
+
+source:
+  kind: cases_jsonl
+  base_run_config: config/graph_sym_perf.yaml
+  cases_path: config/experiments/replay_known_cases.jsonl
+  max_cases: 100
+
+transforms:
+  enabled_families:
+    - bool_redundancy
+    - symmetry
+  enabled_rules:
+    - and_true_or
+    - or_false_and
+    - predicate_order_symmetry
+    - pattern_order_symmetry
+  max_variants_per_case: 2
+
+coverage:
+  enabled: true
+
+feedback:
+  enabled: false
+
+oracle:
+  enable_structural_diff: true
+  enable_profile_metrics: true
+
+clustering:
+  enabled: true
+
+reducer:
+  strategy: no_op
+
+execution:
+  shards: 1
+  cases_per_shard: 100
+  per_query_timeout_seconds: 60
+  per_case_timeout_seconds: 180
+  resume: true
+  write_every_n_cases: 10
+
+artifacts:
+  write_issue_drafts: true

@@ -1,0 +1,59 @@
+experiment_id: oracle_reliability_2026_01
+description: Oracle reliability validation run with conservative thresholds and detailed triage output.
+seed: 20260522
+output_root: runs/oracle_reliability_2026_01
+
+systems:
+  targets:
+    - neo4j
+
+source:
+  kind: gdsmith
+  base_run_config: config/graph_sym_perf.yaml
+  max_cases: 2000
+  gdsmith:
+    num_queries: 2000
+
+transforms:
+  enabled_families:
+    - bool_redundancy
+    - symmetry
+  enabled_rules:
+    - and_true_or
+    - or_false_and
+    - and_expr_null_partition
+    - or_expr_null_contradiction
+    - predicate_order_symmetry
+    - pattern_order_symmetry
+    - label_order_symmetry
+    - alpha_renaming_symmetry
+  max_variants_per_case: 4
+
+coverage:
+  enabled: true
+
+feedback:
+  enabled: false
+
+oracle:
+  enable_structural_diff: true
+  enable_profile_metrics: true
+  runtime_validation_policy: conservative
+
+clustering:
+  enabled: true
+  include_plan_only: true
+
+reducer:
+  strategy: no_op
+
+execution:
+  shards: 4
+  cases_per_shard: 500
+  per_query_timeout_seconds: 60
+  per_case_timeout_seconds: 180
+  resume: true
+  write_every_n_cases: 20
+
+artifacts:
+  write_issue_drafts: true

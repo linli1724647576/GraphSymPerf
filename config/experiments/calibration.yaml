@@ -1,0 +1,57 @@
+experiment_id: calibration_2026_01
+description: Small calibration run to validate thresholds, artifact completeness, and shard resume behavior.
+seed: 20260522
+output_root: runs/calibration_2026_01
+
+systems:
+  targets:
+    - neo4j
+
+source:
+  kind: gdsmith
+  base_run_config: config/graph_sym_perf.yaml
+  max_cases: 200
+  gdsmith:
+    num_queries: 200
+
+transforms:
+  enabled_families:
+    - bool_redundancy
+    - symmetry
+  enabled_rules:
+    - and_true_or
+    - or_false_and
+    - and_expr_null_partition
+    - or_expr_null_contradiction
+    - predicate_order_symmetry
+    - pattern_order_symmetry
+    - label_order_symmetry
+    - alpha_renaming_symmetry
+  max_variants_per_case: 3
+
+coverage:
+  enabled: true
+
+feedback:
+  enabled: false
+
+oracle:
+  enable_structural_diff: true
+  enable_profile_metrics: true
+
+clustering:
+  enabled: true
+
+reducer:
+  strategy: no_op
+
+execution:
+  shards: 4
+  cases_per_shard: 50
+  per_query_timeout_seconds: 45
+  per_case_timeout_seconds: 120
+  resume: true
+  write_every_n_cases: 10
+
+artifacts:
+  write_issue_drafts: false
