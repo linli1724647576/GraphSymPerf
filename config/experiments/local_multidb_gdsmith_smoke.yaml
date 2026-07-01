@@ -1,0 +1,66 @@
+experiment_id: local_multidb_gdsmith_smoke_2026_07
+description: GDsmith-generated graph and queries replayed across Neo4j, Memgraph, FalkorDB, ArcadeDB, and Apache AGE.
+seed: 20260522
+output_root: runs/local_multidb_gdsmith_smoke_2026_07
+
+systems:
+  targets:
+    - neo4j
+    - memgraph
+    - falkordb
+    - arcadedb
+    - apache_age
+
+source:
+  kind: gdsmith
+  generator_target: neo4j
+  base_run_config: config/graph_sym_perf.yaml
+  max_cases: 10
+  result_limit: 50
+  include_variable_length: true
+  gdsmith:
+    num_queries: 10
+    num_tries: 1
+    timeout_seconds: 180
+
+transforms:
+  enabled_families:
+    - symmetry
+    - bool_redundancy
+  enabled_rules:
+    - predicate_order_symmetry
+    - pattern_order_symmetry
+    - label_order_symmetry
+    - alpha_renaming_symmetry
+    - and_true_or
+    - or_false_and
+  gdsmith_safe_only: true
+  max_variants_per_case: 2
+
+coverage:
+  enabled: true
+
+feedback:
+  enabled: false
+
+oracle:
+  enable_structural_diff: true
+  enable_profile_metrics: true
+
+clustering:
+  enabled: true
+  include_plan_only: true
+
+reducer:
+  strategy: no_op
+
+execution:
+  shards: 1
+  cases_per_shard: 10
+  per_query_timeout_seconds: 30
+  per_case_timeout_seconds: 120
+  resume: true
+  write_every_n_cases: 2
+
+artifacts:
+  write_issue_drafts: false

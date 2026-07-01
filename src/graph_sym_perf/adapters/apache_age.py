@@ -10,6 +10,7 @@ from urllib.parse import urlparse, urlunparse
 
 from graph_sym_perf.adapters.base import BaseAdapter
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
+from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
 
@@ -57,6 +58,25 @@ class ApacheAgeAdapter(BaseAdapter):
                 f"CREATE (a)-[r:{relationship.relationship_type} {_map_literal(props)}]->(b)"
             )
             self._run_wrapped(query, "gdsmith_load_relationship")
+
+    def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
+        graph = parse_gdsmith_replay_graph(statements)
+        self.ensure_schema()
+        node_labels: dict[int, tuple[str, ...]] = {}
+        for node in graph.nodes:
+            labels = node.labels or ("GdsmithNode",)
+            node_labels[node.node_id] = labels
+            self._run_wrapped(_create_node_cypher(labels, node.properties), "gdsmith_load_node")
+        for relationship in graph.relationships:
+            start_labels = node_labels.get(relationship.start_id, ("GdsmithNode",))
+            end_labels = node_labels.get(relationship.end_id, ("GdsmithNode",))
+            query = (
+                f"MATCH (a:{start_labels[0]} {{id: {_literal(relationship.start_id)}}}), "
+                f"(b:{end_labels[0]} {{id: {_literal(relationship.end_id)}}}) "
+                f"CREATE (a)-[r:{relationship.relationship_type} {_map_literal(relationship.properties)}]->(b)"
+            )
+            self._run_wrapped(query, "gdsmith_load_relationship")
+        return graph
 
     def execute(
         self,

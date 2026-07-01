@@ -82,6 +82,7 @@ def build_gdsmith_command(
     java_path: str,
     jar_path: str,
     config: GdsmithConfig,
+    backend: str,
     host: str,
     port: int,
     username: str,
@@ -106,7 +107,7 @@ def build_gdsmith_command(
         "--print-progress-information=false",
         "--timeout-seconds",
         str(int(config.timeout_seconds)),
-        "neo4j",
+        backend,
         "--host",
         host,
         "--port",
@@ -123,7 +124,9 @@ def run_gdsmith(
     config: GdsmithConfig,
     env: Mapping[str, str],
     raw_dir: Path,
-    neo4j_uri: str,
+    backend: str,
+    host: str,
+    port: int,
     username: str,
     password: str,
     num_queries: int,
@@ -133,12 +136,12 @@ def run_gdsmith(
     if not status.ready or status.java_path is None or status.jar_path is None:
         raise ConfigError(f"GDsmith preflight failed: {status.reason}")
 
-    host, port = neo4j_uri_to_host_port(neo4j_uri)
     raw_dir.mkdir(parents=True, exist_ok=True)
     command = build_gdsmith_command(
         java_path=status.java_path,
         jar_path=status.jar_path,
         config=config,
+        backend=backend,
         host=host,
         port=port,
         username=username,
@@ -166,10 +169,10 @@ def run_gdsmith(
     stdout_path.write_text(completed.stdout, encoding="utf-8")
     stderr_path.write_text(completed.stderr, encoding="utf-8")
 
-    log_path = _latest_neo4j_log(raw_dir)
+    log_path = _latest_dbms_log(raw_dir, backend)
     parsed = parse_gdsmith_log(log_path.read_text(encoding="utf-8") if log_path else "", max_cases=num_queries)
     if not parsed.accepted_queries and log_path is None:
-        raise ConfigError("GDsmith completed without producing logs/neo4j/*-cur.log")
+        raise ConfigError(f"GDsmith completed without producing logs/{backend}/*-cur.log")
     return GdsmithRunResult(
         command=artifact_command,
         returncode=completed.returncode,
@@ -190,8 +193,8 @@ def _redact_sensitive_command_parts(command: tuple[str, ...]) -> tuple[str, ...]
     return tuple(redacted)
 
 
-def _latest_neo4j_log(raw_dir: Path) -> Path | None:
-    log_dir = raw_dir / "logs" / "neo4j"
+def _latest_dbms_log(raw_dir: Path, backend: str) -> Path | None:
+    log_dir = raw_dir / "logs" / backend
     if not log_dir.exists():
         return None
     candidates = sorted(log_dir.glob("*-cur.log"), key=lambda path: path.stat().st_mtime, reverse=True)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from time import perf_counter
 from typing import Any, Mapping
 
@@ -98,6 +99,14 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
             self._driver.close()
         self._driver = None
 
+    def gdsmith_query_is_replayable(self, query: str) -> bool:
+        upper = query.upper()
+        if " STARTS WITH " in upper or " ENDS WITH " in upper:
+            return False
+        if _has_bare_property_predicate(query) or _has_boolean_property_operand(query):
+            return False
+        return True
+
     def _connect(self) -> None:
         if self._driver is not None:
             return
@@ -137,3 +146,23 @@ def _summary(summary: Any) -> Mapping[str, Any]:
         "result_available_after": getattr(summary, "result_available_after", None),
         "result_consumed_after": getattr(summary, "result_consumed_after", None),
     }
+
+
+def _has_bare_property_predicate(query: str) -> bool:
+    return bool(
+        re.search(
+            r"\bWHERE\b[^\\n]*\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)",
+            query,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _has_boolean_property_operand(query: str) -> bool:
+    return bool(
+        re.search(
+            r"(\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)\s+(AND|OR)\b)|(\b(AND|OR)\s+\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\))",
+            query,
+            flags=re.IGNORECASE,
+        )
+    )

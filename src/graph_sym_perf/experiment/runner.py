@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -14,6 +14,8 @@ from graph_sym_perf.app.mining import (
     EXIT_NO_READY_SYSTEMS,
     EXIT_OK,
     _attach_pmc,
+    _case_record,
+    _new_runtime_state,
     _preflight,
     _run_family,
     _summary,
@@ -22,7 +24,7 @@ from graph_sym_perf.app.mining import (
 )
 from graph_sym_perf.cluster import write_clustered_summary, write_exploratory_leads, write_review_candidates
 from graph_sym_perf.config import environment_with_dotenv
-from graph_sym_perf.core import ConfigError, QueryCase, SystemStatus
+from graph_sym_perf.core import ConfigError, QueryCase, QueryFamily, SystemStatus, TargetSystem
 from graph_sym_perf.coverage import PMCCoverageState, PMCEvidence, write_pmc_artifacts
 from graph_sym_perf.datasets import generate_mini_ldbc
 from graph_sym_perf.feedback import TransformScheduler, initialize_feedback_state, summarize_feedback_state
@@ -34,6 +36,14 @@ from graph_sym_perf.transforms import generate_transform_family
 from graph_sym_perf.experiment.manifest import load_experiment_manifest
 from graph_sym_perf.experiment.resume import CheckpointState, append_checkpoint_event, load_checkpoint, save_checkpoint
 from graph_sym_perf.experiment.shard import ShardSpec, stable_case_id
+from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port
+
+
+@dataclass(frozen=True)
+class SourcePayload:
+    query_cases: tuple[QueryCase, ...]
+    graph_statements: tuple[str, ...] = ()
+    generator_target: TargetSystem | None = None
 
 
 def run_experiment(
@@ -75,8 +85,15 @@ def run_experiment(
                 adapter.ensure_schema()
                 adapter.load_mini_ldbc(graph)
 
-        query_cases = _query_cases_from_source(manifest, run_config, writer, env)
-        shard_cases = shard_spec.slice_cases(query_cases)
+        source_payload = _query_cases_from_source(manifest, run_config, writer, env)
+        if manifest.source_kind == "gdsmith" and source_payload.graph_statements:
+            for adapter in adapters:
+                if adapter.target is source_payload.generator_target:
+                    continue
+                loader = getattr(adapter, "load_gdsmith_graph", None)
+                if callable(loader):
+                    loader(source_payload.graph_statements)
+        shard_cases = shard_spec.slice_cases(source_payload.query_cases)
         checkpoint = load_checkpoint(writer.run_dir) if manifest.execution.resume else CheckpointState()
         pmc_state = checkpoint.pmc_state or PMCCoverageState(novelty_weights=run_config.coverage.novelty_weights)
         feedback_state = checkpoint.feedback_state or initialize_feedback_state(run_config.transforms, run_config.feedback)
@@ -90,6 +107,32 @@ def run_experiment(
                     case_id=stable_case_id(manifest.experiment_id, adapter.target, shard_spec, local_index, manifest.seed),
                 )
                 if system_case.case_id in checkpoint.completed_case_ids:
+                    continue
+                replayable = getattr(adapter, "gdsmith_query_is_replayable", None)
+                if system_case.source == "gdsmith" and callable(replayable) and not replayable(system_case.query):
+                    family = QueryFamily(
+                        case_id=system_case.case_id,
+                        seed_query=system_case.query,
+                        parameters=system_case.parameters,
+                        variants=(),
+                        source=system_case.source,
+                        generator_case_id=system_case.generator_case_id,
+                        raw_query=system_case.raw_query,
+                    )
+                    artifacts = writer.write_query_family(system_name, family)
+                    _write_transform_artifacts(writer, system_name, family, artifacts)
+                    record = _case_record(
+                        adapter.target,
+                        family,
+                        (),
+                        None,
+                        None,
+                        artifacts,
+                        "skipped",
+                        "GDSMITH_QUERY_NOT_REPLAYABLE_ON_TARGET",
+                    )
+                    writer.write_case_record(record)
+                    _update_checkpoint(checkpoint, record, local_index, feedback_state, pmc_state, manifest, shard_spec)
                     continue
                 decision = scheduler.choose_for_case(system_case)
                 transform_config = replace(
@@ -172,33 +215,40 @@ def run_experiment(
             adapter.close()
 
 
-def _query_cases_from_source(manifest, run_config, writer: ArtifactWriter, env: Mapping[str, str]) -> tuple[QueryCase, ...]:
+def _query_cases_from_source(manifest, run_config, writer: ArtifactWriter, env: Mapping[str, str]) -> SourcePayload:
     kind = manifest.source_kind
     if kind == "ldbc":
-        return generate_query_cases(run_config.dataset, run_config.query_generation)
+        return SourcePayload(query_cases=generate_query_cases(run_config.dataset, run_config.query_generation))
     if kind == "cases_jsonl":
         source_path = _resolve_source_path(manifest, str(manifest.source.get("cases_path") or ""))
-        return _load_query_cases_jsonl(source_path)
+        return SourcePayload(query_cases=_load_query_cases_jsonl(source_path))
     if kind != "gdsmith":
         raise ConfigError(f"unsupported source.kind: {kind}")
-    if any(system.target.value != "neo4j" for system in run_config.systems):
-        raise ConfigError("GDsmith experiment manifests currently support only neo4j targets")
+    generator = TargetSystem.parse(str(manifest.source.get("generator_target", "neo4j")))
     gdsmith_status = check_gdsmith_tooling(run_config.query_generation.gdsmith, env)
     writer.write_json("gdsmith_tool_status.json", gdsmith_status)
     if not gdsmith_status.ready:
         raise ConfigError("GDsmith tooling is not ready; see gdsmith_tool_status.json")
+    backend = _gdsmith_backend(generator)
+    host, port, username, password = _gdsmith_connection_fields(generator, env)
     result = run_gdsmith(
         config=run_config.query_generation.gdsmith,
         env=env,
         raw_dir=writer.run_dir / "gdsmith_raw",
-        neo4j_uri=env["GRAPHSYMPERF_NEO4J_URI"],
-        username=env["GRAPHSYMPERF_NEO4J_USER"],
-        password=env["GRAPHSYMPERF_NEO4J_PASSWORD"],
+        backend=backend,
+        host=host,
+        port=port,
+        username=username,
+        password=password,
         num_queries=run_config.query_generation.max_cases,
         seed=manifest.seed,
     )
     _write_gdsmith_artifacts(writer, result)
-    return query_cases_from_gdsmith(result.parsed.query_records)
+    return SourcePayload(
+        query_cases=query_cases_from_gdsmith(result.parsed.query_records),
+        graph_statements=tuple(result.parsed.graph_statements),
+        generator_target=generator,
+    )
 
 
 def _resolve_source_path(manifest, raw_path: str) -> Path:
@@ -278,3 +328,40 @@ def _load_pmc_evidences(run_dir: Path) -> list[PMCEvidence]:
         if line.strip():
             evidences.append(_pmc_from_mapping(json.loads(line)))
     return evidences
+
+
+def _gdsmith_backend(target: TargetSystem) -> str:
+    mapping = {
+        TargetSystem.NEO4J: "neo4j",
+        TargetSystem.MEMGRAPH: "memgraph",
+        TargetSystem.FALKORDB: "redisgraph",
+        TargetSystem.ARCADEDB: "arcadedb",
+        TargetSystem.AGENSGRAPH: "agensgraph",
+    }
+    backend = mapping.get(target)
+    if backend is None:
+        raise ConfigError(f"no direct GDsmith backend for {target.value}")
+    return backend
+
+
+def _gdsmith_connection_fields(target: TargetSystem, env: Mapping[str, str]) -> tuple[str, int, str, str]:
+    if target is TargetSystem.NEO4J:
+        return neo4j_uri_to_host_port(env["GRAPHSYMPERF_NEO4J_URI"]) + (
+            env["GRAPHSYMPERF_NEO4J_USER"],
+            env["GRAPHSYMPERF_NEO4J_PASSWORD"],
+        )
+    if target is TargetSystem.MEMGRAPH:
+        return (
+            env["GRAPHSYMPERF_MEMGRAPH_HOST"],
+            int(env["GRAPHSYMPERF_MEMGRAPH_PORT"]),
+            env.get("GRAPHSYMPERF_MEMGRAPH_USER", "sqlancer"),
+            env.get("GRAPHSYMPERF_MEMGRAPH_PASSWORD", "sqlancer"),
+        )
+    if target is TargetSystem.FALKORDB:
+        return (
+            env["GRAPHSYMPERF_FALKORDB_HOST"],
+            int(env["GRAPHSYMPERF_FALKORDB_PORT"]),
+            env.get("GRAPHSYMPERF_FALKORDB_USER", "neo4j"),
+            env.get("GRAPHSYMPERF_FALKORDB_PASSWORD", "sqlancer"),
+        )
+    raise ConfigError(f"GDsmith connection fields for {target.value} are not configured")

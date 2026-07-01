@@ -20,6 +20,7 @@ from graph_sym_perf.core import (
     OracleRecord,
     PlanDiff,
     QueryCase,
+    QueryFamily,
     RunConfig,
     SystemConfig,
     SystemStatus,
@@ -232,14 +233,59 @@ def _run_query_cases(
     adapters: list[GraphAdapter],
     query_cases: tuple[QueryCase, ...],
 ) -> tuple[list[CaseRecord], dict[str, object]]:
-    records: list[CaseRecord] = []
     pmc_state = PMCCoverageState(novelty_weights=config.coverage.novelty_weights)
     feedback_state = initialize_feedback_state(config.transforms, config.feedback)
     scheduler = TransformScheduler(config.transforms, config.feedback, feedback_state)
+    return _run_query_cases_with_state(config, writer, adapters, query_cases, pmc_state, feedback_state, scheduler)
+
+
+def _new_runtime_state(config: RunConfig) -> tuple[PMCCoverageState, object, TransformScheduler]:
+    pmc_state = PMCCoverageState(novelty_weights=config.coverage.novelty_weights)
+    feedback_state = initialize_feedback_state(config.transforms, config.feedback)
+    scheduler = TransformScheduler(config.transforms, config.feedback, feedback_state)
+    return pmc_state, feedback_state, scheduler
+
+
+def _run_query_cases_with_state(
+    config: RunConfig,
+    writer: ArtifactWriter,
+    adapters: list[GraphAdapter],
+    query_cases: tuple[QueryCase, ...],
+    pmc_state: PMCCoverageState,
+    feedback_state,
+    scheduler: TransformScheduler,
+) -> tuple[list[CaseRecord], dict[str, object]]:
+    records: list[CaseRecord] = []
     pmc_evidences = []
     for adapter in adapters:
         system_name = adapter.target.value
         for query_case in query_cases:
+            replayable = getattr(adapter, "gdsmith_query_is_replayable", None)
+            if query_case.source == "gdsmith" and callable(replayable) and not replayable(query_case.query):
+                family = QueryFamily(
+                    case_id=query_case.case_id,
+                    seed_query=query_case.query,
+                    parameters=query_case.parameters,
+                    variants=(),
+                    source=query_case.source,
+                    generator_case_id=query_case.generator_case_id,
+                    raw_query=query_case.raw_query,
+                )
+                artifacts = writer.write_query_family(system_name, family)
+                _write_transform_artifacts(writer, system_name, family, artifacts)
+                record = _case_record(
+                    adapter.target,
+                    family,
+                    (),
+                    None,
+                    None,
+                    artifacts,
+                    "skipped",
+                    "GDSMITH_QUERY_NOT_REPLAYABLE_ON_TARGET",
+                )
+                writer.write_case_record(record)
+                records.append(record)
+                continue
             decision = scheduler.choose_for_case(query_case)
             case_transform_config = replace(
                 config.transforms,

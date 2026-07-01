@@ -46,3 +46,10 @@ The matching smoke manifest is:
 graph-sym-perf doctor --config config/experiments/local_multidb_smoke.yaml --strict
 graph-sym-perf experiment run --manifest config/experiments/local_multidb_smoke.yaml --shard 0 --num-shards 1
 ```
+
+The GDsmith-backed local replay smoke manifest is:
+
+```bash
+graph-sym-perf doctor --config config/experiments/local_multidb_gdsmith_smoke.yaml --strict
+graph-sym-perf experiment run --manifest config/experiments/local_multidb_gdsmith_smoke.yaml --shard 0 --num-shards 1
+```

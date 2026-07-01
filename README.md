@@ -120,6 +120,15 @@ graph-sym-perf experiment run \
 
 The smoke manifest writes artifacts under `runs/local_multidb_smoke_2026_07/shard_000`.
 
+To run a GDsmith-backed multi-database smoke, use:
+
+```bash
+graph-sym-perf doctor --config config/experiments/local_multidb_gdsmith_smoke.yaml --strict
+graph-sym-perf experiment run --manifest config/experiments/local_multidb_gdsmith_smoke.yaml --shard 0 --num-shards 1
+```
+
+This path uses `neo4j` as the GDsmith generator backend, then replays the generated graph and accepted read queries on the other configured targets.
+
 ## Experiment Manifests
 
 The repository now includes YAML-driven experiment presets under [config/experiments](/Users/sakuraq/Documents/科研实习/GraphSymPerf/config/experiments).
@@ -159,6 +168,7 @@ graph-sym-perf validate \
 Notes:
 
 - Current `source.kind: gdsmith` experiment manifests support `neo4j` targets only, matching the existing GDsmith integration.
+- `config/experiments/local_multidb_gdsmith_smoke.yaml` lifts this to five local targets by using `neo4j` as the GDsmith generator and replaying the same graph plus accepted read queries on `memgraph`, `falkordb`, `arcadedb`, and `apache_age`.
 - For local multi-database validation, use `config/experiments/local_multidb_smoke.yaml`, which runs the deterministic mini-LDBC loader instead of GDsmith.
 - `config/experiments/replay_known.yaml` is a scaffold. Populate `config/experiments/replay_known_cases.jsonl` with real replayable `QueryCase` records before running known-issue replay.
 - Shards currently execute serially within one process; large-scale execution is expected to come from launching many shards in parallel on the server.

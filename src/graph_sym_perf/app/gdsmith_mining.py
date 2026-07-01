@@ -12,13 +12,14 @@ from graph_sym_perf.app.mining import (
     EXIT_NO_READY_SYSTEMS,
     EXIT_OK,
     _default_run_id,
+    _new_runtime_state,
     _preflight,
+    _run_query_cases_with_state,
     _select_systems,
     _summary,
     _violation_payload,
     _with_max_cases,
     _with_runtime_overrides,
-    _run_query_cases,
 )
 from graph_sym_perf.config import load_run_config
 from graph_sym_perf.core import ConfigError, SystemStatus, TargetSystem
@@ -37,6 +38,7 @@ def run_gdsmith_mining(
     feedback_enabled: bool | None = None,
     max_rules_per_case: int | None = None,
     transform_family: str = "auto",
+    generator_target: str = "neo4j",
     env: Mapping[str, str] | None = None,
 ) -> int:
     env = dict(os.environ if env is None else env)
@@ -50,8 +52,8 @@ def run_gdsmith_mining(
         transform_family=transform_family,
     )
     selected_systems = _select_systems(config, systems)
-    if any(system.target is not TargetSystem.NEO4J for system in selected_systems):
-        raise ConfigError("GDsmith mode currently supports only --systems neo4j")
+    generator = TargetSystem.parse(generator_target)
+    backend = _gdsmith_backend(generator)
 
     run_id = run_id or _default_run_id()
     writer = ArtifactWriter(config, run_id)
@@ -82,23 +84,43 @@ def run_gdsmith_mining(
             )
             return EXIT_NO_READY_SYSTEMS
 
-        graph_adapter = adapters[0]
+        graph_adapter = next((adapter for adapter in adapters if adapter.target is generator), None)
+        if graph_adapter is None:
+            raise ConfigError(f"GDsmith generator target {generator.value} must be included in --systems")
         gdsmith_config = config.query_generation.gdsmith
         case_budget = config.query_generation.max_cases
         seed_value = seed if seed is not None else gdsmith_config.random_seed
+        host, port, username, password = _gdsmith_connection_fields(generator, env)
         result = run_gdsmith(
             config=gdsmith_config,
             env=env,
             raw_dir=writer.run_dir / "gdsmith_raw",
-            neo4j_uri=env["GRAPHSYMPERF_NEO4J_URI"],
-            username=env["GRAPHSYMPERF_NEO4J_USER"],
-            password=env["GRAPHSYMPERF_NEO4J_PASSWORD"],
+            backend=backend,
+            host=host,
+            port=port,
+            username=username,
+            password=password,
             num_queries=case_budget,
             seed=seed_value,
         )
         _write_gdsmith_artifacts(writer, result)
         query_cases = query_cases_from_gdsmith(result.parsed.query_records)
-        records, run_outputs = _run_query_cases(config, writer, [graph_adapter], query_cases)
+        for adapter in adapters:
+            if adapter.target is generator:
+                continue
+            loader = getattr(adapter, "load_gdsmith_graph", None)
+            if callable(loader):
+                loader(result.parsed.graph_statements)
+        pmc_state, feedback_state, scheduler = _new_runtime_state(config)
+        records, run_outputs = _run_query_cases_with_state(
+            config,
+            writer,
+            adapters,
+            query_cases,
+            pmc_state,
+            feedback_state,
+            scheduler,
+        )
         writer.write_json("confirmation.json", [record.confirmation for record in records if record.confirmation])
         writer.write_json("symmetry_violations.json", _violation_payload(records))
         review = write_review_candidates(writer.run_dir, update_summary=False)
@@ -204,6 +226,47 @@ def _summary_with_gdsmith(
         "log_path": gdsmith_run.log_path if gdsmith_run else None,
     }
     return summary
+
+
+def _gdsmith_backend(target: TargetSystem) -> str:
+    mapping = {
+        TargetSystem.NEO4J: "neo4j",
+        TargetSystem.MEMGRAPH: "memgraph",
+        TargetSystem.FALKORDB: "redisgraph",
+        TargetSystem.ARCADEDB: "arcadedb",
+        TargetSystem.AGENSGRAPH: "agensgraph",
+    }
+    backend = mapping.get(target)
+    if backend is None:
+        raise ConfigError(f"no direct GDsmith backend for {target.value}")
+    return backend
+
+
+def _gdsmith_connection_fields(target: TargetSystem, env: Mapping[str, str]) -> tuple[str, int, str, str]:
+    if target is TargetSystem.NEO4J:
+        host, port = _neo4j_host_port(env["GRAPHSYMPERF_NEO4J_URI"])
+        return host, port, env["GRAPHSYMPERF_NEO4J_USER"], env["GRAPHSYMPERF_NEO4J_PASSWORD"]
+    if target is TargetSystem.MEMGRAPH:
+        return (
+            env["GRAPHSYMPERF_MEMGRAPH_HOST"],
+            int(env["GRAPHSYMPERF_MEMGRAPH_PORT"]),
+            env.get("GRAPHSYMPERF_MEMGRAPH_USER", "sqlancer"),
+            env.get("GRAPHSYMPERF_MEMGRAPH_PASSWORD", "sqlancer"),
+        )
+    if target is TargetSystem.FALKORDB:
+        return (
+            env["GRAPHSYMPERF_FALKORDB_HOST"],
+            int(env["GRAPHSYMPERF_FALKORDB_PORT"]),
+            env.get("GRAPHSYMPERF_FALKORDB_USER", "neo4j"),
+            env.get("GRAPHSYMPERF_FALKORDB_PASSWORD", "sqlancer"),
+        )
+    raise ConfigError(f"GDsmith connection fields for {target.value} are not configured")
+
+
+def _neo4j_host_port(uri: str) -> tuple[str, int]:
+    from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port
+
+    return neo4j_uri_to_host_port(uri)
 
 
 def _relative_or_absolute(writer: ArtifactWriter, path: str) -> str:

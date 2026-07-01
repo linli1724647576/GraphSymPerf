@@ -126,6 +126,14 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
         self._graph = None
         self._db = None
 
+    def gdsmith_query_is_replayable(self, query: str) -> bool:
+        upper = query.upper()
+        if " STARTS WITH " in upper or " ENDS WITH " in upper:
+            return False
+        if _has_bare_property_predicate(query) or _has_boolean_property_operand(query):
+            return False
+        return True
+
     def _connect(self) -> None:
         if self._graph is not None:
             return
@@ -240,3 +248,23 @@ def _falkor_plan_payload(result: Any) -> Any:
     if structured is not None:
         return str(structured)
     return to_jsonable(result)
+
+
+def _has_bare_property_predicate(query: str) -> bool:
+    return bool(
+        re.search(
+            r"\bWHERE\s*\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)(?:\s|$)",
+            query,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _has_boolean_property_operand(query: str) -> bool:
+    return bool(
+        re.search(
+            r"(\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)\s+(AND|OR)\b)|(\b(AND|OR)\s+\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\))",
+            query,
+            flags=re.IGNORECASE,
+        )
+    )
