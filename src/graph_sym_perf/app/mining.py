@@ -31,7 +31,7 @@ from graph_sym_perf.equivalence import compare_results
 from graph_sym_perf.oracle import detect_symmetry_violation
 from graph_sym_perf.plan import diff_plan_records, profile_record_from_execution, unavailable_plan
 from graph_sym_perf.reporter import ArtifactWriter
-from graph_sym_perf.transforms import generate_symmetry_family
+from graph_sym_perf.transforms import generate_transform_family
 from graph_sym_perf.cluster import write_exploratory_leads, write_review_candidates
 
 
@@ -122,8 +122,8 @@ def _run_query_cases(
     for adapter in adapters:
         system_name = adapter.target.value
         for query_case in query_cases:
-            family = generate_symmetry_family(query_case, config.transforms)
-            artifacts = writer.write_symmetry_family(system_name, family)
+            family = generate_transform_family(query_case, config.transforms, target=adapter.target)
+            artifacts = writer.write_query_family(system_name, family)
             _write_transform_artifacts(writer, system_name, family, artifacts)
             record = _run_family(config, writer, adapter, family, artifacts)
             writer.write_case_record(record)

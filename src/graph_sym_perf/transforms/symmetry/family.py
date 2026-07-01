@@ -65,15 +65,20 @@ CLAUSE_RE = re.compile(
 def generate_symmetry_family(
     query_case: QueryCase,
     config: TransformConfig | None = None,
+    target: object | None = None,
 ) -> SymmetryFamily:
     """Generate a conservative symmetric query family for one GDsmith query."""
 
+    del target
     transform_config = config or TransformConfig()
     query = query_case.query.rstrip().rstrip(";")
     variants: list[SymmetryVariant] = []
     skipped: list[SymmetryVariant] = []
     seen = {query}
-    for rule in _enabled_rules(transform_config.enabled_rules):
+    rules = _enabled_rules(transform_config.enabled_rules)
+    if transform_config.max_variants_per_case is not None:
+        rules = rules[: max(0, transform_config.max_variants_per_case)]
+    for rule in rules:
         try:
             variant = rule.apply(query)
         except (TransformSkipError, CypherParseError, ProofFailure) as exc:

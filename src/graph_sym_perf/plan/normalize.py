@@ -23,10 +23,10 @@ from graph_sym_perf.core import (
 
 OPERATOR_PATTERNS = {
     "Filter": ("filter", "selection", "predicate"),
-    "Expand": ("expand", "traverse", "relationship"),
-    "Scan": ("scan", "seek", "index", "nodebylabel"),
-    "Join": ("join", "apply"),
-    "Barrier": ("eager", "materialize", "sort", "aggregate", "distinct"),
+    "Expand": ("expand", "traverse", "relationship", "conditional traverse"),
+    "Scan": ("scan", "seek", "index", "nodebylabel", "scanall", "all node"),
+    "Join": ("join", "apply", "hash join"),
+    "Barrier": ("eager", "materialize", "sort", "aggregate", "distinct", "cartesian"),
 }
 
 ACCESS_RANK = {
@@ -69,6 +69,7 @@ def unavailable_plan(system: TargetSystem, query_kind: str, reason: str) -> Plan
 
 
 def normalize_plan(system: TargetSystem, raw_plan: Any) -> NormalizedPlan:
+    raw_plan = _coerce_plan_raw(raw_plan)
     root = _node_from_raw(system, raw_plan, "0")
     nodes = _flatten_nodes(root) if root is not None else ()
     structural_payload = _structural_payload(root)
@@ -216,7 +217,200 @@ def _node_from_raw(system: TargetSystem, raw_plan: Any, path: str) -> PlanNode |
 def _plan_text(raw_plan: Any) -> str:
     if isinstance(raw_plan, str):
         return raw_plan
+    if isinstance(raw_plan, list | tuple):
+        lines = _text_lines_from_sequence(raw_plan)
+        if lines:
+            return "\n".join(lines)
     return stable_json_dumps(raw_plan)
+
+
+def _coerce_plan_raw(raw_plan: Any) -> Any:
+    if isinstance(raw_plan, Mapping):
+        return raw_plan
+    raw_text = _plan_text(raw_plan)
+    return _parse_text_plan(raw_text) if raw_text.strip() else raw_plan
+
+
+def _parse_text_plan(raw_text: str) -> Mapping[str, Any] | None:
+    nodes: list[Mapping[str, Any]] = []
+    for line in raw_text.splitlines():
+        operator = _operator_from_text_line(line)
+        if operator is None:
+            continue
+        rows = _actual_rows_from_text_line(line)
+        if rows is None:
+            rows = _first_metric_from_text_line(
+                line,
+                ("Rows", "Actual Rows", "Records", "Records produced", "actual number of rows"),
+            )
+        db_hits = _first_metric_from_text_line(
+            line,
+            ("DB Hits", "DbHits", "db_hits", "Actual Hits", "Actual DB Hits", "Hits"),
+        )
+        memory = _first_metric_from_text_line(line, ("Memory", "Memory Bytes", "Memory (Bytes)", "actual memory"))
+        cache_hits = _first_metric_from_text_line(line, ("Page Cache Hits", "page_cache_hits", "shared hit", "hit"))
+        cache_misses = _first_metric_from_text_line(
+            line,
+            ("Page Cache Misses", "page_cache_misses", "shared read", "read"),
+        )
+        arguments: dict[str, Any] = {"Details": _clean_plan_line(line)}
+        if rows is not None:
+            arguments["Rows"] = rows
+        if db_hits is not None:
+            arguments["DbHits"] = db_hits
+        if memory is not None:
+            arguments["Memory"] = memory
+        if cache_hits is not None:
+            arguments["PageCacheHits"] = cache_hits
+        if cache_misses is not None:
+            arguments["PageCacheMisses"] = cache_misses
+        nodes.append({"operator_type": operator, "arguments": arguments, "children": []})
+    if not nodes:
+        return None
+    root: dict[str, Any] | None = None
+    for node in reversed(nodes):
+        current = dict(node)
+        current["children"] = (root,) if root is not None else ()
+        root = current
+    return root
+
+
+def _operator_from_text_line(line: str) -> str | None:
+    cleaned = _clean_plan_line(line)
+    if not cleaned:
+        return None
+    if cleaned.startswith(("Plan:", "QUERY PLAN")):
+        return None
+    candidates = (
+        "NodeIndexSeek",
+        "NodeIndexScan",
+        "Index Scan",
+        "Index Only Scan",
+        "Bitmap Index Scan",
+        "Bitmap Heap Scan",
+        "DirectedRelationshipIndexSeek",
+        "NodeByLabelScan",
+        "Node By Label Scan",
+        "IntersectionNodeByLabelsScan",
+        "RelationshipTypeScan",
+        "AllRelationshipsScan",
+        "AllNodesScan",
+        "ScanAll",
+        "All Node Scan",
+        "Seq Scan",
+        "Function Scan",
+        "Subquery Scan",
+        "CTE Scan",
+        "Filter",
+        "Selection",
+        "Expand",
+        "Conditional Traverse",
+        "Traverse",
+        "Nested Loop",
+        "Merge Join",
+        "Hash Join",
+        "Apply",
+        "Join",
+        "Sort",
+        "Aggregate",
+        "Aggregation",
+        "Distinct",
+        "ProduceResults",
+        "Produce",
+        "Project",
+        "Projection",
+        "Results",
+        "Buffers",
+    )
+    lowered = cleaned.lower()
+    for candidate in candidates:
+        if candidate.lower() in lowered:
+            return candidate.replace(" ", "")
+    return None
+
+
+def _clean_plan_line(line: str) -> str:
+    cleaned = line.strip()
+    cleaned = re.sub(r"^[|+\\\-\s>`*]+", "", cleaned)
+    cleaned = re.sub(r"[|+\\\-\s]+$", "", cleaned)
+    return cleaned.strip()
+
+
+def _first_metric_from_text_line(line: str, labels: tuple[str, ...]) -> float | None:
+    for label in labels:
+        value = _metric_from_text_line(line, label)
+        if value is not None:
+            return value
+    return None
+
+
+def _metric_from_text_line(line: str, label: str) -> float | None:
+    match = re.search(
+        rf"{re.escape(label)}\s*[:=]\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
+        line,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return float(match.group(1).replace(",", ""))
+
+
+def _actual_rows_from_text_line(line: str) -> float | None:
+    match = re.search(
+        r"\(actual\s+[^)]*rows=([0-9][0-9,]*(?:\.[0-9]+)?)",
+        line,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return float(match.group(1).replace(",", ""))
+
+
+def _text_lines_from_sequence(raw_plan: list[Any] | tuple[Any, ...]) -> list[str]:
+    lines: list[str] = []
+    for item in raw_plan:
+        if isinstance(item, str):
+            lines.append(item)
+        elif isinstance(item, Mapping):
+            structured_line = _structured_text_line_from_mapping(item)
+            if structured_line:
+                lines.append(structured_line)
+                continue
+            for value in item.values():
+                if isinstance(value, str):
+                    lines.append(value)
+                elif isinstance(value, list | tuple) and all(isinstance(entry, str) for entry in value):
+                    lines.extend(value)
+        elif isinstance(item, list | tuple):
+            for value in item:
+                if isinstance(value, str):
+                    lines.append(value)
+    return lines
+
+
+def _structured_text_line_from_mapping(item: Mapping[str, Any]) -> str | None:
+    lowered = {str(key).lower().replace(" ", "_"): key for key in item}
+    operator_key = lowered.get("operator") or lowered.get("operator_type") or lowered.get("operatortype")
+    if operator_key is None:
+        return None
+    operator = item.get(operator_key)
+    if not isinstance(operator, str) or not operator.strip():
+        return None
+    parts = [operator]
+    for output_label, keys in (
+        ("Rows", ("rows", "actual_rows", "records", "records_produced")),
+        ("Actual Hits", ("actual_hits", "db_hits", "dbhits")),
+        ("Memory", ("memory", "memory_bytes", "actual_memory")),
+    ):
+        for key in keys:
+            original_key = lowered.get(key)
+            if original_key is None:
+                continue
+            value = item.get(original_key)
+            if value not in (None, ""):
+                parts.append(f"{output_label}: {value}")
+            break
+    return " | ".join(parts)
 
 
 def _operator_family(operator_type: str) -> str:
@@ -229,7 +423,7 @@ def _operator_family(operator_type: str) -> str:
         return "Scan"
     if any(token in lowered for token in ("eager", "materialize", "sort", "aggregate", "distinct", "apply", "join")):
         return "Barrier"
-    if "projection" in lowered or "produce" in lowered or "unwind" in lowered or "limit" in lowered:
+    if any(token in lowered for token in ("projection", "project", "produce", "results", "unwind", "limit")):
         return "Projection"
     return "Other"
 
@@ -310,7 +504,14 @@ def _access_metadata(operator_type: str, details: str) -> dict[str, str | None]:
         kind = "RelationshipTypeScan"
     elif "allrelationshipsscan" in lowered:
         kind = "AllRelationshipsScan"
-    elif "allnodesscan" in lowered:
+    elif (
+        "allnodesscan" in lowered
+        or "scanall" in lowered
+        or "allnodescan" in lowered
+        or "allnodes" in lowered
+        or "seqscan" in lowered
+        or "functionscan" in lowered
+    ):
         kind = "AllNodesScan"
     variable, label = _parse_variable_label(details)
     relationship_type = _parse_relationship_type(details)

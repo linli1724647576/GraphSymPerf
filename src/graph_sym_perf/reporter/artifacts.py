@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from graph_sym_perf.core import CaseRecord, QueryPair, RunConfig, SymmetryFamily, stable_json_dumps, to_jsonable
+from graph_sym_perf.core import CaseRecord, QueryFamily, QueryPair, RunConfig, stable_json_dumps, to_jsonable
 
 
 class ArtifactWriter:
@@ -45,7 +45,7 @@ class ArtifactWriter:
             "parameters": str(parameters.relative_to(self.run_dir)),
         }
 
-    def write_symmetry_family(self, system_name: str, family: SymmetryFamily) -> dict[str, str]:
+    def write_query_family(self, system_name: str, family: QueryFamily) -> dict[str, str]:
         base = f"{system_name}/{family.case_id}"
         seed = self.write_text(f"{base}/seed_query.cypher", family.seed_query + "\n")
         parameters = self.write_json(f"{base}/parameters.json", family.parameters)
@@ -57,6 +57,9 @@ class ArtifactWriter:
             path = self.write_text(f"{base}/{variant.variant_id}.cypher", variant.query + "\n")
             artifacts[f"variant_{variant.variant_id}"] = str(path.relative_to(self.run_dir))
         return artifacts
+
+    def write_symmetry_family(self, system_name: str, family: QueryFamily) -> dict[str, str]:
+        return self.write_query_family(system_name, family)
 
     def write_case_record(self, record: CaseRecord) -> None:
         system_name = record.system.value

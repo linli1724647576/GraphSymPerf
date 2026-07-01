@@ -1,5 +1,6 @@
 """Core models and errors."""
 
+from graph_sym_perf.core.capabilities import EngineCapabilities
 from graph_sym_perf.core.errors import (
     AdapterError,
     ConfigError,
@@ -36,9 +37,11 @@ from graph_sym_perf.core.models import (
     PlanRecord,
     PropertyRef,
     ProfileRecord,
+    QueryFamily,
     QueryCase,
     QueryGenerationConfig,
     QueryPair,
+    QueryVariant,
     RunConfig,
     RunPaths,
     SystemConfig,
@@ -51,11 +54,13 @@ from graph_sym_perf.core.models import (
     stable_json_dumps,
     to_jsonable,
 )
+from graph_sym_perf.core.status import ClaimLevel, DeveloperStatus, ToolSupportLevel
 
 __all__ = [
     "AdapterError",
     "CaseRecord",
     "CaseExpr",
+    "ClaimLevel",
     "ClusterRecord",
     "ClusteredSummary",
     "Comparison",
@@ -63,6 +68,8 @@ __all__ = [
     "ConfirmationConfig",
     "ConfirmationRecord",
     "DatasetConfig",
+    "DeveloperStatus",
+    "EngineCapabilities",
     "EquivalenceConfig",
     "EquivalenceRecord",
     "ExecutionResult",
@@ -84,11 +91,13 @@ __all__ = [
     "PlanRecord",
     "PropertyRef",
     "ProfileRecord",
+    "QueryFamily",
     "PreflightError",
     "QueryCase",
     "QueryExecutionError",
     "QueryGenerationConfig",
     "QueryPair",
+    "QueryVariant",
     "RunConfig",
     "RunPaths",
     "SystemConfig",
@@ -97,6 +106,7 @@ __all__ = [
     "SymmetryVariant",
     "TargetSystem",
     "TransformConfig",
+    "ToolSupportLevel",
     "VariantProfileSummary",
     "stable_json_dumps",
     "to_jsonable",

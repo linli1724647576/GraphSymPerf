@@ -9,12 +9,19 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
+from graph_sym_perf.core.capabilities import EngineCapabilities
+from graph_sym_perf.core.status import ClaimLevel, DeveloperStatus, ToolSupportLevel
+
 
 class TargetSystem(str, Enum):
     """Supported graph database targets."""
 
     NEO4J = "neo4j"
     MEMGRAPH = "memgraph"
+    FALKORDB = "falkordb"
+    AGENSGRAPH = "agensgraph"
+    APACHE_AGE = "apache_age"
+    ARCADEDB = "arcadedb"
     KUZU = "kuzu"
 
     @classmethod
@@ -41,6 +48,7 @@ class SystemConfig:
     required_env: tuple[str, ...]
     optional_env: Mapping[str, str]
     settings: Mapping[str, Any]
+    capabilities: EngineCapabilities = field(default_factory=EngineCapabilities)
 
 
 @dataclass(frozen=True)
@@ -63,6 +71,8 @@ class GdsmithConfig:
     num_queries: int = 20
     random_seed: int = 20260513
     allow_destructive_env: str = "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE"
+    no_proxy_launcher_env: str = "GRAPHSYMPERF_GDSMITH_NO_PROXY_LAUNCHER"
+    backend_extra_args: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     timeout_seconds: float = 180.0
 
 
@@ -77,6 +87,7 @@ class QueryGenerationConfig:
 
 @dataclass(frozen=True)
 class TransformConfig:
+    enabled_families: tuple[str, ...] = ("symmetry", "bool_redundancy")
     enabled_rules: tuple[str, ...] = (
         "node_order_symmetry",
         "edge_notation_symmetry",
@@ -92,6 +103,7 @@ class TransformConfig:
     )
     max_expr_complexity: str = "medium"
     gdsmith_safe_only: bool = True
+    max_variants_per_case: int | None = None
 
 
 @dataclass(frozen=True)
@@ -270,7 +282,7 @@ class QueryPair:
 
 
 @dataclass(frozen=True)
-class SymmetryVariant:
+class QueryVariant:
     variant_id: str
     query: str
     transform_rule: str
@@ -282,15 +294,19 @@ class SymmetryVariant:
 
 
 @dataclass(frozen=True)
-class SymmetryFamily:
+class QueryFamily:
     case_id: str
     seed_query: str
     parameters: Mapping[str, Any]
-    variants: tuple[SymmetryVariant, ...]
-    skipped_variants: tuple[SymmetryVariant, ...] = ()
+    variants: tuple[QueryVariant, ...]
+    skipped_variants: tuple[QueryVariant, ...] = ()
     source: str = "gdsmith"
     generator_case_id: str | None = None
     raw_query: str | None = None
+
+
+SymmetryVariant = QueryVariant
+SymmetryFamily = QueryFamily
 
 
 @dataclass(frozen=True)
@@ -438,7 +454,9 @@ class ConfirmationRecord:
     transformed_samples_ms: tuple[float, ...]
     reason: str
     level: str = "none"
-    support_level: str = "plan_only"
+    support_level: ToolSupportLevel | str = ToolSupportLevel.PLAN_ONLY
+    developer_status: DeveloperStatus | str = DeveloperStatus.UNKNOWN
+    claim_level: ClaimLevel | str = ClaimLevel.CANDIDATE
     metric_deltas: tuple[MetricDelta, ...] = ()
     profile_samples: Mapping[str, Any] = field(default_factory=dict)
     profile_diff_artifact: str | None = None
@@ -457,6 +475,8 @@ class CaseRecord:
     artifacts: Mapping[str, str]
     state: str
     reason: str
+    developer_status: DeveloperStatus | str = DeveloperStatus.UNKNOWN
+    claim_level: ClaimLevel | str = ClaimLevel.CANDIDATE
     exploratory_oracle: OracleRecord | None = None
     exploratory_confirmation: ConfirmationRecord | None = None
 
@@ -485,13 +505,13 @@ class ClusterRecord:
     representative_case_id: str
     case_ids: tuple[str, ...]
     size: int
-    claim_level: str
+    claim_level: ClaimLevel | str
     evidence_summary: Mapping[str, Any]
     expression_family_counts: Mapping[str, int]
     transform_rule_counts: Mapping[str, int]
     confirmation_level_counts: Mapping[str, int]
     plan_bug_kind: str = "unknown"
-    support_level: str = "plan_only"
+    support_level: ToolSupportLevel | str = ToolSupportLevel.PLAN_ONLY
     support_level_counts: Mapping[str, int] = field(default_factory=dict)
 
 

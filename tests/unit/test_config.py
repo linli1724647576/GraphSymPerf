@@ -10,5 +10,7 @@ def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
     assert config.query_generation.max_cases == 500
     assert config.paths.artifact_dir == "logs/{run_id}"
     assert config.query_generation.gdsmith.jar_env == "GRAPHSYMPERF_GDSMITH_JAR"
+    assert config.query_generation.gdsmith.no_proxy_launcher_env == "GRAPHSYMPERF_GDSMITH_NO_PROXY_LAUNCHER"
     assert config.confirmation.min_latency_ratio == 10.0
     assert config.system_config(config.systems[0].target).required_env[0].startswith("GRAPHSYMPERF_")
+    assert config.system_config(config.systems[0].target).capabilities.supports_execute

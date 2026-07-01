@@ -31,6 +31,7 @@ def expression_candidates(
     *,
     property_names: tuple[str, ...] = (),
     max_complexity: str = "medium",
+    dialect: str = "neo4j",
 ) -> tuple[ExpressionRecord, ...]:
     """Build safe expression records for a bound node variable."""
 
@@ -38,16 +39,20 @@ def expression_candidates(
     max_rank = _COMPLEXITY_RANK.get(max_complexity, _COMPLEXITY_RANK["medium"])
     properties = tuple(cypher_identifier(name) for name in property_names if _IDENTIFIER_RE.match(name))
 
-    records: list[ExpressionRecord] = [
-        _element_id_identity(variable),
-        _labels_identity(variable),
-        _label_size_guard(variable),
-    ]
+    if dialect == "neo4j":
+        records: list[ExpressionRecord] = [
+            _element_id_identity(variable),
+            _labels_identity(variable),
+            _label_size_guard(variable),
+        ]
+    else:
+        records = [_literal_true_expression()]
     if properties:
         prop = properties[0]
         records.append(_null_partition(variable, prop))
         records.append(_self_equality_guarded(variable, prop))
-    records.append(_boolean_combo(variable))
+    if dialect == "neo4j":
+        records.append(_boolean_combo(variable))
     return tuple(record for record in records if _COMPLEXITY_RANK.get(record.complexity, 99) <= max_rank)
 
 
@@ -57,8 +62,14 @@ def select_expression(
     property_names: tuple[str, ...] = (),
     index: int = 0,
     max_complexity: str = "medium",
+    dialect: str = "neo4j",
 ) -> ExpressionRecord:
-    records = expression_candidates(variable, property_names=property_names, max_complexity=max_complexity)
+    records = expression_candidates(
+        variable,
+        property_names=property_names,
+        max_complexity=max_complexity,
+        dialect=dialect,
+    )
     if not records:
         raise ValueError("no safe expression candidate is available")
     return records[index % len(records)]
@@ -94,6 +105,20 @@ def _variable_node(variable: str) -> ExprNode:
 
 def _literal(value: str) -> ExprNode:
     return ExprNode(kind="literal", rendered_cypher=value)
+
+
+def _literal_true_expression() -> ExpressionRecord:
+    ast = _literal("true")
+    return ExpressionRecord(
+        expr_id="literal.true",
+        family="literal_tautology",
+        complexity="low",
+        risk_level="low",
+        referenced_variables=(),
+        rendered_cypher="true",
+        proof_note="The literal true predicate is a dialect-portable tautology.",
+        ast=ast,
+    )
 
 
 def _element_id_call(variable: str) -> FunctionCall:

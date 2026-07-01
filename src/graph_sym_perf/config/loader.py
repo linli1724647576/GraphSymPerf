@@ -11,6 +11,7 @@ from graph_sym_perf.core import (
     ConfigError,
     ConfirmationConfig,
     DatasetConfig,
+    EngineCapabilities,
     EquivalenceConfig,
     GdsmithConfig,
     OracleConfig,
@@ -76,6 +77,7 @@ def _load_systems(raw: Any) -> tuple[SystemConfig, ...]:
                 required_env=tuple(str(name) for name in required),
                 optional_env={str(key): str(value) for key, value in optional.items()},
                 settings=dict(_mapping(settings_mapping.get(target.value, {}), f"systems.settings.{target.value}")),
+                capabilities=_default_capabilities(target),
             )
         )
     return tuple(systems)
@@ -121,6 +123,13 @@ def _load_gdsmith_config(raw: Any) -> GdsmithConfig:
         allow_destructive_env=str(
             mapping.get("allow_destructive_env", "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE")
         ),
+        no_proxy_launcher_env=str(
+            mapping.get("no_proxy_launcher_env", "GRAPHSYMPERF_GDSMITH_NO_PROXY_LAUNCHER")
+        ),
+        backend_extra_args=_load_backend_extra_args(
+            mapping.get("backend_extra_args", {}),
+            "query_generation.gdsmith.backend_extra_args",
+        ),
         timeout_seconds=_float(mapping.get("timeout_seconds", 180.0), "query_generation.gdsmith.timeout_seconds"),
     )
 
@@ -158,13 +167,22 @@ def _load_oracle(raw: Any) -> OracleConfig:
 
 def _load_transforms(raw: Any) -> TransformConfig:
     mapping = _mapping(raw, "transforms")
+    enabled_families = mapping.get("enabled_families", TransformConfig().enabled_families)
+    if not isinstance(enabled_families, list | tuple) or not enabled_families:
+        raise ConfigError("transforms.enabled_families must be a non-empty list")
     enabled = mapping.get("enabled_rules", TransformConfig().enabled_rules)
     if not isinstance(enabled, list | tuple) or not enabled:
         raise ConfigError("transforms.enabled_rules must be a non-empty list")
     return TransformConfig(
+        enabled_families=tuple(str(name) for name in enabled_families),
         enabled_rules=tuple(str(rule) for rule in enabled),
         max_expr_complexity=str(mapping.get("max_expr_complexity", "medium")),
         gdsmith_safe_only=bool(mapping.get("gdsmith_safe_only", True)),
+        max_variants_per_case=(
+            _int(mapping.get("max_variants_per_case"), "transforms.max_variants_per_case")
+            if mapping.get("max_variants_per_case") is not None
+            else None
+        ),
     )
 
 
@@ -174,6 +192,16 @@ def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ConfigError(f"{label} must be a mapping")
     return value
+
+
+def _load_backend_extra_args(raw: Any, label: str) -> Mapping[str, tuple[str, ...]]:
+    mapping = _mapping(raw, label)
+    parsed: dict[str, tuple[str, ...]] = {}
+    for backend, values in mapping.items():
+        if not isinstance(values, list | tuple):
+            raise ConfigError(f"{label}.{backend} must be a list")
+        parsed[str(backend)] = tuple(str(value) for value in values)
+    return parsed
 
 
 def _target(value: Any) -> TargetSystem:
@@ -213,6 +241,29 @@ def _default_required_env(target: TargetSystem) -> list[str]:
         ]
     if target is TargetSystem.MEMGRAPH:
         return ["GRAPHSYMPERF_MEMGRAPH_HOST", "GRAPHSYMPERF_MEMGRAPH_PORT"]
+    if target is TargetSystem.FALKORDB:
+        return [
+            "GRAPHSYMPERF_FALKORDB_HOST",
+            "GRAPHSYMPERF_FALKORDB_PORT",
+            "GRAPHSYMPERF_FALKORDB_GRAPH",
+        ]
+    if target is TargetSystem.AGENSGRAPH:
+        return [
+            "GRAPHSYMPERF_AGENSGRAPH_URI",
+            "GRAPHSYMPERF_AGENSGRAPH_GRAPH",
+        ]
+    if target is TargetSystem.APACHE_AGE:
+        return [
+            "GRAPHSYMPERF_APACHE_AGE_URI",
+            "GRAPHSYMPERF_APACHE_AGE_GRAPH",
+        ]
+    if target is TargetSystem.ARCADEDB:
+        return [
+            "GRAPHSYMPERF_ARCADEDB_HTTP_URL",
+            "GRAPHSYMPERF_ARCADEDB_DATABASE",
+            "GRAPHSYMPERF_ARCADEDB_USER",
+            "GRAPHSYMPERF_ARCADEDB_PASSWORD",
+        ]
     if target is TargetSystem.KUZU:
         return ["GRAPHSYMPERF_KUZU_DATABASE_PATH"]
     raise ConfigError(f"unsupported target: {target.value}")
@@ -226,4 +277,97 @@ def _default_optional_env(target: TargetSystem) -> Mapping[str, str]:
             "username": "GRAPHSYMPERF_MEMGRAPH_USER",
             "password": "GRAPHSYMPERF_MEMGRAPH_PASSWORD",
         }
+    if target is TargetSystem.FALKORDB:
+        return {
+            "username": "GRAPHSYMPERF_FALKORDB_USER",
+            "password": "GRAPHSYMPERF_FALKORDB_PASSWORD",
+        }
+    if target is TargetSystem.AGENSGRAPH:
+        return {
+            "username": "GRAPHSYMPERF_AGENSGRAPH_USER",
+            "password": "GRAPHSYMPERF_AGENSGRAPH_PASSWORD",
+            "database": "GRAPHSYMPERF_AGENSGRAPH_DATABASE",
+        }
+    if target is TargetSystem.APACHE_AGE:
+        return {
+            "username": "GRAPHSYMPERF_APACHE_AGE_USER",
+            "password": "GRAPHSYMPERF_APACHE_AGE_PASSWORD",
+            "database": "GRAPHSYMPERF_APACHE_AGE_DATABASE",
+        }
+    if target is TargetSystem.ARCADEDB:
+        return {
+            "bolt_host": "GRAPHSYMPERF_ARCADEDB_BOLT_HOST",
+            "bolt_port": "GRAPHSYMPERF_ARCADEDB_BOLT_PORT",
+        }
     return {}
+
+
+def _default_capabilities(target: TargetSystem) -> EngineCapabilities:
+    if target is TargetSystem.NEO4J:
+        return EngineCapabilities(
+            supports_explain=True,
+            supports_profile=True,
+            has_db_hits=True,
+            has_actual_rows=True,
+            has_estimated_rows=True,
+            has_page_cache_metrics=True,
+            has_memory_metrics=True,
+            plan_tree_reliable=True,
+            profile_text_reliable=True,
+            supports_destructive_load=True,
+            dialect="cypher",
+        )
+    if target is TargetSystem.MEMGRAPH:
+        return EngineCapabilities(
+            supports_explain=True,
+            supports_profile=True,
+            has_actual_rows=True,
+            has_estimated_rows=True,
+            profile_text_reliable=True,
+            supports_destructive_load=True,
+            dialect="cypher",
+        )
+    if target is TargetSystem.KUZU:
+        return EngineCapabilities(
+            supports_explain=True,
+            supports_profile=True,
+            has_actual_rows=True,
+            has_estimated_rows=True,
+            plan_tree_reliable=True,
+            profile_text_reliable=True,
+            dialect="cypher",
+        )
+    if target is TargetSystem.FALKORDB:
+        return EngineCapabilities(
+            supports_explain=True,
+            supports_profile=True,
+            has_actual_rows=True,
+            dialect="cypher",
+        )
+    if target is TargetSystem.AGENSGRAPH:
+        return EngineCapabilities(
+            supports_explain=True,
+            supports_profile=True,
+            has_actual_rows=True,
+            has_page_cache_metrics=True,
+            profile_text_reliable=True,
+            dialect="cypher",
+        )
+    if target is TargetSystem.APACHE_AGE:
+        return EngineCapabilities(
+            supports_explain=True,
+            supports_profile=True,
+            has_actual_rows=True,
+            has_page_cache_metrics=True,
+            profile_text_reliable=True,
+            dialect="cypher",
+        )
+    if target is TargetSystem.ARCADEDB:
+        return EngineCapabilities(
+            supports_explain=True,
+            supports_profile=True,
+            has_actual_rows=True,
+            profile_text_reliable=True,
+            dialect="opencypher",
+        )
+    raise ConfigError(f"unsupported target: {target.value}")
