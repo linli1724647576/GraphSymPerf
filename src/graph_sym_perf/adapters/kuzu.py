@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from graph_sym_perf.adapters.base import BaseAdapter
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
 from graph_sym_perf.datasets import MiniLdbcGraph, MiniLdbcNode, MiniLdbcRelationship
+from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
 
@@ -39,6 +40,27 @@ class KuzuAdapter(BaseAdapter):
             self._create_node(node)
         for relationship in graph.relationships:
             self._create_relationship(relationship)
+
+    def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
+        graph = parse_gdsmith_replay_graph(statements)
+        self._ensure_gdsmith_schema(graph)
+        node_label_by_id = {node.node_id: _primary_label(node.labels) for node in graph.nodes}
+        for node in graph.nodes:
+            self._create_gdsmith_node(_primary_label(node.labels), node.properties)
+        for relationship in graph.relationships:
+            start_label = node_label_by_id.get(relationship.start_id)
+            end_label = node_label_by_id.get(relationship.end_id)
+            if start_label is None or end_label is None:
+                continue
+            self._create_gdsmith_relationship(
+                relationship.relationship_type,
+                start_label,
+                end_label,
+                relationship.start_id,
+                relationship.end_id,
+                relationship.properties,
+            )
+        return graph
 
     def execute(
         self,
@@ -164,6 +186,65 @@ CREATE (a)-[r:{relationship.relationship_type} {{{props}}}]->(b)
         )
         self.execute(_compact(query), parameters, "load_relationship")
 
+    def _ensure_gdsmith_schema(self, graph: GdsmithReplayGraph) -> None:
+        node_props_by_label: dict[str, dict[str, str]] = {}
+        node_label_by_id = {node.node_id: _primary_label(node.labels) for node in graph.nodes}
+        for node in graph.nodes:
+            label = _primary_label(node.labels)
+            props = node_props_by_label.setdefault(label, {"id": "INT64"})
+            for key, value in node.properties.items():
+                props.setdefault(key, _kuzu_type(value))
+        for label, props in node_props_by_label.items():
+            fields = ["id INT64 PRIMARY KEY"]
+            fields.extend(f"{key} {value}" for key, value in props.items() if key != "id")
+            self.execute(f"CREATE NODE TABLE IF NOT EXISTS {label}({', '.join(fields)})", {}, "gdsmith_schema")
+
+        rel_props_by_type: dict[str, dict[str, str]] = {}
+        rel_pairs_by_type: dict[str, list[tuple[str, str]]] = {}
+        for relationship in graph.relationships:
+            start_label = node_label_by_id.get(relationship.start_id)
+            end_label = node_label_by_id.get(relationship.end_id)
+            if start_label is None or end_label is None:
+                continue
+            props = rel_props_by_type.setdefault(relationship.relationship_type, {})
+            for key, value in relationship.properties.items():
+                props.setdefault(key, _kuzu_type(value))
+            pairs = rel_pairs_by_type.setdefault(relationship.relationship_type, [])
+            pair = (start_label, end_label)
+            if pair not in pairs:
+                pairs.append(pair)
+        for relationship_type, pairs in rel_pairs_by_type.items():
+            pair_fields = [f"FROM {start} TO {end}" for start, end in pairs]
+            prop_fields = [f"{key} {value}" for key, value in rel_props_by_type.get(relationship_type, {}).items()]
+            self.execute(
+                f"CREATE REL TABLE IF NOT EXISTS {relationship_type}({', '.join(pair_fields + prop_fields)})",
+                {},
+                "gdsmith_schema",
+            )
+
+    def _create_gdsmith_node(self, label: str, properties: Mapping[str, Any]) -> None:
+        props = ", ".join(f"{key}: ${key}" for key in properties)
+        self.execute(f"CREATE (n:{label} {{{props}}})", dict(properties), "gdsmith_load_node")
+
+    def _create_gdsmith_relationship(
+        self,
+        relationship_type: str,
+        start_label: str,
+        end_label: str,
+        start_id: int,
+        end_id: int,
+        properties: Mapping[str, Any],
+    ) -> None:
+        props = ", ".join(f"{key}: ${key}" for key in properties)
+        query = f"""
+MATCH (a:{start_label}), (b:{end_label})
+WHERE a.id = $start_id AND b.id = $end_id
+CREATE (a)-[r:{relationship_type} {{{props}}}]->(b)
+"""
+        parameters = dict(properties)
+        parameters.update({"start_id": start_id, "end_id": end_id})
+        self.execute(_compact(query), parameters, "gdsmith_load_relationship")
+
 
 def _kuzu_schema_statements() -> tuple[str, ...]:
     return (
@@ -209,3 +290,17 @@ def _kuzu_rows(result: Any) -> tuple[Mapping[str, Any], ...]:
 
 def _compact(query: str) -> str:
     return "\n".join(line.rstrip() for line in query.strip().splitlines())
+
+
+def _primary_label(labels: tuple[str, ...]) -> str:
+    return labels[0] if labels else "GdsmithNode"
+
+
+def _kuzu_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "BOOL"
+    if isinstance(value, int):
+        return "INT64"
+    if isinstance(value, float):
+        return "DOUBLE"
+    return "STRING"

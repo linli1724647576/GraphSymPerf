@@ -12,6 +12,16 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[neo4j,test]"
 ```
 
+## LDBC Mini Mining
+
+Use the deterministic built-in LDBC mini dataset when you want a non-destructive local workflow before switching to GDsmith.
+
+```bash
+export GRAPHSYMPERF_ALLOW_LOAD=1
+
+.venv/bin/python scripts/run_ldbc_mining.py --config config/graph_sym_perf.yaml --systems auto --load --max-cases 20
+```
+
 ## Real GDsmith Mining
 
 Use a dedicated Neo4j database because GDsmith can rebuild the target graph.
@@ -29,6 +39,8 @@ export GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE=1
 The run writes `summary.json`, `cases.jsonl`, `symmetry_violations.json`, `review_candidates.md`, query files, equivalence records, plan diffs, and PROFILE summaries under `logs/{run_id}`.
 
 Candidate replay resets the target Neo4j database. Use it only with a disposable database and set `GRAPHSYMPERF_REPLAY_ALLOW_DESTRUCTIVE=1` explicitly.
+
+Additional helper entrypoints are documented in [scripts/README.md](/Users/sakuraq/Documents/科研实习/GraphSymPerf/scripts/README.md).
 
 ## Validation
 

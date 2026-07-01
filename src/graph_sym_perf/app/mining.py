@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,7 +10,7 @@ from statistics import median
 from typing import Mapping
 
 from graph_sym_perf.adapters import GraphAdapter, create_adapter
-from graph_sym_perf.config import load_run_config
+from graph_sym_perf.config import environment_with_dotenv, load_run_config
 from graph_sym_perf.core import (
     CaseRecord,
     ConfigError,
@@ -27,9 +28,11 @@ from graph_sym_perf.core import (
     VariantProfileSummary,
     to_jsonable,
 )
+from graph_sym_perf.datasets import generate_mini_ldbc
 from graph_sym_perf.equivalence import compare_results
 from graph_sym_perf.oracle import detect_symmetry_violation
 from graph_sym_perf.plan import diff_plan_records, profile_record_from_execution, unavailable_plan
+from graph_sym_perf.querygen import generate_query_cases
 from graph_sym_perf.reporter import ArtifactWriter
 from graph_sym_perf.transforms import generate_transform_family
 from graph_sym_perf.cluster import write_exploratory_leads, write_review_candidates
@@ -40,6 +43,63 @@ EXIT_NO_READY_SYSTEMS = 2
 EXIT_CONFIG_ERROR = 3
 
 
+def run_ldbc_mining(
+    *,
+    config_path: str | Path,
+    systems: str = "auto",
+    load: bool = False,
+    max_cases: int | None = None,
+    run_id: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> int:
+    env = environment_with_dotenv(env)
+    config = load_run_config(config_path)
+    if max_cases is not None:
+        config = _with_max_cases(config, max_cases)
+    if load and env.get(config.dataset.allow_load_env) != "1":
+        raise ConfigError(
+            f"--load requires {config.dataset.allow_load_env}=1 to avoid writing into a database by accident"
+        )
+
+    selected_systems = _select_systems(config, systems)
+    run_id = run_id or _default_run_id()
+    writer = ArtifactWriter(config, run_id)
+    writer.write_json("config_snapshot.json", config)
+
+    adapters: list[GraphAdapter] = []
+    statuses: list[SystemStatus] = []
+    try:
+        for system_config in selected_systems:
+            adapter = create_adapter(system_config, config, env, allow_create=load)
+            status = _preflight(adapter)
+            statuses.append(status)
+            if status.ready:
+                adapters.append(adapter)
+        writer.write_json("preflight.json", {"run_id": run_id, "systems": statuses})
+        if not adapters:
+            writer.write_json("summary.json", _summary(run_id, statuses, [], no_ready=True))
+            return EXIT_NO_READY_SYSTEMS
+
+        graph = generate_mini_ldbc(config.dataset)
+        if load:
+            for adapter in adapters:
+                adapter.ensure_schema()
+                adapter.load_mini_ldbc(graph)
+        writer.write_json("synthetic_graph_spec.json", graph)
+
+        query_cases = generate_query_cases(config.dataset, config.query_generation)
+        records = _run_query_cases(config, writer, adapters, query_cases)
+        writer.write_json("confirmation.json", [record.confirmation for record in records if record.confirmation])
+        writer.write_json("symmetry_violations.json", _violation_payload(records))
+        write_review_candidates(writer.run_dir, update_summary=False)
+        write_exploratory_leads(writer.run_dir, update_summary=False)
+        writer.write_json("summary.json", _summary(run_id, statuses, records, no_ready=False))
+        return EXIT_OK
+    finally:
+        for adapter in adapters:
+            adapter.close()
+
+
 def run_gdsmith_cases(
     *,
     config_path: str | Path,
@@ -48,6 +108,7 @@ def run_gdsmith_cases(
     run_id: str | None = None,
     env: Mapping[str, str] | None = None,
 ) -> int:
+    env = dict(os.environ if env is None else env)
     config = load_run_config(config_path)
     selected_systems = _select_systems(config, systems)
     run_id = run_id or _default_run_id()
@@ -58,7 +119,7 @@ def run_gdsmith_cases(
     statuses: list[SystemStatus] = []
     try:
         for system_config in selected_systems:
-            adapter = create_adapter(system_config, config, env or {}, allow_create=False)
+            adapter = create_adapter(system_config, config, env, allow_create=False)
             status = _preflight(adapter)
             statuses.append(status)
             if status.ready:
