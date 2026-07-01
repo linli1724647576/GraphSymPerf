@@ -1,4 +1,4 @@
-"""Memgraph adapter using GQLAlchemy."""
+"""Memgraph adapter using the Neo4j Bolt driver."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
 
 class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
-    dependency_modules = ("gqlalchemy",)
+    dependency_modules = ("neo4j",)
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._client = None
+        self._driver = None
 
     def connectivity_check(self) -> tuple[bool, str]:
         try:
@@ -37,16 +37,10 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
     ) -> ExecutionResult:
         self._connect()
         start = perf_counter()
-        truncated = False
         try:
-            rows_list = []
-            limit = max_rows + 1 if max_rows is not None else None
-            for row in self._client.execute_and_fetch(query, dict(parameters)):
-                rows_list.append(to_jsonable(row))
-                if limit is not None and len(rows_list) >= limit:
-                    truncated = True
-                    break
-            rows = tuple(rows_list)
+            with self._driver.session() as session:
+                result = session.run(query, dict(parameters))
+                rows, summary, truncated = _collect_rows(result, max_rows)
         except Exception as exc:
             raise QueryExecutionError(f"Memgraph query failed: {exc}") from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
@@ -56,7 +50,8 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
             rows=rows,
             elapsed_ms=elapsed_ms,
             summary={
-                "client": "gqlalchemy",
+                "client": "neo4j",
+                "summary": _summary(summary),
                 "truncated": truncated,
                 "row_cap": max_rows,
                 "timeout_seconds": timeout_seconds,
@@ -99,21 +94,46 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
         )
 
     def close(self) -> None:
-        self._client = None
+        if self._driver is not None:
+            self._driver.close()
+        self._driver = None
 
     def _connect(self) -> None:
-        if self._client is not None:
+        if self._driver is not None:
             return
         try:
-            from gqlalchemy import Memgraph
+            from neo4j import GraphDatabase
 
             host = self.env_value("GRAPHSYMPERF_MEMGRAPH_HOST")
             port = int(self.env_value("GRAPHSYMPERF_MEMGRAPH_PORT", "7687"))
             username = self.optional_env_value("username", "")
             password = self.optional_env_value("password", "")
-            kwargs = {"host": host, "port": port}
-            if username or password:
-                kwargs.update({"username": username, "password": password})
-            self._client = Memgraph(**kwargs)
+            auth = (username, password) if username or password else None
+            self._driver = GraphDatabase.driver(f"bolt://{host}:{port}", auth=auth)
+            self._driver.verify_connectivity()
         except Exception as exc:
             raise AdapterError(f"cannot connect to Memgraph: {exc}") from exc
+
+
+def _collect_rows(result: Any, max_rows: int | None) -> tuple[tuple[Mapping[str, Any], ...], Any, bool]:
+    rows: list[Mapping[str, Any]] = []
+    truncated = False
+    limit = max_rows + 1 if max_rows is not None else None
+    for record in result:
+        rows.append(to_jsonable(record.data()))
+        if limit is not None and len(rows) >= limit:
+            truncated = True
+            break
+    summary = None if truncated else result.consume()
+    return tuple(rows), summary, truncated
+
+
+def _summary(summary: Any) -> Mapping[str, Any]:
+    if summary is None:
+        return {}
+    return {
+        "server": to_jsonable(getattr(summary, "server", None)),
+        "database": to_jsonable(getattr(summary, "database", None)),
+        "result_available_after": getattr(summary, "result_available_after", None),
+        "result_consumed_after": getattr(summary, "result_consumed_after", None),
+    }

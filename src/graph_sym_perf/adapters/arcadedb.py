@@ -39,7 +39,12 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
         self._connect()
         exists = self._request("GET", f"/api/v1/exists/{self._database}")
         if exists.status_code == 200:
-            return
+            try:
+                payload = exists.json()
+            except Exception:
+                payload = None
+            if isinstance(payload, Mapping) and bool(payload.get("result")):
+                return
         response = self._request(
             "POST",
             "/api/v1/server",
@@ -61,7 +66,7 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
         start = perf_counter()
         truncated = False
         try:
-            payload = self._query(query, parameters)
+            payload = self._command_payload(query) if _requires_command_endpoint(query) else self._query(query, parameters)
             rows = _arcade_rows(payload)
             if max_rows is not None and len(rows) > max_rows:
                 truncated = True
@@ -161,12 +166,7 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
 
     def _command(self, query: str, query_kind: str) -> ExecutionResult:
         start = perf_counter()
-        response = self._request(
-            "POST",
-            f"/api/v1/command/{self._database}",
-            json={"language": "opencypher", "command": query},
-        )
-        payload = self._payload_or_error(response)
+        payload = self._command_payload(query)
         return ExecutionResult(
             system=TargetSystem.ARCADEDB,
             query_kind=query_kind,
@@ -174,6 +174,14 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
             elapsed_ms=(perf_counter() - start) * 1000.0,
             summary={"client": "http", "statistics": _arcade_statistics(payload)},
         )
+
+    def _command_payload(self, query: str) -> Mapping[str, Any]:
+        response = self._request(
+            "POST",
+            f"/api/v1/command/{self._database}",
+            json={"language": "opencypher", "command": query},
+        )
+        return self._payload_or_error(response)
 
     def _connect(self) -> None:
         if self._session is not None:
@@ -270,3 +278,10 @@ def _literal(value: Any) -> str:
         return repr(value)
     text = str(value).replace("\\", "\\\\").replace("'", "\\'")
     return f"'{text}'"
+
+
+def _requires_command_endpoint(query: str) -> bool:
+    stripped = query.lstrip().upper()
+    if stripped.startswith(("MERGE ", "CREATE ", "DELETE ", "DETACH ", "SET ", "REMOVE ", "DROP ")):
+        return True
+    return any(token in stripped for token in (" MERGE ", "\nMERGE ", " SET ", "\nSET ", " CREATE ", "\nCREATE "))

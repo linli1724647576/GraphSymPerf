@@ -44,7 +44,7 @@ def validate_triage(
     if not manifest_path.exists():
         raise FileNotFoundError(f"missing {manifest_path}")
     manifest = load_experiment_manifest(manifest_path)
-    env = environment_with_dotenv()
+    env = environment_with_dotenv(None)
     run_config = manifest.to_run_config()
     results: list[Mapping[str, Any]] = []
     for item in payload.get("items") or ():

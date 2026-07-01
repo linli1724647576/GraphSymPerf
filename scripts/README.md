@@ -32,3 +32,17 @@ Export manual review candidates from an existing run:
 ```
 
 The scripts record skipped targets in `preflight.json` and exit with code `2` if no real database target is ready.
+
+Local five-database stack:
+
+```bash
+./scripts/start_local_graphdbs.sh
+./scripts/stop_local_graphdbs.sh
+```
+
+The matching smoke manifest is:
+
+```bash
+graph-sym-perf doctor --config config/experiments/local_multidb_smoke.yaml --strict
+graph-sym-perf experiment run --manifest config/experiments/local_multidb_smoke.yaml --shard 0 --num-shards 1
+```

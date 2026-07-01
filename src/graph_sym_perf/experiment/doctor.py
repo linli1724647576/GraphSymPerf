@@ -20,7 +20,7 @@ EXIT_PREFLIGHT_FAILED = 4
 
 
 def run_doctor(manifest_path: str | Path, *, strict: bool = False) -> int:
-    env = environment_with_dotenv()
+    env = environment_with_dotenv(None)
     manifest = load_experiment_manifest(manifest_path)
     run_config = manifest.to_run_config()
     preflight_dir = manifest.output_root / "preflight"

@@ -42,7 +42,7 @@ def run_experiment(
     shard: int | None = None,
     num_shards: int | None = None,
 ) -> int:
-    env = environment_with_dotenv()
+    env = environment_with_dotenv(None)
     manifest = load_experiment_manifest(manifest_path)
     shard_spec = ShardSpec(
         index=int(shard if shard is not None else manifest.execution.shard_index or 0),

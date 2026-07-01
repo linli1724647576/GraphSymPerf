@@ -1,0 +1,59 @@
+experiment_id: local_multidb_smoke_2026_07
+description: Local deterministic smoke run across Neo4j, Memgraph, FalkorDB, ArcadeDB, and Apache AGE using the mini LDBC loader.
+seed: 20260522
+output_root: runs/local_multidb_smoke_2026_07
+
+systems:
+  targets:
+    - neo4j
+    - memgraph
+    - falkordb
+    - arcadedb
+    - apache_age
+
+source:
+  kind: ldbc
+  base_run_config: config/graph_sym_perf.yaml
+  load: true
+  max_cases: 10
+  result_limit: 50
+  include_variable_length: false
+
+transforms:
+  enabled_families:
+    - bool_redundancy
+    - symmetry
+  enabled_rules:
+    - and_true_or
+    - or_false_and
+    - predicate_order_symmetry
+    - pattern_order_symmetry
+  max_variants_per_case: 2
+
+coverage:
+  enabled: true
+
+feedback:
+  enabled: false
+
+oracle:
+  enable_structural_diff: true
+  enable_profile_metrics: true
+
+clustering:
+  enabled: true
+  include_plan_only: true
+
+reducer:
+  strategy: no_op
+
+execution:
+  shards: 1
+  cases_per_shard: 10
+  per_query_timeout_seconds: 30
+  per_case_timeout_seconds: 90
+  resume: true
+  write_every_n_cases: 2
+
+artifacts:
+  write_issue_drafts: false
