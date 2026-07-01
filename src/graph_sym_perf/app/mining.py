@@ -18,6 +18,7 @@ from graph_sym_perf.core import (
     EquivalenceRecord,
     MetricDelta,
     OracleRecord,
+    PlanDiff,
     QueryCase,
     RunConfig,
     SystemConfig,
@@ -28,14 +29,16 @@ from graph_sym_perf.core import (
     VariantProfileSummary,
     to_jsonable,
 )
+from graph_sym_perf.coverage import PMCCoverageState, PMCSummary, make_pmc_evidence, write_pmc_artifacts
 from graph_sym_perf.datasets import generate_mini_ldbc
 from graph_sym_perf.equivalence import compare_results
+from graph_sym_perf.feedback import TransformScheduler, initialize_feedback_state, summarize_feedback_state
 from graph_sym_perf.oracle import detect_symmetry_violation
 from graph_sym_perf.plan import diff_plan_records, profile_record_from_execution, unavailable_plan
 from graph_sym_perf.querygen import generate_query_cases
 from graph_sym_perf.reporter import ArtifactWriter
 from graph_sym_perf.transforms import generate_transform_family
-from graph_sym_perf.cluster import write_exploratory_leads, write_review_candidates
+from graph_sym_perf.cluster import write_clustered_summary, write_exploratory_leads, write_review_candidates
 
 
 EXIT_OK = 0
@@ -50,12 +53,21 @@ def run_ldbc_mining(
     load: bool = False,
     max_cases: int | None = None,
     run_id: str | None = None,
+    feedback_enabled: bool | None = None,
+    max_rules_per_case: int | None = None,
+    transform_family: str = "auto",
     env: Mapping[str, str] | None = None,
 ) -> int:
     env = environment_with_dotenv(env)
     config = load_run_config(config_path)
     if max_cases is not None:
         config = _with_max_cases(config, max_cases)
+    config = _with_runtime_overrides(
+        config,
+        feedback_enabled=feedback_enabled,
+        max_rules_per_case=max_rules_per_case,
+        transform_family=transform_family,
+    )
     if load and env.get(config.dataset.allow_load_env) != "1":
         raise ConfigError(
             f"--load requires {config.dataset.allow_load_env}=1 to avoid writing into a database by accident"
@@ -88,12 +100,28 @@ def run_ldbc_mining(
         writer.write_json("synthetic_graph_spec.json", graph)
 
         query_cases = generate_query_cases(config.dataset, config.query_generation)
-        records = _run_query_cases(config, writer, adapters, query_cases)
+        records, run_outputs = _run_query_cases(config, writer, adapters, query_cases)
         writer.write_json("confirmation.json", [record.confirmation for record in records if record.confirmation])
         writer.write_json("symmetry_violations.json", _violation_payload(records))
         write_review_candidates(writer.run_dir, update_summary=False)
         write_exploratory_leads(writer.run_dir, update_summary=False)
-        writer.write_json("summary.json", _summary(run_id, statuses, records, no_ready=False))
+        cluster_summary = (
+            write_clustered_summary(writer.run_dir, update_summary=False, clustering_config=config.clustering)
+            if config.clustering.enabled
+            else None
+        )
+        writer.write_json(
+            "summary.json",
+            _summary(
+                run_id,
+                statuses,
+                records,
+                no_ready=False,
+                pmc_summary=run_outputs.get("pmc_summary"),
+                feedback_summary=run_outputs.get("feedback_summary"),
+                cluster_summary=cluster_summary,
+            ),
+        )
         return EXIT_OK
     finally:
         for adapter in adapters:
@@ -106,10 +134,19 @@ def run_gdsmith_cases(
     systems: str = "auto",
     query_cases: tuple[QueryCase, ...],
     run_id: str | None = None,
+    feedback_enabled: bool | None = None,
+    max_rules_per_case: int | None = None,
+    transform_family: str = "auto",
     env: Mapping[str, str] | None = None,
 ) -> int:
     env = dict(os.environ if env is None else env)
     config = load_run_config(config_path)
+    config = _with_runtime_overrides(
+        config,
+        feedback_enabled=feedback_enabled,
+        max_rules_per_case=max_rules_per_case,
+        transform_family=transform_family,
+    )
     selected_systems = _select_systems(config, systems)
     run_id = run_id or _default_run_id()
     writer = ArtifactWriter(config, run_id)
@@ -128,11 +165,27 @@ def run_gdsmith_cases(
         if not adapters:
             writer.write_json("summary.json", _summary(run_id, statuses, [], no_ready=True))
             return EXIT_NO_READY_SYSTEMS
-        records = _run_query_cases(config, writer, adapters, query_cases)
+        records, run_outputs = _run_query_cases(config, writer, adapters, query_cases)
         writer.write_json("symmetry_violations.json", _violation_payload(records))
         write_review_candidates(writer.run_dir, update_summary=False)
         write_exploratory_leads(writer.run_dir, update_summary=False)
-        writer.write_json("summary.json", _summary(run_id, statuses, records, no_ready=False))
+        cluster_summary = (
+            write_clustered_summary(writer.run_dir, update_summary=False, clustering_config=config.clustering)
+            if config.clustering.enabled
+            else None
+        )
+        writer.write_json(
+            "summary.json",
+            _summary(
+                run_id,
+                statuses,
+                records,
+                no_ready=False,
+                pmc_summary=run_outputs.get("pmc_summary"),
+                feedback_summary=run_outputs.get("feedback_summary"),
+                cluster_summary=cluster_summary,
+            ),
+        )
         return EXIT_OK
     finally:
         for adapter in adapters:
@@ -178,18 +231,43 @@ def _run_query_cases(
     writer: ArtifactWriter,
     adapters: list[GraphAdapter],
     query_cases: tuple[QueryCase, ...],
-) -> list[CaseRecord]:
+) -> tuple[list[CaseRecord], dict[str, object]]:
     records: list[CaseRecord] = []
+    pmc_state = PMCCoverageState(novelty_weights=config.coverage.novelty_weights)
+    feedback_state = initialize_feedback_state(config.transforms, config.feedback)
+    scheduler = TransformScheduler(config.transforms, config.feedback, feedback_state)
+    pmc_evidences = []
     for adapter in adapters:
         system_name = adapter.target.value
         for query_case in query_cases:
-            family = generate_transform_family(query_case, config.transforms, target=adapter.target)
+            decision = scheduler.choose_for_case(query_case)
+            case_transform_config = replace(
+                config.transforms,
+                enabled_families=(decision.family,),
+                enabled_rules=decision.enabled_rules,
+                max_variants_per_case=len(decision.enabled_rules) if decision.enabled_rules else config.transforms.max_variants_per_case,
+            )
+            family = generate_transform_family(
+                query_case,
+                case_transform_config,
+                target=adapter.target,
+                family_name=decision.family,
+            )
             artifacts = writer.write_query_family(system_name, family)
             _write_transform_artifacts(writer, system_name, family, artifacts)
             record = _run_family(config, writer, adapter, family, artifacts)
+            record, observed = _attach_pmc(writer, config, pmc_state, record)
+            pmc_evidences.extend(observed)
+            scheduler.update_from_case_record(record, record.pmc)
             writer.write_case_record(record)
             records.append(record)
-    return records
+    pmc_summary = pmc_state.snapshot(writer.run_id)
+    if config.coverage.enabled:
+        write_pmc_artifacts(writer.run_dir, pmc_summary, pmc_evidences)
+    feedback_summary = summarize_feedback_state(feedback_state, config.feedback)
+    writer.write_json("feedback_summary.json", feedback_summary)
+    writer.write_json("rule_stats.json", tuple(feedback_state.rule_stats.values()))
+    return records, {"pmc_summary": pmc_summary, "feedback_summary": feedback_summary}
 
 
 def _run_family(
@@ -286,8 +364,9 @@ def _run_family(
 
     exploratory_oracle = None
     exploratory_confirmation = None
+    exploratory_pmc = None
     if len(exploratory_comparable) >= 2:
-        exploratory_oracle, exploratory_confirmation = _oracle_from_profiles(
+        exploratory_oracle, exploratory_confirmation, exploratory_plan_diff, exploratory_fast, exploratory_slow = _oracle_from_profiles(
             config,
             writer,
             adapter,
@@ -296,6 +375,16 @@ def _run_family(
             artifacts,
             base,
             prefix="exploratory_",
+        )
+        exploratory_pmc = _build_pmc_evidence(
+            config,
+            family,
+            exploratory_fast,
+            exploratory_slow,
+            exploratory_plan_diff,
+            exploratory_oracle,
+            exploratory_confirmation,
+            safety_tier="exploratory",
         )
 
     if len(strict_comparable) < 2:
@@ -322,9 +411,11 @@ def _run_family(
             confirmation.reason,
             exploratory_oracle,
             exploratory_confirmation,
+            None,
+            exploratory_pmc,
         )
 
-    oracle, confirmation = _oracle_from_profiles(
+    oracle, confirmation, plan_diff, fast, slow = _oracle_from_profiles(
         config,
         writer,
         adapter,
@@ -333,6 +424,16 @@ def _run_family(
         artifacts,
         base,
         prefix="",
+    )
+    pmc = _build_pmc_evidence(
+        config,
+        family,
+        fast,
+        slow,
+        plan_diff,
+        oracle,
+        confirmation,
+        safety_tier="strict",
     )
     state = "confirmed" if confirmation.confirmed else "equivalent_no_candidate"
     reason = confirmation.reason
@@ -347,6 +448,8 @@ def _run_family(
         reason,
         exploratory_oracle,
         exploratory_confirmation,
+        pmc,
+        exploratory_pmc,
     )
 
 
@@ -360,7 +463,7 @@ def _oracle_from_profiles(
     base: str,
     *,
     prefix: str,
-) -> tuple[OracleRecord, ConfirmationRecord]:
+) -> tuple[OracleRecord, ConfirmationRecord, PlanDiff, VariantProfileSummary, VariantProfileSummary]:
     fast = min(comparable, key=lambda item: item.median_ms or float("inf"))
     slow = max(comparable, key=lambda item: item.median_ms or 0.0)
     fast_plan = fast.plan or unavailable_plan(adapter.target, "fast", "missing fast plan")
@@ -375,7 +478,7 @@ def _oracle_from_profiles(
     writer.write_json(f"{base}/{prefix}oracle.json", oracle)
     confirmation = _confirmation_from_oracle(family.case_id, fast, slow, oracle)
     writer.write_json(f"{base}/{prefix}confirmation.json", confirmation)
-    return oracle, confirmation
+    return oracle, confirmation, plan_diff, fast, slow
 
 
 def _profile_variant(
@@ -473,6 +576,85 @@ def _confirmation_from_oracle(
     )
 
 
+def _build_pmc_evidence(
+    config: RunConfig,
+    family: SymmetryFamily,
+    fast: VariantProfileSummary,
+    slow: VariantProfileSummary,
+    plan_diff,
+    oracle: OracleRecord,
+    confirmation: ConfirmationRecord,
+    *,
+    safety_tier: str,
+):
+    if not config.coverage.enabled:
+        return None
+    variants = {variant.variant_id: variant for variant in family.variants}
+    fast_variant = variants.get(fast.variant_id)
+    slow_variant = variants.get(slow.variant_id)
+    selected_variant = slow_variant if slow.variant_id != "seed" else fast_variant
+    transform_rule = selected_variant.transform_rule if selected_variant is not None else "seed_pair"
+    transform_family = _transform_family_name(selected_variant, family)
+    return make_pmc_evidence(
+        case_id=family.case_id,
+        transform_family=transform_family,
+        transform_rule=transform_rule,
+        safety_tier=safety_tier,
+        fast_variant_id=fast.variant_id,
+        slow_variant_id=slow.variant_id,
+        plan_diff=plan_diff,
+        coverage_config=config.coverage,
+        metadata={
+            "is_candidate": bool(oracle.is_candidate),
+            "support_level": confirmation.support_level,
+            "candidate_types": tuple(oracle.candidate_types),
+            "fast_transform_rule": fast_variant.transform_rule if fast_variant is not None else None,
+            "slow_transform_rule": slow_variant.transform_rule if slow_variant is not None else None,
+        },
+    )
+
+
+def _attach_pmc(
+    writer: ArtifactWriter,
+    config: RunConfig,
+    pmc_state: PMCCoverageState,
+    record: CaseRecord,
+) -> tuple[CaseRecord, list]:
+    if not config.coverage.enabled:
+        return record, []
+    base = f"{record.system.value}/{record.case_id}"
+    artifacts = dict(record.artifacts)
+    updated = record
+    observed = []
+    if record.pmc is not None:
+        pmc = pmc_state.observe(record.pmc)
+        observed.append(pmc)
+        if config.coverage.write_per_case_evidence:
+            path = writer.write_json(f"{base}/pmc_evidence.json", pmc)
+            artifacts["pmc_evidence"] = str(path.relative_to(writer.run_dir))
+        updated = replace(updated, pmc=pmc, artifacts=artifacts)
+    if record.exploratory_pmc is not None:
+        exploratory_pmc = pmc_state.observe(record.exploratory_pmc)
+        observed.append(exploratory_pmc)
+        if config.coverage.write_per_case_evidence:
+            path = writer.write_json(f"{base}/exploratory_pmc_evidence.json", exploratory_pmc)
+            artifacts["exploratory_pmc_evidence"] = str(path.relative_to(writer.run_dir))
+        updated = replace(updated, exploratory_pmc=exploratory_pmc, artifacts=artifacts)
+    return updated, observed
+
+
+def _transform_family_name(selected_variant: SymmetryVariant | None, family: SymmetryFamily) -> str:
+    if selected_variant is not None:
+        family_name = selected_variant.metadata.get("transform_family")
+        if family_name:
+            return str(family_name)
+        if "symmetry" in selected_variant.transform_rule:
+            return "symmetry"
+    if any("symmetry" in variant.transform_rule for variant in family.variants):
+        return "symmetry"
+    return "bool_redundancy"
+
+
 def _case_record(
     target: TargetSystem,
     family: SymmetryFamily,
@@ -484,6 +666,8 @@ def _case_record(
     reason: str,
     exploratory_oracle: OracleRecord | None = None,
     exploratory_confirmation: ConfirmationRecord | None = None,
+    pmc=None,
+    exploratory_pmc=None,
 ) -> CaseRecord:
     return CaseRecord(
         system=target,
@@ -497,6 +681,8 @@ def _case_record(
         reason=reason,
         exploratory_oracle=exploratory_oracle,
         exploratory_confirmation=exploratory_confirmation,
+        pmc=pmc,
+        exploratory_pmc=exploratory_pmc,
     )
 
 
@@ -520,8 +706,17 @@ def _write_transform_artifacts(
     artifacts["symmetry_family"] = str(transform_path.relative_to(writer.run_dir))
 
 
-def _summary(run_id: str, statuses: list[SystemStatus], records: list[CaseRecord], *, no_ready: bool) -> dict[str, object]:
-    return {
+def _summary(
+    run_id: str,
+    statuses: list[SystemStatus],
+    records: list[CaseRecord],
+    *,
+    no_ready: bool,
+    pmc_summary: PMCSummary | None = None,
+    feedback_summary: Mapping[str, object] | None = None,
+    cluster_summary: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    summary = {
         "run_id": run_id,
         "no_ready_systems": no_ready,
         "systems": to_jsonable(statuses),
@@ -548,6 +743,36 @@ def _summary(run_id: str, statuses: list[SystemStatus], records: list[CaseRecord
         "symmetry_violations_artifact": "symmetry_violations.json",
         "review_candidates_markdown": "review_candidates.md",
     }
+    if pmc_summary is not None:
+        summary.update(
+            {
+                "pmc_total_units_seen": pmc_summary.total_units_seen,
+                "pmc_new_units": pmc_summary.total_new_units,
+                "pmc_units_by_kind": dict(pmc_summary.units_by_kind),
+                "pmc_summary_artifact": "pmc_summary.json",
+            }
+        )
+    if feedback_summary is not None:
+        summary.update(
+            {
+                "feedback_enabled": bool(feedback_summary.get("enabled")),
+                "feedback_top_rules": tuple(feedback_summary.get("top_rules") or ()),
+                "feedback_summary_artifact": "feedback_summary.json",
+                "rule_stats_artifact": "rule_stats.json",
+            }
+        )
+    if cluster_summary is not None:
+        summary.update(
+            {
+                "issue_family_count": int(cluster_summary.get("issue_family_count") or 0),
+                "unique_issue_count": int(cluster_summary.get("unique_issue_count") or 0),
+                "duplicate_group_count": int(cluster_summary.get("duplicate_group_count") or 0),
+                "clustered_summary_artifact": "clustered_summary.json",
+            }
+        )
+        if bool(((cluster_summary.get("generation_metadata") or {}).get("write_signatures"))):
+            summary["candidate_signatures_artifact"] = "candidate_signatures.jsonl"
+    return summary
 
 
 def _tier_equivalence_passed(record: CaseRecord, tier: str) -> bool:
@@ -612,8 +837,32 @@ def _with_max_cases(config: RunConfig, max_cases: int) -> RunConfig:
         equivalence=config.equivalence,
         confirmation=config.confirmation,
         oracle=config.oracle,
+        coverage=config.coverage,
+        feedback=config.feedback,
+        clustering=config.clustering,
         transforms=config.transforms,
     )
+
+
+def _with_runtime_overrides(
+    config: RunConfig,
+    *,
+    feedback_enabled: bool | None = None,
+    max_rules_per_case: int | None = None,
+    transform_family: str = "auto",
+) -> RunConfig:
+    transforms = config.transforms
+    feedback = config.feedback
+    if feedback_enabled is not None:
+        feedback = replace(feedback, enabled=feedback_enabled)
+    if max_rules_per_case is not None:
+        transforms = replace(transforms, max_variants_per_case=max_rules_per_case)
+        feedback = replace(feedback, max_rules_per_case=max_rules_per_case)
+    if transform_family != "auto":
+        if transform_family not in {"symmetry", "bool_redundancy"}:
+            raise ConfigError("--transform-family must be auto, symmetry, or bool_redundancy")
+        transforms = replace(transforms, enabled_families=(transform_family,))
+    return replace(config, transforms=transforms, feedback=feedback)
 
 
 def _state_counts(records: list[CaseRecord]) -> dict[str, int]:

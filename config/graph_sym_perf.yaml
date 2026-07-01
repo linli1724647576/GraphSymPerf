@@ -59,6 +59,42 @@ oracle:
   enable_structural_diff: true
   enable_profile_metrics: true
 
+coverage:
+  enabled: true
+  include_transformation_context: true
+  write_per_case_evidence: true
+  ratio_buckets:
+    - 1.5
+    - 2.0
+    - 5.0
+    - 10.0
+    - 50.0
+    - 100.0
+    - 1000.0
+  novelty_weights:
+    structural: 0.5
+    operator_delta: 1.0
+    access_delta: 2.0
+    predicate_delta: 2.0
+    barrier_delta: 1.5
+    cardinality_delta: 1.5
+    work_delta: 2.0
+    transformation_context: 0.2
+
+feedback:
+  enabled: false
+  exploration_rate: 0.15
+  seed: 20260522
+  min_rules_per_case: 1
+  max_rules_per_case: 4
+
+clustering:
+  enabled: true
+  write_signatures: true
+  representative_policy: support_then_ratio_then_size
+  include_plan_only: true
+  include_exploratory: false
+
 transforms:
   enabled_rules:
     - node_order_symmetry

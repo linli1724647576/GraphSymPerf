@@ -8,11 +8,14 @@ from typing import Any, Mapping
 import yaml
 
 from graph_sym_perf.core import (
+    ClusteringConfig,
     ConfigError,
     ConfirmationConfig,
+    CoverageConfig,
     DatasetConfig,
     EngineCapabilities,
     EquivalenceConfig,
+    FeedbackConfig,
     GdsmithConfig,
     OracleConfig,
     QueryGenerationConfig,
@@ -44,6 +47,9 @@ def load_run_config(path: str | Path) -> RunConfig:
         equivalence=_load_equivalence(data.get("equivalence", {})),
         confirmation=_load_confirmation(data.get("confirmation", {})),
         oracle=_load_oracle(data.get("oracle", {})),
+        coverage=_load_coverage(data.get("coverage", {})),
+        feedback=_load_feedback(data.get("feedback", {})),
+        clustering=_load_clustering(data.get("clustering", {})),
         transforms=_load_transforms(data.get("transforms", {})),
     )
 
@@ -162,6 +168,54 @@ def _load_oracle(raw: Any) -> OracleConfig:
     return OracleConfig(
         enable_structural_diff=bool(mapping.get("enable_structural_diff", True)),
         enable_profile_metrics=bool(mapping.get("enable_profile_metrics", True)),
+    )
+
+
+def _load_coverage(raw: Any) -> CoverageConfig:
+    mapping = _mapping(raw, "coverage")
+    ratio_buckets = mapping.get("ratio_buckets", CoverageConfig().ratio_buckets)
+    if not isinstance(ratio_buckets, list | tuple) or not ratio_buckets:
+        raise ConfigError("coverage.ratio_buckets must be a non-empty list")
+    novelty_weights = _mapping(mapping.get("novelty_weights", {}), "coverage.novelty_weights")
+    defaults = dict(CoverageConfig().novelty_weights)
+    defaults.update({str(key): _float(value, f"coverage.novelty_weights.{key}") for key, value in novelty_weights.items()})
+    return CoverageConfig(
+        enabled=bool(mapping.get("enabled", True)),
+        include_transformation_context=bool(mapping.get("include_transformation_context", True)),
+        write_per_case_evidence=bool(mapping.get("write_per_case_evidence", True)),
+        ratio_buckets=tuple(_float(value, "coverage.ratio_buckets") for value in ratio_buckets),
+        novelty_weights=defaults,
+    )
+
+
+def _load_feedback(raw: Any) -> FeedbackConfig:
+    mapping = _mapping(raw, "feedback")
+    reward_weights = _mapping(mapping.get("reward_weights", {}), "feedback.reward_weights")
+    defaults = dict(FeedbackConfig().reward_weights)
+    defaults.update({str(key): _float(value, f"feedback.reward_weights.{key}") for key, value in reward_weights.items()})
+    return FeedbackConfig(
+        enabled=bool(mapping.get("enabled", False)),
+        exploration_rate=_float(mapping.get("exploration_rate", 0.15), "feedback.exploration_rate"),
+        seed=_int(mapping.get("seed", 20260522), "feedback.seed"),
+        min_rules_per_case=_positive_int(mapping.get("min_rules_per_case", 1), "feedback.min_rules_per_case"),
+        max_rules_per_case=(
+            _positive_int(mapping.get("max_rules_per_case"), "feedback.max_rules_per_case")
+            if mapping.get("max_rules_per_case") is not None
+            else None
+        ),
+        write_artifacts=bool(mapping.get("write_artifacts", True)),
+        reward_weights=defaults,
+    )
+
+
+def _load_clustering(raw: Any) -> ClusteringConfig:
+    mapping = _mapping(raw, "clustering")
+    return ClusteringConfig(
+        enabled=bool(mapping.get("enabled", True)),
+        write_signatures=bool(mapping.get("write_signatures", True)),
+        representative_policy=str(mapping.get("representative_policy", "support_then_ratio_then_size")),
+        include_plan_only=bool(mapping.get("include_plan_only", True)),
+        include_exploratory=bool(mapping.get("include_exploratory", False)),
     )
 
 

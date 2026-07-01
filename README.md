@@ -38,9 +38,58 @@ export GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE=1
 
 The run writes `summary.json`, `cases.jsonl`, `symmetry_violations.json`, `review_candidates.md`, query files, equivalence records, plan diffs, and PROFILE summaries under `logs/{run_id}`.
 
+Newer runs also write:
+
+- `pmc_summary.json` / `pmc_summary.md`
+- `pmc_evidence.jsonl`
+- `feedback_summary.json`
+- `rule_stats.json`
+- `clustered_summary.json` / `clustered_summary.md`
+- `candidate_signatures.jsonl`
+- `issue_families.json`
+- `unique_issues.json`
+- `duplicate_groups.json`
+
 Candidate replay resets the target Neo4j database. Use it only with a disposable database and set `GRAPHSYMPERF_REPLAY_ALLOW_DESTRUCTIVE=1` explicitly.
 
 Additional helper entrypoints are documented in [scripts/README.md](/Users/sakuraq/Documents/科研实习/GraphSymPerf/scripts/README.md).
+
+## Runtime Overrides
+
+The CLI now supports runtime overrides for feedback-guided transform selection and family restriction:
+
+```bash
+graph-sym-perf run-gdsmith-mining \
+  --config config/graph_sym_perf.yaml \
+  --systems neo4j \
+  --max-cases 100 \
+  --feedback \
+  --max-rules-per-case 4 \
+  --transform-family symmetry
+```
+
+To force the bool-redundancy family on the deterministic LDBC loop:
+
+```bash
+graph-sym-perf run-ldbc-mining \
+  --config config/graph_sym_perf.yaml \
+  --systems auto \
+  --max-cases 20 \
+  --transform-family bool_redundancy
+```
+
+Cluster an existing run directory from the main CLI:
+
+```bash
+graph-sym-perf cluster --run-dir logs/<run_id>
+```
+
+## Artifact Semantics
+
+- `pmc_summary.*` summarizes plan-level metamorphic coverage over all dynamically equivalent cases.
+- `feedback_summary.json` explains which transform rules accrued reward and therefore move earlier in later cases when feedback is enabled.
+- `candidate_signatures.jsonl` records stable per-candidate signatures for issue-family clustering and duplicate suppression.
+- `clustered_summary.*` reports issue-family counts, unique issues, duplicate groups, and representatives chosen by support strength and ratio evidence.
 
 ## Validation
 

@@ -29,7 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "clustered candidates: "
         f"{summary['candidate_count']} candidates, "
-        f"{summary['issue_family_count']} issue families"
+        f"{summary['issue_family_count']} issue families, "
+        f"{summary['unique_issue_count']} unique issues"
     )
     return 0
 

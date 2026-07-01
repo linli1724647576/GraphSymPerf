@@ -12,5 +12,11 @@ def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
     assert config.query_generation.gdsmith.jar_env == "GRAPHSYMPERF_GDSMITH_JAR"
     assert config.query_generation.gdsmith.no_proxy_launcher_env == "GRAPHSYMPERF_GDSMITH_NO_PROXY_LAUNCHER"
     assert config.confirmation.min_latency_ratio == 10.0
+    assert config.coverage.enabled
+    assert config.coverage.ratio_buckets[0] == 1.5
+    assert not config.feedback.enabled
+    assert config.feedback.max_rules_per_case == 4
+    assert config.clustering.enabled
+    assert config.clustering.write_signatures
     assert config.system_config(config.systems[0].target).required_env[0].startswith("GRAPHSYMPERF_")
     assert config.system_config(config.systems[0].target).capabilities.supports_execute

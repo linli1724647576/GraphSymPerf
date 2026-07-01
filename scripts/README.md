@@ -19,6 +19,12 @@ Cluster candidates from an existing run:
 .venv/bin/python scripts/cluster_candidates.py --run-dir logs/run-20260701T000000Z
 ```
 
+The main CLI exposes the same operation:
+
+```bash
+graph-sym-perf cluster --run-dir logs/run-20260701T000000Z
+```
+
 Export manual review candidates from an existing run:
 
 ```bash

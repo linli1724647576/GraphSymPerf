@@ -17,11 +17,12 @@ from graph_sym_perf.app.mining import (
     _summary,
     _violation_payload,
     _with_max_cases,
+    _with_runtime_overrides,
     _run_query_cases,
 )
 from graph_sym_perf.config import load_run_config
 from graph_sym_perf.core import ConfigError, SystemStatus, TargetSystem
-from graph_sym_perf.cluster import write_exploratory_leads, write_review_candidates
+from graph_sym_perf.cluster import write_clustered_summary, write_exploratory_leads, write_review_candidates
 from graph_sym_perf.gdsmith import check_gdsmith_tooling, query_cases_from_gdsmith, run_gdsmith
 from graph_sym_perf.reporter import ArtifactWriter
 
@@ -33,12 +34,21 @@ def run_gdsmith_mining(
     max_cases: int | None = None,
     run_id: str | None = None,
     seed: int | None = None,
+    feedback_enabled: bool | None = None,
+    max_rules_per_case: int | None = None,
+    transform_family: str = "auto",
     env: Mapping[str, str] | None = None,
 ) -> int:
     env = dict(os.environ if env is None else env)
     config = load_run_config(config_path)
     if max_cases is not None:
         config = _with_max_cases(config, max_cases)
+    config = _with_runtime_overrides(
+        config,
+        feedback_enabled=feedback_enabled,
+        max_rules_per_case=max_rules_per_case,
+        transform_family=transform_family,
+    )
     selected_systems = _select_systems(config, systems)
     if any(system.target is not TargetSystem.NEO4J for system in selected_systems):
         raise ConfigError("GDsmith mode currently supports only --systems neo4j")
@@ -88,11 +98,16 @@ def run_gdsmith_mining(
         )
         _write_gdsmith_artifacts(writer, result)
         query_cases = query_cases_from_gdsmith(result.parsed.query_records)
-        records = _run_query_cases(config, writer, [graph_adapter], query_cases)
+        records, run_outputs = _run_query_cases(config, writer, [graph_adapter], query_cases)
         writer.write_json("confirmation.json", [record.confirmation for record in records if record.confirmation])
         writer.write_json("symmetry_violations.json", _violation_payload(records))
         review = write_review_candidates(writer.run_dir, update_summary=False)
         exploratory = write_exploratory_leads(writer.run_dir, update_summary=False)
+        cluster_summary = (
+            write_clustered_summary(writer.run_dir, update_summary=False, clustering_config=config.clustering)
+            if config.clustering.enabled
+            else None
+        )
         writer.write_json(
             "summary.json",
             _summary_with_gdsmith(
@@ -104,6 +119,9 @@ def run_gdsmith_mining(
                 gdsmith_run=result,
                 review_candidates=review,
                 exploratory_leads=exploratory,
+                pmc_summary=run_outputs.get("pmc_summary"),
+                feedback_summary=run_outputs.get("feedback_summary"),
+                cluster_summary=cluster_summary,
             ),
         )
         return EXIT_OK
@@ -145,8 +163,19 @@ def _summary_with_gdsmith(
     gdsmith_run=None,
     review_candidates=None,
     exploratory_leads=None,
+    pmc_summary=None,
+    feedback_summary=None,
+    cluster_summary=None,
 ) -> dict[str, object]:
-    summary = _summary(run_id, statuses, records, no_ready=no_ready)
+    summary = _summary(
+        run_id,
+        statuses,
+        records,
+        no_ready=no_ready,
+        pmc_summary=pmc_summary,
+        feedback_summary=feedback_summary,
+        cluster_summary=cluster_summary,
+    )
     if review_candidates is not None:
         summary.update(
             {
