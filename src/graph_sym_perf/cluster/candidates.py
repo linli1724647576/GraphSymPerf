@@ -139,20 +139,19 @@ def write_clustered_summary(
     _write_json(path / "duplicate_groups.json", payload["duplicate_groups"])
     (path / "clustered_summary.md").write_text(render_clustered_summary_markdown(payload), encoding="utf-8")
     if update_summary:
-        _update_summary(
-            path,
-            {
-                "candidate_count": payload["candidate_count"],
-                "issue_family_count": payload["issue_family_count"],
-                "unique_issue_count": payload["unique_issue_count"],
-                "duplicate_group_count": payload["duplicate_group_count"],
-                "clustered_summary_artifact": "clustered_summary.json",
-                "candidate_signatures_artifact": "candidate_signatures.jsonl",
-                "issue_families_artifact": "issue_families.json",
-                "unique_issues_artifact": "unique_issues.json",
-                "duplicate_groups_artifact": "duplicate_groups.json",
-            },
-        )
+        summary_update = {
+            "candidate_count": payload["candidate_count"],
+            "issue_family_count": payload["issue_family_count"],
+            "unique_issue_count": payload["unique_issue_count"],
+            "duplicate_group_count": payload["duplicate_group_count"],
+            "clustered_summary_artifact": "clustered_summary.json",
+            "issue_families_artifact": "issue_families.json",
+            "unique_issues_artifact": "unique_issues.json",
+            "duplicate_groups_artifact": "duplicate_groups.json",
+        }
+        if bool(((payload.get("generation_metadata") or {}).get("write_signatures"))):
+            summary_update["candidate_signatures_artifact"] = "candidate_signatures.jsonl"
+        _update_summary(path, summary_update)
     return payload
 
 

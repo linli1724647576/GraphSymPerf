@@ -173,6 +173,21 @@ def test_clustered_summary_handles_missing_cases_jsonl(tmp_path: Path) -> None:
     assert (tmp_path / "clustered_summary.md").exists()
 
 
+def test_clustered_summary_does_not_advertise_signature_artifact_when_disabled(tmp_path: Path) -> None:
+    from graph_sym_perf.core import ClusteringConfig
+
+    _write_cases(tmp_path, [_candidate("case_001")])
+
+    write_clustered_summary(
+        tmp_path,
+        clustering_config=ClusteringConfig(write_signatures=False),
+    )
+    updated_summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+
+    assert "candidate_signatures_artifact" not in updated_summary
+    assert not (tmp_path / "candidate_signatures.jsonl").exists()
+
+
 def test_review_candidates_exports_sorted_list(tmp_path: Path) -> None:
     _write_cases(
         tmp_path,
