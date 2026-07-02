@@ -12,10 +12,13 @@ RULES_BY_FAMILY = {
     "symmetry": SYMMETRY_RULES,
 }
 
+CURRENT_TARGETS = ("neo4j", "memgraph", "falkordb", "agensgraph", "arcadedb", "apache_age")
+
 
 def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
     config = load_run_config("config/graph_sym_perf.yaml")
 
+    assert tuple(system.target.value for system in config.systems) == CURRENT_TARGETS
     assert config.query_generation.source == "gdsmith"
     assert config.query_generation.max_cases == 500
     assert config.paths.artifact_dir == "logs/{run_id}"
@@ -33,6 +36,15 @@ def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
     assert config.system_config(config.systems[0].target).capabilities.supports_execute
 
 
+def test_empty_config_defaults_to_current_six_system_stack(tmp_path: Path) -> None:
+    path = tmp_path / "minimal.yaml"
+    path.write_text("project: {}\n", encoding="utf-8")
+
+    config = load_run_config(path)
+
+    assert tuple(system.target.value for system in config.systems) == CURRENT_TARGETS
+
+
 def test_run_configs_cover_enabled_rule_spaces() -> None:
     paths = (
         Path("config/graph_sym_perf.yaml"),
@@ -42,6 +54,7 @@ def test_run_configs_cover_enabled_rule_spaces() -> None:
     )
     for path in paths:
         config = load_run_config(path)
+        assert tuple(system.target.value for system in config.systems) == CURRENT_TARGETS
         enabled = set(config.transforms.enabled_rules)
         missing = [
             rule

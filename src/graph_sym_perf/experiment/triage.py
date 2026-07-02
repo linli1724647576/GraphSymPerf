@@ -182,6 +182,13 @@ def _run_reducer(
             "requested": False,
         }
     reducer_config = manifest.reducer or {}
+    if not _reducer_enabled(reducer_config):
+        return {
+            "mode": "disabled",
+            "query_length": min(len(fast_query), len(slow_query)),
+            "requested": True,
+            "config": dict(reducer_config),
+        }
     reduce_graph_requested = bool(reducer_config.get("reduce_graph", True))
     try:
         setup_statements, reload_graph, graph_status = _reducer_graph_setup(
@@ -228,6 +235,17 @@ def _run_reducer(
         summary = dict(summary)
         summary["graph_reduction"] = graph_status
     return summary
+
+
+def _reducer_enabled(reducer_config: Mapping[str, Any]) -> bool:
+    enabled = reducer_config.get("enabled", "selective")
+    if isinstance(enabled, bool):
+        if not enabled:
+            return False
+    elif str(enabled).strip().lower() in {"false", "0", "disabled", "never", "no", "no_op"}:
+        return False
+    strategy = str(reducer_config.get("strategy", "validated")).strip().lower()
+    return strategy not in {"disabled", "none", "no_op"}
 
 
 def _reducer_graph_setup(adapter, manifest, top_item: Mapping[str, Any], *, reduce_graph: bool):

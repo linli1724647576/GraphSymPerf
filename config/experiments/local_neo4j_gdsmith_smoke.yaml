@@ -76,7 +76,11 @@ clustering:
   include_plan_only: true
 
 reducer:
-  strategy: no_op
+  enabled: selective
+  strategy: validated
+  reduce_graph: true
+  preserve_metric_ratio: 1.5
+  max_query_attempts: 32
 
 execution:
   shards: 1

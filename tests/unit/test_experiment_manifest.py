@@ -24,6 +24,15 @@ RULES_BY_FAMILY = {
 }
 
 
+EXPECTED_REDUCER = {
+    "enabled": "selective",
+    "strategy": "validated",
+    "reduce_graph": True,
+    "preserve_metric_ratio": 1.5,
+    "max_query_attempts": 32,
+}
+
+
 def test_main_effectiveness_manifest_projects_to_run_config() -> None:
     manifest = load_experiment_manifest("config/experiments/main_effectiveness.yaml")
 
@@ -67,6 +76,13 @@ def test_experiment_manifests_cover_enabled_rule_spaces() -> None:
         ]
 
         assert not missing, f"{path} misses enabled transform rules: {missing}"
+
+
+def test_experiment_manifests_use_validated_reducer_config() -> None:
+    for path in sorted(Path("config/experiments").glob("*.yaml")):
+        manifest = load_experiment_manifest(path)
+
+        assert dict(manifest.reducer) == EXPECTED_REDUCER, f"{path} has stale reducer config"
 
 
 def test_experiment_run_overrides_project_to_run_config() -> None:

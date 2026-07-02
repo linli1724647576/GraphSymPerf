@@ -14,7 +14,10 @@ systems:
   targets:
     - neo4j
     - memgraph
-    - kuzu
+    - falkordb
+    - agensgraph
+    - arcadedb
+    - apache_age
   env:
     neo4j:
       required:
@@ -30,15 +33,46 @@ systems:
       optional:
         username: GRAPHSYMPERF_MEMGRAPH_USER
         password: GRAPHSYMPERF_MEMGRAPH_PASSWORD
-    kuzu:
+    falkordb:
       required:
-        - GRAPHSYMPERF_KUZU_DATABASE_PATH
-      optional: {}
+        - GRAPHSYMPERF_FALKORDB_HOST
+        - GRAPHSYMPERF_FALKORDB_PORT
+        - GRAPHSYMPERF_FALKORDB_GRAPH
+      optional:
+        username: GRAPHSYMPERF_FALKORDB_USER
+        password: GRAPHSYMPERF_FALKORDB_PASSWORD
+    agensgraph:
+      required:
+        - GRAPHSYMPERF_AGENSGRAPH_URI
+        - GRAPHSYMPERF_AGENSGRAPH_GRAPH
+      optional:
+        username: GRAPHSYMPERF_AGENSGRAPH_USER
+        password: GRAPHSYMPERF_AGENSGRAPH_PASSWORD
+        database: GRAPHSYMPERF_AGENSGRAPH_DATABASE
+    arcadedb:
+      required:
+        - GRAPHSYMPERF_ARCADEDB_HTTP_URL
+        - GRAPHSYMPERF_ARCADEDB_DATABASE
+        - GRAPHSYMPERF_ARCADEDB_USER
+        - GRAPHSYMPERF_ARCADEDB_PASSWORD
+      optional:
+        bolt_host: GRAPHSYMPERF_ARCADEDB_BOLT_HOST
+        bolt_port: GRAPHSYMPERF_ARCADEDB_BOLT_PORT
+    apache_age:
+      required:
+        - GRAPHSYMPERF_APACHE_AGE_URI
+        - GRAPHSYMPERF_APACHE_AGE_GRAPH
+      optional:
+        username: GRAPHSYMPERF_APACHE_AGE_USER
+        password: GRAPHSYMPERF_APACHE_AGE_PASSWORD
+        database: GRAPHSYMPERF_APACHE_AGE_DATABASE
   settings:
     neo4j: {}
     memgraph: {}
-    kuzu:
-      require_dedicated_path: true
+    falkordb: {}
+    agensgraph: {}
+    arcadedb: {}
+    apache_age: {}
 
 query_generation:
   source: gdsmith

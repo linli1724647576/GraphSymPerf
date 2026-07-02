@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from graph_sym_perf.core import ConfirmationConfig, ExecutionResult, TargetSystem
+from graph_sym_perf.experiment.triage import _reducer_enabled
 from graph_sym_perf.reducer import reduce_candidate
 
 
@@ -105,3 +106,11 @@ def test_reduce_candidate_reduces_setup_graph_when_reload_available(tmp_path: Pa
     assert graph_summary["reduced_statement_count"] == 1
     assert (tmp_path / "reduced" / "reduced_graph.cypher").exists()
     assert reloads
+
+
+def test_reducer_enabled_respects_manifest_switches() -> None:
+    assert _reducer_enabled({"enabled": "selective", "strategy": "validated"})
+    assert _reducer_enabled({"enabled": True})
+    assert not _reducer_enabled({"enabled": False, "strategy": "validated"})
+    assert not _reducer_enabled({"enabled": "disabled"})
+    assert not _reducer_enabled({"strategy": "no_op"})

@@ -61,7 +61,10 @@ def _load_paths(raw: Any) -> RunPaths:
 
 def _load_systems(raw: Any) -> tuple[SystemConfig, ...]:
     mapping = _mapping(raw, "systems")
-    targets_raw = mapping.get("targets", ["neo4j", "memgraph", "kuzu"])
+    targets_raw = mapping.get(
+        "targets",
+        ["neo4j", "memgraph", "falkordb", "agensgraph", "arcadedb", "apache_age"],
+    )
     if not isinstance(targets_raw, list) or not targets_raw:
         raise ConfigError("systems.targets must be a non-empty list")
     env_mapping = _mapping(mapping.get("env", {}), "systems.env")
