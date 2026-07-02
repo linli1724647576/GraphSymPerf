@@ -9,9 +9,15 @@ from typing import Any, Mapping
 import yaml
 
 from graph_sym_perf.experiment.aggregate import aggregate_run_root
+from graph_sym_perf.experiment.paper_export import export_paper_artifacts
 
 
-def export_run_report(run_dir: str | Path) -> Mapping[str, Any]:
+def export_run_report(
+    run_dir: str | Path,
+    *,
+    ablation_runs: tuple[str | Path, ...] = (),
+    oracle_run: str | Path | None = None,
+) -> Mapping[str, Any]:
     root = Path(run_dir)
     aggregate_path = root / "aggregate_summary.json"
     if not aggregate_path.exists():
@@ -25,6 +31,7 @@ def export_run_report(run_dir: str | Path) -> Mapping[str, Any]:
     validation = _load_json(root / "validation_summary.json") or {}
     reportable = _load_json(root / "reportable_issues.json") or {}
     reported = _load_yaml(root / "reported_issues.yaml") or {}
+    paper_exports = export_paper_artifacts(root, ablation_runs=ablation_runs, oracle_run=oracle_run)
     payload = {
         "run_dir": str(root),
         "aggregate": aggregate,
@@ -32,6 +39,7 @@ def export_run_report(run_dir: str | Path) -> Mapping[str, Any]:
         "validation": validation,
         "reportable_issues": reportable,
         "reported_issues": reported,
+        "paper_exports": paper_exports,
     }
     (root / "report.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (root / "report.md").write_text(_render_report_markdown(payload), encoding="utf-8")
@@ -57,6 +65,7 @@ def _render_report_markdown(payload: Mapping[str, Any]) -> str:
     validation = payload.get("validation") or {}
     reportable = payload.get("reportable_issues") or {}
     reported = payload.get("reported_issues") or {}
+    paper_exports = payload.get("paper_exports") or {}
     lines = [
         f"# Experiment Report: {Path(str(payload.get('run_dir'))).name}",
         "",
@@ -80,5 +89,10 @@ def _render_report_markdown(payload: Mapping[str, Any]) -> str:
         "",
         f"- Reportable issues: {len(reportable.get('issues') or [])}",
         f"- Tracked reported issues: {len(reported.get('issues') or [])}",
+        "",
+        "## Paper Exports",
+        "",
+        f"- Tables: {paper_exports.get('table_count', 0)}",
+        f"- Figures: {paper_exports.get('figure_count', 0)}",
     ]
     return "\n".join(lines) + "\n"

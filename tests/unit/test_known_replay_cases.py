@@ -7,6 +7,7 @@ from graph_sym_perf.core import ExecutionResult, FeedbackConfig, PlanRecord, Que
 from graph_sym_perf.experiment.manifest import load_experiment_manifest
 from graph_sym_perf.experiment.runner import (
     _prepare_known_issue_setup,
+    _reset_adapter_for_known_issue_setup,
     _write_known_replay_summary_artifacts,
     load_known_replay_cases,
 )
@@ -64,6 +65,20 @@ def test_load_known_replay_cases_reads_transform_and_target_fields(tmp_path: Pat
     assert cases[0].expected_relationships == 95
     assert cases[0].developer_status == "fixed"
     assert cases[0].issue_url == "https://github.com/neo4j/neo4j/issues/13783"
+
+
+def test_replay_known_manifest_includes_apache_age_case() -> None:
+    cases = load_known_replay_cases("config/experiments/replay_known.yaml")
+    by_id = {case.case_id: case for case in cases}
+
+    assert len(cases) == 6
+    apache = by_id["apache_age_2428_upstream"]
+    assert apache.target_system == "apache_age"
+    assert apache.transform_rule == "or_expr_null_contradiction"
+    assert apache.expected_nodes == 1280
+    assert apache.expected_relationships == 2450
+    assert apache.developer_status == "upstream"
+    assert apache.issue_url == "https://github.com/apache/age/issues/2428"
 
 
 def test_scheduler_honors_case_pinned_transform() -> None:
@@ -198,6 +213,60 @@ def test_prepare_known_issue_setup_resets_loads_and_verifies_counts(tmp_path: Pa
         "MATCH (n) RETURN count(n) AS nodes",
         "MATCH ()-[r]->() RETURN count(r) AS relationships",
     ]
+
+
+def test_apache_age_known_issue_reset_drops_and_recreates_graph() -> None:
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.statements: list[tuple[str, tuple[object, ...] | None]] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, statement, params=None):
+            self.statements.append((statement, params))
+
+        def fetchone(self):
+            return (1,)
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.cursor_obj = FakeCursor()
+            self.commits = 0
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.commits += 1
+
+    class FakeApacheAgeAdapter:
+        target = TargetSystem.APACHE_AGE
+
+        def __init__(self) -> None:
+            self._conn = FakeConnection()
+            self._graph_name = "graph_sym_perf"
+            self.schema_calls = 0
+
+        def _connect(self):
+            return None
+
+        def _prepare_session(self, cursor):
+            cursor.execute("LOAD 'age'")
+
+        def ensure_schema(self):
+            self.schema_calls += 1
+
+    adapter = FakeApacheAgeAdapter()
+    _reset_adapter_for_known_issue_setup(adapter)
+
+    statements = adapter._conn.cursor_obj.statements
+    assert ("SELECT * FROM ag_catalog.drop_graph(%s, true)", ("graph_sym_perf",)) in statements
+    assert adapter._conn.commits == 1
+    assert adapter.schema_calls == 1
 
 
 def test_write_known_replay_summary_artifacts_emits_expected_files(tmp_path: Path) -> None:

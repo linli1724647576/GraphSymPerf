@@ -1,5 +1,5 @@
 experiment_id: replay_known_2026_01
-description: Known issue replay scaffold. Populate replay_known_cases.jsonl with real replayable QueryCase records before running.
+description: Known issue replay corpus for Neo4j, Memgraph, FalkorDB, ArcadeDB, and Apache AGE.
 seed: 20260522
 output_root: runs/replay_known_2026_01
 

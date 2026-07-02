@@ -162,13 +162,27 @@ def test_cli_doctor_dry_run(monkeypatch) -> None:
 def test_cli_report_exports(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_export_run_report(run_dir):
+    def fake_export_run_report(run_dir, *, ablation_runs=(), oracle_run=None):
         captured["run_dir"] = run_dir
+        captured["ablation_runs"] = ablation_runs
+        captured["oracle_run"] = oracle_run
         return {"run_dir": run_dir}
 
     monkeypatch.setattr("graph_sym_perf.cli.__main__.export_run_report", fake_export_run_report)
 
-    exit_code = main(["report", "--run-dir", "runs/main_effectiveness_2026_01"])
+    exit_code = main(
+        [
+            "report",
+            "--run-dir",
+            "runs/main_effectiveness_2026_01",
+            "--ablation-runs",
+            "runs/ablation_bool_static,runs/ablation_both_feedback",
+            "--oracle-run",
+            "runs/oracle_reliability",
+        ]
+    )
 
     assert exit_code == 0
     assert captured["run_dir"] == "runs/main_effectiveness_2026_01"
+    assert captured["ablation_runs"] == ("runs/ablation_bool_static", "runs/ablation_both_feedback")
+    assert captured["oracle_run"] == "runs/oracle_reliability"

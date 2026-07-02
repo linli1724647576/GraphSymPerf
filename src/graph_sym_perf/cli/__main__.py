@@ -103,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
 
     report = subparsers.add_parser("report", help="Export a reader-facing report from an aggregated run dir.")
     report.add_argument("--run-dir", required=True)
+    report.add_argument("--ablation-runs", default="")
+    report.add_argument("--oracle-run", default=None)
     args = parser.parse_args(argv)
 
     if args.command == "run-ldbc-mining":
@@ -205,7 +207,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"configuration error: {exc}")
             return EXIT_CONFIG_ERROR
     if args.command == "report":
-        payload = export_run_report(args.run_dir)
+        ablation_runs = tuple(item.strip() for item in str(args.ablation_runs or "").split(",") if item.strip())
+        payload = export_run_report(args.run_dir, ablation_runs=ablation_runs, oracle_run=args.oracle_run)
         print(f"exported report: {payload['run_dir']}/report.md")
         return 0
 

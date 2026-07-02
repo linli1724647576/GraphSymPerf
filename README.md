@@ -145,13 +145,25 @@ Run one shard of a resumable experiment:
 graph-sym-perf experiment run \
   --manifest config/experiments/main_effectiveness.yaml \
   --shard 0 \
-  --num-shards 16
+  --num-shards 16 \
+  --systems neo4j,memgraph,falkordb,arcadedb,apache_age \
+  --max-cases 5000 \
+  --feedback
 ```
 
 Aggregate shard outputs after the full sweep finishes:
 
 ```bash
 graph-sym-perf experiment aggregate --run-root runs/main_effectiveness_2026_01
+```
+
+Export paper-facing tables and figure data:
+
+```bash
+graph-sym-perf report \
+  --run-dir runs/main_effectiveness_2026_01 \
+  --ablation-runs runs/ablation_bool_static,runs/ablation_symmetry_static,runs/ablation_both_static,runs/ablation_both_feedback \
+  --oracle-run runs/oracle_reliability
 ```
 
 Rank top representatives and replay them:
@@ -170,8 +182,9 @@ Notes:
 - Direct GDsmith generation still depends on one chosen generator backend, configured through `generator_target` (default `neo4j`).
 - `config/experiments/local_multidb_gdsmith_smoke.yaml` runs a five-database replay experiment by using `neo4j` as the GDsmith generator and replaying the same graph plus accepted read queries on `memgraph`, `falkordb`, `arcadedb`, and `apache_age`.
 - For local multi-database validation, use `config/experiments/local_multidb_smoke.yaml`, which runs the deterministic mini-LDBC loader instead of GDsmith.
-- `config/experiments/replay_known.yaml` is a scaffold. Populate `config/experiments/replay_known_cases.jsonl` with real replayable `QueryCase` records before running known-issue replay.
-- Shards currently execute serially within one process; large-scale execution is expected to come from launching many shards in parallel on the server.
+- `config/experiments/replay_known.yaml` contains the current six-case known issue replay corpus: Neo4j, Memgraph, FalkorDB, ArcadeDB, and Apache AGE.
+- `execution.workers_per_shard` enables shard-internal worker parallelism for non-destructive cases. Known issue replay cases with `setup_path` are forced back to serial execution because each case resets the target graph.
+- Large server runs can combine both levels: launch multiple shards in parallel and set `workers_per_shard` inside each shard when the target databases can handle the load.
 
 ## Artifact Semantics
 

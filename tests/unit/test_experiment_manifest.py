@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from graph_sym_perf.core import ConfigError
+from graph_sym_perf.core import ConfigError, QueryCase
 from graph_sym_perf.experiment.manifest import load_experiment_manifest
-from graph_sym_perf.experiment.runner import _apply_run_overrides
+from graph_sym_perf.experiment.resume import CheckpointState
+from graph_sym_perf.experiment.runner import _apply_run_overrides, _build_case_tasks, _effective_worker_count
+from graph_sym_perf.experiment.shard import ShardSpec
 
 
 def test_main_effectiveness_manifest_projects_to_run_config() -> None:
@@ -54,3 +57,53 @@ def test_experiment_run_overrides_reject_unknown_system() -> None:
 
     with pytest.raises(ConfigError):
         _apply_run_overrides(run_config, systems="unknown", max_cases=None, feedback_enabled=None)
+
+
+def test_worker_count_uses_manifest_workers_for_non_destructive_cases() -> None:
+    manifest = load_experiment_manifest("config/experiments/main_effectiveness.yaml")
+    manifest = replace(manifest, execution=replace(manifest.execution, workers_per_shard=4))
+    case = QueryCase(
+        case_id="seed",
+        template_name="unit",
+        query="MATCH (n) RETURN n",
+        parameters={},
+        base_predicate="true",
+        safe_expression="true",
+    )
+
+    tasks = _build_case_tasks(
+        manifest,
+        ShardSpec(index=0, total=1),
+        ((0, case),),
+        manifest.systems[:2],
+        CheckpointState(),
+    )
+
+    assert len(tasks) == 2
+    assert _effective_worker_count(manifest, tasks) == 2
+
+
+def test_worker_count_forces_serial_when_setup_graph_is_destructive() -> None:
+    manifest = load_experiment_manifest("config/experiments/replay_known.yaml")
+    manifest = replace(manifest, execution=replace(manifest.execution, workers_per_shard=4))
+    case = QueryCase(
+        case_id="known",
+        template_name="unit",
+        query="MATCH (n) RETURN n",
+        parameters={},
+        base_predicate="true",
+        safe_expression="true",
+        target_system="neo4j",
+        setup_path="config/experiments/replay_known_setups/neo4j_13783_reproducer_graph.cypher.txt",
+    )
+
+    tasks = _build_case_tasks(
+        manifest,
+        ShardSpec(index=0, total=1),
+        ((0, case),),
+        manifest.systems,
+        CheckpointState(),
+    )
+
+    assert len(tasks) == 1
+    assert _effective_worker_count(manifest, tasks) == 1

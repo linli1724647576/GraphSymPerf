@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
+from threading import Lock
 import tempfile
 from typing import Any, Mapping
 import yaml
@@ -27,7 +29,7 @@ from graph_sym_perf.app.mining import (
 )
 from graph_sym_perf.cluster import write_clustered_summary, write_exploratory_leads, write_review_candidates
 from graph_sym_perf.config import environment_with_dotenv
-from graph_sym_perf.core import CaseRecord, ConfigError, QueryCase, QueryFamily, SystemStatus, TargetSystem
+from graph_sym_perf.core import CaseRecord, ConfigError, QueryCase, QueryFamily, SystemConfig, SystemStatus, TargetSystem
 from graph_sym_perf.coverage import PMCCoverageState, PMCEvidence, write_pmc_artifacts
 from graph_sym_perf.datasets import generate_mini_ldbc
 from graph_sym_perf.feedback import TransformScheduler, initialize_feedback_state, summarize_feedback_state
@@ -49,6 +51,14 @@ class SourcePayload:
     query_cases: tuple[QueryCase, ...]
     graph_statements: tuple[str, ...] = ()
     generator_target: TargetSystem | None = None
+
+
+@dataclass(frozen=True)
+class CaseTask:
+    system_config: SystemConfig
+    local_index: int
+    base_case: QueryCase
+    case_id: str
 
 
 def run_experiment(
@@ -128,86 +138,63 @@ def run_experiment(
         pmc_state = checkpoint.pmc_state or PMCCoverageState(novelty_weights=run_config.coverage.novelty_weights)
         feedback_state = checkpoint.feedback_state or initialize_feedback_state(run_config.transforms, run_config.feedback)
         scheduler = TransformScheduler(run_config.transforms, run_config.feedback, feedback_state)
+        ready_targets = {adapter.target for adapter in adapters}
+        ready_systems = tuple(system for system in selected_systems if system.target in ready_targets)
+        case_tasks = _build_case_tasks(manifest, shard_spec, shard_cases, ready_systems, checkpoint)
+        worker_count = _effective_worker_count(manifest, case_tasks)
+        scheduler_lock = Lock()
 
-        for adapter in adapters:
-            system_name = adapter.target.value
-            for local_index, base_case in shard_cases:
-                if base_case.target_system and base_case.target_system != system_name:
-                    continue
-                system_case = replace(
-                    base_case,
-                    case_id=stable_case_id(manifest.experiment_id, adapter.target, shard_spec, local_index, manifest.seed),
+        def commit_result(task: CaseTask, record: CaseRecord) -> None:
+            record_with_pmc, observed = _attach_pmc(writer, run_config, pmc_state, record)
+            with scheduler_lock:
+                scheduler.update_from_case_record(record_with_pmc, record_with_pmc.pmc)
+            writer.write_case_record(record_with_pmc)
+            _update_checkpoint(checkpoint, record_with_pmc, task.local_index, feedback_state, pmc_state, manifest, shard_spec)
+            if task.local_index % max(1, manifest.execution.write_every_n_cases) == 0:
+                save_checkpoint(writer.run_dir, checkpoint)
+                append_checkpoint_event(
+                    writer.run_dir,
+                    {
+                        "case_id": record_with_pmc.case_id,
+                        "state": record_with_pmc.state,
+                        "local_index": task.local_index,
+                        "new_pmc_units": sum(item.new_unit_count for item in observed if isinstance(item, PMCEvidence)),
+                    },
                 )
-                if system_case.case_id in checkpoint.completed_case_ids:
-                    continue
-                if system_case.setup_path:
-                    _prepare_known_issue_setup(adapter, manifest, system_case)
-                replayable = getattr(adapter, "gdsmith_query_is_replayable", None)
-                if system_case.source == "gdsmith" and callable(replayable) and not replayable(system_case.query):
-                    family = QueryFamily(
-                        case_id=system_case.case_id,
-                        seed_query=system_case.query,
-                        parameters=system_case.parameters,
-                        variants=(),
-                        source=system_case.source,
-                        generator_case_id=system_case.generator_case_id,
-                        raw_query=system_case.raw_query,
-                    )
-                    artifacts = writer.write_query_family(system_name, family)
-                    _write_transform_artifacts(writer, system_name, family, artifacts)
-                    record = _annotate_record_with_case_metadata(
-                        _case_record(
-                            adapter.target,
-                            family,
-                            (),
-                            None,
-                            None,
-                            artifacts,
-                            "skipped",
-                            "GDSMITH_QUERY_NOT_REPLAYABLE_ON_TARGET",
-                        ),
-                        system_case,
-                    )
-                    writer.write_case_record(record)
-                    _update_checkpoint(checkpoint, record, local_index, feedback_state, pmc_state, manifest, shard_spec)
-                    continue
-                decision = scheduler.choose_for_case(system_case)
-                transform_config = replace(
-                    run_config.transforms,
-                    enabled_families=(decision.family,),
-                    enabled_rules=decision.enabled_rules,
-                    max_variants_per_case=(
-                        len(decision.enabled_rules) if decision.enabled_rules else run_config.transforms.max_variants_per_case
-                    ),
+            if manifest.execution.fail_fast and record_with_pmc.state == "error":
+                save_checkpoint(writer.run_dir, checkpoint)
+                raise RuntimeError(f"fail-fast triggered by {record_with_pmc.case_id}")
+
+        if worker_count == 1:
+            for task in case_tasks:
+                record = _execute_case_task(
+                    task,
+                    run_config=run_config,
+                    writer=writer,
+                    env=env,
+                    manifest=manifest,
+                    scheduler=scheduler,
+                    scheduler_lock=scheduler_lock,
                 )
-                family = generate_transform_family(
-                    system_case,
-                    transform_config,
-                    target=adapter.target,
-                    family_name=decision.family,
-                )
-                artifacts = writer.write_query_family(system_name, family)
-                _write_transform_artifacts(writer, system_name, family, artifacts)
-                record = _run_family(run_config, writer, adapter, family, artifacts)
-                record = _annotate_record_with_case_metadata(record, system_case)
-                record, observed = _attach_pmc(writer, run_config, pmc_state, record)
-                scheduler.update_from_case_record(record, record.pmc)
-                writer.write_case_record(record)
-                _update_checkpoint(checkpoint, record, local_index, feedback_state, pmc_state, manifest, shard_spec)
-                if local_index % max(1, manifest.execution.write_every_n_cases) == 0:
-                    save_checkpoint(writer.run_dir, checkpoint)
-                    append_checkpoint_event(
-                        writer.run_dir,
-                        {
-                            "case_id": record.case_id,
-                            "state": record.state,
-                            "local_index": local_index,
-                            "new_pmc_units": sum(item.new_unit_count for item in observed if isinstance(item, PMCEvidence)),
-                        },
-                    )
-                if manifest.execution.fail_fast and record.state == "error":
-                    save_checkpoint(writer.run_dir, checkpoint)
-                    raise RuntimeError(f"fail-fast triggered by {record.case_id}")
+                commit_result(task, record)
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="graphsymperf-worker") as executor:
+                futures = {
+                    executor.submit(
+                        _execute_case_task,
+                        task,
+                        run_config=run_config,
+                        writer=writer,
+                        env=env,
+                        manifest=manifest,
+                        scheduler=scheduler,
+                        scheduler_lock=scheduler_lock,
+                    ): task
+                    for task in case_tasks
+                }
+                for future in as_completed(futures):
+                    task = futures[future]
+                    commit_result(task, future.result())
 
         save_checkpoint(writer.run_dir, checkpoint)
         records = _load_case_records(writer.run_dir / "cases.jsonl")
@@ -238,8 +225,10 @@ def run_experiment(
             "shard_index": shard_spec.index,
             "num_shards": shard_spec.total,
             "cases_assigned": len(shard_cases),
+            "system_case_tasks": len(case_tasks),
             "resume_enabled": effective_resume,
-            "execution_mode": "serial",
+            "execution_mode": "serial" if worker_count == 1 else "parallel",
+            "workers_per_shard": worker_count,
         }
         writer.write_json("summary.json", summary_payload)
         if manifest.source_modes == ("cases_jsonl",):
@@ -250,6 +239,101 @@ def run_experiment(
     finally:
         for adapter in adapters:
             adapter.close()
+
+
+def _build_case_tasks(
+    manifest,
+    shard_spec: ShardSpec,
+    shard_cases: tuple[tuple[int, QueryCase], ...],
+    ready_systems: tuple[SystemConfig, ...],
+    checkpoint: CheckpointState,
+) -> tuple[CaseTask, ...]:
+    tasks: list[CaseTask] = []
+    for system_config in ready_systems:
+        system_name = system_config.target.value
+        for local_index, base_case in shard_cases:
+            if base_case.target_system and base_case.target_system != system_name:
+                continue
+            case_id = stable_case_id(manifest.experiment_id, system_config.target, shard_spec, local_index, manifest.seed)
+            if case_id in checkpoint.completed_case_ids:
+                continue
+            tasks.append(CaseTask(system_config=system_config, local_index=local_index, base_case=base_case, case_id=case_id))
+    return tuple(tasks)
+
+
+def _effective_worker_count(manifest, tasks: tuple[CaseTask, ...]) -> int:
+    requested = max(1, int(manifest.execution.workers_per_shard))
+    if requested == 1:
+        return 1
+    if any(task.base_case.setup_path for task in tasks):
+        return 1
+    return min(requested, max(1, len(tasks)))
+
+
+def _execute_case_task(
+    task: CaseTask,
+    *,
+    run_config,
+    writer: ArtifactWriter,
+    env: Mapping[str, str],
+    manifest,
+    scheduler: TransformScheduler,
+    scheduler_lock: Lock,
+) -> CaseRecord:
+    adapter = create_adapter(task.system_config, run_config, env, allow_create=False)
+    try:
+        system_case = replace(task.base_case, case_id=task.case_id)
+        system_name = adapter.target.value
+        if system_case.setup_path:
+            _prepare_known_issue_setup(adapter, manifest, system_case)
+        replayable = getattr(adapter, "gdsmith_query_is_replayable", None)
+        if system_case.source == "gdsmith" and callable(replayable) and not replayable(system_case.query):
+            family = QueryFamily(
+                case_id=system_case.case_id,
+                seed_query=system_case.query,
+                parameters=system_case.parameters,
+                variants=(),
+                source=system_case.source,
+                generator_case_id=system_case.generator_case_id,
+                raw_query=system_case.raw_query,
+            )
+            artifacts = writer.write_query_family(system_name, family)
+            _write_transform_artifacts(writer, system_name, family, artifacts)
+            return _annotate_record_with_case_metadata(
+                _case_record(
+                    adapter.target,
+                    family,
+                    (),
+                    None,
+                    None,
+                    artifacts,
+                    "skipped",
+                    "GDSMITH_QUERY_NOT_REPLAYABLE_ON_TARGET",
+                ),
+                system_case,
+            )
+        with scheduler_lock:
+            decision = scheduler.choose_for_case(system_case)
+        transform_config = replace(
+            run_config.transforms,
+            enabled_families=(decision.family,),
+            enabled_rules=decision.enabled_rules,
+            max_variants_per_case=(
+                len(decision.enabled_rules) if decision.enabled_rules else run_config.transforms.max_variants_per_case
+            ),
+        )
+        family = generate_transform_family(
+            system_case,
+            transform_config,
+            target=adapter.target,
+            family_name=decision.family,
+        )
+        artifacts = writer.write_query_family(system_name, family)
+        _write_transform_artifacts(writer, system_name, family, artifacts)
+        record = _run_family(run_config, writer, adapter, family, artifacts)
+        return _annotate_record_with_case_metadata(record, system_case)
+    finally:
+        adapter.close()
 
 
 def _apply_run_overrides(
@@ -640,6 +724,17 @@ def _reset_adapter_for_known_issue_setup(adapter) -> None:
         )
         if response.status_code not in (200, 201, 204, 404, 409):
             raise ConfigError(f"cannot drop ArcadeDB database {adapter._database!r}: {response.text}")
+        adapter.ensure_schema()
+        return
+    if target == "apache_age":
+        adapter._connect()
+        with adapter._conn.cursor() as cursor:
+            adapter._prepare_session(cursor)
+            cursor.execute("SELECT count(*) FROM ag_catalog.ag_graph WHERE name = %s", (adapter._graph_name,))
+            exists = int(cursor.fetchone()[0]) > 0
+            if exists:
+                cursor.execute("SELECT * FROM ag_catalog.drop_graph(%s, true)", (adapter._graph_name,))
+        adapter._conn.commit()
         adapter.ensure_schema()
         return
     raise ConfigError(f"known issue replay setup reset is not implemented for target: {target}")
