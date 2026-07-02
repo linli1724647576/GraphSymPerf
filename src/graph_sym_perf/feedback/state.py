@@ -70,6 +70,11 @@ def initialize_feedback_state(transform_config: TransformConfig, feedback_config
 
 def summarize_feedback_state(state: FeedbackState, feedback_config: FeedbackConfig) -> dict[str, object]:
     for stats in state.rule_stats.values():
+        if stats.attempted == 0:
+            family_attempted = state.family_stats.get(stats.family, RuleStats(stats.family, "__family__")).attempted
+            stats.inactive_reason = (
+                "disabled_by_max_variants_per_case" if family_attempted > 0 else "not_applicable_to_case"
+            )
         stats.reward = compute_reward(stats, feedback_config)
     for stats in state.family_stats.values():
         stats.reward = compute_reward(stats, feedback_config)
@@ -99,6 +104,7 @@ def summarize_feedback_state(state: FeedbackState, feedback_config: FeedbackConf
                 "equivalence_passed": stats.equivalence_passed,
                 "candidate_count": stats.candidate_count,
                 "pmc_new_units": stats.pmc_new_units,
+                "inactive_reason": stats.inactive_reason,
             }
             for stats in ranked_rules[:10]
         ],

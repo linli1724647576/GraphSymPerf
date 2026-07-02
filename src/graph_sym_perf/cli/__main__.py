@@ -17,6 +17,7 @@ from graph_sym_perf.experiment import (
     run_triage,
     validate_triage,
 )
+from graph_sym_perf.experiment.calibration_health import run_calibration_health
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -105,6 +106,10 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--run-dir", required=True)
     report.add_argument("--ablation-runs", default="")
     report.add_argument("--oracle-run", default=None)
+
+    health = subparsers.add_parser("health", help="Check calibration-run artifact and statistics consistency.")
+    health.add_argument("--run-dir", required=True)
+    health.add_argument("--strict", action="store_true")
     args = parser.parse_args(argv)
 
     if args.command == "run-ldbc-mining":
@@ -211,10 +216,21 @@ def main(argv: list[str] | None = None) -> int:
         payload = export_run_report(args.run_dir, ablation_runs=ablation_runs, oracle_run=args.oracle_run)
         print(f"exported report: {payload['run_dir']}/report.md")
         return 0
+    if args.command == "health":
+        payload = run_calibration_health(args.run_dir)
+        counts = payload.get("severity_counts") or {}
+        print(
+            "health: "
+            f"ok={payload.get('ok')} "
+            f"severe={counts.get('severe', 0)} "
+            f"warning={counts.get('warning', 0)} "
+            f"report={args.run_dir}/calibration_health_report.md"
+        )
+        return 1 if args.strict and not payload.get("ok") else 0
 
     print(
         "GraphSymPerf is installed. Use: "
-        "graph-sym-perf run-ldbc-mining | run-gdsmith-mining | cluster | doctor | experiment | triage | validate | replay | report"
+        "graph-sym-perf run-ldbc-mining | run-gdsmith-mining | cluster | doctor | experiment | triage | validate | replay | report | health"
     )
     return 0
 

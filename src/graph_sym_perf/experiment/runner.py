@@ -32,6 +32,7 @@ from graph_sym_perf.config import environment_with_dotenv
 from graph_sym_perf.core import CaseRecord, ConfigError, QueryCase, QueryFamily, SystemConfig, SystemStatus, TargetSystem
 from graph_sym_perf.coverage import PMCCoverageState, PMCEvidence, write_pmc_artifacts
 from graph_sym_perf.datasets import generate_mini_ldbc
+from graph_sym_perf.diagnostics import summarize_skip_errors
 from graph_sym_perf.feedback import TransformScheduler, initialize_feedback_state, summarize_feedback_state
 from graph_sym_perf.gdsmith import check_gdsmith_tooling, query_cases_from_gdsmith, run_gdsmith
 from graph_sym_perf.querygen import generate_query_cases
@@ -200,11 +201,12 @@ def run_experiment(
         records = _load_case_records(writer.run_dir / "cases.jsonl")
         pmc_summary = pmc_state.snapshot(writer.run_id)
         if run_config.coverage.enabled:
-            write_pmc_artifacts(writer.run_dir, pmc_summary, _load_pmc_evidences(writer.run_dir))
+            write_pmc_artifacts(writer.run_dir, pmc_summary, _pmc_evidences_from_records(records))
         feedback_summary = summarize_feedback_state(feedback_state, run_config.feedback)
         writer.write_json("feedback_summary.json", feedback_summary)
         writer.write_json("rule_stats.json", tuple(feedback_state.rule_stats.values()))
         writer.write_json("symmetry_violations.json", _violation_payload(records))
+        writer.write_json("skip_reason_summary.json", summarize_skip_errors(records))
         write_review_candidates(writer.run_dir, update_summary=False)
         write_exploratory_leads(writer.run_dir, update_summary=False)
         cluster_summary = (
@@ -867,6 +869,16 @@ def _load_pmc_evidences(run_dir: Path) -> list[PMCEvidence]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             evidences.append(_pmc_from_mapping(json.loads(line)))
+    return evidences
+
+
+def _pmc_evidences_from_records(records: list[CaseRecord]) -> list[PMCEvidence]:
+    evidences: list[PMCEvidence] = []
+    for record in records:
+        if record.pmc is not None:
+            evidences.append(record.pmc)
+        if record.exploratory_pmc is not None:
+            evidences.append(record.exploratory_pmc)
     return evidences
 
 

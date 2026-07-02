@@ -112,6 +112,33 @@ def test_candidate_classification_covers_bool_redundancy_and_estimated_only() ->
     assert "EstimatedOnlyAnomaly" in estimated_only
 
 
+def test_profile_supported_candidate_is_not_runtime_only_outlier() -> None:
+    labels = classify_candidate(
+        transform_family="symmetry",
+        transform_rule="pattern_order_symmetry",
+        safety_tier="strict",
+        oracle=None,
+        confirmation=_confirmation(support_level="profile_supported", db_hits_ratio=1.0),
+        plan_diff=PlanDiff(
+            structural_hash_changed=True,
+            changes=({"change": "replaced"},),
+            added_nodes=(),
+            removed_nodes=(),
+            replaced_nodes=(),
+            family_delta={},
+            access_point_delta={},
+            expand_chain_delta={"delta": 0},
+            barrier_delta={"delta": 0},
+            estimated_rows_delta={},
+            metric_deltas=(),
+        ),
+        pmc_evidence=None,
+    )
+
+    assert "ProfileSupported" in labels
+    assert "RuntimeOnlyOutlier" not in labels
+
+
 def test_candidate_signature_is_stable_but_metric_buckets_split_unique_issue() -> None:
     rule = "pattern_order_symmetry"
     record_a = _record("case_001", rule, family_name="symmetry")

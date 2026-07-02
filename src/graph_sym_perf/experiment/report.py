@@ -75,6 +75,7 @@ def _render_report_markdown(payload: Mapping[str, Any]) -> str:
         f"- Unique candidate signatures: {aggregate.get('candidate_count')}",
         f"- Unique issues: {aggregate.get('unique_issue_count')}",
         f"- Issue families: {aggregate.get('issue_family_count')}",
+        f"- Health: {(aggregate.get('health') or {}).get('message', 'not checked')}",
         "",
         "## Triage",
         "",

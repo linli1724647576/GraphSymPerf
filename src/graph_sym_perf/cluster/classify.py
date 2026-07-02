@@ -82,7 +82,7 @@ def classify_candidate(
         labels.append("ExploratoryOnly")
     if _looks_upstream(oracle, confirmation):
         labels.append("UpstreamOrBackendLimitationCandidate")
-    if confirmation is not None and support_level != "plan_only" and not _work_inflation(plan_diff):
+    if confirmation is not None and support_level == "latency_supported" and not _work_inflation(plan_diff):
         labels.append("RuntimeOnlyOutlier")
     if pmc_evidence is not None and not pmc_evidence.units:
         labels.append("UnknownPlanAnomaly")

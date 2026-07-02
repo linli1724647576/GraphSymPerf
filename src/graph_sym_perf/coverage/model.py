@@ -43,4 +43,10 @@ class PMCSummary:
     units_by_transform_rule: Mapping[str, int]
     candidate_units_by_kind: Mapping[str, int]
     top_units: tuple[Mapping[str, Any], ...]
+    total_units_seen_all: int = 0
+    total_units_seen_core: int = 0
+    total_new_units_all: int = 0
+    total_new_units_core: int = 0
+    context_units: Mapping[str, int] = field(default_factory=dict)
+    top_context_units: tuple[Mapping[str, Any], ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)

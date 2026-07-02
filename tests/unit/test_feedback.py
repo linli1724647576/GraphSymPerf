@@ -5,6 +5,7 @@ from dataclasses import replace
 from graph_sym_perf.core import (
     CaseRecord,
     ConfirmationRecord,
+    EquivalenceRecord,
     FeedbackConfig,
     OracleRecord,
     QueryCase,
@@ -67,6 +68,39 @@ def test_feedback_disabled_keeps_static_family_choice() -> None:
 
     assert decision.family == "symmetry"
     assert decision.enabled_rules == ("pattern_order_symmetry", "predicate_order_symmetry")
+
+
+def test_feedback_disabled_static_rotation_prevents_rule_starvation() -> None:
+    config = TransformConfig(
+        enabled_families=("symmetry",),
+        enabled_rules=(
+            "predicate_order_symmetry",
+            "pattern_order_symmetry",
+            "label_order_symmetry",
+            "alpha_renaming_symmetry",
+        ),
+        max_variants_per_case=3,
+    )
+    feedback = FeedbackConfig(enabled=False, exploration_rate=0.0)
+    scheduler = TransformScheduler(config, feedback, initialize_feedback_state(config, feedback))
+
+    chosen = {
+        rule
+        for index in range(20)
+        for rule in scheduler.choose_for_case(
+            QueryCase(
+                case_id=f"case_{index:03d}",
+                template_name="gdsmith",
+                query="MATCH (n)-[:KNOWS]->(m) RETURN n, m",
+                parameters={},
+                base_predicate="true",
+                safe_expression="n.id",
+                source="gdsmith",
+            )
+        ).enabled_rules
+    }
+
+    assert "alpha_renaming_symmetry" in chosen
 
 
 def test_feedback_update_counts_equivalence_candidate_and_pmc_units() -> None:
@@ -141,3 +175,79 @@ def test_feedback_update_counts_equivalence_candidate_and_pmc_units() -> None:
     assert stats.candidate_count == 1
     assert stats.strong_candidate_count == 1
     assert stats.pmc_new_units == 1
+
+
+def test_feedback_rule_stats_are_variant_level_and_self_consistent() -> None:
+    config = TransformConfig(
+        enabled_families=("symmetry",),
+        enabled_rules=("pattern_order_symmetry", "label_order_symmetry"),
+    )
+    feedback = FeedbackConfig(enabled=True, exploration_rate=0.0, max_rules_per_case=2)
+    state = initialize_feedback_state(config, feedback)
+    scheduler = TransformScheduler(config, feedback, state)
+    family = QueryFamily(
+        case_id="case_002",
+        seed_query="MATCH (n) RETURN n",
+        parameters={},
+        variants=(
+            QueryVariant(
+                variant_id="case_002_01_pattern_order_symmetry",
+                query="MATCH (n) RETURN n",
+                transform_rule="pattern_order_symmetry",
+                proof_obligation="proof",
+                metadata={"transform_family": "symmetry"},
+            ),
+            QueryVariant(
+                variant_id="case_002_02_label_order_symmetry",
+                query="MATCH (n:A:B) RETURN n",
+                transform_rule="label_order_symmetry",
+                proof_obligation="proof",
+                metadata={"transform_family": "symmetry"},
+            ),
+        ),
+        source="gdsmith",
+    )
+    record = CaseRecord(
+        system=TargetSystem.NEO4J,
+        case_id="case_002",
+        family=family,
+        equivalences=(
+            EquivalenceRecord(
+                case_id="case_002_01_pattern_order_symmetry",
+                passed=True,
+                left_hash="a",
+                right_hash="a",
+                left_count=1,
+                right_count=1,
+                reason="equal",
+            ),
+            EquivalenceRecord(
+                case_id="case_002_02_label_order_symmetry",
+                passed=False,
+                left_hash="a",
+                right_hash="b",
+                left_count=1,
+                right_count=2,
+                reason="different",
+            ),
+        ),
+        oracle=None,
+        confirmation=None,
+        artifacts={},
+        state="equivalence_failed",
+        reason="NO_DYNAMICALLY_EQUIVALENT_VARIANT",
+    )
+
+    scheduler.update_from_case_record(record, None)
+
+    pattern = state.rule_stats[next(key for key in state.rule_stats if key.rule == "pattern_order_symmetry")]
+    label = state.rule_stats[next(key for key in state.rule_stats if key.rule == "label_order_symmetry")]
+    assert pattern.generated == 1
+    assert pattern.equivalence_passed == 1
+    assert pattern.equivalence_failed == 0
+    assert label.generated == 1
+    assert label.equivalence_passed == 0
+    assert label.equivalence_failed == 1
+    for stats in (pattern, label):
+        assert stats.generated <= stats.attempted
+        assert stats.equivalence_passed + stats.equivalence_failed + stats.errors + stats.timeouts <= stats.generated

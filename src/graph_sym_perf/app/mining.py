@@ -32,6 +32,7 @@ from graph_sym_perf.core import (
 )
 from graph_sym_perf.coverage import PMCCoverageState, PMCSummary, make_pmc_evidence, write_pmc_artifacts
 from graph_sym_perf.datasets import generate_mini_ldbc
+from graph_sym_perf.diagnostics import summarize_skip_errors
 from graph_sym_perf.equivalence import compare_results
 from graph_sym_perf.feedback import TransformScheduler, initialize_feedback_state, summarize_feedback_state
 from graph_sym_perf.oracle import detect_symmetry_violation
@@ -104,6 +105,7 @@ def run_ldbc_mining(
         records, run_outputs = _run_query_cases(config, writer, adapters, query_cases)
         writer.write_json("confirmation.json", [record.confirmation for record in records if record.confirmation])
         writer.write_json("symmetry_violations.json", _violation_payload(records))
+        writer.write_json("skip_reason_summary.json", summarize_skip_errors(records))
         write_review_candidates(writer.run_dir, update_summary=False)
         write_exploratory_leads(writer.run_dir, update_summary=False)
         cluster_summary = (
@@ -168,6 +170,7 @@ def run_gdsmith_cases(
             return EXIT_NO_READY_SYSTEMS
         records, run_outputs = _run_query_cases(config, writer, adapters, query_cases)
         writer.write_json("symmetry_violations.json", _violation_payload(records))
+        writer.write_json("skip_reason_summary.json", summarize_skip_errors(records))
         write_review_candidates(writer.run_dir, update_summary=False)
         write_exploratory_leads(writer.run_dir, update_summary=False)
         cluster_summary = (
@@ -482,7 +485,7 @@ def _run_family(
         confirmation,
         safety_tier="strict",
     )
-    state = "confirmed" if confirmation.confirmed else "equivalent_no_candidate"
+    state = _candidate_state(oracle, confirmation)
     reason = confirmation.reason
     return _case_record(
         adapter.target,
@@ -526,6 +529,21 @@ def _oracle_from_profiles(
     confirmation = _confirmation_from_oracle(family.case_id, fast, slow, oracle)
     writer.write_json(f"{base}/{prefix}confirmation.json", confirmation)
     return oracle, confirmation, plan_diff, fast, slow
+
+
+def _candidate_state(oracle: OracleRecord, confirmation: ConfirmationRecord) -> str:
+    if not oracle.is_candidate:
+        return "equivalent_no_candidate"
+    latency = oracle.evidence.get("latency", {}) if isinstance(oracle.evidence, Mapping) else {}
+    latency_supported = bool(isinstance(latency, Mapping) and latency.get("worsened"))
+    support_level = str(confirmation.support_level)
+    if support_level == "profile_supported" and latency_supported:
+        return "profile_and_latency_supported_candidate"
+    if support_level == "profile_supported":
+        return "profile_supported_candidate"
+    if support_level == "latency_supported":
+        return "latency_supported_candidate"
+    return "plan_only_candidate"
 
 
 def _write_profile_alias_artifacts(
@@ -663,7 +681,7 @@ def _confirmation_from_oracle(
     level = "strong" if profile_supported and latency_supported else "moderate" if profile_supported else "weak" if latency_supported else "none"
     return ConfirmationRecord(
         case_id=case_id,
-        confirmed=oracle.is_candidate and support_level != "plan_only",
+        confirmed=oracle.is_candidate and latency_supported,
         original_median_ms=fast.median_ms,
         transformed_median_ms=slow.median_ms,
         latency_ratio=latency.get("ratio"),
@@ -839,19 +857,33 @@ def _summary(
         "exploratory_leads": sum(
             1 for record in records if record.exploratory_oracle and record.exploratory_oracle.is_candidate
         ),
-        "runtime_confirmed": sum(1 for record in records if record.confirmation and record.confirmation.confirmed),
-        "profile_supported_candidates": sum(1 for record in records if record.confirmation and record.confirmation.support_level == "profile_supported"),
+        "runtime_confirmed": sum(1 for record in records if _latency_supported(record)),
+        "profile_supported_candidates": sum(
+            1
+            for record in records
+            if record.oracle
+            and record.oracle.is_candidate
+            and record.confirmation
+            and record.confirmation.support_level == "profile_supported"
+        ),
         "candidate_types": _candidate_type_counts(records),
         "transform_rules": _transform_rule_counts(records),
         "states": _state_counts(records),
+        **summarize_skip_errors(records),
         "symmetry_violations_artifact": "symmetry_violations.json",
         "review_candidates_markdown": "review_candidates.md",
+        "skip_reason_summary_artifact": "skip_reason_summary.json",
     }
     if pmc_summary is not None:
         summary.update(
             {
                 "pmc_total_units_seen": pmc_summary.total_units_seen,
                 "pmc_new_units": pmc_summary.total_new_units,
+                "pmc_total_units_seen_all": pmc_summary.total_units_seen_all or pmc_summary.total_units_seen,
+                "pmc_total_units_seen_core": pmc_summary.total_units_seen_core or pmc_summary.total_units_seen,
+                "pmc_new_units_all": pmc_summary.total_new_units_all or pmc_summary.total_new_units,
+                "pmc_new_units_core": pmc_summary.total_new_units_core or pmc_summary.total_new_units,
+                "context_units": dict(pmc_summary.context_units),
                 "pmc_units_by_kind": dict(pmc_summary.units_by_kind),
                 "pmc_summary_artifact": "pmc_summary.json",
             }
@@ -860,11 +892,14 @@ def _summary(
         summary.update(
             {
                 "feedback_enabled": bool(feedback_summary.get("enabled")),
-                "feedback_top_rules": tuple(feedback_summary.get("top_rules") or ()),
                 "feedback_summary_artifact": "feedback_summary.json",
                 "rule_stats_artifact": "rule_stats.json",
             }
         )
+        if bool(feedback_summary.get("enabled")):
+            summary["feedback_top_rules"] = tuple(feedback_summary.get("top_rules") or ())
+        else:
+            summary["passive_top_rules"] = tuple(feedback_summary.get("top_rules") or ())
     if cluster_summary is not None:
         summary.update(
             {
@@ -877,6 +912,17 @@ def _summary(
         if bool(((cluster_summary.get("generation_metadata") or {}).get("write_signatures"))):
             summary["candidate_signatures_artifact"] = "candidate_signatures.jsonl"
     return summary
+
+
+def _latency_supported(record: CaseRecord) -> bool:
+    if record.oracle is None or not record.oracle.is_candidate:
+        return False
+    if record.confirmation is not None and record.confirmation.support_level == "latency_supported":
+        return True
+    latency = {}
+    if isinstance(record.oracle.evidence, Mapping):
+        latency = record.oracle.evidence.get("latency") or {}
+    return bool(isinstance(latency, Mapping) and latency.get("worsened"))
 
 
 def _tier_equivalence_passed(record: CaseRecord, tier: str) -> bool:

@@ -15,10 +15,13 @@ def render_pmc_summary_markdown(summary: PMCSummary) -> str:
         "# Plan Metamorphic Coverage Summary",
         "",
         f"- Run ID: {summary.run_id}",
-        f"- Total unit observations: {summary.total_units_seen}",
-        f"- Total new units: {summary.total_new_units}",
+        f"- Core unit observations: {summary.total_units_seen_core or summary.total_units_seen}",
+        f"- Core new units: {summary.total_new_units_core or summary.total_new_units}",
+        f"- All unit observations: {summary.total_units_seen_all or summary.total_units_seen}",
+        f"- All new units: {summary.total_new_units_all or summary.total_new_units}",
+        f"- Context units: {sum((summary.context_units or {}).values())}",
         "",
-        "## Units By Kind",
+        "## Core Units By Kind",
         "",
         "| Kind | Count | New | Candidate |",
         "|---|---:|---:|---:|",
@@ -31,7 +34,7 @@ def render_pmc_summary_markdown(summary: PMCSummary) -> str:
     lines.extend(
         [
             "",
-            "## Top Units",
+            "## Top Core Units",
             "",
             "| Unit Key | Kind | Count | Label |",
             "|---|---|---:|---|",
@@ -41,6 +44,18 @@ def render_pmc_summary_markdown(summary: PMCSummary) -> str:
         lines.append(
             f"| {unit.get('key')} | {unit.get('kind')} | {unit.get('count')} | {unit.get('label')} |"
         )
+    if summary.top_context_units:
+        lines.extend(
+            [
+                "",
+                "## Context Units",
+                "",
+                "| Unit Key | Count | Label |",
+                "|---|---:|---|",
+            ]
+        )
+        for unit in summary.top_context_units:
+            lines.append(f"| {unit.get('key')} | {unit.get('count')} | {unit.get('label')} |")
     return "\n".join(lines) + "\n"
 
 
@@ -57,18 +72,36 @@ def write_pmc_artifacts(
     with (path / "pmc_evidence.jsonl").open("w", encoding="utf-8") as file:
         for evidence in evidence_items:
             file.write(stable_json_dumps(evidence) + "\n")
+    unit_counts: dict[tuple[str, str], int] = {}
+    unit_payloads: dict[tuple[str, str], dict[str, object]] = {}
+    new_unit_keys = {
+        (unit.kind, unit.key)
+        for evidence in evidence_items
+        for unit in evidence.new_units
+    }
+    for evidence in evidence_items:
+        for unit in evidence.units:
+            token = (unit.kind, unit.key)
+            unit_counts[token] = unit_counts.get(token, 0) + 1
+            unit_payloads.setdefault(
+                token,
+                {
+                    "kind": unit.kind,
+                    "key": unit.key,
+                    "label": unit.label,
+                    "weight": unit.weight,
+                    "metadata": dict(unit.metadata),
+                },
+            )
     (path / "pmc_units.json").write_text(
         json.dumps(
             [
-                {
-                    "case_id": evidence.case_id,
-                    "transform_family": evidence.transform_family,
-                    "transform_rule": evidence.transform_rule,
-                    "safety_tier": evidence.safety_tier,
-                    "unit_keys": [unit.key for unit in evidence.units],
-                    "new_unit_keys": [unit.key for unit in evidence.new_units],
-                }
-                for evidence in evidence_items
+                dict(
+                    unit_payloads[token],
+                    count=unit_counts[token],
+                    first_seen_in_run=token in new_unit_keys,
+                )
+                for token in sorted(unit_payloads, key=lambda item: (item[0], item[1]))
             ],
             ensure_ascii=False,
             indent=2,

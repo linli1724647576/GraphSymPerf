@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from graph_sym_perf.core import MetricDelta, PlanDiff
 from graph_sym_perf.coverage import PMCCoverageState, extract_pmc_units, ratio_bucket_label
-from graph_sym_perf.coverage.model import PMCEvidence
+from graph_sym_perf.coverage.model import CoverageUnit, PMCEvidence
 
 
 def _plan_diff() -> PlanDiff:
@@ -86,7 +86,8 @@ def test_pmc_coverage_state_marks_only_first_observation_as_new() -> None:
 
     assert first.new_unit_count == len(units)
     assert second.new_unit_count == 0
-    assert summary.total_new_units == len(units)
+    assert summary.total_new_units == len(tuple(unit for unit in units if unit.kind != "transformation_context"))
+    assert summary.total_new_units_all == len(units)
     assert summary.units_by_kind["access_delta"] >= 1
     assert summary.candidate_units_by_kind["access_delta"] >= 1
 
@@ -97,3 +98,67 @@ def test_ratio_bucket_label_uses_stable_thresholds() -> None:
     assert ratio_bucket_label(2.3) == "2x"
     assert ratio_bucket_label(10.1) == "10x"
     assert ratio_bucket_label(1000.0) == "1000x"
+
+
+def test_pmc_summary_separates_core_and_context_units() -> None:
+    state = PMCCoverageState()
+    evidence = PMCEvidence(
+        case_id="case_001",
+        transform_family="symmetry",
+        transform_rule="pattern_order_symmetry",
+        safety_tier="strict",
+        fast_variant_id="seed",
+        slow_variant_id="case_001_01_pattern_order_symmetry",
+        structural_hash_changed=False,
+        units=(
+            CoverageUnit(kind="transformation_context", key="family:symmetry", label="Transform family: symmetry"),
+            CoverageUnit(kind="access_delta", key="access_changed", label="Access changed"),
+        ),
+    )
+
+    state.observe(evidence)
+    summary = state.snapshot("run-core")
+
+    assert summary.total_units_seen == 1
+    assert summary.total_units_seen_core == 1
+    assert summary.total_units_seen_all == 2
+    assert summary.context_units["transformation_context"] == 1
+    assert all(unit["kind"] != "transformation_context" for unit in summary.top_units)
+    assert summary.top_context_units[0]["key"] == "family:symmetry"
+
+
+def test_metric_aliases_generate_cardinality_work_and_latency_units() -> None:
+    plan = PlanDiff(
+        structural_hash_changed=False,
+        changes=(),
+        added_nodes=(),
+        removed_nodes=(),
+        replaced_nodes=(),
+        family_delta={},
+        access_point_delta={},
+        expand_chain_delta={"delta": 0},
+        barrier_delta={"delta": 0},
+        estimated_rows_delta={},
+        metric_deltas=(
+            MetricDelta("actual_rows", 10.0, 54.0, 5.4, 44.0, True),
+            MetricDelta("actual_hits", 7.0, 70.0, 10.0, 63.0, True),
+            MetricDelta("median_ms", 10.0, 62.0, 6.2, 52.0, True),
+            MetricDelta("missing_metric", None, None, None, None, False),
+        ),
+    )
+
+    units = extract_pmc_units(
+        case_id="case_aliases",
+        transform_family="symmetry",
+        transform_rule="pattern_order_symmetry",
+        safety_tier="strict",
+        fast_variant_id="seed",
+        slow_variant_id="case_aliases_01_pattern_order_symmetry",
+        plan_diff=plan,
+    )
+    keys = {unit.key for unit in units}
+
+    assert "actual_rows_inflated:5x" in keys
+    assert "db_hits_ratio_bucket:10x" in keys
+    assert "latency_ratio_bucket:5x" in keys
+    assert all("missing_metric" not in key for key in keys)

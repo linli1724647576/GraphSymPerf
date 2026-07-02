@@ -170,6 +170,8 @@ def test_run_query_cases_writes_pmc_and_feedback_artifacts(tmp_path: Path, monke
     assert len(records) == 2
     assert outputs["pmc_summary"].total_units_seen >= 2
     assert (run_dir / "pmc_summary.json").exists()
+    assert (run_dir / "pmc_evidence.jsonl").read_text(encoding="utf-8").strip()
+    assert json.loads((run_dir / "pmc_units.json").read_text(encoding="utf-8"))
     assert (run_dir / "feedback_summary.json").exists()
     assert (run_dir / "rule_stats.json").exists()
     assert (run_dir / "neo4j" / "case_001" / "pmc_evidence.json").exists()

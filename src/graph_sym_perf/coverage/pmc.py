@@ -8,6 +8,9 @@ from graph_sym_perf.core import CoverageConfig, MetricDelta, PlanDiff
 from graph_sym_perf.coverage.model import CoverageUnit, PMCEvidence
 
 DEFAULT_RATIO_BUCKETS: tuple[float, ...] = (1.5, 2.0, 5.0, 10.0, 50.0, 100.0, 1000.0)
+ROW_METRIC_ALIASES = {"rows", "actual_rows", "records", "records_produced", "row_work"}
+DB_HIT_METRIC_ALIASES = {"db_hits", "actual_hits", "actual_db_hits", "dbhits"}
+LATENCY_METRIC_ALIASES = {"latency_ms", "median_ms", "elapsed_ms", "runtime_ms"}
 
 
 def extract_pmc_units(
@@ -267,7 +270,7 @@ def _add_cardinality_units(
                     metadata={"ratio": estimated_ratio},
                 )
             )
-    rows_delta = _metric_by_name(plan_diff.metric_deltas, "rows")
+    rows_delta = _metric_by_name(plan_diff.metric_deltas, ROW_METRIC_ALIASES)
     if rows_delta and rows_delta.worsened and _passes_threshold("rows", rows_delta.ratio, metric_thresholds):
         bucket = ratio_bucket_label(rows_delta.ratio, ratio_buckets)
         if bucket is not None:
@@ -296,21 +299,31 @@ def _add_work_units(
     metric_thresholds: Mapping[str, float] | None,
 ) -> None:
     for metric in metric_deltas:
-        if metric.metric == "rows" or not metric.worsened or not _passes_threshold(metric.metric, metric.ratio, metric_thresholds):
+        canonical = _canonical_metric(metric.metric)
+        if canonical == "rows" or not metric.worsened or not _passes_threshold(canonical, metric.ratio, metric_thresholds):
             continue
         bucket = ratio_bucket_label(metric.ratio, ratio_buckets)
         if bucket is None:
             continue
-        if metric.metric == "db_hits":
+        if canonical == "db_hits":
             units.append(_unit("work_delta", f"db_hits_ratio_bucket:{bucket}", f"DB hits ratio bucket: {bucket}"))
-        elif metric.metric == "memory_bytes":
+        elif canonical == "memory_bytes":
             units.append(_unit("work_delta", f"memory_ratio_bucket:{bucket}", f"Memory ratio bucket: {bucket}"))
-        elif metric.metric in {"page_cache_hits", "page_cache_misses"}:
+        elif canonical in {"page_cache_hits", "page_cache_misses"}:
             units.append(
                 _unit(
                     "work_delta",
                     f"page_cache_ratio_bucket:{bucket}",
                     f"Page cache ratio bucket: {bucket}",
+                    metadata={"metric": metric.metric},
+                )
+            )
+        elif canonical == "latency_ms":
+            units.append(
+                _unit(
+                    "latency_delta",
+                    f"latency_ratio_bucket:{bucket}",
+                    f"Latency ratio bucket: {bucket}",
                     metadata={"metric": metric.metric},
                 )
             )
@@ -360,11 +373,23 @@ def _is_access_improved(access: Mapping[str, Any]) -> bool:
     return original_rank is not None and transformed_rank is not None and transformed_rank < original_rank
 
 
-def _metric_by_name(metric_deltas: tuple[MetricDelta, ...], metric: str) -> MetricDelta | None:
+def _metric_by_name(metric_deltas: tuple[MetricDelta, ...], metric: str | set[str]) -> MetricDelta | None:
+    wanted = {metric} if isinstance(metric, str) else metric
     for delta in metric_deltas:
-        if delta.metric == metric:
+        if delta.metric in wanted or _canonical_metric(delta.metric) in wanted:
             return delta
     return None
+
+
+def _canonical_metric(metric: str) -> str:
+    normalized = metric.strip().lower()
+    if normalized in ROW_METRIC_ALIASES:
+        return "rows"
+    if normalized in DB_HIT_METRIC_ALIASES:
+        return "db_hits"
+    if normalized in LATENCY_METRIC_ALIASES:
+        return "latency_ms"
+    return normalized
 
 
 def _passes_threshold(

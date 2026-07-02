@@ -8,6 +8,8 @@ from typing import Any, Mapping
 
 from graph_sym_perf.coverage.model import CoverageUnit, PMCEvidence, PMCSummary
 
+CONTEXT_KIND = "transformation_context"
+
 
 @dataclass
 class PMCCoverageState:
@@ -50,6 +52,12 @@ class PMCCoverageState:
         )
 
     def snapshot(self, run_id: str) -> PMCSummary:
+        core_unit_key_counts = Counter(
+            {key: count for key, count in self.unit_key_counts.items() if self.unit_registry[key].kind != CONTEXT_KIND}
+        )
+        context_unit_key_counts = Counter(
+            {key: count for key, count in self.unit_key_counts.items() if self.unit_registry[key].kind == CONTEXT_KIND}
+        )
         top_units = tuple(
             {
                 "key": key,
@@ -57,24 +65,53 @@ class PMCCoverageState:
                 "label": self.unit_registry[key].label,
                 "count": count,
             }
-            for key, count in sorted(self.unit_key_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+            for key, count in sorted(core_unit_key_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+        )
+        top_context_units = tuple(
+            {
+                "key": key,
+                "kind": self.unit_registry[key].kind,
+                "label": self.unit_registry[key].label,
+                "count": count,
+            }
+            for key, count in sorted(context_unit_key_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+        )
+        core_kind_counts = Counter(
+            {kind: count for kind, count in self.unit_kind_counts.items() if kind != CONTEXT_KIND}
+        )
+        core_new_kind_counts = Counter(
+            {kind: count for kind, count in self.new_unit_kind_counts.items() if kind != CONTEXT_KIND}
         )
         metadata: dict[str, Any] = {
             "distinct_unit_keys": len(self.seen_unit_keys),
+            "distinct_core_unit_keys": len(core_unit_key_counts),
+            "distinct_context_unit_keys": len(context_unit_key_counts),
             "tier_units_by_kind": {
                 tier: dict(sorted(counter.items()))
                 for tier, counter in sorted(self.tier_unit_kind_counts.items())
             },
+            "all_units_by_kind": dict(sorted(self.unit_kind_counts.items())),
+            "all_new_units_by_kind": dict(sorted(self.new_unit_kind_counts.items())),
         }
+        total_all = sum(self.unit_counts.values())
+        total_new_all = sum(self.new_unit_kind_counts.values())
+        total_core = sum(core_kind_counts.values())
+        total_new_core = sum(core_new_kind_counts.values())
         return PMCSummary(
             run_id=run_id,
-            total_units_seen=sum(self.unit_counts.values()),
-            total_new_units=sum(self.new_unit_kind_counts.values()),
-            units_by_kind=dict(sorted(self.unit_kind_counts.items())),
-            new_units_by_kind=dict(sorted(self.new_unit_kind_counts.items())),
+            total_units_seen=total_core,
+            total_new_units=total_new_core,
+            units_by_kind=dict(sorted(core_kind_counts.items())),
+            new_units_by_kind=dict(sorted(core_new_kind_counts.items())),
             units_by_transform_family=dict(sorted(self.transform_family_counts.items())),
             units_by_transform_rule=dict(sorted(self.transform_rule_counts.items())),
             candidate_units_by_kind=dict(sorted(self.candidate_unit_kind_counts.items())),
             top_units=top_units,
+            total_units_seen_all=total_all,
+            total_units_seen_core=total_core,
+            total_new_units_all=total_new_all,
+            total_new_units_core=total_new_core,
+            context_units=dict(sorted({CONTEXT_KIND: self.unit_kind_counts.get(CONTEXT_KIND, 0)}.items())),
+            top_context_units=top_context_units,
             metadata=metadata,
         )

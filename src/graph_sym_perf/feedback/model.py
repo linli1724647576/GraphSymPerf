@@ -29,6 +29,7 @@ class RuleStats:
     timeouts: int = 0
     errors: int = 0
     reward: float = 0.0
+    inactive_reason: str | None = None
 
 
 @dataclass(frozen=True)

@@ -17,7 +17,7 @@ from graph_sym_perf.cypher.proof import ProofFailure, prove_redundant_boolean_pr
 from graph_sym_perf.query_ir import select_expression, wrap_as_case_true
 
 
-TRANSFORM_RULE = "where_and_true_or_expr"
+TRANSFORM_RULE = "and_true_or"
 GDSMITH_TRANSFORM_RULE = "gdsmith_ir_redundant_predicate"
 
 SUPPORTED_GDSMITH_RULES = (
@@ -104,10 +104,14 @@ def generate_bool_redundancy_family(
     skipped: list[QueryVariant] = []
 
     if query_case.source != "gdsmith" and query_case.base_predicate:
-        try:
-            variants.append(_named_variant(query_case.case_id, 1, _ldbc_variant(query_case, query)))
-        except TransformSkipError as exc:
-            skipped.append(_skipped_variant(query_case.case_id, TRANSFORM_RULE, query, exc))
+        rules = (query_case.transform_rule,) if query_case.transform_rule else _enabled_rules(config.enabled_rules)
+        if config.max_variants_per_case is not None:
+            rules = rules[: max(0, config.max_variants_per_case)]
+        for rule in rules:
+            try:
+                variants.append(_named_variant(query_case.case_id, len(variants) + 1, _ldbc_variant(query_case, query, rule=rule)))
+            except TransformSkipError as exc:
+                skipped.append(_skipped_variant(query_case.case_id, rule, query, exc))
         return QueryFamily(
             case_id=query_case.case_id,
             seed_query=query,
@@ -483,14 +487,14 @@ def _has_variable_length_path(query: str) -> bool:
     return bool(re.search(r"\[[^\]]*\*", query))
 
 
-def _ldbc_variant(query_case: QueryCase, query: str) -> QueryVariant:
+def _ldbc_variant(query_case: QueryCase, query: str, *, rule: str | None = None) -> QueryVariant:
     site = analyze_gdsmith_injection_site(query)
     if _normalize_predicate_text(site.base_predicate) != _normalize_predicate_text(query_case.base_predicate):
         raise TransformSkipError(
             "UNSAFE_PREDICATE_PROOF_FRAGMENT",
             "query case base_predicate does not match the selected MATCH WHERE predicate",
         )
-    rule = query_case.transform_rule or TRANSFORM_RULE
+    rule = query_case.transform_rule or rule or TRANSFORM_RULE
     proof, ast_fragment = _prove_static_redundant_transform(
         query,
         site,

@@ -30,6 +30,7 @@ def aggregate_run_root(run_root: str | Path) -> Mapping[str, Any]:
         raise FileNotFoundError(f"no shard directories found under {root}")
 
     records = _load_all_case_records(shard_dirs)
+    health_reports = _run_shard_health_checks(shard_dirs)
     signatures = _load_all_signatures(shard_dirs)
     deduped_signatures = _dedupe_signatures(signatures)
     pmc_summary = _aggregate_pmc(shard_dirs, root)
@@ -54,6 +55,7 @@ def aggregate_run_root(run_root: str | Path) -> Mapping[str, Any]:
         "states": dict(sorted(Counter(str(record.get("state") or "") for record in records).items())),
         "support_levels": dict(sorted(Counter(item.signature.support_level for item in deduped_signatures.values()).items())),
         "ratio_distributions": _ratio_distributions(deduped_signatures.values()),
+        "health": _health_summary(health_reports),
         "artifacts": {
             "aggregate_pmc_summary": "aggregate_pmc_summary.json",
             "aggregate_feedback_summary": "aggregate_feedback_summary.json",
@@ -75,6 +77,31 @@ def aggregate_run_root(run_root: str | Path) -> Mapping[str, Any]:
     _write_tables(root, summary, unique_issues, issue_families, deduped_signatures.values())
     _copy_first_manifest(shard_dirs, root)
     return summary
+
+
+def _run_shard_health_checks(shard_dirs: tuple[Path, ...]) -> tuple[Mapping[str, Any], ...]:
+    from graph_sym_perf.experiment.calibration_health import run_calibration_health
+
+    reports: list[Mapping[str, Any]] = []
+    for shard_dir in shard_dirs:
+        reports.append(run_calibration_health(shard_dir))
+    return tuple(reports)
+
+
+def _health_summary(reports: tuple[Mapping[str, Any], ...]) -> Mapping[str, Any]:
+    severe = sum(int((report.get("severity_counts") or {}).get("severe", 0)) for report in reports)
+    warnings = sum(int((report.get("severity_counts") or {}).get("warning", 0)) for report in reports)
+    return {
+        "ok": severe == 0,
+        "severe": severe,
+        "warning": warnings,
+        "message": (
+            "aggregate is health-check clean"
+            if severe == 0
+            else "aggregate is not trustworthy until shard calibration_health_report severe issues are fixed"
+        ),
+        "reports": [str(Path(str(report.get("run_dir"))) / "calibration_health_report.json") for report in reports],
+    }
 
 
 def _aggregate_pmc(shard_dirs: tuple[Path, ...], root: Path) -> Mapping[str, Any]:
@@ -302,12 +329,18 @@ def _summary_to_mapping(summary: PMCSummary) -> Mapping[str, Any]:
         "run_id": summary.run_id,
         "total_units_seen": summary.total_units_seen,
         "total_new_units": summary.total_new_units,
+        "total_units_seen_all": summary.total_units_seen_all,
+        "total_units_seen_core": summary.total_units_seen_core,
+        "total_new_units_all": summary.total_new_units_all,
+        "total_new_units_core": summary.total_new_units_core,
+        "context_units": dict(summary.context_units),
         "units_by_kind": dict(summary.units_by_kind),
         "new_units_by_kind": dict(summary.new_units_by_kind),
         "units_by_transform_family": dict(summary.units_by_transform_family),
         "units_by_transform_rule": dict(summary.units_by_transform_rule),
         "candidate_units_by_kind": dict(summary.candidate_units_by_kind),
         "top_units": list(summary.top_units),
+        "top_context_units": list(summary.top_context_units),
         "metadata": dict(summary.metadata),
     }
 
@@ -432,6 +465,9 @@ def _render_aggregate_markdown(summary: Mapping[str, Any]) -> str:
         f"- Unique candidate signatures: {summary.get('candidate_count')}",
         f"- Unique issues: {summary.get('unique_issue_count')}",
         f"- Issue families: {summary.get('issue_family_count')}",
+        f"- Health: {(summary.get('health') or {}).get('message', 'not checked')}",
+        f"- Health severe issues: {(summary.get('health') or {}).get('severe', 0)}",
+        f"- Health warnings: {(summary.get('health') or {}).get('warning', 0)}",
         "",
         "## Systems",
         "",

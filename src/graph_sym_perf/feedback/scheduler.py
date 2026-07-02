@@ -35,7 +35,7 @@ class TransformScheduler:
             )
         if not self.feedback_config.enabled:
             family = select_family_name(query_case, replace(self.config, enabled_families=eligible_families))
-            rules = family_rules(self.config, family)
+            rules = self._static_rule_order(query_case, family_rules(self.config, family), family)
             return FeedbackDecision(
                 family=family,
                 enabled_rules=self._cap_rules(rules),
@@ -58,22 +58,23 @@ class TransformScheduler:
     def update_from_case_record(self, record: CaseRecord, pmc_evidence: PMCEvidence | None = None) -> None:
         candidate = bool(record.oracle and record.oracle.is_candidate)
         strong_candidate = bool(record.confirmation and record.confirmation.support_level == "profile_supported")
-        passed_ids = {item.case_id for item in record.equivalences if item.passed}
-        generated_rules = {variant.transform_rule for variant in record.family.variants}
-        skipped_rules = {variant.transform_rule for variant in record.family.skipped_variants}
+        equivalences_by_id = {item.case_id: item for item in record.equivalences}
         pmc_rule = pmc_evidence.transform_rule if pmc_evidence is not None else None
         family_name = self._infer_family(record)
-        for rule in sorted(generated_rules | skipped_rules):
+        for variant in record.family.variants:
+            rule = variant.transform_rule
             stats = self._stats(family_name, rule)
             stats.attempted += 1
-            if rule in generated_rules:
-                stats.generated += 1
-            if rule in skipped_rules:
-                stats.skipped += 1
-            if any(item.case_id in passed_ids and f"_{rule}" in item.case_id for item in record.equivalences):
+            stats.generated += 1
+            equivalence = equivalences_by_id.get(variant.variant_id)
+            if equivalence is not None and equivalence.passed:
                 stats.equivalence_passed += 1
-            elif record.equivalences:
+            elif equivalence is not None:
                 stats.equivalence_failed += 1
+            elif record.state == "error":
+                stats.errors += 1
+            if record.reason and "TIMEOUT" in str(record.reason).upper():
+                stats.timeouts += 1
             if record.confirmation is not None and pmc_rule == rule:
                 stats.profile_available += 1
                 stats.pmc_units += pmc_evidence.unit_count if pmc_evidence else 0
@@ -82,9 +83,14 @@ class TransformScheduler:
                     stats.candidate_count += 1
                 if strong_candidate:
                     stats.strong_candidate_count += 1
-            if record.state == "error":
-                stats.errors += 1
-            if "TIMEOUT" in str(record.reason).upper():
+            stats.reward = compute_reward(stats, self.feedback_config)
+            self._merge_family_stats(stats)
+        for variant in record.family.skipped_variants:
+            rule = variant.transform_rule
+            stats = self._stats(family_name, rule)
+            stats.attempted += 1
+            stats.skipped += 1
+            if variant.skip_reason and "TIMEOUT" in str(variant.skip_reason).upper():
                 stats.timeouts += 1
             stats.reward = compute_reward(stats, self.feedback_config)
             self._merge_family_stats(stats)
@@ -153,6 +159,14 @@ class TransformScheduler:
                 key=lambda item: (-item[1], item[0]),
             )
         )
+
+    def _static_rule_order(self, query_case: QueryCase, rules: tuple[str, ...], family: str) -> tuple[str, ...]:
+        if len(rules) <= 1:
+            return rules
+        if self.config.max_variants_per_case is None or self.config.max_variants_per_case >= len(rules):
+            return rules
+        offset = self._stable_token(f"static-rotation:{self.state.seed}:{family}:{query_case.case_id}") % len(rules)
+        return rules[offset:] + rules[:offset]
 
     def _cap_rules(self, rules: tuple[str, ...]) -> tuple[str, ...]:
         minimum = 1 if not self.feedback_config.enabled else max(1, self.feedback_config.min_rules_per_case)

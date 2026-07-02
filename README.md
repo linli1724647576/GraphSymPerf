@@ -157,6 +157,14 @@ Aggregate shard outputs after the full sweep finishes:
 graph-sym-perf experiment aggregate --run-root runs/main_effectiveness_2026_01
 ```
 
+Check a calibration shard before using it to tune thresholds or launch main effectiveness runs:
+
+```bash
+graph-sym-perf health --run-dir runs/calibration_2026_01/shard_000
+```
+
+Use `--strict` in automation when severe health errors should fail the job.
+
 Export paper-facing tables and figure data:
 
 ```bash
@@ -188,10 +196,15 @@ Notes:
 
 ## Artifact Semantics
 
-- `pmc_summary.*` summarizes plan-level metamorphic coverage over all dynamically equivalent cases.
-- `feedback_summary.json` explains which transform rules accrued reward and therefore move earlier in later cases when feedback is enabled.
+- Calibration runs are not expected to maximize bug yield. Their purpose is to validate adapter connectivity, result-equivalence execution, PROFILE/parser availability, PMC artifact completeness, rule-stat consistency, skip/error diagnosis, and clustering output before the main run.
+- `pmc_summary.*` summarizes plan-level metamorphic coverage over all dynamically equivalent cases. Core PMC excludes `transformation_context`; `pmc_total_units_seen_all`, `pmc_total_units_seen_core`, `pmc_new_units_all`, `pmc_new_units_core`, and `context_units` make the split explicit.
+- `pmc_evidence.jsonl` is the run-level stream of per-case `PMCEvidence`; each candidate case also writes `pmc_evidence.json` when coverage artifact writing is enabled.
+- `feedback_summary.json` explains which transform rules accrued reward and therefore move earlier in later cases when feedback is enabled. When feedback is disabled, the same passive statistics are exposed as `passive_top_rules` in `summary.json`.
 - `candidate_signatures.jsonl` records stable per-candidate signatures for issue-family clustering and duplicate suppression.
 - `clustered_summary.*` reports issue-family counts, unique issues, duplicate groups, and representatives chosen by support strength and ratio evidence.
+- `support_level` is tool evidence strength (`plan_only`, `profile_supported`, or `latency_supported`). `claim_level` is the reporting claim strength. `developer_status` tracks external issue-tracker state.
+- `runtime_confirmed` is strict: it counts only candidates whose latency ratio and latency delta pass the configured runtime thresholds. Profile-only candidates are not runtime-confirmed.
+- `calibration_health_report.*` must have no severe errors before a calibration result is used to tune main-run settings or before proceeding to main effectiveness runs.
 
 ## Validation
 
