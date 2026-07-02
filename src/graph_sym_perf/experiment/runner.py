@@ -10,6 +10,7 @@ from pathlib import Path
 from threading import Lock
 import tempfile
 from typing import Any, Mapping
+from urllib.parse import unquote, urlparse
 import yaml
 
 from graph_sym_perf.adapters import create_adapter
@@ -739,6 +740,9 @@ def _reset_adapter_for_known_issue_setup(adapter) -> None:
         adapter._conn.commit()
         adapter.ensure_schema()
         return
+    if target == "agensgraph":
+        adapter.reset_schema()
+        return
     raise ConfigError(f"known issue replay setup reset is not implemented for target: {target}")
 
 
@@ -916,4 +920,21 @@ def _gdsmith_connection_fields(target: TargetSystem, env: Mapping[str, str]) -> 
             env.get("GRAPHSYMPERF_FALKORDB_USER", "neo4j"),
             env.get("GRAPHSYMPERF_FALKORDB_PASSWORD", "sqlancer"),
         )
+    if target is TargetSystem.AGENSGRAPH:
+        host, port, username, password = _postgres_uri_to_connection_fields(env["GRAPHSYMPERF_AGENSGRAPH_URI"])
+        return (
+            host,
+            port,
+            env.get("GRAPHSYMPERF_AGENSGRAPH_USER") or username or "postgres",
+            env.get("GRAPHSYMPERF_AGENSGRAPH_PASSWORD") or password or "",
+        )
     raise ConfigError(f"GDsmith connection fields for {target.value} are not configured")
+
+
+def _postgres_uri_to_connection_fields(uri: str) -> tuple[str, int, str | None, str | None]:
+    parsed = urlparse(uri)
+    if not parsed.hostname:
+        raise ConfigError(f"invalid PostgreSQL URI for GDsmith: {uri!r}")
+    username = unquote(parsed.username) if parsed.username is not None else None
+    password = unquote(parsed.password) if parsed.password is not None else None
+    return parsed.hostname, parsed.port or 5432, username, password

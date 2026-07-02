@@ -8,6 +8,7 @@ systems:
     - neo4j
     - memgraph
     - falkordb
+    - agensgraph
     - arcadedb
     - apache_age
 

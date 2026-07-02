@@ -86,11 +86,12 @@ graph-sym-perf cluster --run-dir logs/<run_id>
 
 ## Local Multi-DB Stack
 
-This repository now includes a local five-database stack for deterministic smoke runs:
+This repository now includes a local six-database stack for deterministic smoke runs:
 
 - Neo4j
 - Memgraph
 - FalkorDB
+- AgensGraph
 - ArcadeDB
 - Apache AGE
 
@@ -103,13 +104,13 @@ Start or stop the local stack with:
 ./scripts/stop_local_graphdbs.sh
 ```
 
-Verify that all five adapters are locally reachable:
+Verify that all six adapters are locally reachable:
 
 ```bash
 graph-sym-perf doctor --config config/experiments/local_multidb_smoke.yaml --strict
 ```
 
-Run a real end-to-end smoke experiment across all five systems:
+Run a real end-to-end smoke experiment across all six systems:
 
 ```bash
 graph-sym-perf experiment run \
@@ -146,7 +147,7 @@ graph-sym-perf experiment run \
   --manifest config/experiments/main_effectiveness.yaml \
   --shard 0 \
   --num-shards 16 \
-  --systems neo4j,memgraph,falkordb,arcadedb,apache_age \
+  --systems neo4j,memgraph,falkordb,agensgraph,arcadedb,apache_age \
   --max-cases 5000 \
   --feedback
 ```
@@ -188,9 +189,9 @@ graph-sym-perf validate \
 Notes:
 
 - Direct GDsmith generation still depends on one chosen generator backend, configured through `generator_target` (default `neo4j`).
-- `config/experiments/local_multidb_gdsmith_smoke.yaml` runs a five-database replay experiment by using `neo4j` as the GDsmith generator and replaying the same graph plus accepted read queries on `memgraph`, `falkordb`, `arcadedb`, and `apache_age`.
+- `config/experiments/local_multidb_gdsmith_smoke.yaml` runs a six-database replay experiment by using `neo4j` as the GDsmith generator and replaying the same graph plus accepted read queries on `memgraph`, `falkordb`, `agensgraph`, `arcadedb`, and `apache_age`.
 - For local multi-database validation, use `config/experiments/local_multidb_smoke.yaml`, which runs the deterministic mini-LDBC loader instead of GDsmith.
-- `config/experiments/replay_known.yaml` contains the current six-case known issue replay corpus: Neo4j, Memgraph, FalkorDB, ArcadeDB, and Apache AGE.
+- `config/experiments/replay_known.yaml` contains the current six-case known issue replay corpus: Neo4j, Memgraph, FalkorDB, ArcadeDB, and Apache AGE. AgensGraph is adapter-supported, but no AgensGraph known-issue replay case is recorded yet.
 - `execution.workers_per_shard` enables shard-internal worker parallelism for non-destructive cases. Known issue replay cases with `setup_path` are forced back to serial execution because each case resets the target graph.
 - Large server runs can combine both levels: launch multiple shards in parallel and set `workers_per_shard` inside each shard when the target databases can handle the load.
 

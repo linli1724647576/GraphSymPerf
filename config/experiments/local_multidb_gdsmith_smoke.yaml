@@ -1,5 +1,5 @@
 experiment_id: local_multidb_gdsmith_smoke_2026_07
-description: GDsmith-generated graph and queries replayed across Neo4j, Memgraph, FalkorDB, ArcadeDB, and Apache AGE.
+description: GDsmith-generated graph and queries replayed across Neo4j, Memgraph, FalkorDB, AgensGraph, ArcadeDB, and Apache AGE.
 seed: 20260522
 output_root: runs/local_multidb_gdsmith_smoke_2026_07
 
@@ -8,6 +8,7 @@ systems:
     - neo4j
     - memgraph
     - falkordb
+    - agensgraph
     - arcadedb
     - apache_age
 

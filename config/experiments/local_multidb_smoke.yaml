@@ -1,5 +1,5 @@
 experiment_id: local_multidb_smoke_2026_07
-description: Local deterministic smoke run across Neo4j, Memgraph, FalkorDB, ArcadeDB, and Apache AGE using the mini LDBC loader.
+description: Local deterministic smoke run across Neo4j, Memgraph, FalkorDB, AgensGraph, ArcadeDB, and Apache AGE using the mini LDBC loader.
 seed: 20260522
 output_root: runs/local_multidb_smoke_2026_07
 
@@ -8,6 +8,7 @@ systems:
     - neo4j
     - memgraph
     - falkordb
+    - agensgraph
     - arcadedb
     - apache_age
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from graph_sym_perf.config import load_run_config
+from graph_sym_perf.core import TargetSystem
 
 
 def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
@@ -18,5 +19,6 @@ def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
     assert config.feedback.max_rules_per_case == 4
     assert config.clustering.enabled
     assert config.clustering.write_signatures
+    assert config.system_config(TargetSystem.AGENSGRAPH) is not None
     assert config.system_config(config.systems[0].target).required_env[0].startswith("GRAPHSYMPERF_")
     assert config.system_config(config.systems[0].target).capabilities.supports_execute

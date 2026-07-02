@@ -11,6 +11,7 @@ systems:
   targets:
     - neo4j
     - memgraph
+    - agensgraph
     - kuzu
   env:
     neo4j:
@@ -27,6 +28,14 @@ systems:
       optional:
         username: GRAPHSYMPERF_MEMGRAPH_USER
         password: GRAPHSYMPERF_MEMGRAPH_PASSWORD
+    agensgraph:
+      required:
+        - GRAPHSYMPERF_AGENSGRAPH_URI
+        - GRAPHSYMPERF_AGENSGRAPH_GRAPH
+      optional:
+        username: GRAPHSYMPERF_AGENSGRAPH_USER
+        password: GRAPHSYMPERF_AGENSGRAPH_PASSWORD
+        database: GRAPHSYMPERF_AGENSGRAPH_DATABASE
     kuzu:
       required:
         - GRAPHSYMPERF_KUZU_DATABASE_PATH
@@ -34,6 +43,7 @@ systems:
   settings:
     neo4j: {}
     memgraph: {}
+    agensgraph: {}
     kuzu:
       require_dedicated_path: true
 

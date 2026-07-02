@@ -269,6 +269,22 @@ def test_apache_age_known_issue_reset_drops_and_recreates_graph() -> None:
     assert adapter.schema_calls == 1
 
 
+def test_agensgraph_known_issue_reset_uses_adapter_schema_reset() -> None:
+    class FakeAgensGraphAdapter:
+        target = TargetSystem.AGENSGRAPH
+
+        def __init__(self) -> None:
+            self.reset_calls = 0
+
+        def reset_schema(self):
+            self.reset_calls += 1
+
+    adapter = FakeAgensGraphAdapter()
+    _reset_adapter_for_known_issue_setup(adapter)
+
+    assert adapter.reset_calls == 1
+
+
 def test_write_known_replay_summary_artifacts_emits_expected_files(tmp_path: Path) -> None:
     class DummyPaths:
         def artifact_path(self, run_id: str) -> Path:

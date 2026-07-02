@@ -33,7 +33,7 @@ Export manual review candidates from an existing run:
 
 The scripts record skipped targets in `preflight.json` and exit with code `2` if no real database target is ready.
 
-Local five-database stack:
+Local six-database stack:
 
 ```bash
 ./scripts/start_local_graphdbs.sh

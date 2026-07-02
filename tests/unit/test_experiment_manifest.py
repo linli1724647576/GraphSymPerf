@@ -5,10 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from graph_sym_perf.core import ConfigError, QueryCase
+from graph_sym_perf.core import ConfigError, QueryCase, TargetSystem
 from graph_sym_perf.experiment.manifest import load_experiment_manifest
 from graph_sym_perf.experiment.resume import CheckpointState
-from graph_sym_perf.experiment.runner import _apply_run_overrides, _build_case_tasks, _effective_worker_count
+from graph_sym_perf.experiment.runner import (
+    _apply_run_overrides,
+    _build_case_tasks,
+    _effective_worker_count,
+    _gdsmith_connection_fields,
+)
 from graph_sym_perf.experiment.shard import ShardSpec
 
 
@@ -18,6 +23,14 @@ def test_main_effectiveness_manifest_projects_to_run_config() -> None:
     run_config = manifest.to_run_config(shard_index=2, num_shards=16)
 
     assert manifest.experiment_id == "main_effectiveness_2026_01"
+    assert [system.target.value for system in manifest.systems] == [
+        "neo4j",
+        "memgraph",
+        "falkordb",
+        "agensgraph",
+        "arcadedb",
+        "apache_age",
+    ]
     assert manifest.source_kind == "multi"
     assert manifest.source_modes == ("gdsmith", "ldbc")
     assert manifest.total_case_budget(16) == 55000
@@ -57,6 +70,15 @@ def test_experiment_run_overrides_reject_unknown_system() -> None:
 
     with pytest.raises(ConfigError):
         _apply_run_overrides(run_config, systems="unknown", max_cases=None, feedback_enabled=None)
+
+
+def test_gdsmith_connection_fields_support_agensgraph_uri() -> None:
+    fields = _gdsmith_connection_fields(
+        TargetSystem.AGENSGRAPH,
+        {"GRAPHSYMPERF_AGENSGRAPH_URI": "postgresql://postgres:secret@127.0.0.1:5456/postgres"},
+    )
+
+    assert fields == ("127.0.0.1", 5456, "postgres", "secret")
 
 
 def test_worker_count_uses_manifest_workers_for_non_destructive_cases() -> None:
