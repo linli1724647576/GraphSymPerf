@@ -54,7 +54,7 @@ def make_pmc_evidence(
         safety_tier=safety_tier,
         plan_diff=plan_diff,
         ratio_buckets=tuple(config.ratio_buckets),
-        metric_thresholds=None,
+        metric_thresholds=dict(config.metric_thresholds) if config.metric_thresholds else None,
     )
     if not config.include_transformation_context:
         units = tuple(unit for unit in units if unit.kind != "transformation_context")
@@ -73,6 +73,13 @@ def make_pmc_evidence(
 
 
 def ratio_bucket_label(ratio: float | None, buckets: Iterable[float] = DEFAULT_RATIO_BUCKETS) -> str | None:
+    """Map a ratio to the largest bucket threshold it meets or exceeds.
+
+    The loop walks ascending buckets and keeps updating ``selected`` so long
+    as ratio >= bucket.  On the first bucket that is *larger* than ratio the
+    loop breaks, leaving ``selected`` at the last (largest) satisfied
+    threshold.  E.g. ratio=7 with buckets (1.5, 2, 5, 10) → "5x".
+    """
     if ratio is None:
         return None
     bucket_values = tuple(float(value) for value in buckets)
@@ -83,9 +90,9 @@ def ratio_bucket_label(ratio: float | None, buckets: Iterable[float] = DEFAULT_R
     selected = bucket_values[0]
     for bucket in bucket_values:
         if ratio >= bucket:
-            selected = bucket
+            selected = bucket  # still satisfies this threshold — keep climbing
         else:
-            break
+            break  # first unsatisfied threshold — stop
     return f"{selected:g}x"
 
 
@@ -103,6 +110,7 @@ def _extract_pmc_units(
     _add_operator_units(units, plan_diff)
     _add_access_units(units, plan_diff)
     _add_expand_units(units, plan_diff)
+    _add_join_units(units, plan_diff)
     _add_predicate_units(units, plan_diff)
     _add_barrier_units(units, plan_diff)
     _add_cardinality_units(units, plan_diff, ratio_buckets, metric_thresholds)
@@ -200,6 +208,35 @@ def _add_expand_units(units: list[CoverageUnit], plan_diff: PlanDiff) -> None:
             units.append(_unit("expand_delta", "relationship_type_changed", "Relationship type changed"))
         if left.get("direction") != right.get("direction") and (left.get("direction") or right.get("direction")):
             units.append(_unit("expand_delta", "expand_direction_changed", "Expand direction changed"))
+
+
+def _add_join_units(units: list[CoverageUnit], plan_diff: PlanDiff) -> None:
+    """PMC join_delta: join/apply operator changes (Δjoin in document/总体研究主线.md §7)."""
+    join_delta = int(plan_diff.family_delta.get("Join", 0))
+    if join_delta > 0:
+        units.append(_unit("join_delta", "join_count_increased", "Join count increased"))
+    elif join_delta < 0:
+        units.append(_unit("join_delta", "join_count_decreased", "Join count decreased"))
+    # Detect join-type replacements via added/removed nodes.
+    for node in plan_diff.added_nodes:
+        family = str(node.get("operator_family") or node.get("operator_type") or "")
+        if family == "Join":
+            units.append(_unit("join_delta", "join_added", "Join operator added"))
+    for node in plan_diff.removed_nodes:
+        family = str(node.get("operator_family") or node.get("operator_type") or "")
+        if family == "Join":
+            units.append(_unit("join_delta", "join_removed", "Join operator removed"))
+    for item in plan_diff.replaced_nodes:
+        original = item.get("original") if isinstance(item, Mapping) else {}
+        transformed = item.get("transformed") if isinstance(item, Mapping) else {}
+        left_fam = str((original or {}).get("operator_family") or "")
+        right_fam = str((transformed or {}).get("operator_family") or "")
+        if left_fam == "Join" or right_fam == "Join":
+            left_type = str((original or {}).get("operator_type") or "Unknown")
+            right_type = str((transformed or {}).get("operator_type") or "Unknown")
+            units.append(
+                _unit("join_delta", f"join_replaced:{left_type}->{right_type}", f"Join replaced: {left_type} -> {right_type}")
+            )
 
 
 def _add_predicate_units(units: list[CoverageUnit], plan_diff: PlanDiff) -> None:

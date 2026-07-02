@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from graph_sym_perf.experiment.calibration_health import run_calibration_health
+from graph_sym_perf.experiment.calibration_health import rule_stats_consistency_check, run_calibration_health
 
 
 def _write_json(path: Path, payload) -> None:
@@ -193,3 +193,19 @@ def test_calibration_health_reports_warn_and_fail_context_pollution_levels(tmp_p
 
     assert report["context_pollution_level"] == "FAIL"
     assert report["overall_status"] == "FAIL"
+
+
+def test_rule_stats_consistency_allows_skipped_attempts_without_generated_variants() -> None:
+    assert rule_stats_consistency_check(
+        {
+            "family": "symmetry",
+            "rule": "predicate_order_symmetry",
+            "attempted": 1,
+            "generated": 0,
+            "equivalence_passed": 0,
+            "equivalence_failed": 0,
+            "errors": 0,
+            "timeouts": 0,
+            "skipped": 1,
+        }
+    )

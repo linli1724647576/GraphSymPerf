@@ -7,6 +7,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
 
+from graph_sym_perf.core import is_profile_supported_level, support_level_value
+
 
 def run_calibration_health(run_dir: str | Path) -> Mapping[str, Any]:
     path = Path(run_dir)
@@ -148,20 +150,24 @@ def _rule_stats_consistency_issues(row: Mapping[str, Any]) -> list[dict[str, Any
     outcomes = (
         _int(row.get("equivalence_passed"))
         + _int(row.get("equivalence_failed"))
-        + _int(row.get("errors"))
-        + _int(row.get("timeouts"))
-        + skipped
     )
     if generated > attempted:
         _issue(issues, "severe", "rule_generated_gt_attempted", f"{rule}: generated={generated} > attempted={attempted}")
     if skipped > attempted:
         _issue(issues, "severe", "rule_skipped_gt_attempted", f"{rule}: skipped={skipped} > attempted={attempted}")
+    if generated + skipped > attempted:
+        _issue(
+            issues,
+            "severe",
+            "rule_generated_skipped_gt_attempted",
+            f"{rule}: generated+skipped={generated + skipped} > attempted={attempted}",
+        )
     if outcomes > generated:
         _issue(
             issues,
             "severe",
             "rule_outcomes_gt_generated",
-            f"{rule}: passed+failed+errors+timeouts+skipped={outcomes} > generated={generated}",
+            f"{rule}: passed+failed={outcomes} > generated={generated}",
         )
     return issues
 
@@ -177,7 +183,7 @@ def _check_runtime_confirmed(summary: Mapping[str, Any], cases: list[Mapping[str
             f"summary.runtime_confirmed={observed} but profile-gated runtime-confirmed cases={expected}",
         )
     for case in cases:
-        support_level = str(((case.get("confirmation") or {}).get("support_level")) or "")
+        support_level = support_level_value(((case.get("confirmation") or {}).get("support_level")) or "")
         if support_level == "latency_supported":
             _issue(
                 issues,
@@ -326,7 +332,7 @@ def _runtime_confirmed_case(case: Mapping[str, Any]) -> bool:
     if not oracle.get("is_candidate"):
         return False
     confirmation = case.get("confirmation") or {}
-    if str(confirmation.get("support_level") or "") != "profile_supported":
+    if not is_profile_supported_level(confirmation.get("support_level")):
         return False
     return _runtime_layer_passed(case)
 
@@ -345,7 +351,7 @@ def _runtime_without_profile(case: Mapping[str, Any]) -> bool:
 
 def _profile_layer_passed(case: Mapping[str, Any]) -> bool:
     confirmation = case.get("confirmation") or {}
-    if str(confirmation.get("support_level") or "") == "profile_supported":
+    if is_profile_supported_level(confirmation.get("support_level")):
         return True
     oracle = case.get("oracle") or {}
     evidence = (oracle.get("evidence") or {}) if isinstance(oracle, Mapping) else {}

@@ -23,6 +23,7 @@ from graph_sym_perf.core import (
     TargetSystem,
     ToolSupportLevel,
     stable_json_dumps,
+    support_rank,
     to_jsonable,
 )
 from graph_sym_perf.coverage import CoverageUnit, PMCEvidence
@@ -690,8 +691,7 @@ def _guess_family(transform_rule: str) -> str:
 
 
 def _support_rank(value: str) -> int:
-    support_rank = {"profile_supported": 3, "latency_supported": 2, "plan_only": 1, "none": 0}
-    return support_rank.get(value, 0)
+    return support_rank(value)
 
 
 def _developer_rank(value: str) -> int:

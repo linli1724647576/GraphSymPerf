@@ -11,6 +11,8 @@ from typing import Any, Iterable, Mapping
 
 import yaml
 
+from graph_sym_perf.core import is_profile_supported_level, support_level_value
+
 
 PAPER_TABLES = (
     "system_setup.csv",
@@ -319,11 +321,19 @@ def _effectiveness_row(
         "system": system,
         "records": len(system_records),
         "equivalence_passed": sum(1 for record in system_records if _equivalence_passed(record)),
-        "profile_supported_candidates": sum(1 for sig in system_signatures if str(sig.get("support_level") or "") == "profile_supported"),
-        "latency_supported_candidates": sum(1 for sig in system_signatures if str(sig.get("support_level") or "") == "latency_supported"),
+        "profile_supported_candidates": sum(1 for sig in system_signatures if _is_profile_supported(sig.get("support_level"))),
+        "latency_supported_candidates": sum(1 for sig in system_signatures if _support_value(sig.get("support_level")) == "latency_supported"),
         "candidate_count": len(system_signatures),
         "unique_issue_count": unique_issue_count,
     }
+
+
+def _support_value(value: Any) -> str:
+    return support_level_value(value)
+
+
+def _is_profile_supported(value: Any) -> bool:
+    return is_profile_supported_level(value)
 
 
 def _candidate_funnel_rows(
@@ -350,8 +360,8 @@ def _candidate_funnel_rows(
         "system": "overall",
         "records": len(records),
         "equivalence_passed": sum(1 for record in records if _equivalence_passed(record)),
-        "profile_supported_candidates": sum(1 for sig in signatures if str(sig.get("support_level") or "") == "profile_supported"),
-        "latency_supported_candidates": sum(1 for sig in signatures if str(sig.get("support_level") or "") == "latency_supported"),
+        "profile_supported_candidates": sum(1 for sig in signatures if _is_profile_supported(sig.get("support_level"))),
+        "latency_supported_candidates": sum(1 for sig in signatures if _support_value(sig.get("support_level")) == "latency_supported"),
         "candidate_count": len(signatures),
         "unique_issue_count": _unique_issue_count(unique_issues),
         "reportable_issues": len(reported),
@@ -369,7 +379,7 @@ def _transform_family_rows(signatures: list[Mapping[str, Any]]) -> list[Mapping[
             "transform_family": family,
             "candidate_count": len(items),
             "unique_issue_count": len({str(item.get("unique_issue_key") or "") for item in items if item.get("unique_issue_key")}),
-            "profile_supported_candidates": sum(1 for item in items if str(item.get("support_level") or "") == "profile_supported"),
+            "profile_supported_candidates": sum(1 for item in items if _is_profile_supported(item.get("support_level"))),
             "pmc_new_units": sum(_float((item.get("metadata") or {}).get("pmc_new_units")) for item in items),
         }
         for family, items in sorted(groups.items())
@@ -389,7 +399,7 @@ def _rule_rows(signatures: list[Mapping[str, Any]], rule_stats: list[Mapping[str
         row.setdefault("family", str(items[0].get("transform_family") or "unknown"))
         row["candidate_count"] = max(int(row.get("candidate_count") or 0), len(items))
         row["unique_issue_count"] = len({str(item.get("unique_issue_key") or "") for item in items if item.get("unique_issue_key")})
-        row["profile_supported_candidates"] = sum(1 for item in items if str(item.get("support_level") or "") == "profile_supported")
+        row["profile_supported_candidates"] = sum(1 for item in items if _is_profile_supported(item.get("support_level")))
         row["pmc_new_units"] = max(_float(row.get("pmc_new_units")), sum(_float((item.get("metadata") or {}).get("pmc_new_units")) for item in items))
     return [
         {
@@ -415,7 +425,12 @@ def _ablation_rows(paths: tuple[Path, ...]) -> list[Mapping[str, Any]]:
         record_count = int(summary.get("record_count") or 0)
         candidate_count = int(summary.get("candidate_count") or 0)
         unique_issue_count = int(summary.get("unique_issue_count") or 0)
-        profile_candidates = int((summary.get("support_levels") or {}).get("profile_supported") or 0)
+        support_levels = summary.get("support_levels") or {}
+        profile_candidates = sum(
+            int(count or 0)
+            for level, count in support_levels.items()
+            if _is_profile_supported(level)
+        )
         rows.append(
             {
                 "strategy": path.name,

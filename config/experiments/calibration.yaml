@@ -61,11 +61,7 @@ transforms:
     - label_order_symmetry
     - property_map_order_symmetry
     - alpha_renaming_symmetry
-    - exploratory_pattern_order_symmetry
-    - exploratory_predicate_order_symmetry
-    - exploratory_optional_match_order_symmetry
-    - exploratory_with_filter_shift_symmetry
-    - exploratory_projection_reorder_symmetry
+  # Exploratory rules excluded; see exploratory_symmetry.yaml.
   max_variants_per_case: 3
 
 coverage:

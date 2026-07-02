@@ -19,8 +19,10 @@ CONTEXT_KIND = "transformation_context"
 
 @dataclass
 class PMCCoverageState:
-    seen_unit_keys: set[str] = field(default_factory=set)
-    unit_counts: Counter[str] = field(default_factory=Counter)
+    # Use (kind, key) tuple to prevent cross-kind key collisions
+    # (document/总体研究主线.md §7 PMC recommendations).
+    seen_unit_keys: set[tuple[str, str]] = field(default_factory=set)
+    unit_counts: Counter[tuple[str, str]] = field(default_factory=Counter)
     unit_kind_counts: Counter[str] = field(default_factory=Counter)
     transform_rule_counts: Counter[str] = field(default_factory=Counter)
     transform_family_counts: Counter[str] = field(default_factory=Counter)
@@ -28,19 +30,23 @@ class PMCCoverageState:
     new_unit_kind_counts: Counter[str] = field(default_factory=Counter)
     candidate_unit_kind_counts: Counter[str] = field(default_factory=Counter)
     tier_unit_kind_counts: dict[str, Counter[str]] = field(default_factory=dict)
-    unit_key_counts: Counter[str] = field(default_factory=Counter)
-    unit_registry: dict[str, CoverageUnit] = field(default_factory=dict)
+    unit_key_counts: Counter[tuple[str, str]] = field(default_factory=Counter)
+    unit_registry: dict[tuple[str, str], CoverageUnit] = field(default_factory=dict)
 
     def observe(self, evidence: PMCEvidence) -> PMCEvidence:
-        new_units = tuple(unit for unit in evidence.units if unit.key not in self.seen_unit_keys)
+        new_units = tuple(
+            unit for unit in evidence.units
+            if (unit.kind, unit.key) not in self.seen_unit_keys
+        )
         core_units = filter_core_units(evidence.units)
         core_new_units = filter_core_units(new_units)
         for unit in evidence.units:
-            self.seen_unit_keys.add(unit.key)
-            self.unit_counts[unit.key] += 1
-            self.unit_key_counts[unit.key] += 1
+            token = (unit.kind, unit.key)
+            self.seen_unit_keys.add(token)
+            self.unit_counts[token] += 1
+            self.unit_key_counts[token] += 1
             self.unit_kind_counts[unit.kind] += 1
-            self.unit_registry.setdefault(unit.key, unit)
+            self.unit_registry.setdefault(token, unit)
             self.tier_unit_kind_counts.setdefault(evidence.safety_tier, Counter())[unit.kind] += 1
         for unit in core_units:
             self.transform_rule_counts[evidence.transform_rule] += 1
@@ -61,27 +67,35 @@ class PMCCoverageState:
         )
 
     def snapshot(self, run_id: str) -> PMCSummary:
-        core_keys = {unit.key for unit in filter_core_units(self.unit_registry.values())}
-        context_keys = {unit.key for unit in filter_context_units(self.unit_registry.values())}
-        core_unit_key_counts = Counter({key: count for key, count in self.unit_key_counts.items() if key in core_keys})
-        context_unit_key_counts = Counter({key: count for key, count in self.unit_key_counts.items() if key in context_keys})
+        core_tokens = {
+            (unit.kind, unit.key) for unit in filter_core_units(self.unit_registry.values())
+        }
+        context_tokens = {
+            (unit.kind, unit.key) for unit in filter_context_units(self.unit_registry.values())
+        }
+        core_unit_key_counts = Counter({
+            token: count for token, count in self.unit_key_counts.items() if token in core_tokens
+        })
+        context_unit_key_counts = Counter({
+            token: count for token, count in self.unit_key_counts.items() if token in context_tokens
+        })
         top_units = tuple(
             {
-                "key": key,
-                "kind": self.unit_registry[key].kind,
-                "label": self.unit_registry[key].label,
+                "key": token[1],
+                "kind": self.unit_registry[token].kind,
+                "label": self.unit_registry[token].label,
                 "count": count,
             }
-            for key, count in sorted(core_unit_key_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+            for token, count in sorted(core_unit_key_counts.items(), key=lambda item: (-item[1], item[0][1]))[:10]
         )
         top_context_units = tuple(
             {
-                "key": key,
-                "kind": self.unit_registry[key].kind,
-                "label": self.unit_registry[key].label,
+                "key": token[1],
+                "kind": self.unit_registry[token].kind,
+                "label": self.unit_registry[token].label,
                 "count": count,
             }
-            for key, count in sorted(context_unit_key_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+            for token, count in sorted(context_unit_key_counts.items(), key=lambda item: (-item[1], item[0][1]))[:10]
         )
         core_kind_counts = Counter(
             {kind: count for kind, count in self.unit_kind_counts.items() if kind != CONTEXT_KIND}

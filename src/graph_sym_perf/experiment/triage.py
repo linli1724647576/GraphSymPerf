@@ -11,7 +11,7 @@ from typing import Any, Mapping
 from graph_sym_perf.adapters import create_adapter
 from graph_sym_perf.config import environment_with_dotenv
 from graph_sym_perf.confirm.runtime import evaluate_confirmation
-from graph_sym_perf.core import ConfigError, MetricDelta, ProfileRecord
+from graph_sym_perf.core import ConfigError, MetricDelta, ProfileRecord, is_profile_supported_level, support_rank
 from graph_sym_perf.experiment.manifest import load_experiment_manifest
 from graph_sym_perf.issues import build_issue_tracking_artifacts
 from graph_sym_perf.reducer import reduce_candidate
@@ -74,7 +74,7 @@ def validate_triage(
         "triage_path": str(triage_file),
         "validated": len(results),
         "passed": sum(1 for item in results if item.get("equivalence_passed")),
-        "runtime_supported": sum(1 for item in results if _support_value(item.get("support_level")) == "profile_supported"),
+        "runtime_supported": sum(1 for item in results if is_profile_supported_level(item.get("support_level"))),
         "results": results,
     }
     issue_tracking = build_issue_tracking_artifacts(
@@ -361,13 +361,7 @@ def _developer_rank(value: str) -> int:
 
 
 def _support_rank(value: str) -> int:
-    return {
-        "profile_supported": 4,
-        "profile_supported_without_db_hits": 3,
-        "latency_supported": 2,
-        "plan_only": 1,
-        "none": 0,
-    }.get(value, 0)
+    return support_rank(value)
 
 
 def _root_cause_rank(labels: tuple[str, ...]) -> int:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from graph_sym_perf.core import ConfirmationRecord, OracleRecord, PlanDiff
+from graph_sym_perf.core import ConfirmationRecord, OracleRecord, PlanDiff, is_profile_supported_level, support_level_value
 from graph_sym_perf.coverage import PMCEvidence
 
 
@@ -70,8 +70,10 @@ def classify_candidate(
         if estimated_only:
             labels.append("EstimatedOnlyAnomaly")
 
-    support_level = str(confirmation.support_level) if confirmation is not None else "none"
-    if support_level == "profile_supported":
+    support_level = support_level_value(confirmation.support_level) if confirmation is not None else "none"
+    if support_level == "profile_and_runtime_supported":
+        labels.append("ProfileAndRuntimeSupported")
+    elif is_profile_supported_level(support_level):
         labels.append("ProfileSupported")
     elif support_level == "latency_supported":
         labels.append("LatencySupported")

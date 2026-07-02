@@ -10,6 +10,7 @@ from graph_sym_perf.coverage import (
     ratio_bucket_label,
 )
 from graph_sym_perf.coverage.model import CoverageUnit, PMCEvidence
+from graph_sym_perf.experiment.resume import CheckpointState, load_checkpoint, save_checkpoint
 
 
 def _plan_diff() -> PlanDiff:
@@ -185,3 +186,31 @@ def test_metric_aliases_generate_cardinality_work_and_latency_units() -> None:
     assert "db_hits_ratio_bucket:10x" in keys
     assert "latency_ratio_bucket:5x" in keys
     assert all("missing_metric" not in key for key in keys)
+
+
+def test_checkpoint_round_trips_tuple_pmc_unit_tokens(tmp_path) -> None:
+    state = PMCCoverageState()
+    evidence = PMCEvidence(
+        case_id="case_tuple",
+        transform_family="symmetry",
+        transform_rule="pattern_order_symmetry",
+        safety_tier="strict",
+        fast_variant_id="seed",
+        slow_variant_id="case_tuple_01_pattern_order_symmetry",
+        structural_hash_changed=False,
+        units=(
+            CoverageUnit(kind="operator_delta", key="shared", label="Operator shared"),
+            CoverageUnit(kind="access_delta", key="shared", label="Access shared"),
+        ),
+    )
+
+    state.observe(evidence)
+    save_checkpoint(tmp_path, CheckpointState(pmc_state=state))
+    restored = load_checkpoint(tmp_path).pmc_state
+
+    assert restored is not None
+    assert ("operator_delta", "shared") in restored.seen_unit_keys
+    assert ("access_delta", "shared") in restored.seen_unit_keys
+    assert restored.unit_counts[("operator_delta", "shared")] == 1
+    assert restored.unit_counts[("access_delta", "shared")] == 1
+    assert restored.unit_registry[("operator_delta", "shared")].kind == "operator_delta"

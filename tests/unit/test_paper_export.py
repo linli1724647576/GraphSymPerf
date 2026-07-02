@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -25,7 +26,7 @@ def test_report_exports_schedule_required_tables_and_figures(tmp_path: Path) -> 
                 "state": "confirmed",
                 "equivalences": [{"passed": True}],
                 "oracle": {"is_candidate": True},
-                "confirmation": {"support_level": "profile_supported"},
+                "confirmation": {"support_level": "profile_and_runtime_supported"},
             }
         ],
     )
@@ -40,7 +41,7 @@ def test_report_exports_schedule_required_tables_and_figures(tmp_path: Path) -> 
                 "safety_tier": "strict",
                 "candidate_types": ["latency"],
                 "root_cause_labels": ["PredicatePushdownBlocked"],
-                "support_level": "profile_supported",
+                "support_level": "profile_and_runtime_supported",
                 "claim_level": "strong_candidate",
                 "plan_signature": "sig-plan",
                 "metric_signature": "sig-metric",
@@ -126,6 +127,9 @@ def test_report_exports_schedule_required_tables_and_figures(tmp_path: Path) -> 
         assert path.read_text(encoding="utf-8").splitlines()[0]
     ablation_rows = (run_root / "tables" / "ablation_comparison.csv").read_text(encoding="utf-8")
     assert "ablation_bool_static" in ablation_rows
+    funnel_rows = list(csv.DictReader((run_root / "tables" / "candidate_funnel.csv").open(encoding="utf-8")))
+    overall = next(row for row in funnel_rows if row["scope"] == "overall")
+    assert overall["profile_supported_candidates"] == "1"
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:

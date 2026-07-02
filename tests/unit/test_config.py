@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 from graph_sym_perf.config import load_run_config
@@ -64,3 +65,10 @@ def test_run_configs_cover_enabled_rule_spaces() -> None:
         ]
 
         assert not missing, f"{path} misses enabled transform rules: {missing}"
+
+
+def test_memgraph_extra_installs_adapter_driver() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    memgraph_deps = pyproject["project"]["optional-dependencies"]["memgraph"]
+
+    assert any(dep.startswith("neo4j") for dep in memgraph_deps)

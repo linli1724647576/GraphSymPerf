@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 
-from graph_sym_perf.core import CaseRecord, FeedbackConfig, QueryCase, RunConfig, TransformConfig
+from graph_sym_perf.core import CaseRecord, FeedbackConfig, QueryCase, RunConfig, TransformConfig, is_profile_supported_level
 from graph_sym_perf.coverage import PMCEvidence
 from graph_sym_perf.feedback.model import FeedbackDecision, FeedbackState, RuleKey, RuleStats
 from graph_sym_perf.feedback.scoring import compute_reward, rule_priority
@@ -56,25 +56,41 @@ class TransformScheduler:
         )
 
     def update_from_case_record(self, record: CaseRecord, pmc_evidence: PMCEvidence | None = None) -> None:
+        """Update per-rule statistics from a completed case record.
+
+        Invariants (document 4.md §P0-2):
+          - attempted >= generated  (skipped variants are attempted but not generated)
+          - equivalence_passed + equivalence_failed <= generated
+          - generated + skipped <= attempted
+          - Case-level error/timeout state MUST NOT propagate to individual rule variants.
+        """
         candidate = bool(record.oracle and record.oracle.is_candidate)
-        strong_candidate = bool(record.confirmation and record.confirmation.support_level == "profile_supported")
+        strong_candidate = bool(record.confirmation and is_profile_supported_level(record.confirmation.support_level))
         equivalences_by_id = {item.case_id: item for item in record.equivalences}
         pmc_rule = pmc_evidence.transform_rule if pmc_evidence is not None else None
         family_name = self._infer_family(record)
+
+        # -- generated variants (passed static safety check) --
         for variant in record.family.variants:
             rule = variant.transform_rule
             stats = self._stats(family_name, rule)
             stats.attempted += 1
             stats.generated += 1
+
             equivalence = equivalences_by_id.get(variant.variant_id)
-            if equivalence is not None and equivalence.passed:
-                stats.equivalence_passed += 1
-            elif equivalence is not None:
-                stats.equivalence_failed += 1
-            elif record.state == "error":
-                stats.errors += 1
-            if record.reason and "TIMEOUT" in str(record.reason).upper():
-                stats.timeouts += 1
+            if equivalence is not None:
+                if equivalence.passed:
+                    stats.equivalence_passed += 1
+                else:
+                    stats.equivalence_failed += 1
+                    # Attribute variant-level (not case-level) errors and timeouts.
+                    _reason = str(equivalence.reason or "")
+                    if "QUERY_ERROR" in _reason.upper():
+                        stats.errors += 1
+                    if "TIMEOUT" in _reason.upper():
+                        stats.timeouts += 1
+
+            # PMC-linked stats: only for the specific rule that produced the evidence.
             if record.confirmation is not None and pmc_rule == rule:
                 stats.profile_available += 1
                 stats.pmc_units += pmc_evidence.unit_count if pmc_evidence else 0
@@ -83,8 +99,11 @@ class TransformScheduler:
                     stats.candidate_count += 1
                 if strong_candidate:
                     stats.strong_candidate_count += 1
+
             stats.reward = compute_reward(stats, self.feedback_config)
             self._merge_family_stats(stats)
+
+        # -- skipped variants (failed static safety check) --
         for variant in record.family.skipped_variants:
             rule = variant.transform_rule
             stats = self._stats(family_name, rule)

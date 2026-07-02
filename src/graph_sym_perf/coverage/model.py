@@ -17,6 +17,7 @@ CORE_PMC_KINDS = frozenset(
         "operator_delta",
         "access_delta",
         "expand_delta",
+        "join_delta",
         "predicate_delta",
         "barrier_delta",
         "cardinality_delta",

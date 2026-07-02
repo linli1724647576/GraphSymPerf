@@ -488,13 +488,15 @@ def _render_rule(rule: str, base_predicate: str, expression: str) -> str:
     if rule == "and_multi_layer_redundancy":
         return f"(({base}) AND (true OR ({expr}))) OR (false AND ({expr}))"
     if rule == "arcade_and_true":
-        return f"{base} AND true"
+        return f"({base}) AND true"
     if rule == "arcade_or_false":
-        return f"{base} OR false AND {expr}"
+        # Fully parenthesized: explicit precedence avoids soundness ambiguity
+        return f"({base}) OR (false AND ({expr}))"
     if rule == "arcade_and_not_false":
-        return f"{base} AND NOT false"
+        return f"({base}) AND (NOT false)"
     if rule == "arcade_and_true_or_false_expr":
-        return f"{base} AND true OR false AND {expr}"
+        # Fully parenthesized: explicit precedence avoids soundness ambiguity
+        return f"(({base}) AND true) OR (false AND ({expr}))"
     raise TransformSkipError(SKIP_NO_ENABLED_TRANSFORM_RULE, f"unsupported transform rule: {rule}")
 
 

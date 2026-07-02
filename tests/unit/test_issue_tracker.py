@@ -90,3 +90,33 @@ def test_issue_tracking_uses_searcher_for_possible_duplicates(tmp_path: Path) ->
     reportable = json.loads((tmp_path / "reportable_issues.json").read_text(encoding="utf-8"))
     assert reportable["issues"][0]["status"] == "possible_duplicate"
     assert reportable["issues"][0]["duplicate_of"].endswith("/4208")
+
+
+def test_issue_tracking_treats_profile_and_runtime_supported_as_runtime_supported(tmp_path: Path) -> None:
+    triage_payload = {
+        "items": [
+            {
+                "representative_case_id": "case003",
+                "system": "neo4j",
+                "root_cause_labels": ("WorkInflation",),
+                "transform_rules": {"pattern_order_symmetry": 1},
+            }
+        ]
+    }
+    validation_summary = {
+        "results": [
+            {
+                "case_id": "case003",
+                "system": "neo4j",
+                "equivalence_passed": True,
+                "support_level": "profile_and_runtime_supported",
+                "latency_ratio": 12.0,
+                "reducer": {},
+            }
+        ]
+    }
+
+    build_issue_tracking_artifacts(tmp_path, triage_payload, validation_summary, issue_search=False)
+
+    reportable = json.loads((tmp_path / "reportable_issues.json").read_text(encoding="utf-8"))
+    assert reportable["issues"][0]["runtime_supported"] is True

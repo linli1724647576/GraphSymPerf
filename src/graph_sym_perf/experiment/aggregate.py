@@ -10,7 +10,7 @@ from statistics import median
 from typing import Any, Iterable, Mapping
 
 from graph_sym_perf.cluster.signature import CandidateSignature
-from graph_sym_perf.core import MetricDelta, stable_json_dumps
+from graph_sym_perf.core import MetricDelta, stable_json_dumps, support_rank
 from graph_sym_perf.coverage import PMCEvidence, PMCSummary, replay_pmc_evidence
 from graph_sym_perf.coverage.report import write_pmc_artifacts
 from graph_sym_perf.experiment.tables import write_table
@@ -423,13 +423,7 @@ def _triage_payload_sort_key(item: Mapping[str, Any]) -> tuple[int, int, int, fl
 
 
 def _support_rank(value: str) -> int:
-    return {
-        "profile_supported": 4,
-        "profile_supported_without_db_hits": 3,
-        "latency_supported": 2,
-        "plan_only": 1,
-        "none": 0,
-    }.get(value, 0)
+    return support_rank(value)
 
 
 def _developer_rank(value: str) -> int:

@@ -23,6 +23,19 @@ RULES_BY_FAMILY = {
     "symmetry": SYMMETRY_RULES,
 }
 
+_STRICT_SYMMETRY = frozenset({
+    "node_order_symmetry",
+    "edge_notation_symmetry",
+    "predicate_order_symmetry",
+    "pattern_order_symmetry",
+    "pattern_decomposition_symmetry",
+    "pattern_fusion_symmetry",
+    "path_endpoint_symmetry",
+    "label_order_symmetry",
+    "property_map_order_symmetry",
+    "alpha_renaming_symmetry",
+})
+
 
 EXPECTED_REDUCER = {
     "enabled": "selective",
@@ -64,6 +77,22 @@ def test_replay_known_manifest_uses_cases_jsonl_source() -> None:
 
 
 def test_experiment_manifests_cover_enabled_rule_spaces() -> None:
+    # Exploratory rules are intentionally excluded from main/calibration configs
+    # (document/总体研究主线.md §4: strict-only for core claims).
+    EXPLORATORY_RULES = {
+        "exploratory_pattern_order_symmetry",
+        "exploratory_predicate_order_symmetry",
+        "exploratory_optional_match_order_symmetry",
+        "exploratory_with_filter_shift_symmetry",
+        "exploratory_projection_reorder_symmetry",
+    }
+    STRICT_ONLY_CONFIGS = {
+        "calibration.yaml",
+        "main_effectiveness.yaml",
+    }
+    EXPLORATORY_ONLY_CONFIGS = {
+        "exploratory_symmetry.yaml",
+    }
     for path in sorted(Path("config/experiments").glob("*.yaml")):
         manifest = load_experiment_manifest(path)
         transform_config = manifest.to_run_config(shard_index=0, num_shards=manifest.execution.shards).transforms
@@ -74,6 +103,12 @@ def test_experiment_manifests_cover_enabled_rule_spaces() -> None:
             for rule in RULES_BY_FAMILY.get(family, ())
             if rule not in enabled
         ]
+        # Allow strict-only configs to intentionally exclude exploratory rules.
+        if path.name in STRICT_ONLY_CONFIGS:
+            missing = [r for r in missing if r not in EXPLORATORY_RULES]
+        # Allow exploratory-only configs to intentionally exclude strict rules.
+        if path.name in EXPLORATORY_ONLY_CONFIGS:
+            missing = [r for r in missing if r not in _STRICT_SYMMETRY]
 
         assert not missing, f"{path} misses enabled transform rules: {missing}"
 

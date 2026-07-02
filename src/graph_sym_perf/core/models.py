@@ -142,11 +142,24 @@ class CoverageConfig:
     include_transformation_context: bool = True
     write_per_case_evidence: bool = True
     ratio_buckets: tuple[float, ...] = (1.5, 2.0, 5.0, 10.0, 50.0, 100.0, 1000.0)
+    # Per-metric minimum ratio thresholds for cardinality/work PMC units.
+    # Metrics below threshold are excluded from coverage to reduce noise.
+    metric_thresholds: Mapping[str, float] = field(
+        default_factory=lambda: {
+            "rows": 1.5,
+            "db_hits": 1.5,
+            "estimated_rows": 2.0,
+            "memory_bytes": 1.5,
+            "page_cache_misses": 1.5,
+        }
+    )
     novelty_weights: Mapping[str, float] = field(
         default_factory=lambda: {
             "structural": 0.5,
             "operator_delta": 1.0,
             "access_delta": 2.0,
+            "expand_delta": 1.5,
+            "join_delta": 2.0,
             "predicate_delta": 2.0,
             "barrier_delta": 1.5,
             "cardinality_delta": 1.5,
@@ -555,6 +568,9 @@ class CaseRecord:
     exploratory_confirmation: ConfirmationRecord | None = None
     pmc: PMCEvidence | None = None
     exploratory_pmc: PMCEvidence | None = None
+    # Per-variant PMC evidences (bool_redundancy pairwise strategy).  Observed
+    # for coverage but not used for case-level candidate state.
+    _per_variant_pmcs: tuple[Any, ...] = ()
 
     @property
     def equivalence(self) -> EquivalenceRecord:

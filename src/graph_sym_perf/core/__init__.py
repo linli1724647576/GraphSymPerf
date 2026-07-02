@@ -57,7 +57,15 @@ from graph_sym_perf.core.models import (
     stable_json_dumps,
     to_jsonable,
 )
-from graph_sym_perf.core.status import ClaimLevel, DeveloperStatus, ToolSupportLevel
+from graph_sym_perf.core.status import (
+    ClaimLevel,
+    DeveloperStatus,
+    ToolSupportLevel,
+    is_profile_supported_level,
+    is_runtime_supported_level,
+    support_level_value,
+    support_rank,
+)
 
 __all__ = [
     "AdapterError",
@@ -114,6 +122,10 @@ __all__ = [
     "TransformConfig",
     "ToolSupportLevel",
     "VariantProfileSummary",
+    "is_profile_supported_level",
+    "is_runtime_supported_level",
     "stable_json_dumps",
+    "support_level_value",
+    "support_rank",
     "to_jsonable",
 ]

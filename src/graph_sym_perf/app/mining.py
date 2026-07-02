@@ -28,6 +28,8 @@ from graph_sym_perf.core import (
     SymmetryVariant,
     TargetSystem,
     VariantProfileSummary,
+    is_profile_supported_level,
+    support_level_value,
     to_jsonable,
 )
 from graph_sym_perf.coverage import (
@@ -313,6 +315,12 @@ def _run_query_cases_with_state(
             record = _run_family(config, writer, adapter, family, artifacts)
             record, observed = _attach_pmc(writer, config, pmc_state, record)
             pmc_evidences.extend(observed)
+            # Incrementally persist each evidence so pmc_evidence.jsonl is
+            # crash-safe (document 4.md §P0-1).  The final write_pmc_artifacts
+            # call below overwrites with the replayed set for consistency.
+            if config.coverage.enabled:
+                for evidence in observed:
+                    writer.append_jsonl("pmc_evidence.jsonl", evidence)
             scheduler.update_from_case_record(record, record.pmc)
             writer.write_case_record(record)
             records.append(record)
@@ -475,26 +483,25 @@ def _run_family(
             exploratory_pmc,
         )
 
-    oracle, confirmation, plan_diff, fast, slow = _oracle_from_profiles(
-        config,
-        writer,
-        adapter,
-        family,
-        strict_comparable,
-        artifacts,
-        base,
-        prefix="",
-    )
-    pmc = _build_pmc_evidence(
-        config,
-        family,
-        fast,
-        slow,
-        plan_diff,
-        oracle,
-        confirmation,
-        safety_tier="strict",
-    )
+    # Branch on comparison strategy (document/总体研究主线.md §4):
+    #   bool_redundancy → seed vs each variant (pair-wise)
+    #   symmetry       → group fastest/slowest comparison
+    family_name = _detect_family_name(family)
+    per_variant_pmcs: tuple[Any, ...] = ()
+    if family_name == "bool_redundancy":
+        oracle, confirmation, pmc_evidence, pmc_list = _run_bool_pairwise_oracles(
+            config, writer, adapter, family, strict_comparable, artifacts, base
+        )
+        # Best (strongest) PMC evidence goes on the case record; all per-variant
+        # evidences are observed for coverage via _attach_pmc.
+        per_variant_pmcs = tuple(pmc_list)
+    else:
+        oracle, confirmation, plan_diff, fast, slow = _oracle_from_profiles(
+            config, writer, adapter, family, strict_comparable, artifacts, base, prefix="",
+        )
+        pmc_evidence = _build_pmc_evidence(
+            config, family, fast, slow, plan_diff, oracle, confirmation, safety_tier="strict",
+        )
     state = _candidate_state(oracle, confirmation)
     reason = confirmation.reason
     return _case_record(
@@ -508,9 +515,92 @@ def _run_family(
         reason,
         exploratory_oracle,
         exploratory_confirmation,
-        pmc,
+        pmc_evidence,
         exploratory_pmc,
+        per_variant_pmcs=per_variant_pmcs,
     )
+
+
+def _detect_family_name(family: SymmetryFamily) -> str:
+    """Infer the transform family name from variant metadata."""
+    for variant in family.variants:
+        name = variant.metadata.get("transform_family")
+        if name:
+            return str(name)
+    for variant in family.skipped_variants:
+        name = variant.metadata.get("transform_family")
+        if name:
+            return str(name)
+    return "symmetry"  # default
+
+
+def _run_bool_pairwise_oracles(
+    config: RunConfig,
+    writer: ArtifactWriter,
+    adapter: GraphAdapter,
+    family: SymmetryFamily,
+    strict_comparable: list[VariantProfileSummary],
+    artifacts: dict[str, str],
+    base: str,
+) -> tuple[OracleRecord, ConfirmationRecord, PMCEvidence | None, tuple[PMCEvidence, ...]]:
+    """Bool redundancy: compare seed vs each equivalent variant individually.
+
+    Returns the strongest case-level oracle/confirmation, its matching PMC,
+    and all per-variant PMCs for coverage observation.
+    """
+    seed_profile = next((p for p in strict_comparable if p.variant_id == "seed"), None)
+    if seed_profile is None:
+        empty = ConfirmationRecord(
+            case_id=family.case_id, confirmed=False,
+            original_median_ms=None, transformed_median_ms=None,
+            latency_ratio=None, latency_delta_ms=None,
+            original_samples_ms=(), transformed_samples_ms=(),
+            reason="NO_SEED_PROFILE",
+        )
+        return (
+            OracleRecord(case_id=family.case_id, is_candidate=False, candidate_types=(), reason="no_seed", evidence={}),
+            empty, None, (),
+        )
+
+    variant_profiles = [p for p in strict_comparable if p.variant_id != "seed"]
+    oracles: list[OracleRecord] = []
+    confirmations: list[ConfirmationRecord] = []
+    pmc_evidences: list[PMCEvidence] = []
+
+    for vp in variant_profiles:
+        pair = [seed_profile, vp]
+        pair_prefix = f"pair_{vp.variant_id}_"
+        o, c, pdiff, fast, slow = _oracle_from_profiles(
+            config, writer, adapter, family, pair, artifacts, base, prefix=pair_prefix,
+        )
+        oracles.append(o)
+        confirmations.append(c)
+        if config.coverage.enabled:
+            pmc = _build_pmc_evidence(
+                config, family, fast, slow, pdiff, o, c, safety_tier="strict",
+            )
+            pmc_evidences.append(pmc)
+
+    # Select the strongest oracle as the case-level result.
+    best_idx = _strongest_oracle_index(oracles, confirmations)
+    best_pmc = pmc_evidences[best_idx] if best_idx < len(pmc_evidences) else None
+    return oracles[best_idx], confirmations[best_idx], best_pmc, tuple(pmc_evidences)
+
+
+_SUPPORT_RANK = {"profile_and_runtime_supported": 4, "profile_supported": 3, "plan_only": 1, "none": 0}
+
+
+def _strongest_oracle_index(oracles: list[OracleRecord], confirmations: list[ConfirmationRecord]) -> int:
+    """Return the index of the strongest oracle by support_level, breaking ties by latency_ratio."""
+    best_idx = 0
+    best_rank = -1
+    best_ratio = 0.0
+    for i, (o, c) in enumerate(zip(oracles, confirmations)):
+        rank = _SUPPORT_RANK.get(support_level_value(c.support_level), 0)
+        ratio = c.latency_ratio or 0.0
+        if rank > best_rank or (rank == best_rank and ratio > best_ratio):
+            best_idx, best_rank, best_ratio = i, rank, ratio
+    return best_idx
 
 
 def _oracle_from_profiles(
@@ -542,11 +632,17 @@ def _oracle_from_profiles(
 
 
 def _candidate_state(oracle: OracleRecord, confirmation: ConfirmationRecord) -> str:
+    """Map oracle + confirmation to a tiered candidate state string.
+
+    Tier semantics (document/总体研究主线.md §6):
+      - plan_only: structural plan change, no metric regression
+      - profile_supported: plan change + core metric regression
+      - profile_and_runtime_supported: plan + profile + stable latency regression
+    """
     if not oracle.is_candidate:
         return "equivalent_no_candidate"
-    runtime_supported = _runtime_layer_passed(oracle)
-    support_level = str(confirmation.support_level)
-    if support_level == "profile_supported" and runtime_supported:
+    support_level = support_level_value(confirmation.support_level)
+    if support_level == "profile_and_runtime_supported":
         return "profile_and_latency_supported_candidate"
     if support_level == "profile_supported":
         return "profile_supported_candidate"
@@ -684,14 +780,30 @@ def _confirmation_from_oracle(
     )
     profile_supported = any(delta.worsened for delta in metric_deltas if delta.metric in {"db_hits", "rows", "memory_bytes"})
     latency_supported = bool(latency.get("worsened"))
-    support_level = "profile_supported" if profile_supported else "plan_only"
-    level = "strong" if profile_supported and latency_supported else "moderate" if profile_supported else "none"
+    # Respect the oracle's own tiered support_level (document/总体研究主线.md §6).
+    oracle_level = str(oracle.evidence.get("support_level", "") if isinstance(oracle.evidence, Mapping) else "")
+    if oracle_level in ("profile_and_runtime_supported", "profile_supported", "plan_only"):
+        support_level = oracle_level
+    elif profile_supported:
+        support_level = "profile_supported"
+    else:
+        support_level = "plan_only"
+    # confirmed still requires profile-gated support; raw latency alone must
+    # not upgrade a plan-only candidate.
+    confirmed = oracle.is_candidate and is_profile_supported_level(support_level)
+    level = (
+        "strong"
+        if support_level == "profile_and_runtime_supported"
+        else "moderate"
+        if is_profile_supported_level(support_level)
+        else "none"
+    )
     reason = oracle.reason
     if latency_supported and not profile_supported:
         reason = "RUNTIME_WITHOUT_PROFILE_SUPPORT"
     return ConfirmationRecord(
         case_id=case_id,
-        confirmed=oracle.is_candidate and profile_supported,
+        confirmed=confirmed,
         original_median_ms=fast.median_ms,
         transformed_median_ms=slow.median_ms,
         latency_ratio=latency.get("ratio"),
@@ -762,13 +874,22 @@ def _attach_pmc(
     artifacts = dict(record.artifacts)
     updated = record
     observed = []
+    observed_pair_keys: set[tuple[str, str, str | None, str | None, str]] = set()
     if record.pmc is not None:
         pmc = pmc_state.observe(record.pmc)
         observed.append(pmc)
+        observed_pair_keys.add(_pmc_observation_key(record.pmc))
         if config.coverage.write_per_case_evidence:
             path = writer.write_json(f"{base}/pmc_evidence.json", pmc)
             artifacts["pmc_evidence"] = str(path.relative_to(writer.run_dir))
         updated = replace(updated, pmc=pmc, artifacts=artifacts)
+    # Observe per-variant PMC evidences (bool_redundancy pairwise strategy).
+    for pv_pmc in record._per_variant_pmcs:
+        pair_key = _pmc_observation_key(pv_pmc) if pv_pmc is not None else None
+        if pv_pmc is not None and pair_key not in observed_pair_keys:
+            observed_pv = pmc_state.observe(pv_pmc)
+            observed.append(observed_pv)
+            observed_pair_keys.add(pair_key)
     if record.exploratory_pmc is not None:
         exploratory_pmc = pmc_state.observe(record.exploratory_pmc)
         observed.append(exploratory_pmc)
@@ -777,6 +898,16 @@ def _attach_pmc(
             artifacts["exploratory_pmc_evidence"] = str(path.relative_to(writer.run_dir))
         updated = replace(updated, exploratory_pmc=exploratory_pmc, artifacts=artifacts)
     return updated, observed
+
+
+def _pmc_observation_key(pmc: PMCEvidence) -> tuple[str, str, str | None, str | None, str]:
+    return (
+        pmc.case_id,
+        pmc.transform_rule,
+        pmc.fast_variant_id,
+        pmc.slow_variant_id,
+        pmc.safety_tier,
+    )
 
 
 def _transform_family_name(selected_variant: SymmetryVariant | None, family: SymmetryFamily) -> str:
@@ -804,6 +935,7 @@ def _case_record(
     exploratory_confirmation: ConfirmationRecord | None = None,
     pmc=None,
     exploratory_pmc=None,
+    per_variant_pmcs: tuple[Any, ...] = (),
 ) -> CaseRecord:
     return CaseRecord(
         system=target,
@@ -819,6 +951,7 @@ def _case_record(
         exploratory_confirmation=exploratory_confirmation,
         pmc=pmc,
         exploratory_pmc=exploratory_pmc,
+        _per_variant_pmcs=per_variant_pmcs,
     )
 
 
@@ -878,7 +1011,7 @@ def _summary(
             if record.oracle
             and record.oracle.is_candidate
             and record.confirmation
-            and record.confirmation.support_level == "profile_supported"
+            and is_profile_supported_level(record.confirmation.support_level)
         ),
         "candidate_types": _candidate_type_counts(records),
         "transform_rules": _transform_rule_counts(records),
@@ -931,18 +1064,26 @@ def _summary(
 def _runtime_confirmed(record: CaseRecord) -> bool:
     if record.oracle is None or not record.oracle.is_candidate:
         return False
-    if record.confirmation is None or record.confirmation.support_level != "profile_supported":
+    if record.confirmation is None or not is_profile_supported_level(record.confirmation.support_level):
         return False
     return _runtime_layer_passed(record.oracle)
 
 
 def _runtime_layer_passed(oracle: OracleRecord) -> bool:
+    """Return True only when the runtime oracle layer explicitly passes.
+
+    The oracle itself enforces the profile→runtime dependency
+    (runtime_secondary_supported = core_metric_worse AND latency_worse),
+    so oracle_layer_status["runtime"] == "pass" already implies
+    oracle_layer_status["profile"] == "pass".
+
+    There is NO fallback to latency.get("worsened") because that path
+    does not verify profile gating (document 4.md §P0-3).
+    """
     if isinstance(oracle.evidence, Mapping):
         layer_status = oracle.evidence.get("oracle_layer_status") or {}
         if isinstance(layer_status, Mapping) and str(layer_status.get("runtime") or ""):
             return str(layer_status.get("runtime")) == "pass"
-        latency = oracle.evidence.get("latency") or {}
-        return bool(isinstance(latency, Mapping) and latency.get("worsened"))
     return False
 
 

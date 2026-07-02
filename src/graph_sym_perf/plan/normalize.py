@@ -414,6 +414,14 @@ def _structured_text_line_from_mapping(item: Mapping[str, Any]) -> str | None:
 
 
 def _operator_family(operator_type: str) -> str:
+    """Classify an operator into its semantic family.
+
+    Join (Apply, Join, HashJoin, MergeJoin, NestedLoop) is separated from
+    Barrier (Sort, Aggregate, Distinct, Eager, Materialize) because they
+    represent different PMC dimensions (document/总体研究主线.md §7):
+      - Δjoin  → join order, apply, hash join changes
+      - Δbarrier → sort, aggregate, distinct, eager, materialize
+    """
     lowered = operator_type.lower()
     if "filter" in lowered or "selection" in lowered:
         return "Filter"
@@ -421,7 +429,9 @@ def _operator_family(operator_type: str) -> str:
         return "Expand"
     if "scan" in lowered or "seek" in lowered or "index" in lowered:
         return "Scan"
-    if any(token in lowered for token in ("eager", "materialize", "sort", "aggregate", "distinct", "apply", "join")):
+    if any(token in lowered for token in ("apply", "join")):
+        return "Join"
+    if any(token in lowered for token in ("eager", "materialize", "sort", "aggregate", "distinct")):
         return "Barrier"
     if any(token in lowered for token in ("projection", "project", "produce", "results", "unwind", "limit")):
         return "Projection"
@@ -549,8 +559,13 @@ def _parse_relationship_type(details: str) -> str | None:
 
 
 def _barrier_kind(operator_type: str) -> str | None:
+    """Return the specific barrier sub-kind, or None for non-barrier operators.
+
+    Join operators (Apply, Join, HashJoin, etc.) are classified separately
+    as operator_family="Join" and tracked via join_delta PMC units.
+    """
     lowered = operator_type.lower()
-    for token in ("eager", "apply", "join", "sort", "aggregation", "aggregate", "distinct", "materialize"):
+    for token in ("eager", "sort", "aggregation", "aggregate", "distinct", "materialize"):
         if token in lowered:
             return token
     return None

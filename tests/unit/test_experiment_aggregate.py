@@ -121,6 +121,65 @@ def test_aggregate_and_triage_emit_expected_artifacts(tmp_path: Path) -> None:
     assert (run_root / "triage_top10.json").exists()
 
 
+def test_aggregate_prefers_profile_and_runtime_supported_representative(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs" / "main_effectiveness_2026_01"
+    shard_dir = run_root / "shard_000"
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    _write_jsonl(shard_dir / "cases.jsonl", [])
+    _write_jsonl(
+        shard_dir / "candidate_signatures.jsonl",
+        [
+            {
+                "case_id": "case_profile",
+                "system": "neo4j",
+                "transform_family": "symmetry",
+                "transform_rule": "predicate_order_symmetry",
+                "safety_tier": "strict",
+                "candidate_types": ["latency"],
+                "root_cause_labels": ["PredicatePushdownBlocked"],
+                "support_level": "profile_supported",
+                "claim_level": "strong_candidate",
+                "plan_signature": "sig-plan",
+                "metric_signature": "sig-metric",
+                "pmc_signature": "sig-pmc",
+                "issue_family_key": "family",
+                "unique_issue_key": "unique",
+                "duplicate_key": "dup",
+                "metadata": {"latency_ratio": 200.0, "db_hits_ratio": 200.0, "rows_ratio": 200.0},
+            },
+            {
+                "case_id": "case_runtime",
+                "system": "neo4j",
+                "transform_family": "symmetry",
+                "transform_rule": "predicate_order_symmetry",
+                "safety_tier": "strict",
+                "candidate_types": ["latency"],
+                "root_cause_labels": ["PredicatePushdownBlocked"],
+                "support_level": "profile_and_runtime_supported",
+                "claim_level": "strong_candidate",
+                "plan_signature": "sig-plan",
+                "metric_signature": "sig-metric",
+                "pmc_signature": "sig-pmc",
+                "issue_family_key": "family",
+                "unique_issue_key": "unique",
+                "duplicate_key": "dup",
+                "metadata": {"latency_ratio": 10.0, "db_hits_ratio": 10.0, "rows_ratio": 10.0},
+            },
+        ],
+    )
+    _write_jsonl(shard_dir / "pmc_evidence.jsonl", [])
+    (shard_dir / "rule_stats.json").write_text("[]\n", encoding="utf-8")
+
+    aggregate_run_root(run_root)
+    signatures = [
+        json.loads(line)
+        for line in (run_root / "aggregate_candidate_signatures.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert signatures[0]["case_id"] == "case_runtime"
+
+
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")

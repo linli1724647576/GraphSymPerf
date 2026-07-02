@@ -23,7 +23,8 @@ neo4j = [
   "neo4j>=5.0"
 ]
 memgraph = [
-  "neo4j>=5.0"
+  "neo4j>=5.0",
+  "gqlalchemy>=1.8"
 ]
 falkordb = [
   "FalkorDB>=1.6"

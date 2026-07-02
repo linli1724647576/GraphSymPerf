@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 import yaml
 
-from graph_sym_perf.core import to_jsonable
+from graph_sym_perf.core import is_profile_supported_level, is_runtime_supported_level, support_level_value, to_jsonable
 
 SYSTEM_ISSUE_REPOSITORIES: Mapping[str, str] = {
     "neo4j": "neo4j/neo4j",
@@ -71,8 +71,7 @@ def build_issue_tracking_artifacts(
             "developer_status": _developer_status(triage_item, validation),
             "support_level": _support_value(validation.get("support_level")),
             "equivalence_passed": bool(validation.get("equivalence_passed")),
-            "runtime_supported": _support_value(validation.get("support_level"))
-            in {"profile_supported", "profile_supported_without_db_hits", "latency_supported"},
+            "runtime_supported": is_runtime_supported_level(validation.get("support_level")),
             "root_cause_labels": tuple(triage_item.get("root_cause_labels") or ()),
             "transform_rules": triage_item.get("transform_rules") or {},
             "latency_ratio": validation.get("latency_ratio") or triage_item.get("latency_ratio"),
@@ -221,7 +220,7 @@ def _is_reportable(validation: Mapping[str, Any]) -> bool:
     if not validation.get("equivalence_passed"):
         return False
     support_level = _support_value(validation.get("support_level"))
-    return support_level in {"profile_supported", "profile_supported_without_db_hits", "latency_supported"}
+    return is_profile_supported_level(support_level) or is_runtime_supported_level(support_level)
 
 
 def _external_issue_status(search_payload: Mapping[str, Any]) -> str:
@@ -361,7 +360,7 @@ def _csv_value(value: Any) -> Any:
 
 
 def _support_value(value: Any) -> str:
-    return str(getattr(value, "value", value) or "")
+    return support_level_value(value)
 
 
 def _utc_now() -> str:

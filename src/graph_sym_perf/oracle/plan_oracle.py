@@ -41,8 +41,26 @@ def detect_symmetry_violation(
     plan_changed = plan_diff.structural_hash_changed or bool(plan_diff.changes)
 
     candidate_types = _candidate_types(fast, slow, plan_diff, latency_worse, core_metric_worse)
-    runtime_secondary_supported = core_metric_worse and latency_worse
-    is_candidate = bool(candidate_types) and core_metric_worse and plan_changed
+
+    # Tiered oracle (document/总体研究主线.md §6):
+    #   plan_signal  → structural plan difference (weakest tier)
+    #   profile_signal → plan_signal + core metric regression
+    #   runtime_signal → profile_signal + stable latency regression (strongest)
+    plan_signal = plan_changed and bool(candidate_types)
+    profile_signal = plan_signal and core_metric_worse
+    runtime_signal = profile_signal and latency_worse
+
+    is_candidate = plan_signal  # plan-only is a legitimate weak candidate tier
+
+    if runtime_signal:
+        oracle_support_level = "profile_and_runtime_supported"
+    elif profile_signal:
+        oracle_support_level = "profile_supported"
+    elif plan_signal:
+        oracle_support_level = "plan_only"
+    else:
+        oracle_support_level = "none"
+
     return OracleRecord(
         case_id=case_id,
         is_candidate=is_candidate,
@@ -63,8 +81,9 @@ def detect_symmetry_violation(
             "oracle_layer_status": {
                 "result_equivalence": "pass",
                 "profile": "pass" if core_metric_worse else "fail",
-                "runtime": "pass" if runtime_secondary_supported else "fail",
+                "runtime": "pass" if runtime_signal else "fail",
             },
+            "support_level": oracle_support_level,
             "metric_deltas": metric_deltas,
             "plan_changed": plan_changed,
             "structural_hash": {

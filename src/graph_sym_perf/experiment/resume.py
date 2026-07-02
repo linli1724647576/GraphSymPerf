@@ -159,8 +159,8 @@ def _pmc_state_to_mapping(state: PMCCoverageState | None) -> Mapping[str, Any] |
     if state is None:
         return None
     return {
-        "seen_unit_keys": sorted(state.seen_unit_keys),
-        "unit_counts": dict(state.unit_counts),
+        "seen_unit_keys": [_unit_token_to_mapping(token) for token in sorted(state.seen_unit_keys)],
+        "unit_counts": _unit_counter_to_rows(state.unit_counts),
         "unit_kind_counts": dict(state.unit_kind_counts),
         "transform_rule_counts": dict(state.transform_rule_counts),
         "transform_family_counts": dict(state.transform_family_counts),
@@ -168,8 +168,11 @@ def _pmc_state_to_mapping(state: PMCCoverageState | None) -> Mapping[str, Any] |
         "new_unit_kind_counts": dict(state.new_unit_kind_counts),
         "candidate_unit_kind_counts": dict(state.candidate_unit_kind_counts),
         "tier_unit_kind_counts": {tier: dict(counter) for tier, counter in state.tier_unit_kind_counts.items()},
-        "unit_key_counts": dict(state.unit_key_counts),
-        "unit_registry": {key: to_jsonable(unit) for key, unit in state.unit_registry.items()},
+        "unit_key_counts": _unit_counter_to_rows(state.unit_key_counts),
+        "unit_registry": [
+            {**_unit_token_to_mapping(token), "unit": to_jsonable(unit)}
+            for token, unit in sorted(state.unit_registry.items())
+        ],
     }
 
 
@@ -177,8 +180,12 @@ def _pmc_state_from_mapping(raw: Any) -> PMCCoverageState | None:
     if not isinstance(raw, Mapping):
         return None
     state = PMCCoverageState(novelty_weights=raw.get("novelty_weights") or {})
-    state.seen_unit_keys = set(raw.get("seen_unit_keys") or ())
-    state.unit_counts = Counter({str(key): int(value) for key, value in (raw.get("unit_counts") or {}).items()})
+    state.seen_unit_keys = {
+        token
+        for token in (_unit_token_from_raw(item) for item in (raw.get("seen_unit_keys") or ()))
+        if token is not None
+    }
+    state.unit_counts = _unit_counter_from_raw(raw.get("unit_counts"))
     state.unit_kind_counts = Counter({str(key): int(value) for key, value in (raw.get("unit_kind_counts") or {}).items()})
     state.transform_rule_counts = Counter(
         {str(key): int(value) for key, value in (raw.get("transform_rule_counts") or {}).items()}
@@ -197,13 +204,71 @@ def _pmc_state_from_mapping(raw: Any) -> PMCCoverageState | None:
         for tier, counter in (raw.get("tier_unit_kind_counts") or {}).items()
         if isinstance(counter, Mapping)
     }
-    state.unit_key_counts = Counter({str(key): int(value) for key, value in (raw.get("unit_key_counts") or {}).items()})
-    state.unit_registry = {
-        str(key): _coverage_unit_from_mapping(unit)
-        for key, unit in (raw.get("unit_registry") or {}).items()
-        if isinstance(unit, Mapping)
-    }
+    state.unit_key_counts = _unit_counter_from_raw(raw.get("unit_key_counts"))
+    state.unit_registry = _unit_registry_from_raw(raw.get("unit_registry"))
     return state
+
+
+def _unit_token_to_mapping(token: tuple[str, str]) -> Mapping[str, str]:
+    return {"kind": str(token[0]), "key": str(token[1])}
+
+
+def _unit_token_from_raw(raw: Any) -> tuple[str, str] | None:
+    if isinstance(raw, Mapping):
+        return (str(raw.get("kind") or ""), str(raw.get("key") or ""))
+    if isinstance(raw, (list, tuple)) and len(raw) == 2:
+        return (str(raw[0]), str(raw[1]))
+    if raw is None:
+        return None
+    # Best-effort compatibility with older string-only checkpoints.
+    return ("", str(raw))
+
+
+def _unit_counter_to_rows(counter: Counter[tuple[str, str]]) -> list[Mapping[str, Any]]:
+    return [
+        {**_unit_token_to_mapping(token), "count": int(count)}
+        for token, count in sorted(counter.items())
+    ]
+
+
+def _unit_counter_from_raw(raw: Any) -> Counter[tuple[str, str]]:
+    if isinstance(raw, Mapping):
+        return Counter(
+            {
+                token: int(value)
+                for key, value in raw.items()
+                for token in (_unit_token_from_raw(key),)
+                if token is not None
+            }
+        )
+    rows = raw or ()
+    return Counter(
+        {
+            token: int(row.get("count") or 0)
+            for row in rows
+            if isinstance(row, Mapping)
+            for token in (_unit_token_from_raw(row),)
+            if token is not None
+        }
+    )
+
+
+def _unit_registry_from_raw(raw: Any) -> dict[tuple[str, str], CoverageUnit]:
+    if isinstance(raw, Mapping):
+        return {
+            token: _coverage_unit_from_mapping(unit)
+            for key, unit in raw.items()
+            if isinstance(unit, Mapping)
+            for token in (_unit_token_from_raw(key),)
+            if token is not None
+        }
+    return {
+        token: _coverage_unit_from_mapping(row.get("unit") or row)
+        for row in (raw or ())
+        if isinstance(row, Mapping)
+        for token in (_unit_token_from_raw(row),)
+        if token is not None
+    }
 
 
 def _coverage_unit_from_mapping(raw: Mapping[str, Any]) -> CoverageUnit:

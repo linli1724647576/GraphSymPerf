@@ -164,7 +164,8 @@ def _confirmation_level(
 
 
 def _support_level(latency_worsened: bool, workload_worsened: bool) -> str:
-    del latency_worsened
+    if workload_worsened and latency_worsened:
+        return "profile_and_runtime_supported"
     if workload_worsened:
         return "profile_supported"
     return "plan_only"
