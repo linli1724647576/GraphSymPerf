@@ -46,6 +46,10 @@ transforms:
     - and_null_guarded_true
     - and_distributive_absorption
     - and_multi_layer_redundancy
+    - arcade_and_true
+    - arcade_or_false
+    - arcade_and_not_false
+    - arcade_and_true_or_false_expr
   max_variants_per_case: 4
 
 coverage:

@@ -80,6 +80,26 @@ transforms:
     - exploratory_optional_match_order_symmetry
     - exploratory_with_filter_shift_symmetry
     - exploratory_projection_reorder_symmetry
+    - and_true_or
+    - and_expr_or_true
+    - or_false_and
+    - or_expr_and_false
+    - and_not_false_and
+    - and_case_true
+    - and_expr_null_partition
+    - or_expr_null_contradiction
+    - and_not_expr_null_contradiction
+    - and_excluded_middle_or_null
+    - or_guarded_contradiction
+    - and_double_negated_true_or
+    - or_duplicate_predicate
+    - and_null_guarded_true
+    - and_distributive_absorption
+    - and_multi_layer_redundancy
+    - arcade_and_true
+    - arcade_or_false
+    - arcade_and_not_false
+    - arcade_and_true_or_false_expr
   gdsmith_safe_only: true
 
 confirmation:

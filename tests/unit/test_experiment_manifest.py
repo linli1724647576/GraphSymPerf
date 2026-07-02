@@ -14,7 +14,14 @@ from graph_sym_perf.experiment.runner import (
     _effective_worker_count,
     _gdsmith_connection_fields,
 )
+from graph_sym_perf.feedback.state import BOOL_REDUNDANCY_RULES, SYMMETRY_RULES
 from graph_sym_perf.experiment.shard import ShardSpec
+
+
+RULES_BY_FAMILY = {
+    "bool_redundancy": BOOL_REDUNDANCY_RULES,
+    "symmetry": SYMMETRY_RULES,
+}
 
 
 def test_main_effectiveness_manifest_projects_to_run_config() -> None:
@@ -45,6 +52,21 @@ def test_replay_known_manifest_uses_cases_jsonl_source() -> None:
     assert manifest.source_kind == "cases_jsonl"
     assert manifest.execution.shards == 1
     assert Path(str(manifest.source["cases_path"])).name == "replay_known_cases.jsonl"
+
+
+def test_experiment_manifests_cover_enabled_rule_spaces() -> None:
+    for path in sorted(Path("config/experiments").glob("*.yaml")):
+        manifest = load_experiment_manifest(path)
+        transform_config = manifest.to_run_config(shard_index=0, num_shards=manifest.execution.shards).transforms
+        enabled = set(transform_config.enabled_rules)
+        missing = [
+            rule
+            for family in transform_config.enabled_families
+            for rule in RULES_BY_FAMILY.get(family, ())
+            if rule not in enabled
+        ]
+
+        assert not missing, f"{path} misses enabled transform rules: {missing}"
 
 
 def test_experiment_run_overrides_project_to_run_config() -> None:

@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from graph_sym_perf.config import load_run_config
 from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.feedback.state import BOOL_REDUNDANCY_RULES, SYMMETRY_RULES
+
+
+RULES_BY_FAMILY = {
+    "bool_redundancy": BOOL_REDUNDANCY_RULES,
+    "symmetry": SYMMETRY_RULES,
+}
 
 
 def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
@@ -22,3 +31,23 @@ def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
     assert config.system_config(TargetSystem.AGENSGRAPH) is not None
     assert config.system_config(config.systems[0].target).required_env[0].startswith("GRAPHSYMPERF_")
     assert config.system_config(config.systems[0].target).capabilities.supports_execute
+
+
+def test_run_configs_cover_enabled_rule_spaces() -> None:
+    paths = (
+        Path("config/graph_sym_perf.yaml"),
+        Path("config/graph_sym_perf_2000.yaml"),
+        Path("config/graph_sym_perf_10000.yaml"),
+        Path("config/graph_sym_perf_500_longtimeout.yaml"),
+    )
+    for path in paths:
+        config = load_run_config(path)
+        enabled = set(config.transforms.enabled_rules)
+        missing = [
+            rule
+            for family in config.transforms.enabled_families
+            for rule in RULES_BY_FAMILY.get(family, ())
+            if rule not in enabled
+        ]
+
+        assert not missing, f"{path} misses enabled transform rules: {missing}"
