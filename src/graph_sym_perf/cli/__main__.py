@@ -64,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     doctor = subparsers.add_parser("doctor", help="Run experiment preflight checks from a manifest.")
     doctor.add_argument("--config", required=True)
     doctor.add_argument("--strict", action="store_true")
+    doctor.add_argument("--dry-run", action="store_true")
 
     experiment = subparsers.add_parser("experiment", help="Run or aggregate sharded experiments.")
     experiment_subparsers = experiment.add_subparsers(dest="experiment_command")
@@ -71,6 +72,16 @@ def main(argv: list[str] | None = None) -> int:
     experiment_run.add_argument("--manifest", required=True)
     experiment_run.add_argument("--shard", type=int, default=None)
     experiment_run.add_argument("--num-shards", type=int, default=None)
+    experiment_run.add_argument("--systems", default=None)
+    experiment_run.add_argument("--max-cases", type=int, default=None)
+    experiment_feedback = experiment_run.add_mutually_exclusive_group()
+    experiment_feedback.add_argument("--feedback", dest="feedback_enabled", action="store_true")
+    experiment_feedback.add_argument("--no-feedback", dest="feedback_enabled", action="store_false")
+    experiment_run.set_defaults(feedback_enabled=None)
+    experiment_resume = experiment_run.add_mutually_exclusive_group()
+    experiment_resume.add_argument("--resume", dest="resume_enabled", action="store_true")
+    experiment_resume.add_argument("--no-resume", dest="resume_enabled", action="store_false")
+    experiment_run.set_defaults(resume_enabled=None)
     experiment_aggregate = experiment_subparsers.add_parser("aggregate", help="Aggregate shard outputs.")
     experiment_aggregate.add_argument("--run-root", required=True)
 
@@ -82,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("--triage", required=True)
     validate.add_argument("--runtime-repeats", type=int, default=15)
     validate.add_argument("--reduce", action="store_true")
+    validate.add_argument("--issue-search", action="store_true")
 
     replay = subparsers.add_parser("replay", help="Replay known issue cases from a manifest.")
     replay.add_argument("--config", required=True)
@@ -135,14 +147,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "doctor":
         try:
-            return run_doctor(args.config, strict=args.strict)
+            return run_doctor(args.config, strict=args.strict, dry_run=args.dry_run)
         except ConfigError as exc:
             print(f"configuration error: {exc}")
             return EXIT_CONFIG_ERROR
     if args.command == "experiment":
         if args.experiment_command == "run":
             try:
-                return run_experiment(args.manifest, shard=args.shard, num_shards=args.num_shards)
+                return run_experiment(
+                    args.manifest,
+                    shard=args.shard,
+                    num_shards=args.num_shards,
+                    systems=args.systems,
+                    max_cases=args.max_cases,
+                    feedback_enabled=args.feedback_enabled,
+                    resume=args.resume_enabled,
+                )
             except ConfigError as exc:
                 print(f"configuration error: {exc}")
                 return EXIT_CONFIG_ERROR
@@ -159,7 +179,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"triaged {len(payload['items'])} representatives into triage_top{args.top}.json")
         return 0
     if args.command == "validate":
-        payload = validate_triage(args.triage, runtime_repeats=args.runtime_repeats, reduce=args.reduce)
+        payload = validate_triage(
+            args.triage,
+            runtime_repeats=args.runtime_repeats,
+            reduce=args.reduce,
+            issue_search=args.issue_search,
+        )
         print(
             "validated representatives: "
             f"{payload['validated']} total, {payload['passed']} equivalence-passing"

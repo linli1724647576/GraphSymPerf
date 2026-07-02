@@ -22,10 +22,11 @@ transforms:
     - bool_redundancy
     - symmetry
   enabled_rules:
-    - and_true_or
     - or_false_and
-    - predicate_order_symmetry
-    - pattern_order_symmetry
+    - or_expr_null_contradiction
+    - or_guarded_contradiction
+    - and_double_negated_true_or
+    - arcade_and_true_or_false_expr
   max_variants_per_case: 2
 
 coverage:

@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+import yaml
+
 from graph_sym_perf.experiment.aggregate import aggregate_run_root
 
 
@@ -21,11 +23,15 @@ def export_run_report(run_dir: str | Path) -> Mapping[str, Any]:
     aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
     triage = _load_json(root / "triage_top100.json") or _load_json(root / "triage_top20.json") or {}
     validation = _load_json(root / "validation_summary.json") or {}
+    reportable = _load_json(root / "reportable_issues.json") or {}
+    reported = _load_yaml(root / "reported_issues.yaml") or {}
     payload = {
         "run_dir": str(root),
         "aggregate": aggregate,
         "triage": triage,
         "validation": validation,
+        "reportable_issues": reportable,
+        "reported_issues": reported,
     }
     (root / "report.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (root / "report.md").write_text(_render_report_markdown(payload), encoding="utf-8")
@@ -38,10 +44,19 @@ def _load_json(path: Path) -> Mapping[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _load_yaml(path: Path) -> Mapping[str, Any] | None:
+    if not path.exists():
+        return None
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return payload if isinstance(payload, Mapping) else {}
+
+
 def _render_report_markdown(payload: Mapping[str, Any]) -> str:
     aggregate = payload.get("aggregate") or {}
     triage = payload.get("triage") or {}
     validation = payload.get("validation") or {}
+    reportable = payload.get("reportable_issues") or {}
+    reported = payload.get("reported_issues") or {}
     lines = [
         f"# Experiment Report: {Path(str(payload.get('run_dir'))).name}",
         "",
@@ -60,5 +75,10 @@ def _render_report_markdown(payload: Mapping[str, Any]) -> str:
         "",
         f"- Validated representatives: {validation.get('validated', 0)}",
         f"- Equivalence passing: {validation.get('passed', 0)}",
+        "",
+        "## Issue Tracking",
+        "",
+        f"- Reportable issues: {len(reportable.get('issues') or [])}",
+        f"- Tracked reported issues: {len(reported.get('issues') or [])}",
     ]
     return "\n".join(lines) + "\n"

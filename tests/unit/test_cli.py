@@ -49,10 +49,23 @@ def test_cli_gdsmith_flags_are_forwarded(monkeypatch) -> None:
 def test_cli_experiment_run_flags_are_forwarded(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_run_experiment(manifest_path, *, shard=None, num_shards=None):
+    def fake_run_experiment(
+        manifest_path,
+        *,
+        shard=None,
+        num_shards=None,
+        systems=None,
+        max_cases=None,
+        feedback_enabled=None,
+        resume=None,
+    ):
         captured["manifest_path"] = manifest_path
         captured["shard"] = shard
         captured["num_shards"] = num_shards
+        captured["systems"] = systems
+        captured["max_cases"] = max_cases
+        captured["feedback_enabled"] = feedback_enabled
+        captured["resume"] = resume
         return 0
 
     monkeypatch.setattr("graph_sym_perf.cli.__main__.run_experiment", fake_run_experiment)
@@ -67,6 +80,12 @@ def test_cli_experiment_run_flags_are_forwarded(monkeypatch) -> None:
             "1",
             "--num-shards",
             "16",
+            "--systems",
+            "neo4j,memgraph",
+            "--max-cases",
+            "25",
+            "--no-feedback",
+            "--no-resume",
         ]
     )
 
@@ -74,6 +93,33 @@ def test_cli_experiment_run_flags_are_forwarded(monkeypatch) -> None:
     assert captured["manifest_path"] == "config/experiments/main_effectiveness.yaml"
     assert captured["shard"] == 1
     assert captured["num_shards"] == 16
+    assert captured["systems"] == "neo4j,memgraph"
+    assert captured["max_cases"] == 25
+    assert captured["feedback_enabled"] is False
+    assert captured["resume"] is False
+
+
+def test_cli_validate_issue_search_flag_is_forwarded(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_validate_triage(triage_path, *, runtime_repeats=15, reduce=False, issue_search=False):
+        captured["triage_path"] = triage_path
+        captured["runtime_repeats"] = runtime_repeats
+        captured["reduce"] = reduce
+        captured["issue_search"] = issue_search
+        return {"validated": 1, "passed": 1}
+
+    monkeypatch.setattr("graph_sym_perf.cli.__main__.validate_triage", fake_validate_triage)
+
+    exit_code = main(["validate", "--triage", "triage_top100.json", "--runtime-repeats", "3", "--reduce", "--issue-search"])
+
+    assert exit_code == 0
+    assert captured == {
+        "triage_path": "triage_top100.json",
+        "runtime_repeats": 3,
+        "reduce": True,
+        "issue_search": True,
+    }
 
 
 def test_cli_replay_dry_run(monkeypatch) -> None:
@@ -91,6 +137,25 @@ def test_cli_replay_dry_run(monkeypatch) -> None:
 
     assert exit_code == 0
     assert captured["config_path"] == "config/experiments/replay_known.yaml"
+    assert captured["dry_run"] is True
+
+
+def test_cli_doctor_dry_run(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_doctor(config_path, *, strict=False, dry_run=False):
+        captured["config_path"] = config_path
+        captured["strict"] = strict
+        captured["dry_run"] = dry_run
+        return 0
+
+    monkeypatch.setattr("graph_sym_perf.cli.__main__.run_doctor", fake_run_doctor)
+
+    exit_code = main(["doctor", "--config", "config/experiments/calibration.yaml", "--dry-run"])
+
+    assert exit_code == 0
+    assert captured["config_path"] == "config/experiments/calibration.yaml"
+    assert captured["strict"] is False
     assert captured["dry_run"] is True
 
 

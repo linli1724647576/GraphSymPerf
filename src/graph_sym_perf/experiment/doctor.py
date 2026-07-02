@@ -19,32 +19,37 @@ EXIT_OK = 0
 EXIT_PREFLIGHT_FAILED = 4
 
 
-def run_doctor(manifest_path: str | Path, *, strict: bool = False) -> int:
+def run_doctor(manifest_path: str | Path, *, strict: bool = False, dry_run: bool = False) -> int:
     env = environment_with_dotenv(None)
     manifest = load_experiment_manifest(manifest_path)
+    # Validate that the manifest can be projected into a runtime config even in dry-run mode.
     run_config = manifest.to_run_config()
     preflight_dir = manifest.output_root / "preflight"
-    preflight_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        preflight_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ConfigError(f"unable to create preflight directory: {preflight_dir}") from exc
 
     statuses: list[Mapping[str, Any]] = []
     blocking_issue = False
-    for system in manifest.systems:
-        adapter = create_adapter(system, run_config, env, allow_create=bool(manifest.source.get("load")))
-        try:
-            status = _preflight(adapter)
-            checks = _capability_checks(adapter, manifest.execution.per_query_timeout_seconds, status)
-            record = {
-                "system": system.target.value,
-                "status": to_jsonable(status),
-                "capabilities": to_jsonable(system.capabilities),
-                "checks": checks,
-                "settings": dict(system.settings),
-            }
-            statuses.append(record)
-            if status.state != "ready" or any(item.get("level") == "error" for item in checks):
-                blocking_issue = True
-        finally:
-            adapter.close()
+    if not dry_run:
+        for system in manifest.systems:
+            adapter = create_adapter(system, run_config, env, allow_create=bool(manifest.source.get("load")))
+            try:
+                status = _preflight(adapter)
+                checks = _capability_checks(adapter, manifest.execution.per_query_timeout_seconds, status)
+                record = {
+                    "system": system.target.value,
+                    "status": to_jsonable(status),
+                    "capabilities": to_jsonable(system.capabilities),
+                    "checks": checks,
+                    "settings": dict(system.settings),
+                }
+                statuses.append(record)
+                if status.state != "ready" or any(item.get("level") == "error" for item in checks):
+                    blocking_issue = True
+            finally:
+                adapter.close()
 
     disk = shutil.disk_usage(preflight_dir)
     package_info = {
@@ -57,6 +62,7 @@ def run_doctor(manifest_path: str | Path, *, strict: bool = False) -> int:
         "experiment_id": manifest.experiment_id,
         "description": manifest.description,
         "package": package_info,
+        "dry_run": dry_run,
         "disk": {
             "total_bytes": disk.total,
             "used_bytes": disk.used,
@@ -144,11 +150,24 @@ def _render_preflight_markdown(payload: Mapping[str, Any]) -> str:
         f"- Output root: {((payload.get('package') or {}).get('output_root'))}",
         f"- GraphSymPerf version: {((payload.get('package') or {}).get('graph_sym_perf_version'))}",
         f"- Git commit: {((payload.get('package') or {}).get('git_commit') or 'unknown')}",
+        f"- Dry run: {((payload.get('dry_run')))}",
         f"- Free disk bytes: {((payload.get('disk') or {}).get('free_bytes'))}",
         "",
-        "| System | State | Execute | Explain | Profile |",
-        "|---|---|---|---|---|",
     ]
+    if payload.get("dry_run"):
+        lines.extend(
+            [
+                "Dry-run mode validated manifest loading, RunConfig projection, and output directory creation.",
+                "Adapter creation and database capability checks were skipped.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "| System | State | Execute | Explain | Profile |",
+            "|---|---|---|---|---|",
+        ]
+    )
     for item in payload.get("statuses") or ():
         checks = {check.get("name"): check for check in item.get("checks") or ()}
         status = item.get("status") or {}

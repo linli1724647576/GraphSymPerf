@@ -20,6 +20,9 @@ class TransformScheduler:
         self.state = state
 
     def choose_for_case(self, query_case: QueryCase) -> FeedbackDecision:
+        pinned = self._pinned_decision(query_case)
+        if pinned is not None:
+            return pinned
         eligible_families = self._eligible_families(query_case)
         if not eligible_families:
             family = select_family_name(query_case, self.config)
@@ -93,6 +96,31 @@ class TransformScheduler:
                 continue
             eligible.append(family)
         return tuple(eligible)
+
+    def _pinned_decision(self, query_case: QueryCase) -> FeedbackDecision | None:
+        family = query_case.transform_family or self._family_for_rule(query_case.transform_rule)
+        if family is None:
+            return None
+        if query_case.transform_rule:
+            rules = (query_case.transform_rule,)
+        else:
+            rules = self._cap_rules(family_rules(self.config, family))
+        return FeedbackDecision(
+            family=family,
+            enabled_rules=rules,
+            reason="case_pinned_transform",
+            scores={rule: 0.0 for rule in rules},
+        )
+
+    @staticmethod
+    def _family_for_rule(rule: str | None) -> str | None:
+        if rule is None:
+            return None
+        if rule in family_rules(TransformConfig(), "symmetry"):
+            return "symmetry"
+        if rule in family_rules(TransformConfig(), "bool_redundancy"):
+            return "bool_redundancy"
+        return None
 
     def _choose_family(self, query_case: QueryCase, eligible_families: tuple[str, ...]) -> str:
         if len(eligible_families) == 1:

@@ -490,22 +490,23 @@ def _ldbc_variant(query_case: QueryCase, query: str) -> QueryVariant:
             "UNSAFE_PREDICATE_PROOF_FRAGMENT",
             "query case base_predicate does not match the selected MATCH WHERE predicate",
         )
+    rule = query_case.transform_rule or TRANSFORM_RULE
     proof, ast_fragment = _prove_static_redundant_transform(
         query,
         site,
-        rule=TRANSFORM_RULE,
+        rule=rule,
         expression=query_case.safe_expression,
         referenced_variables=_referenced_variables_from_expression(query_case.safe_expression),
     )
     return QueryVariant(
         variant_id="",
-        query=render_gdsmith_transform(query, site, rule=TRANSFORM_RULE, expression=query_case.safe_expression),
-        transform_rule=TRANSFORM_RULE,
+        query=render_gdsmith_transform(query, site, rule=rule, expression=query_case.safe_expression),
+        transform_rule=rule,
         proof_obligation=proof.obligation,
         metadata={
             "transform_family": "bool_redundancy",
             "source": query_case.source,
-            "rule": TRANSFORM_RULE,
+            "rule": rule,
             "rule_family": "conservative_tautology",
             "base_predicate": site.base_predicate,
             "expression_cypher": query_case.safe_expression,

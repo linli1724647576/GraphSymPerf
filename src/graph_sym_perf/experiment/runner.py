@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 import tempfile
@@ -26,7 +27,7 @@ from graph_sym_perf.app.mining import (
 )
 from graph_sym_perf.cluster import write_clustered_summary, write_exploratory_leads, write_review_candidates
 from graph_sym_perf.config import environment_with_dotenv
-from graph_sym_perf.core import ConfigError, QueryCase, QueryFamily, SystemStatus, TargetSystem
+from graph_sym_perf.core import CaseRecord, ConfigError, QueryCase, QueryFamily, SystemStatus, TargetSystem
 from graph_sym_perf.coverage import PMCCoverageState, PMCEvidence, write_pmc_artifacts
 from graph_sym_perf.datasets import generate_mini_ldbc
 from graph_sym_perf.feedback import TransformScheduler, initialize_feedback_state, summarize_feedback_state
@@ -39,6 +40,8 @@ from graph_sym_perf.experiment.manifest import load_experiment_manifest
 from graph_sym_perf.experiment.resume import CheckpointState, append_checkpoint_event, load_checkpoint, save_checkpoint
 from graph_sym_perf.experiment.shard import ShardSpec, stable_case_id
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port
+
+DESTRUCTIVE_REPLAY_ENV = "GRAPHSYMPERF_REPLAY_ALLOW_DESTRUCTIVE"
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,10 @@ def run_experiment(
     *,
     shard: int | None = None,
     num_shards: int | None = None,
+    systems: str | None = None,
+    max_cases: int | None = None,
+    feedback_enabled: bool | None = None,
+    resume: bool | None = None,
 ) -> int:
     env = environment_with_dotenv(None)
     manifest = load_experiment_manifest(manifest_path)
@@ -61,6 +68,13 @@ def run_experiment(
         total=int(num_shards if num_shards is not None else manifest.execution.shards),
     )
     run_config = manifest.to_run_config(shard_index=shard_spec.index, num_shards=shard_spec.total)
+    run_config = _apply_run_overrides(
+        run_config,
+        systems=systems,
+        max_cases=max_cases,
+        feedback_enabled=feedback_enabled,
+    )
+    effective_resume = bool(manifest.execution.resume if resume is None else resume)
     writer = ArtifactWriter(run_config, shard_spec.run_id)
     writer.write_json("experiment_manifest.json", manifest)
     writer.write_json("run_config_snapshot.json", run_config)
@@ -78,7 +92,10 @@ def run_experiment(
                 adapters.append(adapter)
         writer.write_json("preflight.json", {"systems": statuses})
         if not adapters:
-            writer.write_json("summary.json", _summary(writer.run_id, statuses, [], no_ready=True))
+            summary_payload = _summary(writer.run_id, statuses, [], no_ready=True)
+            writer.write_json("summary.json", summary_payload)
+            if manifest.source_modes == ("cases_jsonl",):
+                _write_known_replay_summary_artifacts(writer, summary_payload, ())
             return EXIT_NO_READY_SYSTEMS
         if manifest.source_kind == "ldbc" and bool(manifest.source.get("load")):
             graph = generate_mini_ldbc(run_config.dataset)
@@ -101,8 +118,13 @@ def run_experiment(
                 loader = getattr(adapter, "load_gdsmith_graph", None)
                 if callable(loader):
                     loader(source_payload.graph_statements)
+        if max_cases is not None:
+            source_payload = replace(
+                source_payload,
+                query_cases=source_payload.query_cases[: int(max_cases)],
+            )
         shard_cases = shard_spec.slice_cases(source_payload.query_cases)
-        checkpoint = load_checkpoint(writer.run_dir) if manifest.execution.resume else CheckpointState()
+        checkpoint = load_checkpoint(writer.run_dir) if effective_resume else CheckpointState()
         pmc_state = checkpoint.pmc_state or PMCCoverageState(novelty_weights=run_config.coverage.novelty_weights)
         feedback_state = checkpoint.feedback_state or initialize_feedback_state(run_config.transforms, run_config.feedback)
         scheduler = TransformScheduler(run_config.transforms, run_config.feedback, feedback_state)
@@ -110,12 +132,16 @@ def run_experiment(
         for adapter in adapters:
             system_name = adapter.target.value
             for local_index, base_case in shard_cases:
+                if base_case.target_system and base_case.target_system != system_name:
+                    continue
                 system_case = replace(
                     base_case,
                     case_id=stable_case_id(manifest.experiment_id, adapter.target, shard_spec, local_index, manifest.seed),
                 )
                 if system_case.case_id in checkpoint.completed_case_ids:
                     continue
+                if system_case.setup_path:
+                    _prepare_known_issue_setup(adapter, manifest, system_case)
                 replayable = getattr(adapter, "gdsmith_query_is_replayable", None)
                 if system_case.source == "gdsmith" and callable(replayable) and not replayable(system_case.query):
                     family = QueryFamily(
@@ -129,15 +155,18 @@ def run_experiment(
                     )
                     artifacts = writer.write_query_family(system_name, family)
                     _write_transform_artifacts(writer, system_name, family, artifacts)
-                    record = _case_record(
-                        adapter.target,
-                        family,
-                        (),
-                        None,
-                        None,
-                        artifacts,
-                        "skipped",
-                        "GDSMITH_QUERY_NOT_REPLAYABLE_ON_TARGET",
+                    record = _annotate_record_with_case_metadata(
+                        _case_record(
+                            adapter.target,
+                            family,
+                            (),
+                            None,
+                            None,
+                            artifacts,
+                            "skipped",
+                            "GDSMITH_QUERY_NOT_REPLAYABLE_ON_TARGET",
+                        ),
+                        system_case,
                     )
                     writer.write_case_record(record)
                     _update_checkpoint(checkpoint, record, local_index, feedback_state, pmc_state, manifest, shard_spec)
@@ -160,6 +189,7 @@ def run_experiment(
                 artifacts = writer.write_query_family(system_name, family)
                 _write_transform_artifacts(writer, system_name, family, artifacts)
                 record = _run_family(run_config, writer, adapter, family, artifacts)
+                record = _annotate_record_with_case_metadata(record, system_case)
                 record, observed = _attach_pmc(writer, run_config, pmc_state, record)
                 scheduler.update_from_case_record(record, record.pmc)
                 writer.write_case_record(record)
@@ -195,32 +225,67 @@ def run_experiment(
             if run_config.clustering.enabled
             else None
         )
-        writer.write_json(
-            "summary.json",
-            _summary(
-                writer.run_id,
-                statuses,
-                records,
-                no_ready=False,
-                pmc_summary=pmc_summary,
-                feedback_summary=feedback_summary,
-                cluster_summary=cluster_summary,
-            )
-            | {
-                "experiment_id": manifest.experiment_id,
-                "shard_index": shard_spec.index,
-                "num_shards": shard_spec.total,
-                "cases_assigned": len(shard_cases),
-                "resume_enabled": manifest.execution.resume,
-                "execution_mode": "serial",
-            },
-        )
+        summary_payload = _summary(
+            writer.run_id,
+            statuses,
+            records,
+            no_ready=False,
+            pmc_summary=pmc_summary,
+            feedback_summary=feedback_summary,
+            cluster_summary=cluster_summary,
+        ) | {
+            "experiment_id": manifest.experiment_id,
+            "shard_index": shard_spec.index,
+            "num_shards": shard_spec.total,
+            "cases_assigned": len(shard_cases),
+            "resume_enabled": effective_resume,
+            "execution_mode": "serial",
+        }
+        writer.write_json("summary.json", summary_payload)
+        if manifest.source_modes == ("cases_jsonl",):
+            _write_known_replay_summary_artifacts(writer, summary_payload, records)
         return EXIT_OK
     except ConfigError:
         return EXIT_CONFIG_ERROR
     finally:
         for adapter in adapters:
             adapter.close()
+
+
+def _apply_run_overrides(
+    run_config,
+    *,
+    systems: str | None,
+    max_cases: int | None,
+    feedback_enabled: bool | None,
+):
+    updated = run_config
+    if systems:
+        try:
+            requested = tuple(TargetSystem.parse(item.strip()) for item in systems.split(",") if item.strip())
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        if not requested:
+            raise ConfigError("--systems must contain at least one target")
+        by_target = {system.target: system for system in updated.systems}
+        missing = tuple(target.value for target in requested if target not in by_target)
+        if missing:
+            raise ConfigError(f"--systems references targets not present in manifest: {', '.join(missing)}")
+        updated = replace(updated, systems=tuple(by_target[target] for target in requested))
+    if max_cases is not None:
+        if max_cases <= 0:
+            raise ConfigError("--max-cases must be greater than 0")
+        updated = replace(
+            updated,
+            query_generation=replace(
+                updated.query_generation,
+                max_cases=max_cases,
+                gdsmith=replace(updated.query_generation.gdsmith, num_queries=max_cases),
+            ),
+        )
+    if feedback_enabled is not None:
+        updated = replace(updated, feedback=replace(updated.feedback, enabled=feedback_enabled))
+    return updated
 
 
 def _query_cases_from_source(manifest, run_config, writer: ArtifactWriter, env: Mapping[str, str]) -> SourcePayload:
@@ -322,6 +387,18 @@ def _load_query_cases_jsonl(path: Path) -> tuple[QueryCase, ...]:
                     generator_case_id=raw.get("generator_case_id"),
                     raw_query=raw.get("raw_query"),
                     skip_reason=raw.get("skip_reason"),
+                    transform_family=(str(raw["transform_family"]) if raw.get("transform_family") is not None else None),
+                    transform_rule=(str(raw["transform_rule"]) if raw.get("transform_rule") is not None else None),
+                    target_system=(str(raw["target_system"]) if raw.get("target_system") is not None else None),
+                    setup_path=(str(raw["setup_path"]) if raw.get("setup_path") is not None else None),
+                    setup_attachment_url=(str(raw["setup_attachment_url"]) if raw.get("setup_attachment_url") is not None else None),
+                    setup_attachment_name=(str(raw["setup_attachment_name"]) if raw.get("setup_attachment_name") is not None else None),
+                    expected_nodes=(int(raw["expected_nodes"]) if raw.get("expected_nodes") is not None else None),
+                    expected_relationships=(
+                        int(raw["expected_relationships"]) if raw.get("expected_relationships") is not None else None
+                    ),
+                    developer_status=(str(raw["developer_status"]) if raw.get("developer_status") is not None else None),
+                    issue_url=(str(raw["issue_url"]) if raw.get("issue_url") is not None else None),
                 )
             )
         except KeyError as exc:
@@ -379,6 +456,16 @@ def run_known_replay(
                         "generator_case_id": case.generator_case_id,
                         "raw_query": case.raw_query,
                         "skip_reason": case.skip_reason,
+                        "transform_family": case.transform_family,
+                        "transform_rule": case.transform_rule,
+                        "target_system": case.target_system,
+                        "setup_path": case.setup_path,
+                        "setup_attachment_url": case.setup_attachment_url,
+                        "setup_attachment_name": case.setup_attachment_name,
+                        "expected_nodes": case.expected_nodes,
+                        "expected_relationships": case.expected_relationships,
+                        "developer_status": case.developer_status,
+                        "issue_url": case.issue_url,
                     },
                     ensure_ascii=False,
                 )
@@ -444,6 +531,205 @@ def run_known_replay(
         )
         exit_code = run_experiment(temp_manifest, shard=0, num_shards=1)
     return exit_code, payload
+
+
+def _annotate_record_with_case_metadata(record, query_case: QueryCase):
+    confirmation = record.confirmation
+    if confirmation is not None and query_case.developer_status:
+        confirmation = replace(confirmation, developer_status=query_case.developer_status)
+    artifacts = dict(record.artifacts)
+    for field_name in (
+        "setup_path",
+        "setup_attachment_url",
+        "setup_attachment_name",
+        "issue_url",
+    ):
+        value = getattr(query_case, field_name, None)
+        if value is not None:
+            artifacts[field_name] = str(value)
+    for field_name in ("expected_nodes", "expected_relationships"):
+        value = getattr(query_case, field_name, None)
+        if value is not None:
+            artifacts[field_name] = str(value)
+    return replace(
+        record,
+        artifacts=artifacts,
+        developer_status=(query_case.developer_status or record.developer_status),
+        confirmation=confirmation,
+    )
+
+
+def _prepare_known_issue_setup(adapter, manifest, query_case: QueryCase) -> None:
+    _require_destructive_replay_guard()
+    setup_path = _resolve_source_path(manifest, query_case.setup_path or "")
+    if not setup_path.exists():
+        raise ConfigError(f"known issue setup does not exist: {setup_path}")
+    _reset_adapter_for_known_issue_setup(adapter)
+    for statement in _split_setup_statements(setup_path.read_text(encoding="utf-8")):
+        adapter.execute(
+            statement,
+            {},
+            "known_issue_setup",
+            timeout_seconds=float(manifest.execution.per_query_timeout_seconds),
+        )
+    if adapter.target.value == "neo4j":
+        adapter.execute(
+            "CALL db.awaitIndexes()",
+            {},
+            "known_issue_setup_await_indexes",
+            timeout_seconds=float(manifest.execution.per_query_timeout_seconds),
+        )
+    _verify_loaded_graph_counts(adapter, query_case)
+
+
+def _require_destructive_replay_guard() -> None:
+    if os.environ.get(DESTRUCTIVE_REPLAY_ENV) != "1":
+        raise ConfigError(
+            f"known issue replay resets target data; set {DESTRUCTIVE_REPLAY_ENV}=1 only for disposable databases"
+        )
+
+
+def _split_setup_statements(text: str) -> tuple[str, ...]:
+    statements: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        current.append(stripped)
+        if stripped.endswith(";"):
+            statement = " ".join(current).rstrip(";").strip()
+            if statement:
+                statements.append(statement)
+            current = []
+    if current:
+        statement = " ".join(current).strip()
+        if statement:
+            statements.append(statement)
+    return tuple(statements)
+
+
+def _reset_adapter_for_known_issue_setup(adapter) -> None:
+    target = adapter.target.value
+    if target == "neo4j":
+        adapter._connect()
+        with adapter._session() as session:
+            indexes = list(session.run("SHOW INDEXES YIELD name, type RETURN name, type"))
+            for record in indexes:
+                if str(record["type"]).upper() == "LOOKUP":
+                    continue
+                name = str(record["name"]).replace("`", "``")
+                session.run(f"DROP INDEX `{name}` IF EXISTS").consume()
+            session.run("MATCH (n) DETACH DELETE n").consume()
+        return
+    if target == "memgraph":
+        adapter.execute("MATCH (n) DETACH DELETE n", {}, "known_issue_reset")
+        return
+    if target == "falkordb":
+        adapter._connect()
+        graph_name = adapter._graph.name
+        adapter._graph.delete()
+        adapter._graph = adapter._db.select_graph(graph_name)
+        return
+    if target == "arcadedb":
+        adapter._connect()
+        response = adapter._request(
+            "POST",
+            "/api/v1/server",
+            json={"command": f"drop database {adapter._database}"},
+        )
+        if response.status_code not in (200, 201, 204, 404, 409):
+            raise ConfigError(f"cannot drop ArcadeDB database {adapter._database!r}: {response.text}")
+        adapter.ensure_schema()
+        return
+    raise ConfigError(f"known issue replay setup reset is not implemented for target: {target}")
+
+
+def _verify_loaded_graph_counts(adapter, query_case: QueryCase) -> None:
+    if query_case.expected_nodes is not None:
+        rows = adapter.execute("MATCH (n) RETURN count(n) AS nodes", {}, "known_issue_setup_count_nodes").rows
+        actual_nodes = int((rows[0] or {}).get("nodes", 0)) if rows else 0
+        if actual_nodes != query_case.expected_nodes:
+            raise ConfigError(
+                f"known issue setup node count mismatch for {query_case.case_id}: "
+                f"expected {query_case.expected_nodes}, got {actual_nodes}"
+            )
+    if query_case.expected_relationships is not None:
+        rows = adapter.execute(
+            "MATCH ()-[r]->() RETURN count(r) AS relationships",
+            {},
+            "known_issue_setup_count_relationships",
+        ).rows
+        actual_relationships = int((rows[0] or {}).get("relationships", 0)) if rows else 0
+        if actual_relationships != query_case.expected_relationships:
+            raise ConfigError(
+                f"known issue setup relationship count mismatch for {query_case.case_id}: "
+                f"expected {query_case.expected_relationships}, got {actual_relationships}"
+            )
+
+
+def _write_known_replay_summary_artifacts(
+    writer: ArtifactWriter,
+    summary_payload: Mapping[str, Any],
+    records: tuple[CaseRecord, ...] | list[CaseRecord],
+) -> None:
+    replay_summary = {
+        "run_id": writer.run_id,
+        "summary": dict(summary_payload),
+        "cases": [_known_replay_case_payload(record) for record in records],
+    }
+    writer.write_json("replay_summary.json", replay_summary)
+    writer.write_text("replay_summary.md", _render_known_replay_summary_markdown(replay_summary))
+
+
+def _known_replay_case_payload(record: CaseRecord) -> Mapping[str, Any]:
+    return {
+        "system": record.system.value,
+        "case_id": record.case_id,
+        "state": record.state,
+        "reason": record.reason,
+        "developer_status": str(record.developer_status),
+        "equivalence_passed": bool(record.equivalences) and all(item.passed for item in record.equivalences),
+        "equivalence_count": len(record.equivalences),
+        "is_candidate": bool(record.oracle.is_candidate) if record.oracle is not None else False,
+        "support_level": (
+            str(record.confirmation.support_level)
+            if record.confirmation is not None and record.confirmation.support_level is not None
+            else None
+        ),
+        "artifacts": dict(record.artifacts),
+    }
+
+
+def _render_known_replay_summary_markdown(payload: Mapping[str, Any]) -> str:
+    summary = payload.get("summary") or {}
+    cases = tuple(payload.get("cases") or ())
+    lines = [
+        f"# Known Issue Replay Summary: {payload.get('run_id')}",
+        "",
+        f"- Cases assigned: {summary.get('cases_assigned', 0)}",
+        f"- Equivalence passed: {summary.get('equivalence_passed', 0)}",
+        f"- Runtime confirmed: {summary.get('runtime_confirmed', 0)}",
+        f"- Profile supported candidates: {summary.get('profile_supported_candidates', 0)}",
+        f"- Unique issue count: {summary.get('unique_issue_count', 0)}",
+        "",
+        "| Case | System | State | Developer Status | Equivalence | Candidate | Support | Reason |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for item in cases:
+        lines.append(
+            "| {case_id} | {system} | {state} | {developer_status} | {equivalence} | {candidate} | {support} | {reason} |".format(
+                case_id=item.get("case_id"),
+                system=item.get("system"),
+                state=item.get("state"),
+                developer_status=item.get("developer_status"),
+                equivalence=item.get("equivalence_passed"),
+                candidate=item.get("is_candidate"),
+                support=item.get("support_level"),
+                reason=item.get("reason"),
+            )
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _update_checkpoint(checkpoint: CheckpointState, record, local_index: int, feedback_state, pmc_state, manifest, shard_spec) -> None:

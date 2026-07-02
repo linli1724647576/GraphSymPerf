@@ -398,6 +398,7 @@ def _run_family(
     for variant in equivalent_variants:
         profiles.append(_profile_variant(config, adapter, variant.variant_id, variant.query, family.parameters))
     writer.write_json(f"{base}/profile_summaries.json", profiles)
+    _write_profile_alias_artifacts(writer, base, profiles, equivalent_variants)
 
     comparable = [profile for profile in profiles if profile.available and profile.median_ms is not None]
     profile_by_id = {profile.variant_id: profile for profile in comparable}
@@ -525,6 +526,63 @@ def _oracle_from_profiles(
     confirmation = _confirmation_from_oracle(family.case_id, fast, slow, oracle)
     writer.write_json(f"{base}/{prefix}confirmation.json", confirmation)
     return oracle, confirmation, plan_diff, fast, slow
+
+
+def _write_profile_alias_artifacts(
+    writer: ArtifactWriter,
+    base: str,
+    profiles: list[VariantProfileSummary],
+    equivalent_variants: list[SymmetryVariant],
+) -> None:
+    profile_by_id = {profile.variant_id: profile for profile in profiles}
+    base_profile = profile_by_id.get("seed")
+    transformed_profile = None
+    for variant in equivalent_variants:
+        transformed_profile = profile_by_id.get(variant.variant_id)
+        if transformed_profile is not None:
+            break
+    if base_profile is not None:
+        writer.write_text(f"{base}/profile_base.txt", _render_profile_alias_text(base_profile, label="base"))
+    if transformed_profile is not None:
+        writer.write_text(
+            f"{base}/profile_transformed.txt",
+            _render_profile_alias_text(transformed_profile, label="transformed"),
+        )
+
+
+def _render_profile_alias_text(profile: VariantProfileSummary, *, label: str) -> str:
+    lines = [
+        f"# GraphSymPerf Replay Profile: {label}",
+        "",
+        f"- Query kind: {profile.query_kind}",
+        f"- Available: {profile.available}",
+        f"- Median elapsed ms: {profile.median_ms}",
+        f"- Samples ms: {', '.join(str(item) for item in profile.samples_ms)}",
+        "",
+        "## Metrics",
+        "",
+    ]
+    if profile.metrics:
+        for key in sorted(profile.metrics):
+            lines.append(f"- {key}: {profile.metrics[key]}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Plan Text", ""])
+    if profile.plan is not None and getattr(profile.plan, "raw_text", ""):
+        lines.append(str(profile.plan.raw_text))
+    else:
+        lines.append("No raw plan text available.")
+    if profile.profile_plan is not None:
+        lines.extend(
+            [
+                "",
+                "## Normalized Profile",
+                "",
+                f"- Structural hash: {profile.profile_plan.structural_hash}",
+                f"- Operator skeleton: {', '.join(profile.profile_plan.operator_skeleton)}",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _profile_variant(

@@ -235,6 +235,16 @@ class QueryCase:
     generator_case_id: str | None = None
     raw_query: str | None = None
     skip_reason: str | None = None
+    transform_family: str | None = None
+    transform_rule: str | None = None
+    target_system: str | None = None
+    setup_path: str | None = None
+    setup_attachment_url: str | None = None
+    setup_attachment_name: str | None = None
+    expected_nodes: int | None = None
+    expected_relationships: int | None = None
+    developer_status: str | None = None
+    issue_url: str | None = None
 
 
 @dataclass(frozen=True)
