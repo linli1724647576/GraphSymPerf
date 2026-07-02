@@ -11,7 +11,7 @@ from typing import Any, Iterable, Mapping
 
 from graph_sym_perf.cluster.signature import CandidateSignature
 from graph_sym_perf.core import MetricDelta, stable_json_dumps
-from graph_sym_perf.coverage import PMCCoverageState, PMCEvidence, PMCSummary
+from graph_sym_perf.coverage import PMCEvidence, PMCSummary, replay_pmc_evidence
 from graph_sym_perf.coverage.report import write_pmc_artifacts
 from graph_sym_perf.experiment.tables import write_table
 
@@ -105,7 +105,6 @@ def _health_summary(reports: tuple[Mapping[str, Any], ...]) -> Mapping[str, Any]
 
 
 def _aggregate_pmc(shard_dirs: tuple[Path, ...], root: Path) -> Mapping[str, Any]:
-    state = PMCCoverageState()
     evidences: list[PMCEvidence] = []
     for shard_dir in shard_dirs:
         path = shard_dir / "pmc_evidence.jsonl"
@@ -114,10 +113,9 @@ def _aggregate_pmc(shard_dirs: tuple[Path, ...], root: Path) -> Mapping[str, Any
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
-            evidence = _pmc_from_mapping(json.loads(line))
-            evidences.append(state.observe(evidence))
-    summary = state.snapshot(root.name)
-    write_pmc_artifacts(root, summary, evidences)
+            evidences.append(_pmc_from_mapping(json.loads(line)))
+    summary, evidences_for_artifact = replay_pmc_evidence(root.name, tuple(evidences))
+    write_pmc_artifacts(root, summary, evidences_for_artifact)
     return _summary_to_mapping(summary)
 
 

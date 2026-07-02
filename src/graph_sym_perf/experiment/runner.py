@@ -31,7 +31,7 @@ from graph_sym_perf.app.mining import (
 from graph_sym_perf.cluster import write_clustered_summary, write_exploratory_leads, write_review_candidates
 from graph_sym_perf.config import environment_with_dotenv
 from graph_sym_perf.core import CaseRecord, ConfigError, QueryCase, QueryFamily, SystemConfig, SystemStatus, TargetSystem
-from graph_sym_perf.coverage import PMCCoverageState, PMCEvidence, write_pmc_artifacts
+from graph_sym_perf.coverage import PMCCoverageState, PMCEvidence, replay_pmc_evidence, write_pmc_artifacts
 from graph_sym_perf.datasets import generate_mini_ldbc
 from graph_sym_perf.diagnostics import summarize_skip_errors
 from graph_sym_perf.feedback import TransformScheduler, initialize_feedback_state, summarize_feedback_state
@@ -200,9 +200,14 @@ def run_experiment(
 
         save_checkpoint(writer.run_dir, checkpoint)
         records = _load_case_records(writer.run_dir / "cases.jsonl")
-        pmc_summary = pmc_state.snapshot(writer.run_id)
+        pmc_evidences = _pmc_evidences_from_records(records)
+        pmc_summary, pmc_evidences_for_artifact = replay_pmc_evidence(
+            writer.run_id,
+            tuple(pmc_evidences),
+            run_config.coverage.novelty_weights,
+        )
         if run_config.coverage.enabled:
-            write_pmc_artifacts(writer.run_dir, pmc_summary, _pmc_evidences_from_records(records))
+            write_pmc_artifacts(writer.run_dir, pmc_summary, pmc_evidences_for_artifact)
         feedback_summary = summarize_feedback_state(feedback_state, run_config.feedback)
         writer.write_json("feedback_summary.json", feedback_summary)
         writer.write_json("rule_stats.json", tuple(feedback_state.rule_stats.values()))

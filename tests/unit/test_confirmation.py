@@ -4,7 +4,7 @@ from graph_sym_perf.confirm import evaluate_confirmation
 from graph_sym_perf.core import ConfirmationConfig
 
 
-def test_evaluate_confirmation_marks_threshold_supported_latency() -> None:
+def test_evaluate_confirmation_does_not_upgrade_latency_without_profile_support() -> None:
     record = evaluate_confirmation(
         "case_0001",
         (10.0, 11.0, 12.0),
@@ -12,6 +12,6 @@ def test_evaluate_confirmation_marks_threshold_supported_latency() -> None:
         ConfirmationConfig(min_latency_ratio=10.0, min_latency_delta_ms=50.0),
     )
 
-    assert record.confirmed
-    assert record.support_level == "latency_supported"
-    assert record.reason == "LATENCY_ONLY_WEAK"
+    assert not record.confirmed
+    assert record.support_level == "plan_only"
+    assert record.reason == "RUNTIME_WITHOUT_PROFILE_SUPPORT"

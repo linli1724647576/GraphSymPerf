@@ -20,6 +20,7 @@ def render_pmc_summary_markdown(summary: PMCSummary) -> str:
         f"- All unit observations: {summary.total_units_seen_all or summary.total_units_seen}",
         f"- All new units: {summary.total_new_units_all or summary.total_new_units}",
         f"- Context units: {sum((summary.context_units or {}).values())}",
+        f"- Context new units: {sum((summary.context_new_units or {}).values())}",
         "",
         "## Core Units By Kind",
         "",

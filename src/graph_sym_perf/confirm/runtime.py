@@ -59,7 +59,7 @@ def evaluate_confirmation(
     workload_worsened = any(item.worsened for item in metric_deltas)
     level = _confirmation_level(latency_worsened, workload_worsened, original_profiles, transformed_profiles)
     support_level = _support_level(latency_worsened, workload_worsened)
-    confirmed = latency_worsened or workload_worsened
+    confirmed = workload_worsened
     return ConfirmationRecord(
         case_id=case_id,
         confirmed=confirmed,
@@ -154,28 +154,29 @@ def _confirmation_level(
     original_profiles: tuple[ProfileRecord, ...],
     transformed_profiles: tuple[ProfileRecord, ...],
 ) -> str:
+    if workload_worsened and latency_worsened:
+        return "strong"
     if workload_worsened:
         return "moderate"
-    if latency_worsened or original_profiles or transformed_profiles:
+    if original_profiles or transformed_profiles:
         return "weak"
     return "none"
 
 
 def _support_level(latency_worsened: bool, workload_worsened: bool) -> str:
+    del latency_worsened
     if workload_worsened:
         return "profile_supported"
-    if latency_worsened:
-        return "latency_supported"
     return "plan_only"
 
 
 def _confirmation_reason(level: str, latency_worsened: bool, workload_worsened: bool) -> str:
-    if level == "moderate":
+    if workload_worsened:
         if latency_worsened:
             return "PROFILE_METRIC_REGRESSION_WITH_LATENCY"
         return "PROFILE_METRIC_REGRESSION"
-    if level == "weak" and latency_worsened:
-        return "LATENCY_ONLY_WEAK"
+    if latency_worsened:
+        return "RUNTIME_WITHOUT_PROFILE_SUPPORT"
     if level == "weak":
         return "PLAN_ONLY_WEAK"
     return "RUNTIME_THRESHOLD_NOT_MET"

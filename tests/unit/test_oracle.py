@@ -44,3 +44,53 @@ def test_oracle_flags_latency_and_metric_supported_symmetry_violation() -> None:
     assert "AccessPointAsymmetry" in record.candidate_types
     assert "ExpansionAsymmetry" in record.candidate_types
     assert "OutlierVariant" in record.candidate_types
+    assert record.evidence["oracle_layer_status"] == {
+        "result_equivalence": "pass",
+        "profile": "pass",
+        "runtime": "pass",
+    }
+
+
+def test_oracle_does_not_promote_latency_only_signal_to_candidate() -> None:
+    fast = VariantProfileSummary(
+        variant_id="seed",
+        query="MATCH (a)-[r:T0]->(b) RETURN b",
+        query_kind="seed",
+        median_ms=10.0,
+        samples_ms=(10.0,),
+        plan=None,
+        profile_plan=None,
+        metrics={"db_hits": 100.0, "rows": 100.0},
+    )
+    slow = VariantProfileSummary(
+        variant_id="case_01_edge_notation_symmetry",
+        query="MATCH (b)<-[r:T0]-(a) RETURN b",
+        query_kind="variant",
+        median_ms=150.0,
+        samples_ms=(150.0,),
+        plan=None,
+        profile_plan=None,
+        metrics={"db_hits": 100.0, "rows": 100.0},
+    )
+    diff = PlanDiff(
+        structural_hash_changed=True,
+        changes=({"change": "replaced"},),
+        added_nodes=(),
+        removed_nodes=(),
+        replaced_nodes=(),
+        family_delta={"Expand": 1},
+        access_point_delta={"changed": True, "regressed": True},
+        expand_chain_delta={"delta": 1},
+        barrier_delta={"delta": 0},
+        estimated_rows_delta={},
+    )
+
+    record = detect_symmetry_violation("case_0002", fast, slow, diff, ConfirmationConfig())
+
+    assert not record.is_candidate
+    assert record.evidence["latency"]["worsened"] is True
+    assert record.evidence["oracle_layer_status"] == {
+        "result_equivalence": "pass",
+        "profile": "fail",
+        "runtime": "fail",
+    }

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from graph_sym_perf.core import MetricDelta, PlanDiff
-from graph_sym_perf.coverage import PMCCoverageState, extract_pmc_units, ratio_bucket_label
+from graph_sym_perf.coverage import (
+    PMCType,
+    PMCCoverageState,
+    extract_pmc_units,
+    filter_context_units,
+    filter_core_units,
+    ratio_bucket_label,
+)
 from graph_sym_perf.coverage.model import CoverageUnit, PMCEvidence
 
 
@@ -84,9 +91,11 @@ def test_pmc_coverage_state_marks_only_first_observation_as_new() -> None:
     second = state.observe(evidence)
     summary = state.snapshot("run-001")
 
-    assert first.new_unit_count == len(units)
+    core_units = filter_core_units(units)
+
+    assert first.new_unit_count == len(core_units)
     assert second.new_unit_count == 0
-    assert summary.total_new_units == len(tuple(unit for unit in units if unit.kind != "transformation_context"))
+    assert summary.total_new_units == len(core_units)
     assert summary.total_new_units_all == len(units)
     assert summary.units_by_kind["access_delta"] >= 1
     assert summary.candidate_units_by_kind["access_delta"] >= 1
@@ -122,9 +131,23 @@ def test_pmc_summary_separates_core_and_context_units() -> None:
     assert summary.total_units_seen == 1
     assert summary.total_units_seen_core == 1
     assert summary.total_units_seen_all == 2
+    assert summary.core_units["access_delta"] == 1
+    assert summary.core_new_units["access_delta"] == 1
     assert summary.context_units["transformation_context"] == 1
+    assert summary.context_new_units["transformation_context"] == 1
     assert all(unit["kind"] != "transformation_context" for unit in summary.top_units)
     assert summary.top_context_units[0]["key"] == "family:symmetry"
+
+
+def test_pmc_filter_helpers_split_core_and_context_units() -> None:
+    units = (
+        CoverageUnit(kind="transformation_context", key="family:symmetry", label="Transform family"),
+        CoverageUnit(kind="access_delta", key="access_changed", label="Access changed"),
+    )
+
+    assert PMCType.CORE.value == "core"
+    assert tuple(unit.key for unit in filter_core_units(units)) == ("access_changed",)
+    assert tuple(unit.key for unit in filter_context_units(units)) == ("family:symmetry",)
 
 
 def test_metric_aliases_generate_cardinality_work_and_latency_units() -> None:

@@ -41,7 +41,8 @@ def detect_symmetry_violation(
     plan_changed = plan_diff.structural_hash_changed or bool(plan_diff.changes)
 
     candidate_types = _candidate_types(fast, slow, plan_diff, latency_worse, core_metric_worse)
-    is_candidate = bool(candidate_types) and (latency_worse or core_metric_worse) and plan_changed
+    runtime_secondary_supported = core_metric_worse and latency_worse
+    is_candidate = bool(candidate_types) and core_metric_worse and plan_changed
     return OracleRecord(
         case_id=case_id,
         is_candidate=is_candidate,
@@ -58,6 +59,11 @@ def detect_symmetry_violation(
                 "ratio": latency_ratio,
                 "delta_ms": latency_delta,
                 "worsened": latency_worse,
+            },
+            "oracle_layer_status": {
+                "result_equivalence": "pass",
+                "profile": "pass" if core_metric_worse else "fail",
+                "runtime": "pass" if runtime_secondary_supported else "fail",
             },
             "metric_deltas": metric_deltas,
             "plan_changed": plan_changed,

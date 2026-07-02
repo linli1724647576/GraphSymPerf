@@ -30,7 +30,13 @@ from graph_sym_perf.core import (
     VariantProfileSummary,
     to_jsonable,
 )
-from graph_sym_perf.coverage import PMCCoverageState, PMCSummary, make_pmc_evidence, write_pmc_artifacts
+from graph_sym_perf.coverage import (
+    PMCCoverageState,
+    PMCSummary,
+    make_pmc_evidence,
+    replay_pmc_evidence,
+    write_pmc_artifacts,
+)
 from graph_sym_perf.datasets import generate_mini_ldbc
 from graph_sym_perf.diagnostics import summarize_skip_errors
 from graph_sym_perf.equivalence import compare_results
@@ -310,9 +316,13 @@ def _run_query_cases_with_state(
             scheduler.update_from_case_record(record, record.pmc)
             writer.write_case_record(record)
             records.append(record)
-    pmc_summary = pmc_state.snapshot(writer.run_id)
+    pmc_summary, pmc_evidences_for_artifact = replay_pmc_evidence(
+        writer.run_id,
+        tuple(pmc_evidences),
+        config.coverage.novelty_weights,
+    )
     if config.coverage.enabled:
-        write_pmc_artifacts(writer.run_dir, pmc_summary, pmc_evidences)
+        write_pmc_artifacts(writer.run_dir, pmc_summary, pmc_evidences_for_artifact)
     feedback_summary = summarize_feedback_state(feedback_state, config.feedback)
     writer.write_json("feedback_summary.json", feedback_summary)
     writer.write_json("rule_stats.json", tuple(feedback_state.rule_stats.values()))
@@ -534,15 +544,12 @@ def _oracle_from_profiles(
 def _candidate_state(oracle: OracleRecord, confirmation: ConfirmationRecord) -> str:
     if not oracle.is_candidate:
         return "equivalent_no_candidate"
-    latency = oracle.evidence.get("latency", {}) if isinstance(oracle.evidence, Mapping) else {}
-    latency_supported = bool(isinstance(latency, Mapping) and latency.get("worsened"))
+    runtime_supported = _runtime_layer_passed(oracle)
     support_level = str(confirmation.support_level)
-    if support_level == "profile_supported" and latency_supported:
+    if support_level == "profile_supported" and runtime_supported:
         return "profile_and_latency_supported_candidate"
     if support_level == "profile_supported":
         return "profile_supported_candidate"
-    if support_level == "latency_supported":
-        return "latency_supported_candidate"
     return "plan_only_candidate"
 
 
@@ -677,22 +684,29 @@ def _confirmation_from_oracle(
     )
     profile_supported = any(delta.worsened for delta in metric_deltas if delta.metric in {"db_hits", "rows", "memory_bytes"})
     latency_supported = bool(latency.get("worsened"))
-    support_level = "profile_supported" if profile_supported else "latency_supported" if latency_supported else "plan_only"
-    level = "strong" if profile_supported and latency_supported else "moderate" if profile_supported else "weak" if latency_supported else "none"
+    support_level = "profile_supported" if profile_supported else "plan_only"
+    level = "strong" if profile_supported and latency_supported else "moderate" if profile_supported else "none"
+    reason = oracle.reason
+    if latency_supported and not profile_supported:
+        reason = "RUNTIME_WITHOUT_PROFILE_SUPPORT"
     return ConfirmationRecord(
         case_id=case_id,
-        confirmed=oracle.is_candidate and latency_supported,
+        confirmed=oracle.is_candidate and profile_supported,
         original_median_ms=fast.median_ms,
         transformed_median_ms=slow.median_ms,
         latency_ratio=latency.get("ratio"),
         latency_delta_ms=latency.get("delta_ms"),
         original_samples_ms=fast.samples_ms,
         transformed_samples_ms=slow.samples_ms,
-        reason=oracle.reason,
+        reason=reason,
         level=level,
         support_level=support_level,
         metric_deltas=metric_deltas,
-        profile_samples={"fast": to_jsonable(fast), "slow": to_jsonable(slow)},
+        profile_samples={
+            "fast": to_jsonable(fast),
+            "slow": to_jsonable(slow),
+            "oracle_layer_status": (oracle.evidence or {}).get("oracle_layer_status", {}),
+        },
         fast_variant_id=fast.variant_id,
         slow_variant_id=slow.variant_id,
     )
@@ -857,7 +871,7 @@ def _summary(
         "exploratory_leads": sum(
             1 for record in records if record.exploratory_oracle and record.exploratory_oracle.is_candidate
         ),
-        "runtime_confirmed": sum(1 for record in records if _latency_supported(record)),
+        "runtime_confirmed": sum(1 for record in records if _runtime_confirmed(record)),
         "profile_supported_candidates": sum(
             1
             for record in records
@@ -914,15 +928,22 @@ def _summary(
     return summary
 
 
-def _latency_supported(record: CaseRecord) -> bool:
+def _runtime_confirmed(record: CaseRecord) -> bool:
     if record.oracle is None or not record.oracle.is_candidate:
         return False
-    if record.confirmation is not None and record.confirmation.support_level == "latency_supported":
-        return True
-    latency = {}
-    if isinstance(record.oracle.evidence, Mapping):
-        latency = record.oracle.evidence.get("latency") or {}
-    return bool(isinstance(latency, Mapping) and latency.get("worsened"))
+    if record.confirmation is None or record.confirmation.support_level != "profile_supported":
+        return False
+    return _runtime_layer_passed(record.oracle)
+
+
+def _runtime_layer_passed(oracle: OracleRecord) -> bool:
+    if isinstance(oracle.evidence, Mapping):
+        layer_status = oracle.evidence.get("oracle_layer_status") or {}
+        if isinstance(layer_status, Mapping) and str(layer_status.get("runtime") or ""):
+            return str(layer_status.get("runtime")) == "pass"
+        latency = oracle.evidence.get("latency") or {}
+        return bool(isinstance(latency, Mapping) and latency.get("worsened"))
+    return False
 
 
 def _tier_equivalence_passed(record: CaseRecord, tier: str) -> bool:
