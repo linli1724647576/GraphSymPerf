@@ -11,6 +11,8 @@ SYMMETRY_RULES: tuple[str, ...] = (
     "edge_notation_symmetry",
     "predicate_order_symmetry",
     "pattern_order_symmetry",
+    "pattern_decomposition_symmetry",
+    "pattern_fusion_symmetry",
     "path_endpoint_symmetry",
     "label_order_symmetry",
     "property_map_order_symmetry",
@@ -18,6 +20,8 @@ SYMMETRY_RULES: tuple[str, ...] = (
     "exploratory_pattern_order_symmetry",
     "exploratory_predicate_order_symmetry",
     "exploratory_optional_match_order_symmetry",
+    "exploratory_with_filter_shift_symmetry",
+    "exploratory_projection_reorder_symmetry",
 )
 
 BOOL_REDUNDANCY_RULES: tuple[str, ...] = (
@@ -33,6 +37,10 @@ BOOL_REDUNDANCY_RULES: tuple[str, ...] = (
     "and_excluded_middle_or_null",
     "or_guarded_contradiction",
     "and_double_negated_true_or",
+    "or_duplicate_predicate",
+    "and_null_guarded_true",
+    "and_distributive_absorption",
+    "and_multi_layer_redundancy",
     "arcade_and_true",
     "arcade_or_false",
     "arcade_and_not_false",

@@ -61,6 +61,87 @@ CLAUSE_RE = re.compile(
     re.I,
 )
 
+RULE_SPACE_METADATA: dict[str, dict[str, str]] = {
+    "predicate_order_symmetry": {
+        "rule_space_id": "S1",
+        "rule_type": "predicate_commutativity",
+        "structural_level": "expression_tree",
+        "optimizer_target": "logical_reorder",
+    },
+    "pattern_order_symmetry": {
+        "rule_space_id": "S2",
+        "rule_type": "clause_reordering",
+        "structural_level": "query_clause",
+        "optimizer_target": "planner_input_order",
+    },
+    "exploratory_pattern_order_symmetry": {
+        "rule_space_id": "S2",
+        "rule_type": "clause_reordering",
+        "structural_level": "query_clause",
+        "optimizer_target": "planner_input_order",
+    },
+    "pattern_decomposition_symmetry": {
+        "rule_space_id": "S3",
+        "rule_type": "pattern_decomposition",
+        "structural_level": "graph_topology",
+        "optimizer_target": "join_decomposition",
+    },
+    "pattern_fusion_symmetry": {
+        "rule_space_id": "S4",
+        "rule_type": "pattern_fusion",
+        "structural_level": "graph_topology",
+        "optimizer_target": "join_merging",
+    },
+    "edge_notation_symmetry": {
+        "rule_space_id": "S6",
+        "rule_type": "direction_reversal_notation",
+        "structural_level": "graph_semantics",
+        "optimizer_target": "index_usage",
+    },
+    "node_order_symmetry": {
+        "rule_space_id": "S6",
+        "rule_type": "undirected_endpoint_reversal",
+        "structural_level": "graph_semantics",
+        "optimizer_target": "index_usage",
+    },
+    "label_order_symmetry": {
+        "rule_space_id": "S7",
+        "rule_type": "label_set_permutation",
+        "structural_level": "schema_symmetry",
+        "optimizer_target": "label_filtering",
+    },
+    "path_endpoint_symmetry": {
+        "rule_space_id": "S8",
+        "rule_type": "path_endpoint_rewriting",
+        "structural_level": "traversal_semantics",
+        "optimizer_target": "expansion_strategy",
+    },
+    "alpha_renaming_symmetry": {
+        "rule_space_id": "S9",
+        "rule_type": "variable_binding_shift",
+        "structural_level": "scope_structure",
+        "optimizer_target": "pipeline_binding",
+    },
+    "exploratory_with_filter_shift_symmetry": {
+        "rule_space_id": "S11",
+        "rule_type": "early_late_filter_shift",
+        "structural_level": "pipeline_stage",
+        "optimizer_target": "pushdown_logic",
+    },
+    "property_map_order_symmetry": {
+        "rule_space_id": "S13",
+        "rule_type": "projection_or_property_reordering",
+        "structural_level": "output_pipeline",
+        "optimizer_target": "projection_pushdown",
+    },
+    "exploratory_projection_reorder_symmetry": {
+        "rule_space_id": "S13",
+        "rule_type": "projection_reordering",
+        "structural_level": "output_pipeline",
+        "optimizer_target": "projection_pushdown",
+    },
+}
+
 
 def generate_symmetry_family(
     query_case: QueryCase,
@@ -139,6 +220,8 @@ def _enabled_rules(raw_rules: Iterable[str]) -> tuple[_Rule, ...]:
         "edge_notation_symmetry": _Rule("edge_notation_symmetry", _edge_notation_symmetry),
         "predicate_order_symmetry": _Rule("predicate_order_symmetry", _predicate_order_symmetry),
         "pattern_order_symmetry": _Rule("pattern_order_symmetry", _pattern_order_symmetry),
+        "pattern_decomposition_symmetry": _Rule("pattern_decomposition_symmetry", _pattern_decomposition_symmetry),
+        "pattern_fusion_symmetry": _Rule("pattern_fusion_symmetry", _pattern_fusion_symmetry),
         "path_endpoint_symmetry": _Rule("path_endpoint_symmetry", _path_endpoint_symmetry),
         "label_order_symmetry": _Rule("label_order_symmetry", _label_order_symmetry),
         "property_map_order_symmetry": _Rule("property_map_order_symmetry", _property_map_order_symmetry),
@@ -151,6 +234,12 @@ def _enabled_rules(raw_rules: Iterable[str]) -> tuple[_Rule, ...]:
         ),
         "exploratory_optional_match_order_symmetry": _Rule(
             "exploratory_optional_match_order_symmetry", _exploratory_optional_match_order_symmetry
+        ),
+        "exploratory_with_filter_shift_symmetry": _Rule(
+            "exploratory_with_filter_shift_symmetry", _exploratory_with_filter_shift_symmetry
+        ),
+        "exploratory_projection_reorder_symmetry": _Rule(
+            "exploratory_projection_reorder_symmetry", _exploratory_projection_reorder_symmetry
         ),
     }
     selected = tuple(available[name] for name in raw_rules if name in available)
@@ -229,6 +318,7 @@ def _predicate_order_symmetry(query: str) -> SymmetryVariant:
         proof_obligation=proof.obligation,
         metadata={
             "where_count": len(replacements),
+            **_rule_space_metadata("predicate_order_symmetry"),
             "semantic_proof": proof.to_metadata(),
             "proofs": tuple(item[2].to_metadata() for item in replacements),
         },
@@ -249,7 +339,11 @@ def _pattern_order_symmetry(query: str) -> SymmetryVariant:
                 query=query[: parsed.clause.start] + transformed_clause + query[parsed.clause.end :],
                 transform_rule="pattern_order_symmetry",
                 proof_obligation=proof.obligation,
-                metadata={"semantic_proof": proof.to_metadata(), "pattern_count": len(parsed.pattern.atoms)},
+                metadata={
+                    **_rule_space_metadata("pattern_order_symmetry"),
+                    "semantic_proof": proof.to_metadata(),
+                    "pattern_count": len(parsed.pattern.atoms),
+                },
             )
     if len(clauses) < 2:
         raise TransformSkipError("NEED_TWO_MATCH_CLAUSES", "pattern order symmetry requires two ordinary MATCH clauses")
@@ -260,7 +354,7 @@ def _pattern_order_symmetry(query: str) -> SymmetryVariant:
         query=transformed,
         transform_rule="pattern_order_symmetry",
         proof_obligation=proved.proof.obligation,
-        metadata=proved.metadata | {"semantic_proof": proved.proof.to_metadata()},
+        metadata=proved.metadata | _rule_space_metadata("pattern_order_symmetry") | {"semantic_proof": proved.proof.to_metadata()},
     )
 
 
@@ -312,7 +406,10 @@ def _exploratory_pattern_order_symmetry(query: str) -> SymmetryVariant:
         transform_rule="exploratory_pattern_order_symmetry",
         proof_obligation="Exploratory adjacent MATCH swap; dynamic equivalence validation is required.",
         safety_tier="exploratory",
-        metadata={"exploratory_reason": "adjacent ordinary MATCH clauses swapped before runtime equivalence validation"},
+        metadata={
+            **_rule_space_metadata("exploratory_pattern_order_symmetry"),
+            "exploratory_reason": "adjacent ordinary MATCH clauses swapped before runtime equivalence validation",
+        },
     )
 
 
@@ -335,7 +432,7 @@ def _exploratory_predicate_order_symmetry(query: str) -> SymmetryVariant:
         transform_rule="exploratory_predicate_order_symmetry",
         proof_obligation="Exploratory predicate reorder with non-total terms; dynamic equivalence validation is required.",
         safety_tier="exploratory",
-        metadata={"where_count": len(replacements)},
+        metadata={**_rule_space_metadata("predicate_order_symmetry"), "where_count": len(replacements)},
     )
 
 
@@ -350,9 +447,167 @@ def _exploratory_optional_match_order_symmetry(query: str) -> SymmetryVariant:
                 transform_rule="exploratory_optional_match_order_symmetry",
                 proof_obligation="Exploratory OPTIONAL MATCH swap; null-introduction semantics require dynamic validation.",
                 safety_tier="exploratory",
-                metadata={"exploratory_reason": "adjacent OPTIONAL MATCH clauses swapped"},
+                metadata={
+                    "rule_space_id": "S5",
+                    "rule_type": "optional_match_lift_lower",
+                    "structural_level": "execution_pipeline",
+                    "optimizer_target": "outer_join_behavior",
+                    "exploratory_reason": "adjacent OPTIONAL MATCH clauses swapped",
+                },
             )
     raise TransformSkipError("NEED_TWO_OPTIONAL_MATCH_CLAUSES", "requires adjacent OPTIONAL MATCH clauses")
+
+
+def _pattern_decomposition_symmetry(query: str) -> SymmetryVariant:
+    _require_provable_query_scope(query)
+    for clause in parse_query(query).ordinary_match_clauses():
+        parsed = parse_match_clause(clause)
+        if not isinstance(parsed.pattern, AstPatternList) or parsed.pattern.separator != "chain":
+            continue
+        if len(parsed.pattern.atoms) < 2 or not all(isinstance(atom, AstEdgePattern) for atom in parsed.pattern.atoms):
+            continue
+        decomposed_pattern = AstPatternList(text="", atoms=parsed.pattern.atoms, separator="comma")
+        proof = prove_pattern_equivalence_ra(
+            parsed.pattern,
+            decomposed_pattern,
+            theorem="MatchChainDecompositionEquivalence",
+            fragment="one ordinary MATCH chain split into adjacent MATCH clauses",
+            premises=(
+                "the chain is decomposed into the same ordered relationship atoms",
+                "shared endpoint variables, labels, relationship variables, types, and properties are unchanged",
+                "the original MATCH WHERE predicate, if present, is kept after all decomposed atoms are bound",
+            ),
+            invariant="a chain pattern and the natural join of its edge atoms produce the same binding multiset",
+        )
+        replacement = " ".join(f"MATCH {atom.render()}" for atom in parsed.pattern.atoms)
+        if parsed.where_region is not None:
+            replacement = f"{replacement} WHERE {parsed.where_region.text}"
+        transformed = _splice_query(query, parsed.clause.start, parsed.clause.end, replacement)
+        return SymmetryVariant(
+            variant_id="",
+            query=transformed,
+            transform_rule="pattern_decomposition_symmetry",
+            proof_obligation=proof.obligation,
+            metadata={
+                **_rule_space_metadata("pattern_decomposition_symmetry"),
+                "semantic_proof": proof.to_metadata(),
+                "decomposed_atom_count": len(parsed.pattern.atoms),
+            },
+        )
+    raise TransformSkipError("NO_DECOMPOSABLE_CHAIN", "requires one ordinary MATCH chain with at least two edge atoms")
+
+
+def _pattern_fusion_symmetry(query: str) -> SymmetryVariant:
+    _require_provable_query_scope(query)
+    clauses = list(parse_query(query).ordinary_match_clauses())
+    for first_raw, second_raw in zip(clauses, clauses[1:]):
+        if first_raw.end != second_raw.start:
+            continue
+        first = parse_match_clause(first_raw)
+        second = parse_match_clause(second_raw)
+        if first.where_region is not None:
+            continue
+        if not isinstance(first.pattern, AstEdgePattern) or not isinstance(second.pattern, AstEdgePattern):
+            continue
+        if not _same_node_pattern(first.pattern.right, second.pattern.left):
+            continue
+        original_pattern = AstPatternList(text="", atoms=(first.pattern, second.pattern), separator="comma")
+        fused_pattern = AstPatternList(text="", atoms=(first.pattern, second.pattern), separator="chain")
+        proof = prove_pattern_equivalence_ra(
+            original_pattern,
+            fused_pattern,
+            theorem="AdjacentMatchChainFusionEquivalence",
+            fragment="two adjacent ordinary MATCH edge atoms fused into one chain pattern",
+            premises=(
+                "the adjacent MATCH clauses bind the same shared endpoint variable",
+                "relationship variables, node labels, types, properties, and directions are unchanged",
+                "the first MATCH has no WHERE filter; any second MATCH WHERE predicate remains after the fused chain",
+            ),
+            invariant="adjacent MATCH edge atoms and the equivalent chain pattern lower to the same natural join",
+        )
+        replacement = f"MATCH {fused_pattern.render()}"
+        if second.where_region is not None:
+            replacement = f"{replacement} WHERE {second.where_region.text}"
+        transformed = _splice_query(query, first.clause.start, second.clause.end, replacement)
+        return SymmetryVariant(
+            variant_id="",
+            query=transformed,
+            transform_rule="pattern_fusion_symmetry",
+            proof_obligation=proof.obligation,
+            metadata={
+                **_rule_space_metadata("pattern_fusion_symmetry"),
+                "semantic_proof": proof.to_metadata(),
+                "fused_atom_count": 2,
+            },
+        )
+    raise TransformSkipError("NO_FUSIBLE_MATCH_CHAIN", "requires adjacent MATCH edge atoms sharing one endpoint")
+
+
+def _exploratory_with_filter_shift_symmetry(query: str) -> SymmetryVariant:
+    _require_exploratory_scope(query)
+    clauses = _clauses(query)
+    for first, second in zip(clauses, clauses[1:]):
+        if first.keyword != "MATCH" or second.keyword != "WITH":
+            continue
+        parsed = parse_match_clause(first)
+        if parsed.where_region is None:
+            continue
+        if _keyword_in_clause(second.text, "WHERE"):
+            continue
+        where_variables = _property_variables(parsed.where_region.text)
+        projected = _with_projected_variables(second.text)
+        if where_variables and not set(where_variables).issubset(projected):
+            raise TransformSkipError("WITH_FILTER_VARIABLE_NOT_PROJECTED", "WITH clause does not project every WHERE variable")
+        where_keyword = re.search(r"\bWHERE\b", first.text, re.I)
+        if where_keyword is None:
+            continue
+        match_without_where = first.text[: where_keyword.start()].rstrip()
+        replacement = f"{match_without_where} {second.text.rstrip()} WHERE {parsed.where_region.text}"
+        transformed = _splice_query(query, first.start, second.end, replacement)
+        return SymmetryVariant(
+            variant_id="",
+            query=transformed,
+            transform_rule="exploratory_with_filter_shift_symmetry",
+            proof_obligation="Exploratory WHERE-to-WITH filter shift; dynamic equivalence validation is required.",
+            safety_tier="exploratory",
+            metadata={
+                **_rule_space_metadata("exploratory_with_filter_shift_symmetry"),
+                "where_variables": where_variables,
+                "projected_variables": tuple(sorted(projected)),
+            },
+        )
+    raise TransformSkipError("NO_SHIFTABLE_WITH_FILTER", "requires MATCH ... WHERE followed by WITH projecting predicate variables")
+
+
+def _exploratory_projection_reorder_symmetry(query: str) -> SymmetryVariant:
+    _require_exploratory_scope(query)
+    clauses = _clauses(query)
+    for clause in reversed(clauses):
+        if clause.keyword != "RETURN":
+            continue
+        body = clause.text[len("RETURN") :].strip()
+        if not body or "*" in body or re.search(r"\b(ORDER\s+BY|SKIP|LIMIT|DISTINCT)\b", body, re.I):
+            continue
+        items = split_top_level_commas(body)
+        if len(items) < 2:
+            continue
+        transformed_items = tuple(reversed(items))
+        if tuple(items) == transformed_items:
+            continue
+        replacement = "RETURN " + ", ".join(transformed_items)
+        transformed = _splice_query(query, clause.start, clause.end, replacement)
+        return SymmetryVariant(
+            variant_id="",
+            query=transformed,
+            transform_rule="exploratory_projection_reorder_symmetry",
+            proof_obligation="Exploratory RETURN projection reorder; dynamic equivalence validation is required.",
+            safety_tier="exploratory",
+            metadata={
+                **_rule_space_metadata("exploratory_projection_reorder_symmetry"),
+                "projection_count": len(items),
+            },
+        )
+    raise TransformSkipError("NO_REORDERABLE_PROJECTION", "requires a RETURN clause with at least two explicit projections")
 
 
 @dataclass(frozen=True)
@@ -821,6 +1076,57 @@ def _first_atom_with_variable(pattern: object, new_name: str, old_name: str):
     raise TransformSkipError("NO_ALPHA_ATOM", "alpha-renamed variable atom was not found")
 
 
+def _same_node_pattern(left: AstNodePattern, right: AstNodePattern) -> bool:
+    return (
+        left.variable == right.variable
+        and tuple(left.labels) == tuple(right.labels)
+        and tuple(left.properties) == tuple(right.properties)
+    )
+
+
+def _property_variables(predicate: str) -> tuple[str, ...]:
+    variables: list[str] = []
+    for match in re.finditer(r"\b([A-Za-z]\w*)\s*\.", predicate):
+        variable = match.group(1)
+        if variable not in variables:
+            variables.append(variable)
+    return tuple(variables)
+
+
+def _with_projected_variables(clause_text: str) -> set[str]:
+    body = re.sub(r"^\s*WITH\b", "", clause_text, count=1, flags=re.I).strip()
+    where_match = re.search(r"\bWHERE\b", body, re.I)
+    if where_match is not None:
+        body = body[: where_match.start()].strip()
+    projected: set[str] = set()
+    for item in split_top_level_commas(body):
+        stripped = item.strip()
+        alias = re.search(r"\bAS\s+([A-Za-z]\w*)$", stripped, re.I)
+        if alias is not None:
+            projected.add(alias.group(1))
+            continue
+        if re.fullmatch(r"[A-Za-z]\w*", stripped):
+            projected.add(stripped)
+    return projected
+
+
+def _keyword_in_clause(text: str, keyword: str) -> bool:
+    pattern = re.compile(rf"\b{re.escape(keyword)}\b", re.I)
+    return any(not _inside_string(text, match.start()) for match in pattern.finditer(text))
+
+
+def _splice_query(query: str, start: int, end: int, replacement: str) -> str:
+    prefix = query[:start]
+    suffix = query[end:]
+    if suffix and not suffix[0].isspace() and not replacement.endswith(" "):
+        replacement += " "
+    return prefix + replacement + suffix
+
+
+def _rule_space_metadata(rule: str) -> dict[str, str]:
+    return dict(RULE_SPACE_METADATA.get(rule, {}))
+
+
 def _next_clause_start(query: str, start: int, keywords: tuple[str, ...]) -> int:
     for match in CLAUSE_RE.finditer(query, start):
         if _inside_string(query, match.start()):
@@ -848,7 +1154,7 @@ def _variant_from_proof(
         query=transformed,
         transform_rule=rule,
         proof_obligation=proved.proof.obligation,
-        metadata=proved.metadata | {"semantic_proof": proved.proof.to_metadata()},
+        metadata=proved.metadata | _rule_space_metadata(rule) | {"semantic_proof": proved.proof.to_metadata()},
     )
 
 

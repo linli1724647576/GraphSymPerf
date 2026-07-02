@@ -42,6 +42,10 @@ transforms:
     - and_excluded_middle_or_null
     - or_guarded_contradiction
     - and_double_negated_true_or
+    - or_duplicate_predicate
+    - and_null_guarded_true
+    - and_distributive_absorption
+    - and_multi_layer_redundancy
   max_variants_per_case: 4
 
 coverage:

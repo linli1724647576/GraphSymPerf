@@ -215,3 +215,61 @@ def test_path_endpoint_skips_return_star_with_path_variable() -> None:
 
     assert not family.variants
     assert family.skipped_variants[0].skip_reason == "PATH_VARIABLE"
+
+
+def test_pattern_decomposition_symmetry_splits_chain_match() -> None:
+    family = generate_symmetry_family(
+        _case("MATCH (a:L0)-[r:T0]->(b:L1)-[s:T1]->(c:L2) WHERE c.id = 1 RETURN a, c"),
+        TransformConfig(enabled_rules=("pattern_decomposition_symmetry",)),
+    )
+
+    assert len(family.variants) == 1
+    assert family.variants[0].query.startswith("MATCH (a:L0)-[r:T0]->(b:L1) MATCH (b:L1)-[s:T1]->(c:L2) WHERE")
+    assert family.variants[0].metadata["rule_space_id"] == "S3"
+    _assert_proof_metadata(family)
+
+
+def test_pattern_fusion_symmetry_merges_adjacent_chain_matches() -> None:
+    family = generate_symmetry_family(
+        _case("MATCH (a:L0)-[r:T0]->(b:L1) MATCH (b:L1)-[s:T1]->(c:L2) RETURN a, c"),
+        TransformConfig(enabled_rules=("pattern_fusion_symmetry",)),
+    )
+
+    assert len(family.variants) == 1
+    assert "MATCH (a:L0)-[r:T0]->(b:L1)-[s:T1]->(c:L2) RETURN" in family.variants[0].query
+    assert family.variants[0].metadata["rule_space_id"] == "S4"
+    _assert_proof_metadata(family)
+
+
+def test_pattern_fusion_symmetry_does_not_cross_with_scope() -> None:
+    family = generate_symmetry_family(
+        _case("MATCH (a:L0)-[r:T0]->(b:L1) WITH b MATCH (b:L1)-[s:T1]->(c:L2) RETURN b, c"),
+        TransformConfig(enabled_rules=("pattern_fusion_symmetry",)),
+    )
+
+    assert not family.variants
+    assert family.skipped_variants[0].skip_reason == "NO_FUSIBLE_MATCH_CHAIN"
+
+
+def test_exploratory_with_filter_shift_marks_pipeline_tier() -> None:
+    family = generate_symmetry_family(
+        _case("MATCH (n:L0) WHERE n.id = 1 WITH n RETURN n.id"),
+        TransformConfig(enabled_rules=("exploratory_with_filter_shift_symmetry",)),
+    )
+
+    assert len(family.variants) == 1
+    assert "MATCH (n:L0) WITH n WHERE n.id = 1 RETURN" in family.variants[0].query
+    assert family.variants[0].safety_tier == "exploratory"
+    assert family.variants[0].metadata["rule_space_id"] == "S11"
+
+
+def test_exploratory_projection_reordering_marks_output_tier() -> None:
+    family = generate_symmetry_family(
+        _case("MATCH (a:L0) RETURN a.id, a.name, a.age"),
+        TransformConfig(enabled_rules=("exploratory_projection_reorder_symmetry",)),
+    )
+
+    assert len(family.variants) == 1
+    assert "RETURN a.age, a.name, a.id" in family.variants[0].query
+    assert family.variants[0].safety_tier == "exploratory"
+    assert family.variants[0].metadata["rule_space_id"] == "S13"

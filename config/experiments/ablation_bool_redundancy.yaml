@@ -30,6 +30,10 @@ transforms:
     - and_excluded_middle_or_null
     - or_guarded_contradiction
     - and_double_negated_true_or
+    - or_duplicate_predicate
+    - and_null_guarded_true
+    - and_distributive_absorption
+    - and_multi_layer_redundancy
     - arcade_and_true
     - arcade_or_false
     - arcade_and_not_false

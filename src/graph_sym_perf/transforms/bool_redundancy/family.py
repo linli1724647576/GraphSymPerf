@@ -33,11 +33,98 @@ SUPPORTED_GDSMITH_RULES = (
     "and_excluded_middle_or_null",
     "or_guarded_contradiction",
     "and_double_negated_true_or",
+    "or_duplicate_predicate",
+    "and_null_guarded_true",
+    "and_distributive_absorption",
+    "and_multi_layer_redundancy",
     "arcade_and_true",
     "arcade_or_false",
     "arcade_and_not_false",
     "arcade_and_true_or_false_expr",
 )
+
+RULE_SPACE_METADATA: dict[str, dict[str, str]] = {
+    "and_true_or": {
+        "rule_space_id": "B1",
+        "rule_type": "constant_folding_stress",
+        "optimizer_target": "constant_folding_failure",
+    },
+    "and_expr_or_true": {
+        "rule_space_id": "B1",
+        "rule_type": "constant_folding_stress",
+        "optimizer_target": "constant_folding_failure",
+    },
+    "or_false_and": {
+        "rule_space_id": "B2",
+        "rule_type": "dead_branch_amplification",
+        "optimizer_target": "dead_code_elimination",
+    },
+    "or_expr_and_false": {
+        "rule_space_id": "B2",
+        "rule_type": "dead_branch_amplification",
+        "optimizer_target": "dead_code_elimination",
+    },
+    "and_expr_null_partition": {
+        "rule_space_id": "B3",
+        "rule_type": "null_aware_contradiction",
+        "optimizer_target": "null_propagation",
+    },
+    "or_expr_null_contradiction": {
+        "rule_space_id": "B3",
+        "rule_type": "null_aware_contradiction",
+        "optimizer_target": "null_propagation",
+    },
+    "and_not_expr_null_contradiction": {
+        "rule_space_id": "B3",
+        "rule_type": "null_aware_contradiction",
+        "optimizer_target": "null_propagation",
+    },
+    "or_duplicate_predicate": {
+        "rule_space_id": "B4",
+        "rule_type": "predicate_explosion",
+        "optimizer_target": "predicate_deduplication",
+    },
+    "and_case_true": {
+        "rule_space_id": "B5",
+        "rule_type": "conditional_flattening",
+        "optimizer_target": "logical_equivalence_detection",
+    },
+    "and_excluded_middle_or_null": {
+        "rule_space_id": "B6",
+        "rule_type": "boolean_distribution_stress",
+        "optimizer_target": "algebraic_rewrite_and_pushdown",
+    },
+    "and_distributive_absorption": {
+        "rule_space_id": "B6",
+        "rule_type": "boolean_distribution_stress",
+        "optimizer_target": "algebraic_rewrite_and_pushdown",
+    },
+    "or_guarded_contradiction": {
+        "rule_space_id": "B7",
+        "rule_type": "guarded_contradiction",
+        "optimizer_target": "partial_evaluation",
+    },
+    "and_not_false_and": {
+        "rule_space_id": "B8",
+        "rule_type": "multi_layer_redundancy",
+        "optimizer_target": "multi_stage_simplification",
+    },
+    "and_double_negated_true_or": {
+        "rule_space_id": "B8",
+        "rule_type": "multi_layer_redundancy",
+        "optimizer_target": "multi_stage_simplification",
+    },
+    "and_multi_layer_redundancy": {
+        "rule_space_id": "B8",
+        "rule_type": "multi_layer_redundancy",
+        "optimizer_target": "multi_stage_simplification",
+    },
+    "and_null_guarded_true": {
+        "rule_space_id": "B9",
+        "rule_type": "null_guarded_predicate_shift",
+        "optimizer_target": "null_elimination_path",
+    },
+}
 
 SKIP_UNSUPPORTED_SCOPE_START = "UNSUPPORTED_SCOPE_START"
 SKIP_UNSAFE_OPTIONAL_MATCH_SITE = "UNSAFE_OPTIONAL_MATCH_SITE"
@@ -182,6 +269,7 @@ def generate_bool_redundancy_family(
                         "safe_only": config.gdsmith_safe_only,
                         "target": target.value if target is not None else None,
                         "expression_dialect": expression_dialect,
+                        **_rule_space_metadata(rule),
                         **_proof_metadata(proof, ast_fragment),
                     },
                 )
@@ -311,6 +399,7 @@ def _inject_gdsmith_redundant_predicate(
             "safe_only": config.gdsmith_safe_only,
             "target": target.value if target is not None else None,
             "expression_dialect": expression_dialect,
+            **_rule_space_metadata(rule),
             **_proof_metadata(proof, ast_fragment),
         },
     )
@@ -390,6 +479,14 @@ def _render_rule(rule: str, base_predicate: str, expression: str) -> str:
         return f"({base}) OR ((({expr}) AND NOT({expr})) AND (({expr}) IS NOT NULL))"
     if rule == "and_double_negated_true_or":
         return f"({base}) AND NOT(NOT(true OR ({expr})))"
+    if rule == "or_duplicate_predicate":
+        return f"({base}) OR ({base}) OR ({base})"
+    if rule == "and_null_guarded_true":
+        return f"({base}) AND ((({expr}) IS NOT NULL) OR true)"
+    if rule == "and_distributive_absorption":
+        return f"(({base}) AND ((({expr}) OR NOT({expr})) OR (({expr}) IS NULL))) OR (({base}) AND false)"
+    if rule == "and_multi_layer_redundancy":
+        return f"(({base}) AND (true OR ({expr}))) OR (false AND ({expr}))"
     if rule == "arcade_and_true":
         return f"{base} AND true"
     if rule == "arcade_or_false":
@@ -516,9 +613,27 @@ def _ldbc_variant(query_case: QueryCase, query: str, *, rule: str | None = None)
             "expression_cypher": query_case.safe_expression,
             "injection_site": site,
             "referenced_variables": _referenced_variables_from_expression(query_case.safe_expression),
+            **_rule_space_metadata(rule),
             **_proof_metadata(proof, ast_fragment),
         },
     )
+
+
+def _rule_space_metadata(rule: str) -> dict[str, str]:
+    metadata = RULE_SPACE_METADATA.get(rule)
+    if metadata is not None:
+        return dict(metadata)
+    if rule.startswith("arcade_"):
+        return {
+            "rule_space_id": "B8",
+            "rule_type": "portable_arcadedb_redundancy",
+            "optimizer_target": "portable_boolean_simplification",
+        }
+    return {
+        "rule_space_id": "B0",
+        "rule_type": "legacy_bool_redundancy",
+        "optimizer_target": "boolean_simplification",
+    }
 
 
 def _named_variant(case_id: str, index: int, variant: QueryVariant) -> QueryVariant:

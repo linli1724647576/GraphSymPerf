@@ -334,6 +334,10 @@ def _require_redundant_rule(rule: str) -> None:
         "and_excluded_middle_or_null",
         "or_guarded_contradiction",
         "and_double_negated_true_or",
+        "or_duplicate_predicate",
+        "and_null_guarded_true",
+        "and_distributive_absorption",
+        "and_multi_layer_redundancy",
         "arcade_and_true",
         "arcade_or_false",
         "arcade_and_not_false",
@@ -464,6 +468,14 @@ def _evaluate_redundant_rule(rule: str, base: Truth, expression: Truth) -> Truth
         return _or(base, _and(_and(expression, _not(expression)), _is_not_null(expression)))
     if rule == "and_double_negated_true_or":
         return _and(base, _not(_not(_or("true", expression))))
+    if rule == "or_duplicate_predicate":
+        return _or(_or(base, base), base)
+    if rule == "and_null_guarded_true":
+        return _and(base, _or(_is_not_null(expression), "true"))
+    if rule == "and_distributive_absorption":
+        return _or(_and(base, _or(_or(expression, _not(expression)), _is_null(expression))), _and(base, "false"))
+    if rule == "and_multi_layer_redundancy":
+        return _or(_and(base, _or("true", expression)), _and("false", expression))
     if rule == "arcade_and_true":
         return _and(base, "true")
     if rule == "arcade_or_false":

@@ -25,8 +25,12 @@ transforms:
   enabled_rules:
     - and_true_or
     - or_false_and
+    - or_duplicate_predicate
+    - and_null_guarded_true
     - predicate_order_symmetry
     - pattern_order_symmetry
+    - pattern_decomposition_symmetry
+    - pattern_fusion_symmetry
 
 coverage:
   enabled: true

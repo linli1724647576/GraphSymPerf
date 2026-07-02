@@ -33,13 +33,19 @@ transforms:
   enabled_rules:
     - and_true_or
     - or_false_and
+    - or_duplicate_predicate
     - and_expr_null_partition
     - or_expr_null_contradiction
+    - and_null_guarded_true
+    - and_multi_layer_redundancy
     - predicate_order_symmetry
     - pattern_order_symmetry
+    - pattern_decomposition_symmetry
+    - pattern_fusion_symmetry
     - label_order_symmetry
     - property_map_order_symmetry
     - alpha_renaming_symmetry
+    - exploratory_with_filter_shift_symmetry
   max_variants_per_case: 4
 
 coverage:

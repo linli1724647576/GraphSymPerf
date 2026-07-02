@@ -32,9 +32,13 @@ transforms:
   enabled_rules:
     - predicate_order_symmetry
     - pattern_order_symmetry
+    - pattern_decomposition_symmetry
+    - pattern_fusion_symmetry
     - label_order_symmetry
     - property_map_order_symmetry
     - alpha_renaming_symmetry
+    - exploratory_with_filter_shift_symmetry
+    - exploratory_projection_reorder_symmetry
   max_variants_per_case: 4
 
 coverage:

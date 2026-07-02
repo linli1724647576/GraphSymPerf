@@ -78,3 +78,46 @@ def test_ldbc_bool_rules_use_enabled_canonical_names() -> None:
 
     assert rules == {"and_true_or", "or_false_and"}
     assert "where_and_true_or_expr" not in rules
+
+
+def test_enhanced_bool_rules_render_cost_model_stress_shapes() -> None:
+    case = QueryCase(
+        case_id="case_bool_space",
+        template_name="gdsmith",
+        query="MATCH (n:L0) WHERE n.id = 1 RETURN n",
+        parameters={},
+        base_predicate="",
+        safe_expression="",
+        source="gdsmith",
+    )
+
+    family = generate_bool_redundancy_family(
+        case,
+        TransformConfig(
+            enabled_families=("bool_redundancy",),
+            enabled_rules=(
+                "or_duplicate_predicate",
+                "and_null_guarded_true",
+                "and_distributive_absorption",
+                "and_multi_layer_redundancy",
+            ),
+            max_variants_per_case=4,
+        ),
+    )
+
+    variants = {variant.transform_rule: variant for variant in family.variants}
+    assert set(variants) == {
+        "or_duplicate_predicate",
+        "and_null_guarded_true",
+        "and_distributive_absorption",
+        "and_multi_layer_redundancy",
+    }
+    assert "OR (n.id = 1) OR (n.id = 1)" in variants["or_duplicate_predicate"].query
+    assert "IS NOT NULL) OR true" in variants["and_null_guarded_true"].query
+    assert "AND false" in variants["and_distributive_absorption"].query
+    assert "true OR" in variants["and_multi_layer_redundancy"].query
+    assert {variant.metadata["rule_space_id"] for variant in variants.values()} == {"B4", "B6", "B8", "B9"}
+    for variant in variants.values():
+        proof = variant.metadata["semantic_proof"]
+        assert proof["theorem"] == "RedundantBooleanPredicateIdentity"
+        assert proof["original_ra"] == proof["transformed_ra"]
