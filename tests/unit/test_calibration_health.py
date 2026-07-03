@@ -195,6 +195,122 @@ def test_calibration_health_reports_warn_and_fail_context_pollution_levels(tmp_p
     assert report["overall_status"] == "FAIL"
 
 
+def test_runtime_without_profile_ignores_plan_only_latency_worsened(tmp_path: Path) -> None:
+    """Regression: plan_only candidates with latency.worsened are NOT runtime_without_profile.
+
+    The oracle correctly classified these as plan_only (profile metrics did not
+    cross the threshold).  Latency variation alone on a plan_only candidate is
+    expected noise, not an oracle inconsistency.
+    """
+    _write_json(
+        tmp_path / "summary.json",
+        {"generated_cases": 1, "runtime_confirmed": 0, "states": {}, "pmc_total_units_seen": 3},
+    )
+    _write_json(tmp_path / "pmc_summary.json", {"total_units_seen": 3, "top_units": []})
+    (tmp_path / "pmc_evidence.jsonl").write_text("", encoding="utf-8")
+    _write_json(tmp_path / "pmc_units.json", [])
+    _write_json(tmp_path / "rule_stats.json", [])
+    _write_json(tmp_path / "run_config_snapshot.json", {"transforms": {"enabled_rules": []}})
+    (tmp_path / "cases.jsonl").write_text(
+        json.dumps(
+            {
+                "system": "neo4j",
+                "case_id": "case_plan_only_latency_noise",
+                "state": "plan_only_candidate",
+                "reason": "candidate",
+                "family": {
+                    "variants": [
+                        {
+                            "variant_id": "case_001_01_and_case_true",
+                            "transform_rule": "and_case_true",
+                            "metadata": {"transform_family": "bool_redundancy"},
+                        }
+                    ],
+                    "skipped_variants": [],
+                },
+                "oracle": {
+                    "is_candidate": True,
+                    "evidence": {
+                        "latency": {"worsened": True, "ratio": 15.2, "delta_ms": 52.5},
+                        "oracle_layer_status": {"profile": "fail", "runtime": "fail", "result_equivalence": "pass"},
+                    },
+                },
+                "confirmation": {"support_level": "plan_only"},
+                "equivalences": [{"passed": True}],
+                "artifacts": {"fast_query": "neo4j/case_plan_only/fast_query.cypher"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = run_calibration_health(tmp_path)
+    codes = {issue["code"] for issue in report["issues"]}
+
+    assert "runtime_without_profile" not in codes, (
+        f"plan_only + latency.worsened should not trigger runtime_without_profile; got codes: {codes}"
+    )
+
+
+def test_runtime_without_profile_flags_oracle_invariant_violation(tmp_path: Path) -> None:
+    """Oracle invariant: runtime=pass + profile=fail should still be flagged.
+
+    By construction runtime_signal can only be True when profile_signal is True,
+    so this case indicates a genuine oracle bug if it occurs.
+    """
+    _write_json(
+        tmp_path / "summary.json",
+        {"generated_cases": 1, "runtime_confirmed": 0, "states": {}, "pmc_total_units_seen": 3},
+    )
+    _write_json(tmp_path / "pmc_summary.json", {"total_units_seen": 3, "top_units": []})
+    (tmp_path / "pmc_evidence.jsonl").write_text("", encoding="utf-8")
+    _write_json(tmp_path / "pmc_units.json", [])
+    _write_json(tmp_path / "rule_stats.json", [])
+    _write_json(tmp_path / "run_config_snapshot.json", {"transforms": {"enabled_rules": []}})
+    (tmp_path / "cases.jsonl").write_text(
+        json.dumps(
+            {
+                "system": "neo4j",
+                "case_id": "case_oracle_invariant_violation",
+                "state": "plan_only_candidate",
+                "reason": "candidate",
+                "family": {
+                    "variants": [
+                        {
+                            "variant_id": "case_002_01_and_case_true",
+                            "transform_rule": "and_case_true",
+                            "metadata": {"transform_family": "bool_redundancy"},
+                        }
+                    ],
+                    "skipped_variants": [],
+                },
+                "oracle": {
+                    "is_candidate": True,
+                    "evidence": {
+                        "latency": {"worsened": True, "ratio": 21.0, "delta_ms": 99.4},
+                        # This should never happen by construction:
+                        "oracle_layer_status": {"profile": "fail", "runtime": "pass", "result_equivalence": "pass"},
+                    },
+                },
+                "confirmation": {"support_level": "plan_only"},
+                "equivalences": [{"passed": True}],
+                "artifacts": {"fast_query": "neo4j/case_invariant/fast_query.cypher"},
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = run_calibration_health(tmp_path)
+    codes = {issue["code"] for issue in report["issues"]}
+
+    assert "runtime_without_profile" in codes, (
+        f"runtime=pass + profile=fail must still flag runtime_without_profile; got codes: {codes}"
+    )
+
+
 def test_rule_stats_consistency_allows_skipped_attempts_without_generated_variants() -> None:
     assert rule_stats_consistency_check(
         {

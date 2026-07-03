@@ -25,7 +25,7 @@ class TargetSystem(str, Enum):
     AGENSGRAPH = "agensgraph"
     APACHE_AGE = "apache_age"
     ARCADEDB = "arcadedb"
-    KUZU = "kuzu"
+    LADYBUGDB = "ladybugdb"
 
     @classmethod
     def parse(cls, value: str) -> "TargetSystem":

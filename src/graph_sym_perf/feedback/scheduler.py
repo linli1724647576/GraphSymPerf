@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import replace
 
 from graph_sym_perf.core import CaseRecord, FeedbackConfig, QueryCase, RunConfig, TransformConfig, is_profile_supported_level
@@ -55,7 +56,11 @@ class TransformScheduler:
             metadata={"eligible_families": eligible_families},
         )
 
-    def update_from_case_record(self, record: CaseRecord, pmc_evidence: PMCEvidence | None = None) -> None:
+    def update_from_case_record(
+        self,
+        record: CaseRecord,
+        pmc_evidence: PMCEvidence | Iterable[PMCEvidence | None] | None = None,
+    ) -> None:
         """Update per-rule statistics from a completed case record.
 
         Invariants (document 4.md §P0-2):
@@ -64,10 +69,8 @@ class TransformScheduler:
           - generated + skipped <= attempted
           - Case-level error/timeout state MUST NOT propagate to individual rule variants.
         """
-        candidate = bool(record.oracle and record.oracle.is_candidate)
-        strong_candidate = bool(record.confirmation and is_profile_supported_level(record.confirmation.support_level))
         equivalences_by_id = {item.case_id: item for item in record.equivalences}
-        pmc_rule = pmc_evidence.transform_rule if pmc_evidence is not None else None
+        pmcs_by_variant = _pmcs_by_variant(pmc_evidence)
         family_name = self._infer_family(record)
 
         # -- generated variants (passed static safety check) --
@@ -90,14 +93,18 @@ class TransformScheduler:
                     if "TIMEOUT" in _reason.upper():
                         stats.timeouts += 1
 
-            # PMC-linked stats: only for the specific rule that produced the evidence.
-            if record.confirmation is not None and pmc_rule == rule:
+            # PMC-linked stats: match evidence to this specific variant by
+            # slow_variant_id (the rule-generated variant).  Indexing by
+            # variant avoids double-counting when multiple variants share
+            # the same transform_rule.
+            variant_pmcs = pmcs_by_variant.get(variant.variant_id, ())
+            if record.confirmation is not None and variant_pmcs:
                 stats.profile_available += 1
-                stats.pmc_units += pmc_evidence.unit_count if pmc_evidence else 0
-                stats.pmc_new_units += pmc_evidence.new_unit_count if pmc_evidence else 0
-                if candidate:
+                stats.pmc_units += sum(evidence.unit_count for evidence in variant_pmcs)
+                stats.pmc_new_units += sum(evidence.new_unit_count for evidence in variant_pmcs)
+                if any(_pmc_is_candidate(record, evidence) for evidence in variant_pmcs):
                     stats.candidate_count += 1
-                if strong_candidate:
+                if any(_pmc_is_strong_candidate(record, evidence) for evidence in variant_pmcs):
                     stats.strong_candidate_count += 1
 
             stats.reward = compute_reward(stats, self.feedback_config)
@@ -262,3 +269,51 @@ class TransformScheduler:
         if variants:
             return str(variants[0].metadata.get("transform_family") or "symmetry")
         return "symmetry"
+
+
+def _pmcs_by_variant(
+    pmc_evidence: PMCEvidence | Iterable[PMCEvidence | None] | None,
+) -> dict[str, tuple[PMCEvidence, ...]]:
+    """Group PMC evidence by slow_variant_id (the rule-generated variant).
+
+    Indexing by variant avoids double-counting when multiple variants
+    in a case share the same transform_rule: each variant only receives
+    credit for evidence where it is the slow (transformed) variant.
+    """
+    if pmc_evidence is None:
+        return {}
+    if isinstance(pmc_evidence, PMCEvidence):
+        evidences = (pmc_evidence,)
+    else:
+        evidences = tuple(evidence for evidence in pmc_evidence if evidence is not None)
+
+    grouped: dict[str, list[PMCEvidence]] = {}
+    for evidence in evidences:
+        vid = evidence.slow_variant_id
+        if vid is not None:
+            grouped.setdefault(vid, []).append(evidence)
+    return {vid: tuple(items) for vid, items in grouped.items()}
+
+
+def _pmc_is_candidate(record: CaseRecord, evidence: PMCEvidence) -> bool:
+    if "is_candidate" in evidence.metadata:
+        return bool(evidence.metadata["is_candidate"])
+    return _pmc_matches_case_confirmation(record, evidence) and bool(record.oracle and record.oracle.is_candidate)
+
+
+def _pmc_is_strong_candidate(record: CaseRecord, evidence: PMCEvidence) -> bool:
+    support_level = evidence.metadata.get("support_level")
+    if support_level is not None:
+        return is_profile_supported_level(str(support_level))
+    return _pmc_matches_case_confirmation(record, evidence) and bool(
+        record.confirmation and is_profile_supported_level(record.confirmation.support_level)
+    )
+
+
+def _pmc_matches_case_confirmation(record: CaseRecord, evidence: PMCEvidence) -> bool:
+    confirmation = record.confirmation
+    if confirmation is None:
+        return False
+    expected = {item for item in (confirmation.fast_variant_id, confirmation.slow_variant_id) if item is not None}
+    observed = {item for item in (evidence.fast_variant_id, evidence.slow_variant_id) if item is not None}
+    return bool(expected) and expected == observed

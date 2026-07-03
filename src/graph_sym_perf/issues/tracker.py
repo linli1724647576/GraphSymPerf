@@ -23,7 +23,7 @@ SYSTEM_ISSUE_REPOSITORIES: Mapping[str, str] = {
     "falkordb": "FalkorDB/FalkorDB",
     "arcadedb": "ArcadeData/arcadedb",
     "apache_age": "apache/age",
-    "kuzu": "kuzudb/kuzu",
+    "ladybugdb": "LadybugDB/ladybug",
     "agensgraph": "bitnine-oss/agensgraph",
 }
 

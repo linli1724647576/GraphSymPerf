@@ -18,6 +18,7 @@ systems:
     - agensgraph
     - arcadedb
     - apache_age
+    - ladybugdb
   env:
     neo4j:
       required:

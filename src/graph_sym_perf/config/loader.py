@@ -63,7 +63,7 @@ def _load_systems(raw: Any) -> tuple[SystemConfig, ...]:
     mapping = _mapping(raw, "systems")
     targets_raw = mapping.get(
         "targets",
-        ["neo4j", "memgraph", "falkordb", "agensgraph", "arcadedb", "apache_age"],
+        ["neo4j", "memgraph", "falkordb", "agensgraph", "arcadedb", "apache_age", "ladybugdb"],
     )
     if not isinstance(targets_raw, list) or not targets_raw:
         raise ConfigError("systems.targets must be a non-empty list")
@@ -182,11 +182,17 @@ def _load_coverage(raw: Any) -> CoverageConfig:
     novelty_weights = _mapping(mapping.get("novelty_weights", {}), "coverage.novelty_weights")
     defaults = dict(CoverageConfig().novelty_weights)
     defaults.update({str(key): _float(value, f"coverage.novelty_weights.{key}") for key, value in novelty_weights.items()})
+    metric_thresholds = _mapping(mapping.get("metric_thresholds", {}), "coverage.metric_thresholds")
+    default_thresholds = dict(CoverageConfig().metric_thresholds)
+    default_thresholds.update(
+        {str(key): _float(value, f"coverage.metric_thresholds.{key}") for key, value in metric_thresholds.items()}
+    )
     return CoverageConfig(
         enabled=bool(mapping.get("enabled", True)),
         include_transformation_context=bool(mapping.get("include_transformation_context", True)),
         write_per_case_evidence=bool(mapping.get("write_per_case_evidence", True)),
         ratio_buckets=tuple(_float(value, "coverage.ratio_buckets") for value in ratio_buckets),
+        metric_thresholds=default_thresholds,
         novelty_weights=defaults,
     )
 
@@ -321,8 +327,8 @@ def _default_required_env(target: TargetSystem) -> list[str]:
             "GRAPHSYMPERF_ARCADEDB_USER",
             "GRAPHSYMPERF_ARCADEDB_PASSWORD",
         ]
-    if target is TargetSystem.KUZU:
-        return ["GRAPHSYMPERF_KUZU_DATABASE_PATH"]
+    if target is TargetSystem.LADYBUGDB:
+        return ["GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH"]
     raise ConfigError(f"unsupported target: {target.value}")
 
 
@@ -384,7 +390,7 @@ def _default_capabilities(target: TargetSystem) -> EngineCapabilities:
             supports_destructive_load=True,
             dialect="cypher",
         )
-    if target is TargetSystem.KUZU:
+    if target is TargetSystem.LADYBUGDB:
         return EngineCapabilities(
             supports_explain=True,
             supports_profile=True,

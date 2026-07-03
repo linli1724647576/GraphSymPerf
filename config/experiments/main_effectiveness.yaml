@@ -11,11 +11,18 @@ systems:
     - agensgraph
     - arcadedb
     - apache_age
+    - ladybugdb
 
 source:
   enabled:
     - gdsmith
-    - ldbc_templates
+  # When generator_per_system is true, GDsmith is run independently for each
+  # ready target system so queries are generated in each system's native Cypher
+  # dialect.  This avoids the >90% cross-system skip rates caused by using
+  # Neo4j-generated queries on PostgreSQL-based systems (AgensGraph, Apache AGE)
+  # and Memgraph.  generator_target is used as a fallback for systems without
+  # a GDsmith backend.
+  generator_per_system: true
   generator_target: neo4j
   base_run_config: config/graph_sym_perf.yaml
   result_limit: 100
@@ -24,10 +31,7 @@ source:
     max_seed_queries_per_shard: 50000
     num_queries: 50000
     num_tries: 1
-  ldbc_templates:
-    enabled: true
-    parameter_sampling: true
-    max_seed_queries_per_shard: 5000
+    timeout_seconds: 600
 
 transforms:
   enabled_families:
@@ -68,12 +72,20 @@ transforms:
   # (document/总体研究主线.md §4: strict rules only for core claims).
   # See config/experiments/exploratory_symmetry.yaml for the exploratory run.
   gdsmith_safe_only: true
-  max_variants_per_case: 4
+  # No static cap — the feedback scheduler drives per-case rule selection.
+  # A low max_variants_per_case was truncating symmetry rules (positions 5–10
+  # in the enabled list) before the scheduler could assign rewards.
 
 coverage:
   enabled: true
   include_transformation_context: true
   write_per_case_evidence: true
+  metric_thresholds:
+    rows: 1.5
+    db_hits: 1.5
+    estimated_rows: 2.0
+    memory_bytes: 1.5
+    page_cache_misses: 1.5
 
 feedback:
   enabled: true
@@ -85,6 +97,12 @@ oracle:
   enable_structural_diff: true
   enable_profile_metrics: true
   runtime_validation_policy: conservative
+
+confirmation:
+  min_latency_ratio: 5.0
+  min_latency_delta_ms: 50.0
+  min_db_hits_ratio: 5.0
+  min_rows_ratio: 5.0
 
 clustering:
   enabled: true
@@ -101,8 +119,8 @@ reducer:
 
 execution:
   shards: 16
-  workers_per_shard: 1
-  cases_per_shard: 5000
+  workers_per_shard: 2
+  cases_per_shard: 50000
   per_query_timeout_seconds: 60
   per_case_timeout_seconds: 180
   resume: true

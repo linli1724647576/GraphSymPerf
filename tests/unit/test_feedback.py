@@ -177,6 +177,259 @@ def test_feedback_update_counts_equivalence_candidate_and_pmc_units() -> None:
     assert stats.pmc_new_units == 1
 
 
+def test_feedback_update_with_multiple_pmc_evidences_counts_generated_once_per_variant() -> None:
+    config = TransformConfig(
+        enabled_families=("bool_redundancy",),
+        enabled_rules=("and_case_true", "and_distributive_absorption"),
+    )
+    feedback = FeedbackConfig(enabled=True, exploration_rate=0.0, max_rules_per_case=2)
+    state = initialize_feedback_state(config, feedback)
+    scheduler = TransformScheduler(config, feedback, state)
+    family = QueryFamily(
+        case_id="case_bool",
+        seed_query="MATCH (n) WHERE n.flag RETURN n",
+        parameters={},
+        variants=(
+            QueryVariant(
+                variant_id="case_bool_01_and_case_true",
+                query="MATCH (n) WHERE n.flag AND true RETURN n",
+                transform_rule="and_case_true",
+                proof_obligation="proof",
+                metadata={"transform_family": "bool_redundancy"},
+            ),
+            QueryVariant(
+                variant_id="case_bool_02_and_distributive_absorption",
+                query="MATCH (n) WHERE n.flag AND (n.flag OR n.other) RETURN n",
+                transform_rule="and_distributive_absorption",
+                proof_obligation="proof",
+                metadata={"transform_family": "bool_redundancy"},
+            ),
+        ),
+        source="gdsmith",
+    )
+    record = CaseRecord(
+        system=TargetSystem.NEO4J,
+        case_id="case_bool",
+        family=family,
+        equivalences=(
+            EquivalenceRecord(
+                case_id="case_bool_01_and_case_true",
+                passed=True,
+                left_hash="a",
+                right_hash="a",
+                left_count=1,
+                right_count=1,
+                reason="equal",
+            ),
+            EquivalenceRecord(
+                case_id="case_bool_02_and_distributive_absorption",
+                passed=True,
+                left_hash="a",
+                right_hash="a",
+                left_count=1,
+                right_count=1,
+                reason="equal",
+            ),
+        ),
+        oracle=OracleRecord(
+            case_id="case_bool",
+            is_candidate=True,
+            candidate_types=("OutlierVariant",),
+            reason="candidate",
+            evidence={},
+        ),
+        confirmation=ConfirmationRecord(
+            case_id="case_bool",
+            confirmed=True,
+            original_median_ms=10.0,
+            transformed_median_ms=90.0,
+            latency_ratio=9.0,
+            latency_delta_ms=80.0,
+            original_samples_ms=(10.0,),
+            transformed_samples_ms=(90.0,),
+            reason="candidate",
+            support_level="profile_supported",
+            fast_variant_id="seed",
+            slow_variant_id="case_bool_01_and_case_true",
+        ),
+        artifacts={},
+        state="confirmed",
+        reason="candidate",
+    )
+    evidences = (
+        PMCEvidence(
+            case_id="case_bool",
+            transform_family="bool_redundancy",
+            transform_rule="and_case_true",
+            safety_tier="strict",
+            fast_variant_id="seed",
+            slow_variant_id="case_bool_01_and_case_true",
+            structural_hash_changed=True,
+            units=(CoverageUnit(kind="access_delta", key="case_true", label="Case true"),),
+            new_units=(CoverageUnit(kind="access_delta", key="case_true", label="Case true"),),
+            unit_count=1,
+            new_unit_count=1,
+        ),
+        PMCEvidence(
+            case_id="case_bool",
+            transform_family="bool_redundancy",
+            transform_rule="and_distributive_absorption",
+            safety_tier="strict",
+            fast_variant_id="seed",
+            slow_variant_id="case_bool_02_and_distributive_absorption",
+            structural_hash_changed=True,
+            units=(CoverageUnit(kind="access_delta", key="absorption", label="Absorption"),),
+            new_units=(CoverageUnit(kind="access_delta", key="absorption", label="Absorption"),),
+            unit_count=1,
+            new_unit_count=1,
+        ),
+    )
+
+    scheduler.update_from_case_record(record, evidences)
+
+    for rule in ("and_case_true", "and_distributive_absorption"):
+        stats = state.rule_stats[next(key for key in state.rule_stats if key.rule == rule)]
+        assert stats.attempted == 1
+        assert stats.generated == 1
+        assert stats.equivalence_passed == 1
+        assert stats.profile_available == 1
+        assert stats.pmc_units == 1
+        assert stats.pmc_new_units == 1
+
+    strong_stats = state.rule_stats[next(key for key in state.rule_stats if key.rule == "and_case_true")]
+    weak_stats = state.rule_stats[
+        next(key for key in state.rule_stats if key.rule == "and_distributive_absorption")
+    ]
+    assert strong_stats.candidate_count == 1
+    assert strong_stats.strong_candidate_count == 1
+    assert weak_stats.candidate_count == 0
+    assert weak_stats.strong_candidate_count == 0
+
+
+def test_feedback_update_with_multiple_pmc_evidences_uses_pair_level_support() -> None:
+    config = TransformConfig(
+        enabled_families=("bool_redundancy",),
+        enabled_rules=("and_case_true", "and_distributive_absorption"),
+    )
+    feedback = FeedbackConfig(enabled=True, exploration_rate=0.0, max_rules_per_case=2)
+    state = initialize_feedback_state(config, feedback)
+    scheduler = TransformScheduler(config, feedback, state)
+    family = QueryFamily(
+        case_id="case_bool_pairwise",
+        seed_query="MATCH (n) WHERE n.flag RETURN n",
+        parameters={},
+        variants=(
+            QueryVariant(
+                variant_id="case_bool_pairwise_01_and_case_true",
+                query="MATCH (n) WHERE n.flag AND true RETURN n",
+                transform_rule="and_case_true",
+                proof_obligation="proof",
+                metadata={"transform_family": "bool_redundancy"},
+            ),
+            QueryVariant(
+                variant_id="case_bool_pairwise_02_and_distributive_absorption",
+                query="MATCH (n) WHERE n.flag AND (n.flag OR n.other) RETURN n",
+                transform_rule="and_distributive_absorption",
+                proof_obligation="proof",
+                metadata={"transform_family": "bool_redundancy"},
+            ),
+        ),
+        source="gdsmith",
+    )
+    record = CaseRecord(
+        system=TargetSystem.NEO4J,
+        case_id="case_bool_pairwise",
+        family=family,
+        equivalences=(
+            EquivalenceRecord(
+                case_id="case_bool_pairwise_01_and_case_true",
+                passed=True,
+                left_hash="a",
+                right_hash="a",
+                left_count=1,
+                right_count=1,
+                reason="equal",
+            ),
+            EquivalenceRecord(
+                case_id="case_bool_pairwise_02_and_distributive_absorption",
+                passed=True,
+                left_hash="a",
+                right_hash="a",
+                left_count=1,
+                right_count=1,
+                reason="equal",
+            ),
+        ),
+        oracle=OracleRecord(
+            case_id="case_bool_pairwise",
+            is_candidate=True,
+            candidate_types=("OutlierVariant",),
+            reason="candidate",
+            evidence={},
+        ),
+        confirmation=ConfirmationRecord(
+            case_id="case_bool_pairwise",
+            confirmed=True,
+            original_median_ms=10.0,
+            transformed_median_ms=90.0,
+            latency_ratio=9.0,
+            latency_delta_ms=80.0,
+            original_samples_ms=(10.0,),
+            transformed_samples_ms=(90.0,),
+            reason="candidate",
+            support_level="profile_supported",
+            fast_variant_id="seed",
+            slow_variant_id="case_bool_pairwise_01_and_case_true",
+        ),
+        artifacts={},
+        state="confirmed",
+        reason="candidate",
+    )
+    evidences = (
+        PMCEvidence(
+            case_id="case_bool_pairwise",
+            transform_family="bool_redundancy",
+            transform_rule="and_case_true",
+            safety_tier="strict",
+            fast_variant_id="seed",
+            slow_variant_id="case_bool_pairwise_01_and_case_true",
+            structural_hash_changed=True,
+            units=(CoverageUnit(kind="access_delta", key="case_true", label="Case true"),),
+            new_units=(CoverageUnit(kind="access_delta", key="case_true", label="Case true"),),
+            unit_count=1,
+            new_unit_count=1,
+            metadata={"is_candidate": True, "support_level": "profile_supported"},
+        ),
+        PMCEvidence(
+            case_id="case_bool_pairwise",
+            transform_family="bool_redundancy",
+            transform_rule="and_distributive_absorption",
+            safety_tier="strict",
+            fast_variant_id="seed",
+            slow_variant_id="case_bool_pairwise_02_and_distributive_absorption",
+            structural_hash_changed=True,
+            units=(CoverageUnit(kind="access_delta", key="absorption", label="Absorption"),),
+            new_units=(CoverageUnit(kind="access_delta", key="absorption", label="Absorption"),),
+            unit_count=1,
+            new_unit_count=1,
+            metadata={"is_candidate": False, "support_level": "none"},
+        ),
+    )
+
+    scheduler.update_from_case_record(record, evidences)
+
+    strong_stats = state.rule_stats[next(key for key in state.rule_stats if key.rule == "and_case_true")]
+    weak_stats = state.rule_stats[
+        next(key for key in state.rule_stats if key.rule == "and_distributive_absorption")
+    ]
+    assert strong_stats.profile_available == 1
+    assert strong_stats.candidate_count == 1
+    assert strong_stats.strong_candidate_count == 1
+    assert weak_stats.profile_available == 1
+    assert weak_stats.candidate_count == 0
+    assert weak_stats.strong_candidate_count == 0
+
+
 def test_feedback_counts_profile_and_runtime_supported_as_strong_candidate() -> None:
     config = TransformConfig(enabled_families=("symmetry",), enabled_rules=("pattern_order_symmetry",))
     feedback = FeedbackConfig(enabled=True, exploration_rate=0.0, max_rules_per_case=1)

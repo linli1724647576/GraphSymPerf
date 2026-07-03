@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import sys
+import types
 from typing import Any, Mapping
 
-from graph_sym_perf.adapters.kuzu import KuzuAdapter
+from graph_sym_perf.adapters.ladybugdb import LadybugDBAdapter
+from graph_sym_perf.config import load_run_config
+from graph_sym_perf.core import AdapterError, SystemConfig, TargetSystem
+import pytest
 
 
-class FakeKuzuAdapter(KuzuAdapter):
+class FakeLadybugDBAdapter(LadybugDBAdapter):
     def __init__(self) -> None:
         self.queries: list[tuple[str, Mapping[str, Any], str]] = []
 
@@ -14,8 +19,8 @@ class FakeKuzuAdapter(KuzuAdapter):
         return None
 
 
-def test_kuzu_gdsmith_replay_generates_schema_and_load_queries() -> None:
-    adapter = FakeKuzuAdapter()
+def test_ladybugdb_gdsmith_replay_generates_schema_and_load_queries() -> None:
+    adapter = FakeLadybugDBAdapter()
 
     graph = adapter.load_gdsmith_graph(
         (
@@ -31,3 +36,19 @@ def test_kuzu_gdsmith_replay_generates_schema_and_load_queries() -> None:
     assert any(query.startswith("CREATE REL TABLE IF NOT EXISTS T0") for query in queries)
     assert any("CREATE (n:L0" in query for query in queries)
     assert any("CREATE (a)-[r:T0" in query for query in queries)
+
+
+def test_ladybugdb_requires_explicit_database_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_ladybug = types.SimpleNamespace(
+        Database=lambda _path: object(),
+        Connection=lambda _db: object(),
+    )
+    monkeypatch.setitem(sys.modules, "ladybug", fake_ladybug)
+    adapter = LadybugDBAdapter(
+        SystemConfig(target=TargetSystem.LADYBUGDB, required_env=(), optional_env={}, settings={}),
+        load_run_config("config/graph_sym_perf.yaml"),
+        {},
+    )
+
+    with pytest.raises(AdapterError, match="GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH"):
+        adapter._connect()

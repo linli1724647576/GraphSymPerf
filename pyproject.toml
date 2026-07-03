@@ -38,8 +38,8 @@ apache_age = [
 arcadedb = [
   "requests>=2.31"
 ]
-kuzu = [
-  "kuzu>=0.11"
+ladybugdb = [
+  "ladybug"
 ]
 db = [
   "neo4j>=5.0",
@@ -47,7 +47,7 @@ db = [
   "FalkorDB>=1.6",
   "psycopg[binary]>=3.1",
   "requests>=2.31",
-  "kuzu>=0.11"
+  "ladybug"
 ]
 
 [project.scripts]

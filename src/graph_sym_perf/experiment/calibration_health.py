@@ -338,6 +338,18 @@ def _runtime_confirmed_case(case: Mapping[str, Any]) -> bool:
 
 
 def _runtime_without_profile(case: Mapping[str, Any]) -> bool:
+    """Detect cases where runtime layer signalled a problem but profile layer did not.
+
+    The oracle's runtime signal is gated on profile_signal by construction
+    (runtime_signal = profile_signal AND latency_worse), so an explicit runtime
+    pass with a profile fail indicates an oracle invariant violation.
+
+    We intentionally do NOT flag every plan_only candidate with latency.worsened:
+    those are cases where the oracle correctly classified the candidate as
+    plan_only (core metrics did not cross the profile threshold) while latency
+    happened to vary.  That is expected noise / threshold asymmetry, not a
+    runtime-without-profile inconsistency.
+    """
     oracle = case.get("oracle") or {}
     if not isinstance(oracle, Mapping):
         return False
@@ -345,26 +357,31 @@ def _runtime_without_profile(case: Mapping[str, Any]) -> bool:
         return False
     if _runtime_layer_passed(case):
         return True
-    latency = ((oracle.get("evidence") or {}).get("latency") or {})
-    return bool(isinstance(latency, Mapping) and latency.get("worsened") and oracle.get("is_candidate"))
+    return False
+
+
+def _get_oracle_layer_status(case: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Extract oracle_layer_status from a case dict, or return empty dict."""
+    oracle = case.get("oracle") or {}
+    evidence = (oracle.get("evidence") or {}) if isinstance(oracle, Mapping) else {}
+    layer_status = evidence.get("oracle_layer_status") or {}
+    return layer_status if isinstance(layer_status, Mapping) else {}
 
 
 def _profile_layer_passed(case: Mapping[str, Any]) -> bool:
     confirmation = case.get("confirmation") or {}
     if is_profile_supported_level(confirmation.get("support_level")):
         return True
-    oracle = case.get("oracle") or {}
-    evidence = (oracle.get("evidence") or {}) if isinstance(oracle, Mapping) else {}
-    layer_status = (evidence.get("oracle_layer_status") or {}) if isinstance(evidence, Mapping) else {}
+    layer_status = _get_oracle_layer_status(case)
     return isinstance(layer_status, Mapping) and str(layer_status.get("profile") or "") == "pass"
 
 
 def _runtime_layer_passed(case: Mapping[str, Any]) -> bool:
-    oracle = case.get("oracle") or {}
-    evidence = (oracle.get("evidence") or {}) if isinstance(oracle, Mapping) else {}
-    layer_status = (evidence.get("oracle_layer_status") or {}) if isinstance(evidence, Mapping) else {}
+    layer_status = _get_oracle_layer_status(case)
     if isinstance(layer_status, Mapping) and str(layer_status.get("runtime") or ""):
         return str(layer_status.get("runtime")) == "pass"
+    oracle = case.get("oracle") or {}
+    evidence = (oracle.get("evidence") or {}) if isinstance(oracle, Mapping) else {}
     latency = (evidence.get("latency") or {}) if isinstance(evidence, Mapping) else {}
     return bool(isinstance(latency, Mapping) and latency.get("worsened") and _profile_layer_passed(case))
 

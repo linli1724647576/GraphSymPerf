@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -13,6 +13,7 @@ from graph_sym_perf.config.loader import (
     _default_optional_env,
     _default_required_env,
     _load_backend_extra_args,
+    _mapping,
 )
 from graph_sym_perf.core import (
     ClusteringConfig,
@@ -57,6 +58,7 @@ class ExperimentManifest:
     coverage: CoverageConfig
     feedback: FeedbackConfig
     oracle: Mapping[str, Any]
+    confirmation: Mapping[str, Any]
     clustering: ClusteringConfig
     reducer: Mapping[str, Any]
     execution: ExecutionConfig
@@ -127,7 +129,7 @@ class ExperimentManifest:
             total_case_budget=self.total_case_budget(total_shards),
             seed=shard_seed,
         )
-        confirmation = replace(base.confirmation, timeout_seconds=query_timeout)
+        confirmation = _merge_confirmation(base.confirmation, self.confirmation, timeout_seconds=query_timeout)
         equivalence = replace(base.equivalence, timeout_seconds=query_timeout)
         systems = self.systems or base.systems
         return replace(
@@ -171,6 +173,7 @@ def load_experiment_manifest(path: str | Path) -> ExperimentManifest:
         coverage=_load_coverage_config(raw.get("coverage")),
         feedback=_load_feedback_config(raw.get("feedback")),
         oracle=_mapping(raw.get("oracle"), "oracle"),
+        confirmation=_mapping(raw.get("confirmation"), "confirmation"),
         clustering=_load_clustering_config(raw.get("clustering")),
         reducer=_mapping(raw.get("reducer"), "reducer"),
         execution=execution,
@@ -246,6 +249,10 @@ def _load_coverage_config(raw: Any) -> CoverageConfig:
     defaults = CoverageConfig()
     novelty_weights = dict(defaults.novelty_weights)
     novelty_weights.update({str(key): float(value) for key, value in _mapping(mapping.get("novelty_weights"), "coverage.novelty_weights").items()})
+    metric_thresholds = dict(defaults.metric_thresholds)
+    metric_thresholds.update(
+        {str(key): float(value) for key, value in _mapping(mapping.get("metric_thresholds"), "coverage.metric_thresholds").items()}
+    )
     ratio_buckets = mapping.get("ratio_buckets", defaults.ratio_buckets)
     return CoverageConfig(
         enabled=bool(mapping.get("enabled", defaults.enabled)),
@@ -254,8 +261,15 @@ def _load_coverage_config(raw: Any) -> CoverageConfig:
         ),
         write_per_case_evidence=bool(mapping.get("write_per_case_evidence", defaults.write_per_case_evidence)),
         ratio_buckets=tuple(float(value) for value in ratio_buckets),
+        metric_thresholds=metric_thresholds,
         novelty_weights=novelty_weights,
     )
+
+
+# Sentinel for "feedback.seed not explicitly set in experiment manifest."
+# Using a sentinel avoids the bug where an explicit seed that happens to equal
+# the default (20260522) is incorrectly treated as unset and overwritten.
+_UNSET_FEEDBACK_SEED = -987654321
 
 
 def _load_feedback_config(raw: Any) -> FeedbackConfig:
@@ -266,7 +280,7 @@ def _load_feedback_config(raw: Any) -> FeedbackConfig:
     return FeedbackConfig(
         enabled=bool(mapping.get("enabled", defaults.enabled)),
         exploration_rate=float(mapping.get("exploration_rate", defaults.exploration_rate)),
-        seed=int(mapping.get("seed", defaults.seed)),
+        seed=_UNSET_FEEDBACK_SEED if mapping.get("seed") is None else int(mapping["seed"]),
         min_rules_per_case=int(mapping.get("min_rules_per_case", defaults.min_rules_per_case)),
         max_rules_per_case=(
             int(mapping["max_rules_per_case"]) if mapping.get("max_rules_per_case") is not None else defaults.max_rules_per_case
@@ -333,8 +347,29 @@ def _merge_oracle(base: OracleConfig, raw: Mapping[str, Any]) -> OracleConfig:
     )
 
 
+def _merge_confirmation(
+    base: ConfirmationConfig,
+    raw: Mapping[str, Any],
+    *,
+    timeout_seconds: float,
+) -> ConfirmationConfig:
+    """Merge experiment confirmation overrides into base config.
+
+    Uses dataclass field introspection so adding a field to
+    ``ConfirmationConfig`` automatically propagates without manual edits.
+    """
+    overrides: dict[str, Any] = {}
+    for f in fields(ConfirmationConfig):
+        if f.name == "timeout_seconds":
+            overrides[f.name] = float(raw.get("timeout_seconds", timeout_seconds))
+        else:
+            default_val = getattr(base, f.name)
+            overrides[f.name] = type(default_val)(raw.get(f.name, default_val))
+    return replace(base, **overrides)
+
+
 def _merge_feedback(base: FeedbackConfig, raw: FeedbackConfig, *, seed: int) -> FeedbackConfig:
-    return replace(raw, seed=seed if raw.seed == FeedbackConfig().seed else raw.seed, max_rules_per_case=raw.max_rules_per_case)
+    return replace(raw, seed=seed if raw.seed == _UNSET_FEEDBACK_SEED else raw.seed, max_rules_per_case=raw.max_rules_per_case)
 
 
 def _merge_transforms(base: TransformConfig, raw: Mapping[str, Any], *, seed: int) -> TransformConfig:
@@ -351,9 +386,3 @@ def _merge_transforms(base: TransformConfig, raw: Mapping[str, Any], *, seed: in
     )
 
 
-def _mapping(value: Any, label: str) -> Mapping[str, Any]:
-    if value is None:
-        return {}
-    if not isinstance(value, Mapping):
-        raise ConfigError(f"{label} must be a mapping")
-    return value

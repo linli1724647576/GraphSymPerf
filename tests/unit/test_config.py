@@ -13,7 +13,7 @@ RULES_BY_FAMILY = {
     "symmetry": SYMMETRY_RULES,
 }
 
-CURRENT_TARGETS = ("neo4j", "memgraph", "falkordb", "agensgraph", "arcadedb", "apache_age")
+CURRENT_TARGETS = ("neo4j", "memgraph", "falkordb", "agensgraph", "arcadedb", "apache_age", "ladybugdb")
 
 
 def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
@@ -33,6 +33,7 @@ def test_default_config_uses_gdsmith_and_graphsymperf_env() -> None:
     assert config.clustering.enabled
     assert config.clustering.write_signatures
     assert config.system_config(TargetSystem.AGENSGRAPH) is not None
+    assert config.system_config(TargetSystem.LADYBUGDB).required_env == ("GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH",)
     assert config.system_config(config.systems[0].target).required_env[0].startswith("GRAPHSYMPERF_")
     assert config.system_config(config.systems[0].target).capabilities.supports_execute
 
@@ -72,3 +73,12 @@ def test_memgraph_extra_installs_adapter_driver() -> None:
     memgraph_deps = pyproject["project"]["optional-dependencies"]["memgraph"]
 
     assert any(dep.startswith("neo4j") for dep in memgraph_deps)
+
+
+def test_ladybugdb_extra_installs_adapter_driver() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    optional_deps = pyproject["project"]["optional-dependencies"]
+
+    assert "ladybugdb" in optional_deps
+    assert any(dep == "ladybug" or dep.startswith("ladybug>=") for dep in optional_deps["ladybugdb"])
+    assert any(dep == "ladybug" or dep.startswith("ladybug>=") for dep in optional_deps["db"])

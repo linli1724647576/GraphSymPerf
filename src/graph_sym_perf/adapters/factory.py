@@ -9,7 +9,7 @@ from graph_sym_perf.adapters.apache_age import ApacheAgeAdapter
 from graph_sym_perf.adapters.arcadedb import ArcadeDBAdapter
 from graph_sym_perf.adapters.base import GraphAdapter
 from graph_sym_perf.adapters.falkordb import FalkorDBAdapter
-from graph_sym_perf.adapters.kuzu import KuzuAdapter
+from graph_sym_perf.adapters.ladybugdb import LadybugDBAdapter
 from graph_sym_perf.adapters.memgraph import MemgraphAdapter
 from graph_sym_perf.adapters.neo4j import Neo4jAdapter
 from graph_sym_perf.core import ConfigError, RunConfig, SystemConfig, TargetSystem
@@ -21,7 +21,7 @@ _ADAPTERS: dict[TargetSystem, type[GraphAdapter]] = {
     TargetSystem.AGENSGRAPH: AgensGraphAdapter,
     TargetSystem.APACHE_AGE: ApacheAgeAdapter,
     TargetSystem.ARCADEDB: ArcadeDBAdapter,
-    TargetSystem.KUZU: KuzuAdapter,
+    TargetSystem.LADYBUGDB: LadybugDBAdapter,
 }
 
 

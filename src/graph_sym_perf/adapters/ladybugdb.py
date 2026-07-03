@@ -1,4 +1,10 @@
-"""Kuzu embedded database adapter."""
+"""LadybugDB embedded database adapter.
+
+LadybugDB is the active community fork of Kuzu (archived 2025-10),
+maintained by Arun Sharma under the MIT license.  It shares the same
+Python API (``Database`` / ``Connection`` / ``execute``) and openCypher
+compatibility.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +13,17 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter
+from graph_sym_perf.adapters.common_cypher import _compact
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
 from graph_sym_perf.datasets import MiniLdbcGraph, MiniLdbcNode, MiniLdbcRelationship
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
 
-class KuzuAdapter(BaseAdapter):
-    dependency_modules = ("kuzu",)
+class LadybugDBAdapter(BaseAdapter):
+    """Adapter for the LadybugDB embedded graph database (pip install ladybug)."""
+
+    dependency_modules = ("ladybug",)
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -30,7 +39,7 @@ class KuzuAdapter(BaseAdapter):
             return False, str(exc)
 
     def ensure_schema(self) -> None:
-        for query in _kuzu_schema_statements():
+        for query in _ladybugdb_schema_statements():
             self.execute(query, {}, "schema")
 
     def load_mini_ldbc(self, graph: MiniLdbcGraph) -> None:
@@ -76,20 +85,20 @@ class KuzuAdapter(BaseAdapter):
         truncated = False
         try:
             result = self._conn.execute(query, dict(parameters))
-            rows = _kuzu_rows(result)
+            rows = _ladybugdb_rows(result)
             if max_rows is not None and len(rows) > max_rows:
                 truncated = True
-                rows = rows[: max_rows + 1]
+                rows = rows[:max_rows]
         except Exception as exc:
-            raise QueryExecutionError(f"Kuzu query failed: {exc}") from exc
+            raise QueryExecutionError(f"LadybugDB query failed: {exc}") from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
         return ExecutionResult(
-            system=TargetSystem.KUZU,
+            system=TargetSystem.LADYBUGDB,
             query_kind=query_kind,
             rows=rows,
             elapsed_ms=elapsed_ms,
             summary={
-                "client": "kuzu",
+                "client": "ladybugdb",
                 "truncated": truncated,
                 "row_cap": max_rows,
                 "timeout_seconds": timeout_seconds,
@@ -99,9 +108,9 @@ class KuzuAdapter(BaseAdapter):
     def explain(self, query: str, parameters: Mapping[str, Any], query_kind: str) -> PlanRecord:
         try:
             result = self.execute(f"EXPLAIN {query}", parameters, f"{query_kind}_explain")
-            return make_plan_record(TargetSystem.KUZU, query_kind, result.rows)
+            return make_plan_record(TargetSystem.LADYBUGDB, query_kind, result.rows)
         except Exception as exc:
-            return unavailable_plan(TargetSystem.KUZU, query_kind, str(exc))
+            return unavailable_plan(TargetSystem.LADYBUGDB, query_kind, str(exc))
 
     def profile(
         self,
@@ -132,24 +141,30 @@ class KuzuAdapter(BaseAdapter):
         self._conn = None
         self._db = None
 
+    # ── private helpers ──────────────────────────────────────────────
+
     def _connect(self) -> None:
         if self._conn is not None:
             return
         try:
-            import kuzu
+            raw_path = self.env_value("GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH")
+            if not raw_path:
+                raise AdapterError("LadybugDB requires GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH")
 
-            path = Path(self.env_value("GRAPHSYMPERF_KUZU_DATABASE_PATH") or "")
+            import ladybug
+
+            path = Path(raw_path).expanduser()
             if not path.exists() and not self.allow_create:
                 raise AdapterError(
-                    "Kuzu database path does not exist; pass --load with GRAPHSYMPERF_ALLOW_LOAD=1 "
-                    "to create a dedicated test database"
+                    "LadybugDB database path does not exist; pass --load "
+                    "with GRAPHSYMPERF_ALLOW_LOAD=1 to create a dedicated test database"
                 )
-            self._db = kuzu.Database(str(path))
-            self._conn = kuzu.Connection(self._db)
+            self._db = ladybug.Database(str(path))
+            self._conn = ladybug.Connection(self._db)
         except Exception as exc:
             if isinstance(exc, AdapterError):
                 raise
-            raise AdapterError(f"cannot connect to Kuzu: {exc}") from exc
+            raise AdapterError(f"cannot connect to LadybugDB: {exc}") from exc
 
     def _dataset_present(self, dataset_id: str) -> bool:
         try:
@@ -187,20 +202,22 @@ CREATE (a)-[r:{relationship.relationship_type} {{{props}}}]->(b)
         self.execute(_compact(query), parameters, "load_relationship")
 
     def _ensure_gdsmith_schema(self, graph: GdsmithReplayGraph) -> None:
+        # Single pass over nodes: build label-by-id map and property map together.
         node_props_by_label: dict[str, dict[str, str]] = {}
-        node_label_by_id = {node.node_id: _primary_label(node.labels) for node in graph.nodes}
+        node_label_by_id: dict[int, str] = {}
         for node in graph.nodes:
             label = _primary_label(node.labels)
+            node_label_by_id[node.node_id] = label
             props = node_props_by_label.setdefault(label, {"id": "INT64"})
             for key, value in node.properties.items():
-                props.setdefault(key, _kuzu_type(value))
+                props.setdefault(key, _ladybugdb_type(value))
         for label, props in node_props_by_label.items():
             fields = ["id INT64 PRIMARY KEY"]
             fields.extend(f"{key} {value}" for key, value in props.items() if key != "id")
             self.execute(f"CREATE NODE TABLE IF NOT EXISTS {label}({', '.join(fields)})", {}, "gdsmith_schema")
 
         rel_props_by_type: dict[str, dict[str, str]] = {}
-        rel_pairs_by_type: dict[str, list[tuple[str, str]]] = {}
+        rel_pairs_by_type: dict[str, set[tuple[str, str]]] = {}
         for relationship in graph.relationships:
             start_label = node_label_by_id.get(relationship.start_id)
             end_label = node_label_by_id.get(relationship.end_id)
@@ -208,11 +225,9 @@ CREATE (a)-[r:{relationship.relationship_type} {{{props}}}]->(b)
                 continue
             props = rel_props_by_type.setdefault(relationship.relationship_type, {})
             for key, value in relationship.properties.items():
-                props.setdefault(key, _kuzu_type(value))
-            pairs = rel_pairs_by_type.setdefault(relationship.relationship_type, [])
-            pair = (start_label, end_label)
-            if pair not in pairs:
-                pairs.append(pair)
+                props.setdefault(key, _ladybugdb_type(value))
+            pairs = rel_pairs_by_type.setdefault(relationship.relationship_type, set())
+            pairs.add((start_label, end_label))
         for relationship_type, pairs in rel_pairs_by_type.items():
             pair_fields = [f"FROM {start} TO {end}" for start, end in pairs]
             prop_fields = [f"{key} {value}" for key, value in rel_props_by_type.get(relationship_type, {}).items()]
@@ -246,7 +261,10 @@ CREATE (a)-[r:{relationship_type} {{{props}}}]->(b)
         self.execute(_compact(query), parameters, "gdsmith_load_relationship")
 
 
-def _kuzu_schema_statements() -> tuple[str, ...]:
+# ── module-level helpers ────────────────────────────────────────────
+
+
+def _ladybugdb_schema_statements() -> tuple[str, ...]:
     return (
         "CREATE NODE TABLE IF NOT EXISTS Person(gbp_id STRING PRIMARY KEY, gbp_dataset STRING, first_name STRING, last_name STRING, age INT64, city STRING, language STRING, creation_day INT64)",
         "CREATE NODE TABLE IF NOT EXISTS Post(gbp_id STRING PRIMARY KEY, gbp_dataset STRING, content STRING, length INT64, creation_day INT64)",
@@ -265,7 +283,7 @@ def _kuzu_schema_statements() -> tuple[str, ...]:
     )
 
 
-def _kuzu_rows(result: Any) -> tuple[Mapping[str, Any], ...]:
+def _ladybugdb_rows(result: Any) -> tuple[Mapping[str, Any], ...]:
     if isinstance(result, list):
         if not result:
             return ()
@@ -288,15 +306,11 @@ def _kuzu_rows(result: Any) -> tuple[Mapping[str, Any], ...]:
     return tuple({"row": to_jsonable(row)} for row in rows)
 
 
-def _compact(query: str) -> str:
-    return "\n".join(line.rstrip() for line in query.strip().splitlines())
-
-
 def _primary_label(labels: tuple[str, ...]) -> str:
     return labels[0] if labels else "GdsmithNode"
 
 
-def _kuzu_type(value: Any) -> str:
+def _ladybugdb_type(value: Any) -> str:
     if isinstance(value, bool):
         return "BOOL"
     if isinstance(value, int):

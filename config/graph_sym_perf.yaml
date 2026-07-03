@@ -15,6 +15,7 @@ systems:
     - agensgraph
     - arcadedb
     - apache_age
+    - ladybugdb
   env:
     neo4j:
       required:
@@ -63,6 +64,10 @@ systems:
         username: GRAPHSYMPERF_APACHE_AGE_USER
         password: GRAPHSYMPERF_APACHE_AGE_PASSWORD
         database: GRAPHSYMPERF_APACHE_AGE_DATABASE
+    ladybugdb:
+      required:
+        - GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH
+      optional: {}
   settings:
     neo4j: {}
     memgraph: {}
@@ -70,6 +75,7 @@ systems:
     agensgraph: {}
     arcadedb: {}
     apache_age: {}
+    ladybugdb: {}
 
 query_generation:
   source: gdsmith
