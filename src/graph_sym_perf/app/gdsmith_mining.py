@@ -106,12 +106,7 @@ def run_gdsmith_mining(
         )
         _write_gdsmith_artifacts(writer, result)
         query_cases = query_cases_from_gdsmith(result.parsed.query_records)
-        for adapter in adapters:
-            if adapter.target is generator:
-                continue
-            loader = getattr(adapter, "load_gdsmith_graph", None)
-            if callable(loader):
-                loader(result.parsed.graph_statements)
+        _load_gdsmith_graph_into_adapters(adapters, result.parsed.graph_statements)
         pmc_state, feedback_state, scheduler = _new_runtime_state(config)
         records, run_outputs = _run_query_cases_with_state(
             config,
@@ -154,6 +149,8 @@ def run_gdsmith_mining(
 
 
 def _write_gdsmith_artifacts(writer: ArtifactWriter, result) -> None:
+    process_returncode = getattr(result, "process_returncode", result.returncode)
+    fatal_stderr_markers = tuple(getattr(result, "fatal_stderr_markers", ()))
     writer.write_text(
         "gdsmith_graph.cypher",
         "".join(f"{statement};\n" for statement in result.parsed.graph_statements),
@@ -165,15 +162,34 @@ def _write_gdsmith_artifacts(writer: ArtifactWriter, result) -> None:
         {
             "command": result.command,
             "returncode": result.returncode,
+            "process_returncode": process_returncode,
             "raw_dir": _relative_or_absolute(writer, result.raw_dir),
             "stdout_path": _relative_or_absolute(writer, result.stdout_path),
             "stderr_path": _relative_or_absolute(writer, result.stderr_path),
             "log_path": _relative_or_absolute(writer, result.log_path) if result.log_path else None,
+            "fatal_stderr_detected": bool(fatal_stderr_markers),
+            "fatal_stderr_markers": list(fatal_stderr_markers),
             "graph_statement_count": len(result.parsed.graph_statements),
             "query_record_count": len(result.parsed.query_records),
             "accepted_query_count": len(result.parsed.accepted_queries),
         },
     )
+
+
+def _load_gdsmith_graph_into_adapters(adapters: list[GraphAdapter], graph_statements: tuple[str, ...]) -> None:
+    if not graph_statements:
+        return
+    for adapter in adapters:
+        loader = getattr(adapter, "load_gdsmith_graph", None)
+        if callable(loader):
+            _reset_adapter_for_gdsmith_load(adapter)
+            loader(graph_statements)
+
+
+def _reset_adapter_for_gdsmith_load(adapter: GraphAdapter) -> None:
+    from graph_sym_perf.experiment.runner import _reset_adapter_for_known_issue_setup
+
+    _reset_adapter_for_known_issue_setup(adapter)
 
 
 def _summary_with_gdsmith(

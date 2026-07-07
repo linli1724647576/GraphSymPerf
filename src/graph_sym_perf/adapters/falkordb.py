@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter
-from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin
+from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _has_bare_property_predicate, _has_boolean_property_operand
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
+
+_logger = logging.getLogger(__name__)
 
 
 class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
@@ -41,7 +45,11 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
         start = perf_counter()
         truncated = False
         try:
-            raw_result = _run_graph_query(self._graph, query, parameters)
+            raw_result = _call_with_timeout(
+                lambda: _run_graph_query(self._graph, query, parameters),
+                timeout_seconds=timeout_seconds,
+                label=f"FalkorDB {query_kind}",
+            )
             rows = _falkor_rows(raw_result)
             if max_rows is not None and len(rows) > max_rows:
                 truncated = True
@@ -90,11 +98,18 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
             start = perf_counter()
             profiled_query = _query_with_params(query, parameters)
             profile = getattr(self._graph, "profile", None)
-            raw_profile = profile(profiled_query) if callable(profile) else _run_graph_query(
-                self._graph,
-                f"PROFILE {profiled_query}",
-                {},
-            )
+            if callable(profile):
+                raw_profile = _call_with_timeout(
+                    lambda: profile(profiled_query),
+                    timeout_seconds=timeout_seconds,
+                    label=f"FalkorDB profile {query_kind}",
+                )
+            else:
+                raw_profile = _call_with_timeout(
+                    lambda: _run_graph_query(self._graph, f"PROFILE {profiled_query}", {}),
+                    timeout_seconds=timeout_seconds,
+                    label=f"FalkorDB profile {query_kind}",
+                )
             profile_payload = _falkor_plan_payload(raw_profile)
             elapsed_ms = (perf_counter() - start) * 1000.0
             return ExecutionResult(
@@ -111,7 +126,8 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
                     "timeout_seconds": timeout_seconds,
                 },
             )
-        except Exception:
+        except Exception as exc:
+            _logger.warning("FalkorDB profile failed for %s (%s), falling back to execute: %s", query_kind, type(exc).__name__, exc)
             return self.execute(query, parameters, query_kind, max_rows=max_rows, timeout_seconds=timeout_seconds)
 
     def schema_statements(self) -> tuple[str, ...]:
@@ -154,6 +170,19 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
             self._graph = self._db.select_graph(graph_name)
         except Exception as exc:
             raise AdapterError(f"cannot connect to FalkorDB: {exc}") from exc
+
+
+def _call_with_timeout(fn, *, timeout_seconds: float | None, label: str = "query") -> Any:
+    """Run *fn* in a thread, raising TimeoutError if it exceeds *timeout_seconds*."""
+    if timeout_seconds is None or timeout_seconds <= 0:
+        return fn()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="falkordb-timeout") as executor:
+        future = executor.submit(fn)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError:
+            _logger.warning("%s exceeded timeout %.3fs", label, timeout_seconds)
+            raise TimeoutError(f"{label} exceeded timeout {timeout_seconds:.3f}s") from None
 
 
 def _run_graph_query(graph: Any, query: str, parameters: Mapping[str, Any]) -> Any:
@@ -248,23 +277,3 @@ def _falkor_plan_payload(result: Any) -> Any:
     if structured is not None:
         return str(structured)
     return to_jsonable(result)
-
-
-def _has_bare_property_predicate(query: str) -> bool:
-    return bool(
-        re.search(
-            r"\bWHERE\s*\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)(?:\s|$)",
-            query,
-            flags=re.IGNORECASE,
-        )
-    )
-
-
-def _has_boolean_property_operand(query: str) -> bool:
-    return bool(
-        re.search(
-            r"(\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)\s+(AND|OR)\b)|(\b(AND|OR)\s+\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\))",
-            query,
-            flags=re.IGNORECASE,
-        )
-    )

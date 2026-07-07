@@ -68,3 +68,31 @@ def test_arcadedb_ensure_schema_creates_database_when_exists_result_false() -> N
         ("GET", "/api/v1/exists/graphsymperf"),
         ("POST", "/api/v1/server"),
     ]
+
+
+def test_arcadedb_execute_passes_timeout_to_http_request() -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"result": [{"ok": 1}]}
+
+    adapter = object.__new__(ArcadeDBAdapter)
+    adapter._database = "graphsymperf"
+    adapter._base_url = "http://127.0.0.1:2481"
+    adapter._connect = lambda: None
+
+    class FakeSession:
+        def request(self, method: str, url: str, **kwargs):
+            calls.append({"method": method, "url": url, **kwargs})
+            return FakeResponse()
+
+    adapter._session = FakeSession()
+
+    result = adapter.execute("MATCH (n) RETURN n", {}, "test", timeout_seconds=7)
+
+    assert result.rows == ({"ok": 1},)
+    assert calls[0]["timeout"] == 7

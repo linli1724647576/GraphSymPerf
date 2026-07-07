@@ -66,7 +66,11 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
         start = perf_counter()
         truncated = False
         try:
-            payload = self._command_payload(query) if _requires_command_endpoint(query) else self._query(query, parameters)
+            payload = (
+                self._command_payload(query, timeout_seconds=timeout_seconds)
+                if _requires_command_endpoint(query)
+                else self._query(query, parameters, timeout_seconds=timeout_seconds)
+            )
             rows = _arcade_rows(payload)
             if max_rows is not None and len(rows) > max_rows:
                 truncated = True
@@ -107,7 +111,7 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
         self._connect()
         start = perf_counter()
         try:
-            payload = self._query(f"PROFILE {query}", parameters)
+            payload = self._query(f"PROFILE {query}", parameters, timeout_seconds=timeout_seconds)
             elapsed_ms = (perf_counter() - start) * 1000.0
             return ExecutionResult(
                 system=TargetSystem.ARCADEDB,
@@ -156,11 +160,18 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
             return False
         return True
 
-    def _query(self, query: str, parameters: Mapping[str, Any]) -> Mapping[str, Any]:
+    def _query(
+        self,
+        query: str,
+        parameters: Mapping[str, Any],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> Mapping[str, Any]:
         response = self._request(
             "POST",
             f"/api/v1/query/{self._database}",
             json={"language": "opencypher", "command": query, "params": dict(parameters)},
+            timeout=timeout_seconds,
         )
         return self._payload_or_error(response)
 
@@ -175,11 +186,12 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
             summary={"client": "http", "statistics": _arcade_statistics(payload)},
         )
 
-    def _command_payload(self, query: str) -> Mapping[str, Any]:
+    def _command_payload(self, query: str, *, timeout_seconds: float | None = None) -> Mapping[str, Any]:
         response = self._request(
             "POST",
             f"/api/v1/command/{self._database}",
             json={"language": "opencypher", "command": query},
+            timeout=timeout_seconds,
         )
         return self._payload_or_error(response)
 
@@ -201,7 +213,9 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
 
     def _request(self, method: str, path: str, **kwargs):
         self._connect()
-        timeout = kwargs.pop("timeout", 30)
+        timeout = kwargs.pop("timeout", None)
+        if timeout is None:
+            timeout = 30
         return self._session.request(method, f"{self._base_url}{path}", timeout=timeout, **kwargs)
 
     def _payload_or_error(self, response) -> Mapping[str, Any]:

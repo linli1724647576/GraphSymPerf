@@ -160,6 +160,15 @@ class TransformScheduler:
         if all(self.state.family_stats[family].attempted == 0 for family in eligible_families):
             index = self._stable_choice_index(query_case.case_id, len(eligible_families))
             return eligible_families[index]
+        # ---- family stratification: ensure each family gets minimum share ----
+        min_share = getattr(self.feedback_config, 'min_family_share', 0.25)
+        total_attempts = sum(self.state.family_stats[f].attempted for f in eligible_families)
+        if total_attempts > 0:
+            for family in eligible_families:
+                share = self.state.family_stats[family].attempted / max(total_attempts, 1)
+                if share < min_share / len(eligible_families):
+                    return family  # force this under-represented family
+        # ----------------------------------------------------------------------
         if self._should_explore(query_case.case_id):
             index = self._stable_choice_index(f"explore:{query_case.case_id}", len(eligible_families))
             return eligible_families[index]

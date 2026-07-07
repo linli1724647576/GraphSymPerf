@@ -13,6 +13,17 @@ from urllib.parse import urlparse
 from graph_sym_perf.core import ConfigError, GdsmithConfig
 from graph_sym_perf.gdsmith.parser import GdsmithParsedLog, parse_gdsmith_log
 
+_MAX_CAPTURE_ARTIFACT_BYTES = 10 * 1024 * 1024
+_CAPTURE_ARTIFACT_EDGE_BYTES = 2 * 1024 * 1024
+_FATAL_STDERR_RETURNCODE = 1
+_FATAL_STDERR_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("OutOfMemoryError", "OutOfMemoryError"),
+    ("StackOverflowError", "StackOverflowError"),
+    ("NoClassDefFoundError", "NoClassDefFoundError"),
+    ("UnsupportedClassVersionError", "UnsupportedClassVersionError"),
+    ("Exception in thread", "Exception in thread"),
+)
+
 
 @dataclass(frozen=True)
 class GdsmithToolStatus:
@@ -35,11 +46,13 @@ class GdsmithToolStatus:
 class GdsmithRunResult:
     command: tuple[str, ...]
     returncode: int
+    process_returncode: int
     raw_dir: str
     stdout_path: str
     stderr_path: str
     log_path: str | None
     parsed: GdsmithParsedLog
+    fatal_stderr_markers: tuple[str, ...] = ()
 
 
 def check_gdsmith_tooling(config: GdsmithConfig, env: Mapping[str, str]) -> GdsmithToolStatus:
@@ -89,6 +102,7 @@ def build_gdsmith_command(
     password: str,
     num_queries: int,
     seed: int,
+    extra_args: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     return (
         java_path,
@@ -102,11 +116,16 @@ def build_gdsmith_command(
         str(num_queries),
         "--random-seed",
         str(seed),
+        # Upstream GDsmith currently returns the configured error exit code once
+        # the worker thread terminates, even on successful completion. Keep the
+        # process-level code at 0 and derive an effective failure code from the
+        # observed stderr below.
         "--exit-code-error",
         "0",
         "--print-progress-information=false",
         "--timeout-seconds",
         str(int(config.timeout_seconds)),
+        *extra_args,
         backend,
         "--host",
         host,
@@ -148,6 +167,7 @@ def run_gdsmith(
         password=password,
         num_queries=num_queries,
         seed=seed,
+        extra_args=config.backend_extra_args.get(backend, ()),
     )
     artifact_command = _redact_sensitive_command_parts(command)
     (raw_dir / "gdsmith_command.json").write_text(
@@ -155,32 +175,44 @@ def run_gdsmith(
         encoding="utf-8",
     )
 
-    completed = subprocess.run(
-        command,
-        cwd=raw_dir,
-        env=dict(env),
-        capture_output=True,
-        text=True,
-        timeout=config.timeout_seconds + 15.0,
-        check=False,
-    )
     stdout_path = raw_dir / "gdsmith_stdout.txt"
     stderr_path = raw_dir / "gdsmith_stderr.txt"
-    stdout_path.write_text(completed.stdout, encoding="utf-8")
-    stderr_path.write_text(completed.stderr, encoding="utf-8")
+    with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open("w", encoding="utf-8") as stderr_file:
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=raw_dir,
+                env=dict(env),
+                stdout=stdout_file,
+                stderr=stderr_file,
+                text=True,
+                timeout=config.timeout_seconds + 15.0,
+                check=False,
+            )
+            process_returncode = completed.returncode
+        except subprocess.TimeoutExpired:
+            process_returncode = 124
+
+    fatal_stderr_markers = _detect_fatal_stderr_markers(stderr_path)
+    returncode = _effective_returncode(process_returncode, fatal_stderr_markers)
 
     log_path = _latest_dbms_log(raw_dir, backend)
     parsed = parse_gdsmith_log(log_path.read_text(encoding="utf-8") if log_path else "", max_cases=num_queries)
     if not parsed.accepted_queries and log_path is None:
         raise ConfigError(f"GDsmith completed without producing logs/{backend}/*-cur.log")
+    _compact_large_text_artifact(stdout_path)
+    _compact_large_text_artifact(stderr_path)
+    _prune_rotated_dbms_logs(raw_dir, backend, keep_path=log_path)
     return GdsmithRunResult(
         command=artifact_command,
-        returncode=completed.returncode,
+        returncode=returncode,
+        process_returncode=process_returncode,
         raw_dir=str(raw_dir),
         stdout_path=str(stdout_path),
         stderr_path=str(stderr_path),
         log_path=str(log_path) if log_path is not None else None,
         parsed=parsed,
+        fatal_stderr_markers=fatal_stderr_markers,
     )
 
 
@@ -199,3 +231,65 @@ def _latest_dbms_log(raw_dir: Path, backend: str) -> Path | None:
         return None
     candidates = sorted(log_dir.glob("*-cur.log"), key=lambda path: path.stat().st_mtime, reverse=True)
     return candidates[0] if candidates else None
+
+
+def _prune_rotated_dbms_logs(raw_dir: Path, backend: str, *, keep_path: Path | None) -> None:
+    log_dir = raw_dir / "logs" / backend
+    if not log_dir.exists() or keep_path is None:
+        return
+    keep = keep_path.resolve()
+    for path in log_dir.glob("*.log"):
+        if path.resolve() == keep:
+            continue
+        path.unlink(missing_ok=True)
+
+
+def _effective_returncode(process_returncode: int, fatal_stderr_markers: tuple[str, ...]) -> int:
+    if process_returncode != 0:
+        return process_returncode
+    if fatal_stderr_markers:
+        return _FATAL_STDERR_RETURNCODE
+    return 0
+
+
+def _detect_fatal_stderr_markers(path: Path) -> tuple[str, ...]:
+    try:
+        text = _read_text_excerpt(path)
+    except FileNotFoundError:
+        return ()
+    seen: list[str] = []
+    for marker, pattern in _FATAL_STDERR_PATTERNS:
+        if pattern in text and marker not in seen:
+            seen.append(marker)
+    return tuple(seen)
+
+
+def _read_text_excerpt(path: Path, *, max_bytes: int = 2 * 1024 * 1024) -> str:
+    size = path.stat().st_size
+    if size <= max_bytes:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    edge = min(_CAPTURE_ARTIFACT_EDGE_BYTES, max_bytes // 2)
+    with path.open("rb") as handle:
+        head = handle.read(edge)
+        handle.seek(max(0, size - edge))
+        tail = handle.read(edge)
+    return (head + b"\n...\n" + tail).decode("utf-8", errors="ignore")
+
+
+def _compact_large_text_artifact(path: Path, *, max_bytes: int = _MAX_CAPTURE_ARTIFACT_BYTES) -> None:
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return
+    if size <= max_bytes:
+        return
+    edge = min(_CAPTURE_ARTIFACT_EDGE_BYTES, max_bytes // 2)
+    with path.open("rb") as handle:
+        head = handle.read(edge)
+        handle.seek(max(0, size - edge))
+        tail = handle.read(edge)
+    marker = (
+        f"\n\n[GraphSymPerf truncated this GDsmith stream artifact from {size} bytes "
+        f"to preserve disk space; retained first {len(head)} and last {len(tail)} bytes.]\n\n"
+    ).encode("utf-8")
+    path.write_bytes(head + marker + tail)

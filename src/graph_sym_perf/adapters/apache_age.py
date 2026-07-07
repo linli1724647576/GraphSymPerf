@@ -218,7 +218,11 @@ class ApacheAgeAdapter(BaseAdapter):
         aliases = _return_aliases(cypher)
         if not aliases:
             aliases = ("result",)
-        escaped = cypher.replace("$$", "$ graph_sym_perf_dollar $")
+        # Use a unique sentinel that is extremely unlikely to appear in any
+        # Cypher query, avoiding the risk of the older "$ graph_sym_perf_dollar $"
+        # placeholder colliding with legitimate query text.
+        _DOLLAR_SENTINEL = "$__GSYM_PERF_DOLLAR_PLHDR_v2__$"
+        escaped = cypher.replace("$$", _DOLLAR_SENTINEL)
         columns = ", ".join(f"{_sql_identifier(alias)} agtype" for alias in aliases)
         sql = f"SELECT * FROM ag_catalog.cypher({_sql_literal(self._graph_name)}, $${escaped}$$) AS ({columns})"
         return sql, aliases

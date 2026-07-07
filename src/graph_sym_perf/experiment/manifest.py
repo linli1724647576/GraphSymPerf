@@ -20,6 +20,7 @@ from graph_sym_perf.core import (
     ConfigError,
     ConfirmationConfig,
     CoverageConfig,
+    EngineCapabilities,
     FeedbackConfig,
     GdsmithConfig,
     OracleConfig,
@@ -200,6 +201,8 @@ def _validate_manifest(manifest: ExperimentManifest) -> None:
 
 
 def _load_manifest_systems(raw: Any) -> tuple[SystemConfig, ...]:
+    if isinstance(raw, list | tuple):
+        return tuple(_load_snapshot_system(item, f"systems[{index}]") for index, item in enumerate(raw))
     mapping = _mapping(raw, "systems")
     targets_raw = mapping.get("targets") or ["neo4j"]
     if not isinstance(targets_raw, list | tuple) or not targets_raw:
@@ -226,6 +229,39 @@ def _load_manifest_systems(raw: Any) -> tuple[SystemConfig, ...]:
             )
         )
     return tuple(systems)
+
+
+def _load_snapshot_system(raw: Any, label: str) -> SystemConfig:
+    mapping = _mapping(raw, label)
+    target = TargetSystem.parse(str(mapping.get("target") or ""))
+    required = mapping.get("required_env") or _default_required_env(target)
+    optional = mapping.get("optional_env") or _default_optional_env(target)
+    settings = mapping.get("settings") or {}
+    if not isinstance(required, list | tuple):
+        raise ConfigError(f"{label}.required_env must be a list")
+    if not isinstance(optional, Mapping):
+        raise ConfigError(f"{label}.optional_env must be a mapping")
+    return SystemConfig(
+        target=target,
+        required_env=tuple(str(name) for name in required),
+        optional_env={str(key): str(value) for key, value in optional.items()},
+        settings=dict(_mapping(settings, f"{label}.settings")),
+        capabilities=_load_snapshot_capabilities(mapping.get("capabilities"), f"{label}.capabilities"),
+    )
+
+
+def _load_snapshot_capabilities(raw: Any, label: str) -> EngineCapabilities:
+    mapping = _mapping(raw, label)
+    defaults = EngineCapabilities()
+    values: dict[str, Any] = {}
+    for field_info in fields(EngineCapabilities):
+        value = mapping.get(field_info.name, getattr(defaults, field_info.name))
+        if field_info.name == "notes":
+            if not isinstance(value, list | tuple):
+                raise ConfigError(f"{label}.notes must be a list")
+            value = tuple(str(item) for item in value)
+        values[field_info.name] = value
+    return EngineCapabilities(**values)
 
 
 def _load_execution_config(raw: Any) -> ExecutionConfig:
@@ -384,5 +420,4 @@ def _merge_transforms(base: TransformConfig, raw: Mapping[str, Any], *, seed: in
             int(raw["max_variants_per_case"]) if raw.get("max_variants_per_case") is not None else base.max_variants_per_case
         ),
     )
-
 

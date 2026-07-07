@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from graph_sym_perf.app.gdsmith_mining import run_gdsmith_mining
+from graph_sym_perf.app.gdsmith_mining import _load_gdsmith_graph_into_adapters, run_gdsmith_mining
+from graph_sym_perf.core import TargetSystem
 
 
 def test_gdsmith_run_without_env_writes_preflight_and_summary(tmp_path: Path) -> None:
@@ -25,3 +26,24 @@ def test_gdsmith_run_without_env_writes_preflight_and_summary(tmp_path: Path) ->
     assert exit_code == 3
     assert (tmp_path / run_id / "preflight.json").exists()
     assert (tmp_path / run_id / "summary.json").exists()
+
+
+def test_gdsmith_mining_loads_graph_into_generator_adapter(monkeypatch) -> None:
+    events: list[str] = []
+
+    class Adapter:
+        target = TargetSystem.FALKORDB
+
+        def load_gdsmith_graph(self, statements):
+            assert tuple(statements) == ("CREATE (n0 :L0{id : 1})",)
+            events.append("load")
+
+    def fake_reset(adapter) -> None:
+        assert adapter.target is TargetSystem.FALKORDB
+        events.append("reset")
+
+    monkeypatch.setattr("graph_sym_perf.app.gdsmith_mining._reset_adapter_for_gdsmith_load", fake_reset)
+
+    _load_gdsmith_graph_into_adapters([Adapter()], ("CREATE (n0 :L0{id : 1})",))
+
+    assert events == ["reset", "load"]

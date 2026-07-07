@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import csv
 import json
+import signal
+import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, TypeVar
 
 from graph_sym_perf.adapters import create_adapter
 from graph_sym_perf.config import environment_with_dotenv
@@ -15,6 +17,8 @@ from graph_sym_perf.core import ConfigError, MetricDelta, ProfileRecord, is_prof
 from graph_sym_perf.experiment.manifest import load_experiment_manifest
 from graph_sym_perf.issues import build_issue_tracking_artifacts
 from graph_sym_perf.reducer import reduce_candidate
+
+T = TypeVar("T")
 
 
 def run_triage(run_dir: str | Path, *, top: int = 100) -> Mapping[str, Any]:
@@ -47,17 +51,19 @@ def validate_triage(
     if not manifest_path.exists():
         raise FileNotFoundError(f"missing {manifest_path}")
     manifest = load_experiment_manifest(manifest_path)
+    manifest_cache: dict[Path, Any] = {manifest_path.resolve(): manifest}
     env = environment_with_dotenv(None)
-    run_config = manifest.to_run_config()
     results: list[Mapping[str, Any]] = []
     for item in payload.get("items") or ():
         system = str(item.get("system") or "")
+        case_dir = Path(str(item.get("case_dir") or ""))
+        item_manifest = _manifest_for_case(case_dir, fallback=manifest, cache=manifest_cache)
+        run_config = item_manifest.to_run_config()
         system_config = next((cfg for cfg in run_config.systems if cfg.target.value == system), None)
         if system_config is None:
             raise ConfigError(f"system {system} missing from aggregate manifest")
         adapter = create_adapter(system_config, run_config, env, allow_create=False)
         try:
-            case_dir = Path(str(item.get("case_dir")))
             result = _validate_one(
                 adapter,
                 case_dir,
@@ -65,9 +71,11 @@ def validate_triage(
                 reduce=reduce,
                 top_item=item,
                 run_config=run_config,
-                manifest=manifest,
+                manifest=item_manifest,
             )
             results.append(result)
+        except Exception as exc:
+            results.append(_validation_error_result(item, case_dir, exc))
         finally:
             adapter.close()
     summary = {
@@ -75,6 +83,7 @@ def validate_triage(
         "validated": len(results),
         "passed": sum(1 for item in results if item.get("equivalence_passed")),
         "runtime_supported": sum(1 for item in results if is_profile_supported_level(item.get("support_level"))),
+        "validation_errors": sum(1 for item in results if item.get("validation_status") == "error"),
         "results": results,
     }
     issue_tracking = build_issue_tracking_artifacts(
@@ -86,6 +95,41 @@ def validate_triage(
     summary["issue_tracking"] = issue_tracking
     _write_json(root / "validation_summary.json", summary)
     return summary
+
+
+def _manifest_for_case(case_dir: Path, *, fallback: Any, cache: dict[Path, Any]) -> Any:
+    try:
+        shard_dir = case_dir.parents[1]
+    except IndexError:
+        return fallback
+    manifest_path = shard_dir / "experiment_manifest.json"
+    if not manifest_path.exists():
+        return fallback
+    key = manifest_path.resolve()
+    if key not in cache:
+        cache[key] = load_experiment_manifest(manifest_path)
+    return cache[key]
+
+
+def _validation_error_result(top_item: Mapping[str, Any], case_dir: Path, exc: Exception) -> Mapping[str, Any]:
+    return {
+        "case_id": top_item.get("representative_case_id") or top_item.get("case_id"),
+        "system": top_item.get("system"),
+        "equivalence_passed": False,
+        "support_level": "validation_error",
+        "latency_ratio": None,
+        "latency_delta_ms": None,
+        "db_hits_ratio": None,
+        "rows_ratio": None,
+        "reducer": {"mode": "not_run", "reason": "validation_error"},
+        "issue_draft_path": None,
+        "issue_url": _artifact_issue_url(top_item),
+        "developer_status": _developer_status(top_item),
+        "validation_status": "error",
+        "error_type": exc.__class__.__name__,
+        "error": str(exc)[:2000],
+        "case_dir": str(case_dir),
+    }
 
 
 def _validate_one(
@@ -100,14 +144,30 @@ def _validate_one(
 ) -> Mapping[str, Any]:
     artifacts = top_item.get("artifact_paths") or {}
     parameters = json.loads((case_dir / "parameters.json").read_text(encoding="utf-8"))
-    fast_query = _read_query(case_dir, artifacts.get("fast_query"))
-    slow_query = _read_query(case_dir, artifacts.get("slow_query"))
-    base_rows = adapter.execute(fast_query, parameters, "validate_fast", max_rows=run_config.equivalence.max_result_rows).rows
-    transformed_rows = adapter.execute(
-        slow_query,
-        parameters,
+    fast_artifact, slow_artifact = _query_artifact_pair(case_dir, artifacts)
+    fast_query = _read_query(case_dir, fast_artifact)
+    slow_query = _read_query(case_dir, slow_artifact)
+    base_rows = _call_with_client_timeout(
+        lambda: adapter.execute(
+            fast_query,
+            parameters,
+            "validate_fast",
+            max_rows=run_config.equivalence.max_result_rows,
+            timeout_seconds=run_config.equivalence.timeout_seconds,
+        ),
+        run_config.equivalence.timeout_seconds,
+        "validate_fast",
+    ).rows
+    transformed_rows = _call_with_client_timeout(
+        lambda: adapter.execute(
+            slow_query,
+            parameters,
+            "validate_slow",
+            max_rows=run_config.equivalence.max_result_rows,
+            timeout_seconds=run_config.equivalence.timeout_seconds,
+        ),
+        run_config.equivalence.timeout_seconds,
         "validate_slow",
-        max_rows=run_config.equivalence.max_result_rows,
     ).rows
     equivalence_passed = base_rows == transformed_rows
     original_profiles: list[ProfileRecord] = []
@@ -115,8 +175,26 @@ def _validate_one(
     original_samples: list[float] = []
     transformed_samples: list[float] = []
     for repeat in range(max(1, runtime_repeats)):
-        fast_result = adapter.profile(fast_query, parameters, f"validate_fast_{repeat}", timeout_seconds=run_config.confirmation.timeout_seconds)
-        slow_result = adapter.profile(slow_query, parameters, f"validate_slow_{repeat}", timeout_seconds=run_config.confirmation.timeout_seconds)
+        fast_result = _call_with_client_timeout(
+            lambda: adapter.profile(
+                fast_query,
+                parameters,
+                f"validate_fast_{repeat}",
+                timeout_seconds=run_config.confirmation.timeout_seconds,
+            ),
+            run_config.confirmation.timeout_seconds,
+            f"validate_fast_{repeat}",
+        )
+        slow_result = _call_with_client_timeout(
+            lambda: adapter.profile(
+                slow_query,
+                parameters,
+                f"validate_slow_{repeat}",
+                timeout_seconds=run_config.confirmation.timeout_seconds,
+            ),
+            run_config.confirmation.timeout_seconds,
+            f"validate_slow_{repeat}",
+        )
         original_samples.append(float(fast_result.elapsed_ms))
         transformed_samples.append(float(slow_result.elapsed_ms))
         original_profiles.append(_profile_from_execution(adapter, fast_result))
@@ -160,6 +238,31 @@ def _validate_one(
         "issue_url": _artifact_issue_url(top_item),
         "developer_status": _developer_status(top_item),
     }
+
+
+def _call_with_client_timeout(fn: Callable[[], T], timeout_seconds: float | None, label: str) -> T:
+    if timeout_seconds is None or timeout_seconds <= 0:
+        return fn()
+    if threading.current_thread() is not threading.main_thread():
+        return fn()
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        return fn()
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+    def _raise_timeout(signum, frame):
+        raise TimeoutError(f"{label} exceeded client timeout {timeout_seconds:.3f}s")
+
+    signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+    try:
+        return fn()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, *previous_timer)
 
 
 def _run_reducer(
@@ -297,6 +400,46 @@ def _read_query(case_dir: Path, artifact_path: Any) -> str:
     raw_path = Path(str(artifact_path))
     path = raw_path if raw_path.is_absolute() else case_dir.parents[1] / raw_path
     return path.read_text(encoding="utf-8")
+
+
+def _query_artifact_pair(case_dir: Path, artifacts: Mapping[str, Any]) -> tuple[Any, Any]:
+    fast = artifacts.get("fast_query")
+    slow = artifacts.get("slow_query")
+    if fast is not None and slow is not None:
+        return fast, slow
+
+    pair_id = _candidate_pair_id(case_dir, artifacts)
+    if pair_id:
+        fast = artifacts.get(f"pair_{pair_id}_fast_query")
+        slow = artifacts.get(f"pair_{pair_id}_slow_query")
+        if fast is not None and slow is not None:
+            return fast, slow
+
+    pair_keys = sorted(str(key) for key in artifacts if str(key).startswith("pair_") and str(key).endswith("_fast_query"))
+    for fast_key in pair_keys:
+        slow_key = f"{fast_key[:-len('_fast_query')]}_slow_query"
+        if slow_key in artifacts:
+            return artifacts[fast_key], artifacts[slow_key]
+    return None, None
+
+
+def _candidate_pair_id(case_dir: Path, artifacts: Mapping[str, Any]) -> str | None:
+    evidence_path = artifacts.get("pmc_evidence")
+    candidates: list[Path] = []
+    if evidence_path:
+        raw_path = Path(str(evidence_path))
+        candidates.append(raw_path if raw_path.is_absolute() else case_dir.parents[1] / raw_path)
+    candidates.append(case_dir / "pmc_evidence.json")
+    for path in candidates:
+        if not path.exists():
+            continue
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+        fast_variant_id = str(evidence.get("fast_variant_id") or "")
+        slow_variant_id = str(evidence.get("slow_variant_id") or "")
+        for variant_id in (slow_variant_id, fast_variant_id):
+            if variant_id and variant_id != "seed":
+                return variant_id
+    return None
 
 
 def _setup_artifact_path(manifest, top_item: Mapping[str, Any]) -> Path | None:

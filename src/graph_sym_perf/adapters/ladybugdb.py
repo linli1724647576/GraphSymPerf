@@ -8,6 +8,8 @@ compatibility.
 
 from __future__ import annotations
 
+import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Mapping
@@ -18,6 +20,8 @@ from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, Query
 from graph_sym_perf.datasets import MiniLdbcGraph, MiniLdbcNode, MiniLdbcRelationship
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
+
+_logger = logging.getLogger(__name__)
 
 
 class LadybugDBAdapter(BaseAdapter):
@@ -84,11 +88,15 @@ class LadybugDBAdapter(BaseAdapter):
         start = perf_counter()
         truncated = False
         try:
-            result = self._conn.execute(query, dict(parameters))
+            result = _call_with_timeout(
+                lambda: self._conn.execute(query, dict(parameters)),
+                timeout_seconds=timeout_seconds,
+                label=f"LadybugDB {query_kind}",
+            )
             rows = _ladybugdb_rows(result)
             if max_rows is not None and len(rows) > max_rows:
                 truncated = True
-                rows = rows[:max_rows]
+                rows = rows[: max_rows + 1]
         except Exception as exc:
             raise QueryExecutionError(f"LadybugDB query failed: {exc}") from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
@@ -129,7 +137,8 @@ class LadybugDBAdapter(BaseAdapter):
                 max_rows=max_rows,
                 timeout_seconds=timeout_seconds,
             )
-        except Exception:
+        except Exception as exc:
+            _logger.warning("LadybugDB profile failed for %s (%s), falling back to execute: %s", query_kind, type(exc).__name__, exc)
             return self.execute(query, parameters, query_kind, max_rows=max_rows, timeout_seconds=timeout_seconds)
 
     def close(self) -> None:
@@ -283,6 +292,19 @@ def _ladybugdb_schema_statements() -> tuple[str, ...]:
     )
 
 
+def _call_with_timeout(fn, *, timeout_seconds: float | None, label: str = "query") -> Any:
+    """Run *fn* in a thread, raising TimeoutError if it exceeds *timeout_seconds*."""
+    if timeout_seconds is None or timeout_seconds <= 0:
+        return fn()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="ladybugdb-timeout") as executor:
+        future = executor.submit(fn)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError:
+            _logger.warning("%s exceeded timeout %.3fs", label, timeout_seconds)
+            raise TimeoutError(f"{label} exceeded timeout {timeout_seconds:.3f}s") from None
+
+
 def _ladybugdb_rows(result: Any) -> tuple[Mapping[str, Any], ...]:
     if isinstance(result, list):
         if not result:
@@ -292,10 +314,12 @@ def _ladybugdb_rows(result: Any) -> tuple[Mapping[str, Any], ...]:
         return ()
     try:
         rows = result.rows_as_dict().get_all()
-    except Exception:
+    except Exception as exc:
+        _logger.debug("LadybugDB rows_as_dict() failed (%s), trying get_all()", exc)
         try:
             rows = result.get_all()
-        except Exception:
+        except Exception as exc2:
+            _logger.warning("LadybugDB row extraction failed: get_all() error: %s", exc2)
             return ()
     if isinstance(rows, dict):
         keys = list(rows)

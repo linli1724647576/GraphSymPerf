@@ -269,6 +269,40 @@ def test_apache_age_known_issue_reset_drops_and_recreates_graph() -> None:
     assert adapter.schema_calls == 1
 
 
+def test_falkordb_known_issue_reset_ignores_missing_graph() -> None:
+    class FakeGraph:
+        name = "graph_sym_perf"
+
+        def delete(self):
+            raise Exception("Invalid graph operation on empty key")
+
+    class FakeDatabase:
+        def __init__(self) -> None:
+            self.selected: list[str] = []
+
+        def select_graph(self, name):
+            self.selected.append(name)
+            return f"selected:{name}"
+
+    class FakeFalkorDBAdapter:
+        target = TargetSystem.FALKORDB
+
+        def __init__(self) -> None:
+            self._db = FakeDatabase()
+            self._graph = FakeGraph()
+            self.connected = False
+
+        def _connect(self):
+            self.connected = True
+
+    adapter = FakeFalkorDBAdapter()
+    _reset_adapter_for_known_issue_setup(adapter)
+
+    assert adapter.connected is True
+    assert adapter._db.selected == ["graph_sym_perf"]
+    assert adapter._graph == "selected:graph_sym_perf"
+
+
 def test_agensgraph_known_issue_reset_uses_adapter_schema_reset() -> None:
     class FakeAgensGraphAdapter:
         target = TargetSystem.AGENSGRAPH

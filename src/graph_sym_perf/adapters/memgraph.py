@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter
-from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin
+from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _has_bare_property_predicate, _has_boolean_property_operand, _is_timeout_like
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
@@ -40,7 +39,7 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
         start = perf_counter()
         try:
             with self._driver.session() as session:
-                result = session.run(query, dict(parameters))
+                result = session.run(_query_with_timeout(query, timeout_seconds), dict(parameters))
                 rows, summary, truncated = _collect_rows(result, max_rows)
         except Exception as exc:
             raise QueryExecutionError(f"Memgraph query failed: {exc}") from exc
@@ -83,7 +82,9 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
                 max_rows=max_rows,
                 timeout_seconds=timeout_seconds,
             )
-        except Exception:
+        except Exception as exc:
+            if _is_timeout_like(exc):
+                raise
             return self.execute(query, parameters, query_kind, max_rows=max_rows, timeout_seconds=timeout_seconds)
 
     def schema_statements(self) -> tuple[str, ...]:
@@ -124,6 +125,14 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
             raise AdapterError(f"cannot connect to Memgraph: {exc}") from exc
 
 
+def _query_with_timeout(query: str, timeout_seconds: float | None) -> Any:
+    if timeout_seconds is None:
+        return query
+    from neo4j import Query
+
+    return Query(query, timeout=timeout_seconds)
+
+
 def _collect_rows(result: Any, max_rows: int | None) -> tuple[tuple[Mapping[str, Any], ...], Any, bool]:
     rows: list[Mapping[str, Any]] = []
     truncated = False
@@ -146,23 +155,3 @@ def _summary(summary: Any) -> Mapping[str, Any]:
         "result_available_after": getattr(summary, "result_available_after", None),
         "result_consumed_after": getattr(summary, "result_consumed_after", None),
     }
-
-
-def _has_bare_property_predicate(query: str) -> bool:
-    return bool(
-        re.search(
-            r"\bWHERE\b[^\\n]*\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)",
-            query,
-            flags=re.IGNORECASE,
-        )
-    )
-
-
-def _has_boolean_property_operand(query: str) -> bool:
-    return bool(
-        re.search(
-            r"(\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)\s+(AND|OR)\b)|(\b(AND|OR)\s+\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\))",
-            query,
-            flags=re.IGNORECASE,
-        )
-    )

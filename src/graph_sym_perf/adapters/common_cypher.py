@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Mapping
 
 from graph_sym_perf.datasets import MiniLdbcGraph, MiniLdbcNode, MiniLdbcRelationship
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, GdsmithReplayNode, GdsmithReplayRelationship, parse_gdsmith_replay_graph
+
+_logger = logging.getLogger(__name__)
 
 
 class CypherLoaderMixin:
@@ -16,7 +19,8 @@ class CypherLoaderMixin:
         for query in self.schema_statements():
             try:
                 self.execute(query, {}, "schema")
-            except Exception:
+            except Exception as exc:
+                _logger.debug("Schema statement skipped (non-fatal): %s", exc)
                 continue
 
     def schema_statements(self) -> tuple[str, ...]:
@@ -101,3 +105,44 @@ SET r += $properties
 
 def _compact(query: str) -> str:
     return "\n".join(line.rstrip() for line in query.strip().splitlines())
+
+
+def _is_timeout_like(exc: Exception) -> bool:
+    """Return True when *exc* is most likely caused by a client or server timeout."""
+    if isinstance(exc, TimeoutError):
+        return True
+    name = exc.__class__.__name__.lower()
+    text = str(exc).lower()
+    return (
+        "timeout" in name
+        or "serviceunavailable" in name
+        or "defunct connection" in text
+        or "timed out" in text
+        or "timeout" in text
+    )
+
+
+def _has_bare_property_predicate(query: str) -> bool:
+    """Return True if *query* has a bare property reference used as a predicate."""
+    import re
+
+    return bool(
+        re.search(
+            r"\bWHERE\b[^\n]*\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)",
+            query,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _has_boolean_property_operand(query: str) -> bool:
+    """Return True if *query* uses a bare property as a boolean operand."""
+    import re
+
+    return bool(
+        re.search(
+            r"(\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\)\s+(AND|OR)\b)|(\b(AND|OR)\s+\(\s*[A-Za-z]\w*\.[A-Za-z]\w*\s*\))",
+            query,
+            flags=re.IGNORECASE,
+        )
+    )

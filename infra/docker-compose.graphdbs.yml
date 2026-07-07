@@ -8,8 +8,29 @@ services:
       - "7687:7687"
     environment:
       NEO4J_AUTH: neo4j/graphsymperf_neo4j
+      NEO4J_dbms_memory_transaction_total_max: 4G
+      NEO4J_server_memory_heap_initial__size: 2G
+      NEO4J_server_memory_heap_max__size: 4G
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -a bolt://localhost:7687 -u neo4j -p graphsymperf_neo4j 'RETURN 1;' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  neo4j-ladybug-proxy:
+    image: neo4j:2026.05.0
+    container_name: graphsymperf-neo4j-ladybug-proxy
+    restart: unless-stopped
+    ports:
+      - "7475:7474"
+      - "7697:7687"
+    environment:
+      NEO4J_AUTH: neo4j/graphsymperf_ladybug_proxy
+      NEO4J_dbms_memory_transaction_total_max: 4G
+      NEO4J_server_memory_heap_initial__size: 2G
+      NEO4J_server_memory_heap_max__size: 4G
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -a bolt://localhost:7687 -u neo4j -p graphsymperf_ladybug_proxy 'RETURN 1;' || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 20
@@ -37,7 +58,7 @@ services:
       - "6389:6379"
       - "3000:3000"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli GRAPH.QUERY graph_sym_perf 'RETURN 1' || redis-cli GRAPH.QUERY sqlancer 'RETURN 1' || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 20
@@ -52,8 +73,13 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: graphsymperf_agens
       POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    command:
+      - "postgres"
+      - "-c"
+      - "password_encryption=md5"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres && PGPASSWORD=graphsymperf_agens psql -U postgres -d postgres -c 'SELECT 1' >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 20
@@ -65,11 +91,12 @@ services:
     ports:
       - "2481:2480"
       - "2425:2424"
+      - "5433:5432"
     environment:
-      JAVA_TOOL_OPTIONS: "-Darcadedb.server.rootPassword=playwithdata"
-      ARCADEDB_OPTS_MEMORY: "-Xms512M -Xmx512M"
+      JAVA_TOOL_OPTIONS: "-Darcadedb.server.rootPassword=playwithdata -Darcadedb.server.plugins=Postgres:com.arcadedb.postgres.PostgresProtocolPlugin"
+      ARCADEDB_OPTS_MEMORY: "-Xms1G -Xmx2G"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2480/api/v1/ready || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:2480/api/v1/ready || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 30
@@ -84,8 +111,13 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: graphsymperf_age
       POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    command:
+      - "postgres"
+      - "-c"
+      - "password_encryption=md5"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres && PGPASSWORD=graphsymperf_age psql -U postgres -d postgres -c 'SELECT 1' >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 20

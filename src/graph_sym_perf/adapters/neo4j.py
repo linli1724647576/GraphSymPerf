@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter
-from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin
+from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _is_timeout_like
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
@@ -78,7 +78,9 @@ class Neo4jAdapter(CypherLoaderMixin, BaseAdapter):
             with self._session() as session:
                 result = session.run(_query_with_timeout(f"PROFILE {query}", timeout_seconds), dict(parameters))
                 rows, summary, truncated = _collect_rows(result, max_rows)
-        except Exception:
+        except Exception as exc:
+            if _is_timeout_like(exc):
+                raise QueryExecutionError(f"Neo4j profile failed: {exc}") from exc
             return self.execute(query, parameters, query_kind, max_rows=max_rows, timeout_seconds=timeout_seconds)
         elapsed_ms = (perf_counter() - start) * 1000.0
         return ExecutionResult(

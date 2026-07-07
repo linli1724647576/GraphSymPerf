@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import sys
 import types
 from typing import Any, Mapping
@@ -7,6 +8,7 @@ from typing import Any, Mapping
 from graph_sym_perf.adapters.ladybugdb import LadybugDBAdapter
 from graph_sym_perf.config import load_run_config
 from graph_sym_perf.core import AdapterError, SystemConfig, TargetSystem
+from graph_sym_perf.experiment.runner import _reset_adapter_for_known_issue_setup
 import pytest
 
 
@@ -52,3 +54,36 @@ def test_ladybugdb_requires_explicit_database_path(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(AdapterError, match="GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH"):
         adapter._connect()
+
+
+def test_ladybugdb_reset_removes_file_database_path(tmp_path: Path) -> None:
+    db_path = tmp_path / "ladybug.db"
+    db_path.write_bytes(b"existing")
+
+    class FakeAdapter:
+        target = TargetSystem.LADYBUGDB
+        allow_create = False
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def close(self) -> None:
+            self.calls.append("close")
+
+        def env_value(self, name: str) -> str:
+            assert name == "GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH"
+            return str(db_path)
+
+        def _connect(self) -> None:
+            self.calls.append("connect")
+
+        def ensure_schema(self) -> None:
+            self.calls.append("schema")
+
+    adapter = FakeAdapter()
+
+    _reset_adapter_for_known_issue_setup(adapter)
+
+    assert adapter.allow_create is True
+    assert adapter.calls == ["close", "connect", "schema"]
+    assert not db_path.exists()

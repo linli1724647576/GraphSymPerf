@@ -1,0 +1,118 @@
+experiment_id: memgraph_10k_2026_07_07
+description: Memgraph 10k-query runtime-focused performance anomaly search (512 nodes).
+seed: 20260707
+output_root: runs/memgraph_10k_2026_07_07
+
+systems:
+  targets:
+    - memgraph
+
+source:
+  enabled:
+    - gdsmith
+  load: true
+  generator_per_system: true
+  generator_target: memgraph
+  base_run_config: config/graph_sym_perf.yaml
+  result_limit: 150
+  include_variable_length: true
+  gdsmith:
+    max_seed_queries_per_shard: 10000
+    num_queries: 10000
+    num_tries: 1
+    timeout_seconds: 900
+    backend_extra_args:
+      memgraph:
+        - "--max-node-num"
+        - "512"
+        - "--avoid-limitations"
+        - "--label-num"
+        - "5"
+
+transforms:
+  enabled_families:
+    - bool_redundancy
+    - symmetry
+  enabled_rules:
+    - and_true_or
+    - and_expr_or_true
+    - or_false_and
+    - or_expr_and_false
+    - and_not_false_and
+    - and_case_true
+    - and_expr_null_partition
+    - or_expr_null_contradiction
+    - and_not_expr_null_contradiction
+    - and_excluded_middle_or_null
+    - or_guarded_contradiction
+    - and_double_negated_true_or
+    - or_duplicate_predicate
+    - and_null_guarded_true
+    - and_distributive_absorption
+    - and_multi_layer_redundancy
+    - arcade_and_true
+    - arcade_or_false
+    - arcade_and_not_false
+    - arcade_and_true_or_false_expr
+    - node_order_symmetry
+    - edge_notation_symmetry
+    - predicate_order_symmetry
+    - pattern_order_symmetry
+    - pattern_decomposition_symmetry
+    - pattern_fusion_symmetry
+    - path_endpoint_symmetry
+    - label_order_symmetry
+    - property_map_order_symmetry
+    - alpha_renaming_symmetry
+    - exploratory_pattern_order_symmetry
+    - exploratory_predicate_order_symmetry
+    - exploratory_optional_match_order_symmetry
+    - exploratory_with_filter_shift_symmetry
+    - exploratory_projection_reorder_symmetry
+  gdsmith_safe_only: true
+
+coverage:
+  enabled: true
+  include_transformation_context: true
+  write_per_case_evidence: true
+
+feedback:
+  enabled: true
+  exploration_rate: 0.25
+  min_rules_per_case: 2
+  max_rules_per_case: 5
+
+oracle:
+  enable_structural_diff: true
+  enable_profile_metrics: true
+  runtime_validation_policy: conservative
+
+confirmation:
+  min_latency_ratio: 3.0
+  min_latency_delta_ms: 20.0
+  min_db_hits_ratio: 3.0
+  min_rows_ratio: 3.0
+
+clustering:
+  enabled: true
+  write_signatures: true
+  include_plan_only: false
+  include_exploratory: false
+
+reducer:
+  enabled: selective
+  strategy: validated
+  reduce_graph: true
+  preserve_metric_ratio: 1.5
+  max_query_attempts: 32
+
+execution:
+  shards: 1
+  workers_per_shard: 1
+  cases_per_shard: 3000
+  per_query_timeout_seconds: 30
+  per_case_timeout_seconds: 180
+  resume: true
+  fail_fast: false
+  isolate_system_per_worker: true
+  write_every_n_cases: 50
