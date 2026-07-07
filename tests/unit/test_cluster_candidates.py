@@ -45,8 +45,10 @@ def _candidate(
     support_level: str = "profile_supported",
     latency_ratio: float = 10.0,
     db_hits_ratio: float = 10.0,
+    runtime_passed: bool | None = None,
 ) -> dict:
     transform_rule = "pattern_order_symmetry"
+    runtime_status = "pass" if (runtime_passed if runtime_passed is not None else support_level == "profile_and_runtime_supported") else "fail"
     return {
         "case_id": case_id,
         "system": "neo4j",
@@ -105,7 +107,11 @@ def _candidate(
             "is_candidate": True,
             "candidate_types": ["AccessPointAsymmetry", "OutlierVariant"],
             "reason": "candidate",
-            "evidence": {"latency": {"ratio": latency_ratio, "delta_ms": 120.0}, "operator_tree_diff": _plan_diff(db_hits_ratio=db_hits_ratio)},
+            "evidence": {
+                "latency": {"ratio": latency_ratio, "delta_ms": 120.0},
+                "operator_tree_diff": _plan_diff(db_hits_ratio=db_hits_ratio),
+                "oracle_layer_status": {"profile": "pass", "runtime": runtime_status},
+            },
         },
         "pmc": {
             "case_id": case_id,
@@ -205,6 +211,39 @@ def test_review_candidates_exports_sorted_list(tmp_path: Path) -> None:
     assert payload["candidates"][0]["case_id"] == "case_002"
     assert "GraphSymPerf Review Candidates" in markdown
     assert "case_001" in markdown
+
+
+def test_review_candidates_runtime_only_filters_non_runtime_candidates(tmp_path: Path) -> None:
+    _write_cases(
+        tmp_path,
+        [
+            _candidate("case_001", support_level="profile_and_runtime_supported", latency_ratio=3.5, runtime_passed=True),
+            _candidate("case_002", support_level="profile_supported", latency_ratio=8.0, runtime_passed=False),
+            _candidate("case_003", support_level="plan_only", latency_ratio=99.0, runtime_passed=False),
+        ],
+    )
+
+    payload = write_review_candidates(tmp_path, runtime_only=True)
+
+    assert payload["candidate_count"] == 1
+    assert [item["case_id"] for item in payload["candidates"]] == ["case_001"]
+    assert payload["selection_policy"] == "runtime-confirmed candidates only"
+
+
+def test_review_candidates_can_sort_only_by_latency_ratio(tmp_path: Path) -> None:
+    _write_cases(
+        tmp_path,
+        [
+            _candidate("case_001", support_level="profile_supported", latency_ratio=30.0, runtime_passed=False),
+            _candidate("case_002", support_level="profile_and_runtime_supported", latency_ratio=8.0, runtime_passed=True),
+            _candidate("case_003", support_level="plan_only", latency_ratio=20.0, runtime_passed=False),
+        ],
+    )
+
+    payload = write_review_candidates(tmp_path, sort_mode="latency_ratio")
+
+    assert [item["case_id"] for item in payload["candidates"]] == ["case_001", "case_003", "case_002"]
+    assert payload["ranking_policy"] == "sort by latency ratio, latency delta, then case id"
 
 
 def test_cluster_run_directory_deduplicates_and_prefers_profile_supported_representative(tmp_path: Path) -> None:

@@ -36,7 +36,7 @@ from graph_sym_perf.coverage import PMCCoverageState, PMCEvidence, replay_pmc_ev
 from graph_sym_perf.datasets import generate_mini_ldbc
 from graph_sym_perf.diagnostics import summarize_skip_errors
 from graph_sym_perf.feedback import TransformScheduler, initialize_feedback_state, summarize_feedback_state
-from graph_sym_perf.gdsmith import check_gdsmith_tooling, query_cases_from_gdsmith, run_gdsmith
+from graph_sym_perf.gdsmith import GdsmithStatementRecord, check_gdsmith_tooling, query_cases_from_gdsmith, run_gdsmith
 from graph_sym_perf.querygen import generate_query_cases
 from graph_sym_perf.reporter import ArtifactWriter
 from graph_sym_perf.transforms import generate_transform_family
@@ -54,6 +54,7 @@ class SourcePayload:
     query_cases: tuple[QueryCase, ...]
     graph_statements: tuple[str, ...] = ()
     generator_target: TargetSystem | None = None
+    partitioning: str = "shared"
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,14 @@ def run_experiment(
                 adapter.ensure_schema()
                 adapter.load_mini_ldbc(graph)
 
-        source_payload = _query_cases_from_source(manifest, run_config, writer, env, adapters)
+        source_payload = _query_cases_from_source(
+            manifest,
+            run_config,
+            writer,
+            env,
+            adapters,
+            reuse_existing_source=effective_resume,
+        )
         if "ldbc" in manifest.source_modes and not (
             manifest.source_kind == "ldbc" and bool(manifest.source.get("load"))
         ):
@@ -138,7 +146,7 @@ def run_experiment(
                 source_payload,
                 query_cases=source_payload.query_cases[: int(max_cases)],
             )
-        shard_cases = shard_spec.slice_cases(source_payload.query_cases)
+        shard_cases = _select_shard_cases(source_payload, shard_spec)
         checkpoint = load_checkpoint(writer.run_dir) if effective_resume else CheckpointState()
         pmc_state = checkpoint.pmc_state or PMCCoverageState(novelty_weights=run_config.coverage.novelty_weights)
         feedback_state = checkpoint.feedback_state or initialize_feedback_state(run_config.transforms, run_config.feedback)
@@ -225,7 +233,7 @@ def run_experiment(
         writer.write_json("rule_stats.json", tuple(feedback_state.rule_stats.values()))
         writer.write_json("symmetry_violations.json", _violation_payload(records))
         writer.write_json("skip_reason_summary.json", summarize_skip_errors(records))
-        write_review_candidates(writer.run_dir, update_summary=False)
+        write_review_candidates(writer.run_dir, update_summary=False, **_review_candidate_options(manifest))
         write_exploratory_leads(writer.run_dir, update_summary=False)
         cluster_summary = (
             write_clustered_summary(writer.run_dir, update_summary=False, clustering_config=run_config.clustering)
@@ -398,13 +406,18 @@ def _query_cases_from_source(
     writer: ArtifactWriter,
     env: Mapping[str, str],
     adapters: list | None = None,
+    *,
+    reuse_existing_source: bool = False,
 ) -> SourcePayload:
     modes = manifest.source_modes
     if modes == ("ldbc",):
-        return SourcePayload(query_cases=generate_query_cases(run_config.dataset, _ldbc_query_generation(run_config, manifest)))
+        return SourcePayload(
+            query_cases=generate_query_cases(run_config.dataset, _ldbc_query_generation(run_config, manifest)),
+            partitioning="shard_local",
+        )
     if modes == ("cases_jsonl",):
         source_path = _resolve_source_path(manifest, str(manifest.source.get("cases_path") or ""))
-        return SourcePayload(query_cases=_load_query_cases_jsonl(source_path))
+        return SourcePayload(query_cases=_load_query_cases_jsonl(source_path), partitioning="shared")
     payloads: list[QueryCase] = []
     graph_statements: tuple[str, ...] = ()
     generator: TargetSystem | None = None
@@ -412,8 +425,16 @@ def _query_cases_from_source(
     if "gdsmith" in modes:
         per_system = manifest.source.get("generator_per_system", False)
         if per_system and adapters:
+            if reuse_existing_source:
+                reused = _reuse_per_system_gdsmith_payload(writer, adapters)
+                if reused is not None:
+                    return reused
             return _per_system_gdsmith_payload(manifest, run_config, writer, env, adapters)
         generator = TargetSystem.parse(str(manifest.source.get("generator_target", "neo4j")))
+        if reuse_existing_source:
+            reused = _reuse_gdsmith_source_payload(writer, generator)
+            if reused is not None:
+                return reused
         gdsmith_payload = _gdsmith_source_payload(manifest, run_config, writer, env, generator)
         payloads.extend(gdsmith_payload.query_cases)
         graph_statements = gdsmith_payload.graph_statements
@@ -425,6 +446,21 @@ def _query_cases_from_source(
         query_cases=tuple(payloads),
         graph_statements=graph_statements,
         generator_target=generator,
+        partitioning="shard_local",
+    )
+
+
+def _reuse_gdsmith_source_payload(writer: ArtifactWriter, generator: TargetSystem) -> SourcePayload | None:
+    query_path = writer.run_dir / "gdsmith_queries.jsonl"
+    graph_path = writer.run_dir / "gdsmith_graph.cypher"
+    if not query_path.exists() or not graph_path.exists():
+        return None
+    records = _load_gdsmith_statement_records(query_path)
+    return SourcePayload(
+        query_cases=query_cases_from_gdsmith(records),
+        graph_statements=_load_gdsmith_graph_statements(graph_path),
+        generator_target=generator,
+        partitioning="shard_local",
     )
 
 
@@ -458,7 +494,74 @@ def _gdsmith_source_payload(
         query_cases=query_cases_from_gdsmith(result.parsed.query_records),
         graph_statements=tuple(result.parsed.graph_statements),
         generator_target=generator,
+        partitioning="shard_local",
     )
+
+
+def _reuse_per_system_gdsmith_payload(writer: ArtifactWriter, adapters: list) -> SourcePayload | None:
+    targets = tuple(adapter.target for adapter in adapters)
+    if not targets:
+        return None
+    for target in targets:
+        if not (writer.run_dir / f"{target.value}_gdsmith_queries.jsonl").exists():
+            return None
+        if not (writer.run_dir / f"{target.value}_gdsmith_graph.cypher").exists():
+            return None
+
+    all_cases: list[QueryCase] = []
+    for adapter in adapters:
+        target = adapter.target
+        records = _load_gdsmith_statement_records(writer.run_dir / f"{target.value}_gdsmith_queries.jsonl")
+        cases = query_cases_from_gdsmith(records)
+        all_cases.extend(replace(case, target_system=target.value) for case in cases)
+
+        graph_statements = _load_gdsmith_graph_statements(writer.run_dir / f"{target.value}_gdsmith_graph.cypher")
+        if graph_statements:
+            loader = getattr(adapter, "load_gdsmith_graph", None)
+            if callable(loader):
+                _reset_adapter_for_known_issue_setup(adapter)
+                loader(graph_statements)
+
+    if not all_cases:
+        return None
+    return SourcePayload(
+        query_cases=tuple(all_cases),
+        graph_statements=(),
+        generator_target=None,
+        partitioning="shard_local",
+    )
+
+
+def _load_gdsmith_statement_records(path: Path) -> tuple[GdsmithStatementRecord, ...]:
+    records: list[GdsmithStatementRecord] = []
+    with path.open(encoding="utf-8") as file:
+        for line in file:
+            if not line.strip():
+                continue
+            raw = json.loads(line)
+            records.append(
+                GdsmithStatementRecord(
+                    index=int(raw.get("index") or 0),
+                    statement=str(raw.get("statement") or ""),
+                    kind=str(raw.get("kind") or "query"),
+                    accepted=bool(raw.get("accepted")),
+                    skip_reason=raw.get("skip_reason"),
+                )
+            )
+    return tuple(records)
+
+
+def _load_gdsmith_graph_statements(path: Path) -> tuple[str, ...]:
+    statements: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        statement = line.strip()
+        if not statement:
+            continue
+        if statement.endswith(";"):
+            statement = statement[:-1].strip()
+        if statement:
+            statements.append(statement)
+    return tuple(statements)
 
 
 def _per_system_gdsmith_payload(
@@ -553,6 +656,8 @@ def _per_system_gdsmith_payload(
             num_queries=queries_for_system,
             seed=system_seed,
         )
+        process_returncode = getattr(result, "process_returncode", result.returncode)
+        fatal_stderr_markers = tuple(getattr(result, "fatal_stderr_markers", ()))
 
         # Write per-system GDsmith artifacts with system prefix.
         writer.write_text(
@@ -566,6 +671,9 @@ def _per_system_gdsmith_payload(
             {
                 "command": result.command,
                 "returncode": result.returncode,
+                "process_returncode": process_returncode,
+                "fatal_stderr_detected": bool(fatal_stderr_markers),
+                "fatal_stderr_markers": list(fatal_stderr_markers),
                 "graph_statement_count": len(result.parsed.graph_statements),
                 "query_record_count": len(result.parsed.query_records),
                 "accepted_query_count": len(result.parsed.accepted_queries),
@@ -578,11 +686,13 @@ def _per_system_gdsmith_payload(
         )
         all_cases.extend(tagged)
 
-        # Cross-load graph data into proxy systems (the GDsmith run populated
-        # conn_target, not the target system).
-        if target is not conn_target and result.parsed.graph_statements:
+        # Load the parsed GDsmith graph into the adapter graph that the oracle
+        # will query. Native GDsmith backends are not guaranteed to use the
+        # same graph/database name as the GraphSymPerf adapter.
+        if result.parsed.graph_statements:
             loader = getattr(adapter, "load_gdsmith_graph", None)
             if callable(loader):
+                _reset_adapter_for_known_issue_setup(adapter)
                 loader(result.parsed.graph_statements)
 
     if not all_cases:
@@ -595,7 +705,30 @@ def _per_system_gdsmith_payload(
         query_cases=tuple(all_cases),
         graph_statements=(),  # each system already has its own data
         generator_target=default_generator,
+        partitioning="shard_local",
     )
+
+
+def _select_shard_cases(source_payload: SourcePayload, shard_spec: ShardSpec) -> tuple[tuple[int, QueryCase], ...]:
+    if source_payload.partitioning == "shard_local":
+        return tuple((local_index, case) for local_index, case in enumerate(source_payload.query_cases))
+    return shard_spec.slice_cases(source_payload.query_cases)
+
+
+def _review_candidate_options(manifest) -> Mapping[str, Any]:
+    review = manifest.artifacts.get("review_candidates") or {}
+    if not isinstance(review, Mapping):
+        return {}
+    runtime_only = bool(review.get("runtime_only", False))
+    sort_by = str(review.get("sort_by") or "support_then_ratio")
+    if sort_by == "runtime_ratio_desc":
+        sort_by = "latency_ratio"
+    if sort_by not in {"support_then_ratio", "latency_ratio"}:
+        raise ConfigError(f"unsupported artifacts.review_candidates.sort_by: {sort_by}")
+    return {
+        "runtime_only": runtime_only,
+        "sort_mode": sort_by,
+    }
 
 
 def _distribute_query_budget(total_cases: int, bucket_count: int) -> tuple[int, ...]:
@@ -888,7 +1021,11 @@ def _reset_adapter_for_known_issue_setup(adapter) -> None:
     if target == "falkordb":
         adapter._connect()
         graph_name = adapter._graph.name
-        adapter._graph.delete()
+        try:
+            adapter._graph.delete()
+        except Exception as exc:
+            if not _is_missing_falkordb_graph_error(exc):
+                raise
         adapter._graph = adapter._db.select_graph(graph_name)
         return
     if target == "arcadedb":
@@ -923,12 +1060,21 @@ def _reset_adapter_for_known_issue_setup(adapter) -> None:
             db_path = Path(raw_path).expanduser()
             if db_path.exists():
                 import shutil
-                shutil.rmtree(db_path)
+
+                if db_path.is_dir():
+                    shutil.rmtree(db_path)
+                else:
+                    db_path.unlink()
         adapter.allow_create = True
         adapter._connect()
         adapter.ensure_schema()
         return
     raise ConfigError(f"known issue replay setup reset is not implemented for target: {target}")
+
+
+def _is_missing_falkordb_graph_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "empty key" in message or "does not exist" in message or "not found" in message
 
 
 def _verify_loaded_graph_counts(adapter, query_case: QueryCase) -> None:
@@ -1077,9 +1223,8 @@ def _pmc_evidences_from_records(records: list[CaseRecord]) -> list[PMCEvidence]:
 
 
 # Proxy fallback for per-system GDsmith: maps a target system to the
-# GDsmith backend of a compatible system (LadybugDB → neo4j, Apache AGE
-# → agensgraph).  The connection target is derived at call time from
-# _gdsmith_backend()'s inverse mapping.
+# GDsmith backend of a compatible system.  The connection target is derived
+# at call time from _gdsmith_backend()'s inverse mapping.
 _GDMSITH_PROXY: dict[TargetSystem, str] = {
     TargetSystem.APACHE_AGE: "agensgraph",
     TargetSystem.LADYBUGDB: "neo4j",
@@ -1121,12 +1266,22 @@ def _validate_gdsmith_env(target: TargetSystem, env: Mapping[str, str]) -> None:
                 f"set the environment variable before running per-system generation"
             )
 
-    # ArcadeDB: must have HTTP_URL or (HOST + PORT).
+    # ArcadeDB: accept the same endpoints that _gdsmith_connection_fields can
+    # resolve, preferring the PostgreSQL wire endpoint used by GDsmith.
     if target is TargetSystem.ARCADEDB:
-        if "GRAPHSYMPERF_ARCADEDB_HTTP_URL" not in env and "GRAPHSYMPERF_ARCADEDB_HOST" not in env:
+        if not any(
+            key in env
+            for key in (
+                "GRAPHSYMPERF_ARCADEDB_POSTGRES_HOST",
+                "GRAPHSYMPERF_ARCADEDB_BOLT_HOST",
+                "GRAPHSYMPERF_ARCADEDB_HTTP_URL",
+                "GRAPHSYMPERF_ARCADEDB_HOST",
+            )
+        ):
             raise ConfigError(
-                "GDsmith requires GRAPHSYMPERF_ARCADEDB_HTTP_URL or "
-                "GRAPHSYMPERF_ARCADEDB_HOST for arcadedb"
+                "GDsmith requires GRAPHSYMPERF_ARCADEDB_POSTGRES_HOST, "
+                "GRAPHSYMPERF_ARCADEDB_BOLT_HOST, GRAPHSYMPERF_ARCADEDB_HTTP_URL, "
+                "or GRAPHSYMPERF_ARCADEDB_HOST for arcadedb"
             )
 
     # Apache AGE: must have URI or HOST.
@@ -1190,11 +1345,8 @@ _GDMSITH_BACKEND: dict[TargetSystem, str] = {
     TargetSystem.NEO4J: "neo4j",
     TargetSystem.MEMGRAPH: "memgraph",
     TargetSystem.FALKORDB: "redisgraph",
-    TargetSystem.ARCADEDB: "arcadedb",
     TargetSystem.AGENSGRAPH: "agensgraph",
-    # Apache AGE shares the PostgreSQL+AGE stack with AgensGraph;
-    # GDsmith's agensgraph backend generates compatible Cypher.
-    TargetSystem.APACHE_AGE: "agensgraph",
+    TargetSystem.ARCADEDB: "arcadedb",
 }
 
 
@@ -1258,7 +1410,13 @@ def _gdsmith_connection_fields(target: TargetSystem, env: Mapping[str, str]) -> 
             env.get("GRAPHSYMPERF_AGENSGRAPH_PASSWORD") or password or "",
         )
     if target is TargetSystem.ARCADEDB:
-        if env.get("GRAPHSYMPERF_ARCADEDB_HTTP_URL"):
+        if env.get("GRAPHSYMPERF_ARCADEDB_POSTGRES_HOST"):
+            host = env["GRAPHSYMPERF_ARCADEDB_POSTGRES_HOST"]
+            port = int(env.get("GRAPHSYMPERF_ARCADEDB_POSTGRES_PORT", "5432"))
+        elif env.get("GRAPHSYMPERF_ARCADEDB_BOLT_HOST"):
+            host = env["GRAPHSYMPERF_ARCADEDB_BOLT_HOST"]
+            port = int(env.get("GRAPHSYMPERF_ARCADEDB_BOLT_PORT", "2424"))
+        elif env.get("GRAPHSYMPERF_ARCADEDB_HTTP_URL"):
             host, port = _http_url_to_host_port(env["GRAPHSYMPERF_ARCADEDB_HTTP_URL"], default_port=2480)
         else:
             host = env.get("GRAPHSYMPERF_ARCADEDB_HOST", "localhost")
@@ -1266,14 +1424,16 @@ def _gdsmith_connection_fields(target: TargetSystem, env: Mapping[str, str]) -> 
         return (
             host,
             port,
-            env.get("GRAPHSYMPERF_ARCADEDB_USER", "admin"),
-            env.get("GRAPHSYMPERF_ARCADEDB_PASSWORD", "admin"),
+            env.get("GRAPHSYMPERF_ARCADEDB_USER", "root"),
+            env.get("GRAPHSYMPERF_ARCADEDB_PASSWORD", "playwithdata"),
         )
     raise ConfigError(f"GDsmith connection fields for {target.value} are not configured")
 
 
 def _postgres_uri_to_connection_fields(uri: str) -> tuple[str, int, str | None, str | None]:
     parsed = urlparse(uri)
+    if parsed.scheme not in {"postgres", "postgresql"}:
+        raise ConfigError(f"invalid PostgreSQL URI for GDsmith: {uri!r}")
     if not parsed.hostname:
         raise ConfigError(f"invalid PostgreSQL URI for GDsmith: {uri!r}")
     username = unquote(parsed.username) if parsed.username is not None else None

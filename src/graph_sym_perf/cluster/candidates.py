@@ -22,25 +22,42 @@ from graph_sym_perf.core import (
     QueryVariant,
     TargetSystem,
     ToolSupportLevel,
+    is_profile_supported_level,
     stable_json_dumps,
     support_rank,
+    support_level_value,
     to_jsonable,
 )
 from graph_sym_perf.coverage import CoverageUnit, PMCEvidence
 
 
-def write_review_candidates(run_dir: str | Path, *, update_summary: bool = True) -> Mapping[str, Any]:
+def write_review_candidates(
+    run_dir: str | Path,
+    *,
+    update_summary: bool = True,
+    runtime_only: bool = False,
+    sort_mode: str = "support_then_ratio",
+) -> Mapping[str, Any]:
     path = Path(run_dir)
     records = _load_case_records(path / "cases.jsonl")
     candidates = tuple(
         dict(candidate, rank=index)
-        for index, candidate in enumerate(sorted(_candidate_items(records), key=_sort_key), start=1)
+        for index, candidate in enumerate(
+            sorted(_candidate_items(records, runtime_only=runtime_only), key=lambda item: _sort_key(item, sort_mode=sort_mode)),
+            start=1,
+        )
     )
     payload: Mapping[str, Any] = {
         "run_id": path.name,
         "candidate_count": len(candidates),
-        "selection_policy": "oracle.is_candidate == true",
-        "ranking_policy": "sort by support level, latency ratio, latency delta, then case id",
+        "selection_policy": (
+            "runtime-confirmed candidates only" if runtime_only else "oracle.is_candidate == true"
+        ),
+        "ranking_policy": (
+            "sort by latency ratio, latency delta, then case id"
+            if sort_mode == "latency_ratio"
+            else "sort by support level, latency ratio, latency delta, then case id"
+        ),
         "candidates": candidates,
     }
     _write_json(path / "review_candidates.json", payload)
@@ -257,12 +274,14 @@ def render_clustered_summary_markdown(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _candidate_items(records: tuple[Mapping[str, Any], ...]) -> tuple[Mapping[str, Any], ...]:
+def _candidate_items(records: tuple[Mapping[str, Any], ...], *, runtime_only: bool = False) -> tuple[Mapping[str, Any], ...]:
     items: list[Mapping[str, Any]] = []
     for record in records:
         oracle = record.get("oracle") or {}
         confirmation = record.get("confirmation") or {}
         if not oracle.get("is_candidate"):
+            continue
+        if runtime_only and not _runtime_confirmed_record(record):
             continue
         evidence = oracle.get("evidence") or {}
         latency = evidence.get("latency") or {}
@@ -280,6 +299,20 @@ def _candidate_items(records: tuple[Mapping[str, Any], ...]) -> tuple[Mapping[st
             }
         )
     return tuple(items)
+
+
+def _runtime_confirmed_record(record: Mapping[str, Any]) -> bool:
+    oracle = record.get("oracle") or {}
+    confirmation = record.get("confirmation") or {}
+    if not oracle.get("is_candidate"):
+        return False
+    if not is_profile_supported_level(confirmation.get("support_level")):
+        return False
+    evidence = oracle.get("evidence") or {}
+    layer_status = evidence.get("oracle_layer_status") or {}
+    if isinstance(layer_status, Mapping) and str(layer_status.get("runtime") or ""):
+        return str(layer_status.get("runtime")) == "pass"
+    return support_level_value(confirmation.get("support_level")) == ToolSupportLevel.PROFILE_AND_RUNTIME_SUPPORTED.value
 
 
 def _exploratory_items(records: tuple[Mapping[str, Any], ...]) -> tuple[Mapping[str, Any], ...]:
@@ -483,7 +516,13 @@ def _group_sort_key(items: list[CandidateSignature]) -> tuple[int, tuple[int, in
     return (-len(items), _representative_sort_key(representative))
 
 
-def _sort_key(candidate: Mapping[str, Any]) -> tuple[int, float, float, str]:
+def _sort_key(candidate: Mapping[str, Any], *, sort_mode: str = "support_then_ratio") -> tuple[float, ...] | tuple[int, float, float, str]:
+    if sort_mode == "latency_ratio":
+        return (
+            -float(candidate.get("latency_ratio") or 0.0),
+            -float(candidate.get("latency_delta_ms") or 0.0),
+            str(candidate.get("case_id")),
+        )
     return (
         -_support_rank(str(candidate.get("support_level"))),
         -float(candidate.get("latency_ratio") or 0.0),
