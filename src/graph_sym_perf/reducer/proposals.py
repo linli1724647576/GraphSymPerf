@@ -254,21 +254,30 @@ def _predicate_edits(query: str) -> tuple[_SingleEdit, ...]:
             match = parse_match_clause(clause)
             if match.where_region is None:
                 continue
-            predicate = parse_and_predicate(match.where_region.text, allow_ordering=True, allow_in=True)
+            terms = _predicate_terms(match.where_region.text)
         except CypherParseError:
             continue
         occurrences: dict[str, int] = {}
-        for term_index in range(len(predicate.terms)):
-            remaining = predicate.terms[:term_index] + predicate.terms[term_index + 1 :]
-            replacement = " AND ".join(term.text for term in remaining)
-            clause_text = (
-                clause.text[: match.where_region.start]
-                + replacement
-                + clause.text[match.where_region.end :]
-            )
+        for term_index in range(len(terms)):
+            remaining = terms[:term_index] + terms[term_index + 1 :]
+            if remaining:
+                replacement = " AND ".join(term.text for term in remaining)
+                clause_text = (
+                    clause.text[: match.where_region.start]
+                    + replacement
+                    + clause.text[match.where_region.end :]
+                )
+            else:
+                where_start = _where_keyword_start(clause.text, match.pattern_region.end, match.where_region.start)
+                if where_start is None:
+                    continue
+                clause_text = (
+                    clause.text[:where_start].rstrip()
+                    + clause.text[match.where_region.end :]
+                )
             candidate = _replace_query_region(query, clause.start, clause.end, clause_text)
             if dependency_preserved(query, candidate):
-                signature = _canonical_text(predicate.terms[term_index].text)
+                signature = _canonical_text(terms[term_index].text)
                 occurrence = occurrences.get(signature, 0)
                 occurrences[signature] = occurrence + 1
                 edits.append(
@@ -284,74 +293,182 @@ def _predicate_edits(query: str) -> tuple[_SingleEdit, ...]:
 
 def _list_item_edits(query: str) -> tuple[_SingleEdit, ...]:
     edits: list[_SingleEdit] = []
-    for list_index, match in enumerate(re.finditer(r"\bIN\s*\[(?P<body>[^\[\]]+)\]", query, re.I | re.S)):
-        items = split_top_level_commas(match.group("body"))
-        if len(items) < 2:
+    parsed_query = parse_query(query)
+    list_index = 0
+    for clause in parsed_query.clauses:
+        if clause.keyword != "MATCH":
             continue
-        body_start = match.start("body")
-        body_end = match.end("body")
-        occurrences: dict[str, int] = {}
-        list_signature = _canonical_text(match.group("body"))
-        for item_index in range(len(items)):
-            replacement = ", ".join(items[:item_index] + items[item_index + 1 :])
-            candidate = query[:body_start] + replacement + query[body_end:]
-            if dependency_preserved(query, candidate):
-                item_signature = _canonical_text(items[item_index])
-                occurrence = occurrences.get(item_signature, 0)
-                occurrences[item_signature] = occurrence + 1
-                edits.append(
-                    _SingleEdit(
-                        _semantic_key(
-                            f"list_{list_index}_item",
-                            f"{list_signature}\0{item_signature}",
-                            occurrence,
-                        ),
-                        "list_item",
-                        candidate,
+        try:
+            match_clause = parse_match_clause(clause)
+            if match_clause.where_region is None:
+                continue
+            _predicate_terms(match_clause.where_region.text)
+        except CypherParseError:
+            continue
+        where_text = match_clause.where_region.text
+        for start, end in _delimited_regions(where_text, "[", "]"):
+            if _previous_word(where_text, start) != "IN":
+                continue
+            body = where_text[start + 1 : end - 1]
+            items = split_top_level_commas(body)
+            if not items:
+                continue
+            body_start = clause.start + match_clause.where_region.start + start + 1
+            body_end = clause.start + match_clause.where_region.start + end - 1
+            occurrences: dict[str, int] = {}
+            list_signature = _canonical_text(body)
+            for item_index in range(len(items)):
+                replacement = ", ".join(items[:item_index] + items[item_index + 1 :])
+                candidate = query[:body_start] + replacement + query[body_end:]
+                if dependency_preserved(query, candidate):
+                    item_signature = _canonical_text(items[item_index])
+                    occurrence = occurrences.get(item_signature, 0)
+                    occurrences[item_signature] = occurrence + 1
+                    edits.append(
+                        _SingleEdit(
+                            _semantic_key(
+                                f"list_{list_index}_item",
+                                f"{list_signature}\0{item_signature}",
+                                occurrence,
+                            ),
+                            "list_item",
+                            candidate,
+                        )
                     )
-                )
+            list_index += 1
     return tuple(edits)
 
 
 def _literal_item_edits(query: str) -> tuple[_SingleEdit, ...]:
     edits: list[_SingleEdit] = []
-    for map_index, match in enumerate(re.finditer(r"\{(?P<body>[^{}]+)\}", query, re.S)):
-        items = split_top_level_commas(match.group("body"))
-        parsed: list[tuple[str, str]] = []
-        for item in items:
-            entry = re.fullmatch(
-                rf"(?P<key>[A-Za-z_]\w*)\s*:\s*(?P<value>{_LITERAL_VALUE.pattern})",
-                item.strip(),
-                re.I | re.S,
-            )
-            if entry is None:
-                parsed = []
-                break
-            parsed.append((entry.group("key"), entry.group("value")))
-        if not parsed:
+    parsed_query = parse_query(query)
+    map_index = 0
+    for clause in parsed_query.clauses:
+        if clause.keyword != "MATCH":
             continue
-        occurrences: dict[str, int] = {}
-        map_signature = _canonical_text(match.group("body"))
-        for item_index, (key, value) in enumerate(parsed):
-            remaining = parsed[:item_index] + parsed[item_index + 1 :]
-            replacement = "{" + ", ".join(f"{name}: {literal}" for name, literal in remaining) + "}"
-            candidate = query[: match.start()] + replacement + query[match.end() :]
-            if dependency_preserved(query, candidate):
-                signature = f"{key}:{value}"
-                occurrence = occurrences.get(signature, 0)
-                occurrences[signature] = occurrence + 1
-                edits.append(
-                    _SingleEdit(
-                        _semantic_key(
-                            f"map_{map_index}_literal",
-                            f"{map_signature}\0{signature}",
-                            occurrence,
-                        ),
-                        "literal_item",
-                        candidate,
-                    )
+        try:
+            match_clause = parse_match_clause(clause)
+        except CypherParseError:
+            continue
+        pattern_text = match_clause.pattern_region.text
+        for start, end in _delimited_regions(pattern_text, "{", "}"):
+            body = pattern_text[start + 1 : end - 1]
+            items = split_top_level_commas(body)
+            parsed: list[tuple[str, str]] = []
+            for item in items:
+                entry = re.fullmatch(
+                    rf"(?P<key>[A-Za-z_]\w*)\s*:\s*(?P<value>{_LITERAL_VALUE.pattern})",
+                    item.strip(),
+                    re.I | re.S,
                 )
+                if entry is None:
+                    parsed = []
+                    break
+                parsed.append((entry.group("key"), entry.group("value")))
+            if not parsed:
+                continue
+            region_start = clause.start + match_clause.pattern_region.start + start
+            region_end = clause.start + match_clause.pattern_region.start + end
+            occurrences: dict[str, int] = {}
+            map_signature = _canonical_text(body)
+            for item_index, (key, value) in enumerate(parsed):
+                remaining = parsed[:item_index] + parsed[item_index + 1 :]
+                replacement = "{" + ", ".join(f"{name}: {literal}" for name, literal in remaining) + "}"
+                candidate = query[:region_start] + replacement + query[region_end:]
+                if dependency_preserved(query, candidate):
+                    signature = f"{key}:{value}"
+                    occurrence = occurrences.get(signature, 0)
+                    occurrences[signature] = occurrence + 1
+                    edits.append(
+                        _SingleEdit(
+                            _semantic_key(
+                                f"map_{map_index}_literal",
+                                f"{map_signature}\0{signature}",
+                                occurrence,
+                            ),
+                            "literal_item",
+                            candidate,
+                        )
+                    )
+            map_index += 1
     return tuple(edits)
+
+
+def _predicate_terms(text: str):
+    try:
+        return parse_and_predicate(text, allow_ordering=True, allow_in=True).terms
+    except CypherParseError as exc:
+        if exc.code != "NO_TOP_LEVEL_AND":
+            raise
+    probe = parse_and_predicate(f"({text}) AND true", allow_ordering=True, allow_in=True)
+    return probe.terms[:1]
+
+
+def _where_keyword_start(text: str, start: int, end: int) -> int | None:
+    region = _mask_lexical_noncode(text[start:end])
+    matches = tuple(re.finditer(r"\bWHERE\b", region, re.I))
+    return start + matches[-1].start() if matches else None
+
+
+def _previous_word(text: str, index: int) -> str:
+    prefix = text[:index].rstrip()
+    match = re.search(r"([A-Za-z_]\w*)$", prefix)
+    return match.group(1).upper() if match else ""
+
+
+def _delimited_regions(text: str, opener: str, closer: str) -> tuple[tuple[int, int], ...]:
+    masked = _mask_lexical_noncode(text)
+    stack: list[int] = []
+    regions: list[tuple[int, int]] = []
+    for index, char in enumerate(masked):
+        if char == opener:
+            stack.append(index)
+        elif char == closer and stack:
+            start = stack.pop()
+            if not stack:
+                regions.append((start, index + 1))
+    return tuple(regions)
+
+
+def _mask_lexical_noncode(text: str) -> str:
+    result = list(text)
+    quote: str | None = None
+    line_comment = False
+    block_comment = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if line_comment:
+            result[index] = " "
+            if char in "\r\n":
+                line_comment = False
+        elif block_comment:
+            result[index] = " "
+            if char == "*" and next_char == "/":
+                result[index + 1] = " "
+                block_comment = False
+                index += 1
+        elif quote is not None:
+            result[index] = " "
+            if char == "\\" and next_char:
+                result[index + 1] = " "
+                index += 1
+            elif char == quote:
+                quote = None
+        elif char in {"'", '"', "`"}:
+            quote = char
+            result[index] = " "
+        elif char == "/" and next_char == "/":
+            result[index] = result[index + 1] = " "
+            line_comment = True
+            index += 1
+        elif char == "/" and next_char == "*":
+            result[index] = result[index + 1] = " "
+            block_comment = True
+            index += 1
+        index += 1
+    return "".join(result)
 
 
 def _split_projection_suffix(body: str) -> tuple[str, str]:

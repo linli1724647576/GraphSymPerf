@@ -91,9 +91,9 @@ def _reduction_gate_complete(
         and final_validation.rule_id == certificate.rule_id == original_validation.rule_id
         and final_validation.proof_version == certificate.proof_version == original_validation.proof_version
         and evidence.verdict is RuntimeVerdict.PASS
-        and len(evidence.paired_samples) == 20
-        and sum(sample.order == "AB" for sample in evidence.paired_samples) == 10
-        and sum(sample.order == "BA" for sample in evidence.paired_samples) == 10
+        and len(evidence.paired_samples) == 40
+        and sum(sample.order == "AB" for sample in evidence.paired_samples) == 20
+        and sum(sample.order == "BA" for sample in evidence.paired_samples) == 20
         and all(
             sample.a_ms is not None
             and sample.b_ms is not None
@@ -110,6 +110,8 @@ def _reduction_gate_complete(
         and evidence.slow_query in {"a", "b"}
         and evidence.graph_snapshot_hash == reduction.reduced_pair.graph_snapshot_hash
         and evidence.dbms_fingerprint == reduction.reduced_pair.dbms_fingerprint
+        and evidence.measurement_source == "ordinary_execute"
+        and evidence.measurement_protocol == "ordinary-execute-40-pair-combined-v1"
         and all(
             session.graph_fingerprint == reduction.reduced_pair.graph_snapshot_hash
             and session.dbms_fingerprint == reduction.reduced_pair.dbms_fingerprint

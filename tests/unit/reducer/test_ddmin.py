@@ -61,3 +61,25 @@ def test_cache_key_binds_graph_both_queries_and_policy() -> None:
     assert baseline != reduction_cache_key(EquivalentQueryPair(pair.query_a, "RETURN 3", {}, "graph", "dbms"), policy_hash="policy")
     assert baseline != reduction_cache_key(EquivalentQueryPair(pair.query_a, pair.query_b, {}, "other", "dbms"), policy_hash="policy")
     assert baseline != reduction_cache_key(pair, policy_hash="other")
+
+
+def test_checkpoint_oserror_preserves_accepted_best_and_stops_partial() -> None:
+    def fail_checkpoint(_best: str, _attempt) -> None:
+        raise OSError("disk unavailable")
+
+    result = HierarchicalDDMin(max_attempts=10, deadline_seconds=30).run(
+        "original",
+        proposals=lambda value: (
+            (DDMinCandidate("smaller", "smaller", "clause"),)
+            if value == "original"
+            else ()
+        ),
+        evaluate=lambda _value: DDMinEvaluation(True, "symptom_preserved", "c" * 64),
+        cache_key=lambda value: value,
+        checkpoint=fail_checkpoint,
+    )
+
+    assert result.best == "smaller"
+    assert tuple(attempt.index for attempt in result.attempts) == (1,)
+    assert not result.exhausted
+    assert result.stop_reason == "checkpoint_error:OSError"

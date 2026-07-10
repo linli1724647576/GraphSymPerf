@@ -171,6 +171,7 @@ class FinalIssueValidator:
         report = IssueValidator().validate(candidate, IndependentRunner())
         if self.fail:
             object.__setattr__(report, "stage", type(report.stage).REJECTED)
+            object.__setattr__(report, "reason_codes", ("ratio_below_threshold",))
         return report
 
 
@@ -274,10 +275,11 @@ def test_reducer_reaches_paired_one_minimal_then_runs_independent_validation(tmp
 def test_profile_only_signal_is_rejected_when_ordinary_runtime_protocol_is_absent() -> None:
     report = CandidateReducer(max_attempts=20).reduce(_bundle(screen=ProfileOnlyScreen()))
 
-    assert report.status is ReductionStatus.REDUCTION_INVALIDATED
+    assert report.status is ReductionStatus.REDUCTION_PARTIAL
     assert report.accepted_steps == ()
     assert any("ordinary_runtime_protocol_invalid" in step.reason for step in report.rejected_steps)
     assert report.final_validation is None
+    assert report.stop_reason == "final_runtime_inconclusive"
 
 
 def test_dependency_output_and_witness_fail_before_equivalence_or_runtime_execution() -> None:
@@ -324,7 +326,7 @@ def test_equivalence_gate_must_return_typed_complete_evidence_before_runtime() -
 
 def test_attempt_limit_after_progress_is_partial_and_cannot_run_final_validation(tmp_path) -> None:
     final = FinalIssueValidator()
-    report = CandidateReducer(max_attempts=1, checkpoint_path=tmp_path / "partial.json").reduce(_bundle(final=final))
+    report = CandidateReducer(max_attempts=2, checkpoint_path=tmp_path / "partial.json").reduce(_bundle(final=final))
 
     assert report.status is ReductionStatus.REDUCTION_PARTIAL
     assert report.accepted_steps
@@ -391,7 +393,87 @@ def test_failed_final_independent_validation_invalidates_reduction() -> None:
     assert report.reduced_candidate_hash == report.final_validation.candidate_hash
 
 
-def test_final_validation_with_wrong_session_query_hash_invalidates_reduction() -> None:
+def test_explicit_final_typed_equivalence_mismatch_invalidates_reduction() -> None:
+    class MismatchRunner(IndependentRunner):
+        def run_session(self, candidate, session_number, **kwargs):
+            _equivalence, session = super().run_session(candidate, session_number, **kwargs)
+            return EquivalenceEvidence(False, True, ("typed_result_mismatch",)), session
+
+    class MismatchFinal(FinalIssueValidator):
+        def validate(self, candidate):
+            self.candidates.append(candidate)
+            return IssueValidator().validate(candidate, MismatchRunner())
+
+    report = CandidateReducer(max_attempts=20).reduce(_bundle(final=MismatchFinal()))
+
+    assert report.status is ReductionStatus.REDUCTION_INVALIDATED
+    assert report.stop_reason == "final_validation_failed"
+
+
+def test_final_validator_exception_is_partial_with_attempt_and_reason_evidence() -> None:
+    class RaisingFinal(FinalIssueValidator):
+        def validate(self, candidate):
+            self.candidates.append(candidate)
+            raise RuntimeError("validator worker crashed")
+
+    report = CandidateReducer(max_attempts=20).reduce(_bundle(final=RaisingFinal()))
+
+    assert report.status is ReductionStatus.REDUCTION_PARTIAL
+    assert report.attempts
+    assert tuple(attempt.index for attempt in report.attempts) == tuple(range(1, len(report.attempts) + 1))
+    assert report.stop_reason == "final_validation_error:RuntimeError"
+    assert report.final_validation is None
+
+
+def test_final_evidence_is_recomputed_from_all_40_validation_pairs() -> None:
+    class OneSessionThresholdFailRunner(IndependentRunner):
+        def run_session(self, candidate, session_number, **kwargs):
+            equivalence, session = super().run_session(candidate, session_number, **kwargs)
+            if session_number == 1:
+                session = replace(
+                    session,
+                    evidence=replace(
+                        session.evidence,
+                        verdict=RuntimeVerdict.FAIL,
+                        ci_ratio_low=1.5,
+                        reason_codes=("ci_lower_below_threshold",),
+                    ),
+                )
+            return equivalence, session
+
+    class CombinedFinal(FinalIssueValidator):
+        def validate(self, candidate):
+            self.candidates.append(candidate)
+            return IssueValidator().validate(candidate, OneSessionThresholdFailRunner())
+
+    report = CandidateReducer(max_attempts=20).reduce(_bundle(final=CombinedFinal()))
+
+    assert report.status is ReductionStatus.REDUCED_VALID
+    assert len(report.final_evidence.paired_samples) == 40
+    assert report.final_evidence.verdict is RuntimeVerdict.PASS
+    assert report.final_evidence.query_a_hash == _hash(report.reduced_pair.query_a)
+    assert report.final_evidence.query_b_hash == _hash(report.reduced_pair.query_b)
+    assert report.final_evidence.slow_query == "b"
+    assert report.final_evidence.measurement_protocol == "ordinary-execute-40-pair-combined-v1"
+
+
+def test_checkpoint_oserror_returns_partial_with_monotonic_best_and_attempt(tmp_path) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("block", encoding="utf-8")
+
+    report = CandidateReducer(
+        max_attempts=20,
+        checkpoint_path=blocker / "best.json",
+    ).reduce(_bundle())
+
+    assert report.status is ReductionStatus.REDUCTION_PARTIAL
+    assert report.reduced_pair != report.original_pair
+    assert tuple(attempt.index for attempt in report.attempts) == tuple(range(1, len(report.attempts) + 1))
+    assert report.attempts[-1].outcome == "symptom_preserved"
+    assert report.stop_reason == "checkpoint_error:FileExistsError"
+
+
+def test_final_validation_with_wrong_session_query_hash_is_partial() -> None:
     class WrongEvidenceFinal(FinalIssueValidator):
         def validate(self, candidate):
             report = super().validate(candidate)
@@ -405,4 +487,5 @@ def test_final_validation_with_wrong_session_query_hash_invalidates_reduction() 
 
     report = CandidateReducer(max_attempts=20).reduce(_bundle(final=WrongEvidenceFinal()))
 
-    assert report.status is ReductionStatus.REDUCTION_INVALIDATED
+    assert report.status is ReductionStatus.REDUCTION_PARTIAL
+    assert report.stop_reason == "final_validation_inconclusive"

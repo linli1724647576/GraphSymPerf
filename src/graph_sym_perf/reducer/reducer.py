@@ -192,15 +192,20 @@ class CandidateReducer:
             final_fast = evaluate_reduction_candidate(bundle, run.best)
             cache[key(run.best)] = final_fast
         if not final_fast.preserved or final_fast.runtime_evidence is None:
+            conclusive = final_fast.conclusive_rejection
             return _report(
-                ReductionStatus.REDUCTION_INVALIDATED,
+                (
+                    ReductionStatus.REDUCTION_INVALIDATED
+                    if conclusive
+                    else ReductionStatus.REDUCTION_PARTIAL
+                ),
                 bundle,
                 run.best,
                 accepted_steps,
                 rejected_steps,
                 final_fast.runtime_evidence or _invalid_evidence(run.best, final_fast.reason),
                 attempts=run.attempts,
-                stop_reason="final_runtime_failed",
+                stop_reason=("final_runtime_failed" if conclusive else "final_runtime_inconclusive"),
             )
 
         universe = MinimalityUniverse.recompute(run.best)
@@ -285,12 +290,30 @@ class CandidateReducer:
         )
         try:
             final_validation = bundle.final_validator.validate(reduced_candidate)
-        except Exception:
-            final_validation = None
+        except Exception as exc:
+            return _report(
+                ReductionStatus.REDUCTION_PARTIAL,
+                bundle,
+                run.best,
+                accepted_steps,
+                rejected_steps,
+                final_fast.runtime_evidence,
+                minimality_proof=proof,
+                reduced_candidate_hash=reduced_candidate.candidate_hash,
+                attempts=run.attempts,
+                stop_reason=f"final_validation_error:{type(exc).__name__}",
+            )
         final_evidence = _final_validation_evidence(final_validation) or final_fast.runtime_evidence
         valid = _final_validation_matches(bundle, reduced_candidate, final_validation, final_evidence)
+        conclusive = _final_validation_failure_is_conclusive(final_validation)
         return _report(
-            ReductionStatus.REDUCED_VALID if valid else ReductionStatus.REDUCTION_INVALIDATED,
+            (
+                ReductionStatus.REDUCED_VALID
+                if valid
+                else ReductionStatus.REDUCTION_INVALIDATED
+                if conclusive
+                else ReductionStatus.REDUCTION_PARTIAL
+            ),
             bundle,
             run.best,
             accepted_steps,
@@ -300,7 +323,13 @@ class CandidateReducer:
             final_validation=final_validation,
             reduced_candidate_hash=reduced_candidate.candidate_hash,
             attempts=run.attempts,
-            stop_reason="exhausted_and_validated" if valid else "final_validation_failed",
+            stop_reason=(
+                "exhausted_and_validated"
+                if valid
+                else "final_validation_failed"
+                if conclusive
+                else "final_validation_inconclusive"
+            ),
         )
 
 
@@ -388,16 +417,37 @@ def _final_validation_matches(
         and evidence.graph_snapshot_hash == candidate.pair.graph_snapshot_hash
         and evidence.dbms_fingerprint == candidate.pair.dbms_fingerprint
         and evidence.measurement_source == "ordinary_execute"
-        and evidence.measurement_protocol == "ordinary-execute-20-pair-v1"
+        and len(evidence.paired_samples) == 40
+        and sum(sample.order == "AB" for sample in evidence.paired_samples) == 20
+        and sum(sample.order == "BA" for sample in evidence.paired_samples) == 20
+        and evidence.measurement_protocol == "ordinary-execute-40-pair-combined-v1"
     )
 
 
 def _final_validation_evidence(validation: object) -> RuntimeEvidence | None:
-    from graph_sym_perf.validation.models import IssueValidationReport
+    from graph_sym_perf.validation.evidence import combined_runtime_evidence
 
-    if isinstance(validation, IssueValidationReport) and validation.sessions:
-        return validation.sessions[0].evidence
-    return None
+    return combined_runtime_evidence(validation)
+
+
+def _final_validation_failure_is_conclusive(validation: object) -> bool:
+    from graph_sym_perf.validation.models import IssueValidationReport, PipelineStage
+
+    if not isinstance(validation, IssueValidationReport) or validation.stage is not PipelineStage.REJECTED:
+        return False
+    if validation.equivalence.complete_result and not validation.equivalence.equivalent:
+        return True
+    if set(validation.equivalence.reason_codes) & {"typed_result_mismatch", "equivalence_failed"}:
+        return True
+    runtime_loss_reasons = {
+        "ratio_below_threshold",
+        "ci_lower_below_threshold",
+        "absolute_delta_within_noise",
+        "negative_control_noise",
+        "direction_mismatch",
+        "missing_paired_samples",
+    }
+    return bool(set(validation.reason_codes) & runtime_loss_reasons)
 
 
 def _gate_failure(

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from statistics import median
 
-from graph_sym_perf.runtime.models import RuntimeVerdict
-from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci, percentile
+from graph_sym_perf.runtime.models import RuntimeEvidence, RuntimeVerdict
+from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci, percentile, relative_mad
 from graph_sym_perf.validation.models import IssueValidationReport, PipelineStage
 
 
@@ -106,6 +106,61 @@ def issue_validation_report_is_complete(report: object) -> bool:
         and ci.low >= 2.0
         and delta > max(control_p99, 0.01)
         and abs(report.validated_ratio - ratio) <= 1e-12
+    )
+
+
+def combined_runtime_evidence(report: object) -> RuntimeEvidence | None:
+    """Recompute one issue-grade runtime record from both independent sessions."""
+
+    if not issue_validation_report_is_complete(report):
+        return None
+    assert isinstance(report, IssueValidationReport)
+    slow_query = report.sessions[0].evidence.slow_query
+    if slow_query not in {"a", "b"}:
+        return None
+    samples = tuple(
+        sample
+        for session in report.sessions
+        for sample in session.evidence.paired_samples
+    )
+    oriented = tuple(
+        (sample.a_ms, sample.b_ms) if slow_query == "b" else (sample.b_ms, sample.a_ms)
+        for sample in samples
+        if sample.a_ms is not None
+        and sample.b_ms is not None
+        and not sample.a_timeout
+        and not sample.b_timeout
+    )
+    if len(oriented) != 40 or any(fast <= 0 for fast, _slow in oriented):
+        return None
+    ratios = tuple(slow / fast for fast, slow in oriented)
+    ci = bootstrap_ratio_ci(oriented)
+    sources = {session.evidence.measurement_source for session in report.sessions}
+    protocols = {session.evidence.measurement_protocol for session in report.sessions}
+    source = "ordinary_execute" if sources == {"ordinary_execute"} else None
+    protocol = (
+        "ordinary-execute-40-pair-combined-v1"
+        if protocols == {"ordinary-execute-20-pair-v1"}
+        else None
+    )
+    first = report.sessions[0]
+    return RuntimeEvidence(
+        verdict=RuntimeVerdict.PASS,
+        query_a_hash=report.query_a_hash,
+        query_b_hash=report.query_b_hash,
+        paired_samples=samples,
+        median_ratio=float(median(ratios)),
+        median_delta_ms=float(median(slow - fast for fast, slow in oriented)),
+        ci_ratio_low=ci.low,
+        ci_ratio_high=ci.high,
+        direction_consistency=sum(ratio > 1.0 for ratio in ratios) / len(ratios),
+        relative_mad=relative_mad(ratios),
+        reason_codes=(),
+        slow_query=slow_query,
+        graph_snapshot_hash=first.graph_fingerprint,
+        dbms_fingerprint=first.dbms_fingerprint,
+        measurement_source=source,
+        measurement_protocol=protocol,
     )
 
 

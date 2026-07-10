@@ -33,6 +33,7 @@ from graph_sym_perf.validation.models import (
 )
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.promotion import promote
+from graph_sym_perf.validation.evidence import combined_runtime_evidence
 
 
 def _original_pair() -> EquivalentQueryPair:
@@ -84,6 +85,8 @@ def _evidence(
         slow_query=slow_query,
         graph_snapshot_hash=pair.graph_snapshot_hash,
         dbms_fingerprint="dbms",
+        measurement_source="ordinary_execute",
+        measurement_protocol="ordinary-execute-20-pair-v1",
     )
 
 
@@ -145,13 +148,17 @@ def _reduction(*, status: ReductionStatus = ReductionStatus.REDUCED_VALID, verdi
     reduced_pair = _reduced_pair()
     final_validation = _report(pair=reduced_pair)
     universe = MinimalityUniverse.recompute(reduced_pair)
+    final_evidence = combined_runtime_evidence(final_validation)
+    assert final_evidence is not None
+    if verdict is not RuntimeVerdict.PASS:
+        final_evidence = replace(final_evidence, verdict=verdict)
     return ReductionReport(
         status,
         original_pair,
         reduced_pair,
         (),
         (),
-        _evidence(pair=reduced_pair, verdict=verdict),
+        final_evidence,
         minimality_proof=MinimalityProof.from_results(
             reduced_pair,
             tuple(

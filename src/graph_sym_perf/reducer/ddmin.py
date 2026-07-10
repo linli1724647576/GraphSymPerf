@@ -111,7 +111,15 @@ class HierarchicalDDMin(Generic[T]):
                     best = proposal.value
                     progressed = True
                     if checkpoint is not None:
-                        checkpoint(best, attempt)
+                        try:
+                            checkpoint(best, attempt)
+                        except OSError as exc:
+                            return DDMinRunResult(
+                                best,
+                                tuple(attempts),
+                                False,
+                                f"checkpoint_error:{type(exc).__name__}",
+                            )
                     break
             if not progressed:
                 return DDMinRunResult(best, tuple(attempts), True, "exhausted")

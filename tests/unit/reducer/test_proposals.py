@@ -84,3 +84,30 @@ def test_graph_setup_reduction_is_explicitly_fail_closed_without_semantic_proof(
 
     assert result.proposals == ()
     assert result.reason == "graph_setup_semantic_proof_unavailable"
+
+
+def test_proposal_regions_ignore_literals_and_handle_single_ast_deletions() -> None:
+    embedded = paired_reduction_proposals(
+        _pair("MATCH (n) WHERE n.text = 'IN [1, 2] {a: 1, b: 2}' AND true RETURN n")
+    )
+    commented = paired_reduction_proposals(
+        _pair("MATCH (n) WHERE true // IN [1, 2] {a: 1, b: 2}\nRETURN n")
+    )
+    parameterized = paired_reduction_proposals(
+        _pair("MATCH (n) WHERE n.id IN $values AND true RETURN n")
+    )
+    single_predicate = paired_reduction_proposals(_pair("MATCH (n) WHERE true RETURN n"))
+    single_list = paired_reduction_proposals(_pair("MATCH (n) WHERE n.id IN [1] AND true RETURN n"))
+
+    assert not any(item.layer in {"literal_item", "list_item"} for item in embedded)
+    assert not any(item.layer in {"literal_item", "list_item"} for item in commented)
+    assert not any(item.layer in {"literal_item", "list_item"} for item in parameterized)
+    assert any(
+        item.layer == "predicate_subtree"
+        and item.candidate.query_a == "MATCH (n) RETURN n"
+        for item in single_predicate
+    )
+    assert any(
+        item.layer == "list_item" and "IN []" in item.candidate.query_a
+        for item in single_list
+    )
