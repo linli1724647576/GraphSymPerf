@@ -46,7 +46,7 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
         truncated = False
         try:
             raw_result = _call_with_timeout(
-                lambda: _run_graph_query(self._graph, query, parameters),
+                lambda: _run_graph_query(self._graph, _bounded_read_query(query, max_rows), parameters),
                 timeout_seconds=timeout_seconds,
                 label=f"FalkorDB {query_kind}",
             )
@@ -223,6 +223,19 @@ def _query_with_params(query: str, parameters: Mapping[str, Any]) -> str:
         return query
     assignments = " ".join(f"{name}={_literal(value)}" for name, value in sorted(parameters.items()))
     return f"CYPHER {assignments} {query}"
+
+
+def _bounded_read_query(query: str, max_rows: int | None) -> str:
+    if max_rows is None:
+        return query
+    stripped = query.strip().rstrip(";").rstrip()
+    final_limit = re.search(r"\bLIMIT\s+(\d+)\s*$", stripped, re.IGNORECASE)
+    if final_limit is not None:
+        bounded = min(int(final_limit.group(1)), max_rows + 1)
+        return stripped[: final_limit.start(1)] + str(bounded)
+    if re.search(r"\bLIMIT\b", stripped, re.IGNORECASE):
+        raise ValueError("cannot safely bound a query with a non-final LIMIT")
+    return f"{stripped}\nLIMIT {max_rows + 1}"
 
 
 def _literal(value: Any) -> str:

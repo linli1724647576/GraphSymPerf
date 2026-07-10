@@ -84,10 +84,7 @@ class LadybugDBAdapter(BaseAdapter):
                 timeout_seconds=timeout_seconds,
                 label=f"LadybugDB {query_kind}",
             )
-            rows = _ladybugdb_rows(result)
-            if max_rows is not None and len(rows) > max_rows:
-                truncated = True
-                rows = rows[: max_rows + 1]
+            rows, truncated = _ladybugdb_rows_bounded(result, max_rows=max_rows)
         except Exception as exc:
             raise _query_execution_error(f"LadybugDB query failed: {exc}", exc) from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
@@ -288,6 +285,35 @@ def _ladybugdb_rows(result: Any) -> tuple[Mapping[str, Any], ...]:
     if rows and isinstance(rows[0], dict):
         return tuple(to_jsonable(row) for row in rows)
     return tuple({"row": to_jsonable(row)} for row in rows)
+
+
+def _ladybugdb_rows_bounded(
+    result: Any,
+    *,
+    max_rows: int | None,
+) -> tuple[tuple[Mapping[str, Any], ...], bool]:
+    if max_rows is None:
+        return _ladybugdb_rows(result), False
+    if isinstance(result, list):
+        result = result[-1] if result else None
+    if result is None:
+        return (), False
+    has_next = getattr(result, "has_next", None)
+    get_next = getattr(result, "get_next", None)
+    get_names = getattr(result, "get_column_names", None)
+    if not callable(has_next) or not callable(get_next) or not callable(get_names):
+        raise RuntimeError("LadybugDB bounded row streaming is unavailable")
+    names = tuple(str(name) for name in get_names())
+    rows: list[Mapping[str, Any]] = []
+    while len(rows) <= max_rows and has_next():
+        raw = get_next()
+        if isinstance(raw, Mapping):
+            rows.append(to_jsonable(raw))
+        elif isinstance(raw, list | tuple):
+            rows.append({names[index] if index < len(names) else f"col{index + 1}": to_jsonable(value) for index, value in enumerate(raw)})
+        else:
+            rows.append({"row": to_jsonable(raw)})
+    return tuple(rows), len(rows) > max_rows
 
 
 def _primary_label(labels: tuple[str, ...]) -> str:

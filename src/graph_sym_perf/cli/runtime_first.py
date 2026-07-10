@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 from graph_sym_perf.experiment import (
@@ -88,12 +87,8 @@ def main(argv: list[str] | None = None) -> int:
         if not path.exists():
             print("missing gate: submit-ready issue payload does not exist")
             return 2
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("stage") != "submit_ready" or payload.get("reduction_status") != "reduced_valid":
-            print("missing gate: stage=submit_ready and reduction_status=reduced_valid are required")
-            return 2
-        Path(args.output).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        return 0
+        print("missing gate: raw JSON cannot prove a typed SubmitReadyIssue; use the typed issue exporter")
+        return 2
     parser.print_help()
     return 2
 

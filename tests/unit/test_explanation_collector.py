@@ -1,19 +1,15 @@
 import pytest
 
 from graph_sym_perf.explanation.collector import collect_explanation
-from graph_sym_perf.validation.models import (
-    DeveloperStatus,
-    EquivalenceEvidence,
-    IssueValidationReport,
-    PipelineStage,
-    SafetyCertificate,
-    SubmitReadyIssue,
-)
+from graph_sym_perf.validation.models import PipelineStage, SubmitReadyIssue
+from graph_sym_perf.validation.promotion import promote
+from tests.unit.validation.test_promotion import _certificate, _duplicate_decision, _reduction, _report
 
 
 def _issue() -> SubmitReadyIssue:
-    report = IssueValidationReport(PipelineStage.VALIDATION_PASSED, EquivalenceEvidence(True, True, ()), (), None, 4.0, "stable", ())
-    return SubmitReadyIssue(PipelineStage.SUBMIT_READY, DeveloperStatus.WAITING_REPLY, report, SafetyCertificate("r", "core", "p", "where"))
+    issue = promote(_report(), reduction_report=_reduction(), certificate=_certificate(), duplicate_decision=_duplicate_decision())
+    assert issue is not None
+    return issue
 
 
 def test_explanation_requires_submit_ready_issue_and_cannot_change_stage() -> None:

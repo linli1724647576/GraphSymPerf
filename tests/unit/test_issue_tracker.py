@@ -124,3 +124,37 @@ def test_issue_tracking_requires_submit_ready_stage_not_profile_support(tmp_path
 
     reportable = json.loads((tmp_path / "reportable_issues.json").read_text(encoding="utf-8"))
     assert reportable["issues"] == []
+
+
+def test_issue_tracking_uses_submit_ready_as_the_only_reportability_stage_gate(tmp_path: Path) -> None:
+    triage_payload = {"items": [{"representative_case_id": "case004", "system": "neo4j"}]}
+    validation_summary = {
+        "results": [
+            {
+                "case_id": "case004",
+                "system": "neo4j",
+                "pipeline_stage": "submit_ready",
+                "profile_supported": False,
+                "plan_changed": False,
+                "pmc_novelty": 0,
+            }
+        ]
+    }
+
+    payload = build_issue_tracking_artifacts(tmp_path, triage_payload, validation_summary)
+
+    assert payload["reportable_count"] == 1
+
+
+def test_reported_issue_count_counts_submitted_not_waiting_submit_ready(tmp_path: Path) -> None:
+    triage_payload = {"items": [{"representative_case_id": "case005", "system": "neo4j"}]}
+    validation_summary = {
+        "results": [{"case_id": "case005", "system": "neo4j", "pipeline_stage": "submit_ready"}]
+    }
+
+    payload = build_issue_tracking_artifacts(tmp_path, triage_payload, validation_summary)
+
+    assert payload["reportable_count"] == 1
+    assert payload["reported_issue_count"] == 0
+    reported = yaml.safe_load((tmp_path / "reported_issues.yaml").read_text(encoding="utf-8"))
+    assert reported["issues"] == []

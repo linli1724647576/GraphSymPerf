@@ -70,7 +70,7 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
             payload = (
                 self._command_payload(query, timeout_seconds=timeout_seconds)
                 if _requires_command_endpoint(query)
-                else self._query(query, parameters, timeout_seconds=timeout_seconds)
+                else self._query(query, parameters, timeout_seconds=timeout_seconds, row_limit=(max_rows + 1 if max_rows is not None else None))
             )
             rows = _arcade_rows(payload)
             if max_rows is not None and len(rows) > max_rows:
@@ -174,11 +174,19 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
         parameters: Mapping[str, Any],
         *,
         timeout_seconds: float | None = None,
+        row_limit: int | None = None,
     ) -> Mapping[str, Any]:
+        request_payload: dict[str, Any] = {
+            "language": "opencypher",
+            "command": query,
+            "params": dict(parameters),
+        }
+        if row_limit is not None:
+            request_payload["limit"] = row_limit
         response = self._request(
             "POST",
             f"/api/v1/query/{self._database}",
-            json={"language": "opencypher", "command": query, "params": dict(parameters)},
+            json=request_payload,
             timeout=timeout_seconds,
         )
         return self._payload_or_error(response)

@@ -32,3 +32,5 @@ class ReductionReport:
     accepted_steps: tuple[ReductionStep, ...]
     rejected_steps: tuple[ReductionStep, ...]
     final_evidence: RuntimeEvidence
+    locally_one_minimal: bool = False
+    final_validation: object | None = None

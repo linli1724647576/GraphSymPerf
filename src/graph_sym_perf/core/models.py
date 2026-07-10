@@ -540,23 +540,12 @@ def to_jsonable(value: Any) -> Any:
         return value.value
     if isinstance(value, Path):
         return str(value)
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
+    if isinstance(value, datetime):
+        return {"__typed_value__": "datetime", "value": value.isoformat()}
+    if isinstance(value, date):
+        return {"__typed_value__": "date", "value": value.isoformat()}
     if isinstance(value, bytes):
-        return value.hex()
-    if isinstance(value, Mapping):
-        return {str(key): to_jsonable(item) for key, item in value.items()}
-    if isinstance(value, tuple | list):
-        return [to_jsonable(item) for item in value]
-    if isinstance(value, set | frozenset):
-        return sorted(to_jsonable(item) for item in value)
-    if hasattr(value, "labels") and hasattr(value, "items"):
-        return {
-            "__graph_type__": "node",
-            "element_id": str(getattr(value, "element_id", getattr(value, "id", ""))),
-            "labels": sorted(str(label) for label in getattr(value, "labels", ())),
-            "properties": {str(key): to_jsonable(item) for key, item in dict(value.items()).items()},
-        }
+        return {"__typed_value__": "bytes", "value": value.hex()}
     if hasattr(value, "type") and hasattr(value, "items") and (
         hasattr(value, "start_node") or hasattr(value, "start_node_element_id")
     ):
@@ -568,12 +557,25 @@ def to_jsonable(value: Any) -> Any:
             "end": str(getattr(value, "end_node_element_id", getattr(getattr(value, "end_node", None), "element_id", ""))),
             "properties": {str(key): to_jsonable(item) for key, item in dict(value.items()).items()},
         }
+    if hasattr(value, "labels") and hasattr(value, "items"):
+        return {
+            "__graph_type__": "node",
+            "element_id": str(getattr(value, "element_id", getattr(value, "id", ""))),
+            "labels": sorted(str(label) for label in getattr(value, "labels", ())),
+            "properties": {str(key): to_jsonable(item) for key, item in dict(value.items()).items()},
+        }
     if hasattr(value, "nodes") and hasattr(value, "relationships"):
         return {
             "__graph_type__": "path",
             "nodes": tuple(to_jsonable(node) for node in getattr(value, "nodes", ())),
             "relationships": tuple(to_jsonable(rel) for rel in getattr(value, "relationships", ())),
         }
+    if isinstance(value, Mapping):
+        return {str(key): to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [to_jsonable(item) for item in value]
+    if isinstance(value, set | frozenset):
+        return sorted(to_jsonable(item) for item in value)
     if hasattr(value, "isoformat"):
         try:
             return value.isoformat()

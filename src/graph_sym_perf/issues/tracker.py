@@ -61,6 +61,7 @@ def build_issue_tracking_artifacts(
         )
         known_issue_url = _known_issue_url(triage_item, validation)
         status = "reported" if known_issue_url else _external_issue_status(search_payload)
+        pipeline_stage = PipelineStage.SUBMITTED if known_issue_url else PipelineStage.SUBMIT_READY
         reducer = validation.get("reducer") or {}
         entry = {
             "case_id": case_id,
@@ -70,7 +71,7 @@ def build_issue_tracking_artifacts(
             "unique_issue_key": triage_item.get("unique_issue_key"),
             "status": status,
             "developer_status": _developer_status(triage_item, validation),
-            "pipeline_stage": _stage_value(validation.get("pipeline_stage")),
+            "pipeline_stage": pipeline_stage.value,
             "equivalence_passed": bool(validation.get("equivalence_passed")),
             "runtime_supported": _stage_value(validation.get("pipeline_stage")) == PipelineStage.SUBMIT_READY.value,
             "root_cause_labels": tuple(triage_item.get("root_cause_labels") or ()),
@@ -92,8 +93,17 @@ def build_issue_tracking_artifacts(
         reportable.append(entry)
         status_rows.append(_status_row(entry))
 
-    existing_reported = _load_reported_issues(root / "reported_issues.yaml")
-    merged_reported = _merge_reported_issues(existing_reported, reportable, checked_at=checked_at)
+    existing_reported = [
+        item
+        for item in _load_reported_issues(root / "reported_issues.yaml")
+        if _stage_value(item.get("pipeline_stage")) == PipelineStage.SUBMITTED.value
+    ]
+    submitted = [
+        item
+        for item in reportable
+        if _stage_value(item.get("pipeline_stage")) == PipelineStage.SUBMITTED.value
+    ]
+    merged_reported = _merge_reported_issues(existing_reported, submitted, checked_at=checked_at)
     _write_json(root / "reportable_issues.json", {"generated_at": checked_at, "issue_search": issue_search, "issues": reportable})
     _write_yaml(root / "reported_issues.yaml", {"issues": merged_reported})
     _write_csv(root / "reported_issues.csv", merged_reported)
@@ -101,7 +111,10 @@ def build_issue_tracking_artifacts(
     _write_feedback_summary(root / "developer_feedback_summary.md", merged_reported)
     return {
         "reportable_count": len(reportable),
-        "reported_issue_count": len(merged_reported),
+        "reported_issue_count": sum(
+            _stage_value(item.get("pipeline_stage")) == PipelineStage.SUBMITTED.value
+            for item in merged_reported
+        ),
         "issue_search_enabled": issue_search,
         "artifacts": {
             "reportable_issues": "reportable_issues.json",
@@ -216,7 +229,7 @@ def _github_issue_payload(item: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _is_reportable(validation: Mapping[str, Any]) -> bool:
-    return bool(validation) and _stage_value(validation.get("pipeline_stage")) == PipelineStage.SUBMIT_READY.value and str(validation.get("reduction_status") or "") == "reduced_valid"
+    return bool(validation) and _stage_value(validation.get("pipeline_stage")) == PipelineStage.SUBMIT_READY.value
 
 
 def _external_issue_status(search_payload: Mapping[str, Any]) -> str:

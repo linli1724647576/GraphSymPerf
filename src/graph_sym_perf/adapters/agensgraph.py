@@ -84,10 +84,13 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
                 self._set_graph_path(cursor)
                 cursor.execute(cypher)
                 aliases = tuple(item.name for item in (cursor.description or ()))
-                rows_raw = cursor.fetchall() if cursor.description else ()
-                if max_rows is not None and len(rows_raw) > max_rows:
-                    truncated = True
-                    rows_raw = rows_raw[: max_rows + 1]
+                if not cursor.description:
+                    rows_raw = ()
+                elif max_rows is None:
+                    rows_raw = cursor.fetchall()
+                else:
+                    rows_raw = tuple(cursor.fetchmany(max_rows + 1))
+                    truncated = len(rows_raw) > max_rows
             self._conn.commit()
         except Exception as exc:
             self._conn.rollback()
