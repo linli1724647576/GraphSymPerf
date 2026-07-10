@@ -34,7 +34,7 @@ def load_experiment_spec(path: str | Path) -> ExperimentSpec:
 
     experiment = _mapping(raw.get("experiment"), "experiment")
     _only_keys(experiment, {"name", "seed", "feedback_observation_days"}, "experiment")
-    name = _nonempty_string(experiment.get("name"), "experiment.name")
+    experiment_name = _nonempty_string(experiment.get("name"), "experiment.name")
     seed = _positive_int(experiment.get("seed"), "experiment.seed", allow_zero=True)
     feedback_observation_days = _positive_int(experiment.get("feedback_observation_days"), "experiment.feedback_observation_days")
 
@@ -88,7 +88,7 @@ def load_experiment_spec(path: str | Path) -> ExperimentSpec:
     systems = _load_systems(source_path.parent / "systems.yaml", targets)
     return ExperimentSpec(
         schema_version=2,
-        name=name,
+        name=experiment_name,
         seed=seed,
         feedback_observation_days=feedback_observation_days,
         targets=targets,

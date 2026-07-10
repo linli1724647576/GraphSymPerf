@@ -12,6 +12,7 @@ def test_runtime_first_experiment_spec_is_the_exact_seven_by_sixteen_matrix() ->
     spec = load_experiment_spec("config/experiment.yaml")
 
     assert spec.schema_version == 2
+    assert spec.name == "main_runtime_first"
     assert spec.targets == (
         TargetSystem.NEO4J,
         TargetSystem.MEMGRAPH,

@@ -40,7 +40,8 @@ class ShardSupervisor:
                     self._event(task, ShardState.FAILED_FINAL, attempt, str(exc))
                     failed.append(task)
                     break
-                if int(result.get("accepted_pairs", 0)) < 1000:
+                required_pairs = int(getattr(task, "accepted_query_pairs", 1000))
+                if int(result.get("accepted_pairs", 0)) < required_pairs:
                     self._event(task, ShardState.INCOMPLETE, attempt)
                     incomplete.append(task)
                 else:

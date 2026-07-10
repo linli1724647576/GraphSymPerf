@@ -16,3 +16,12 @@ def test_retryable_shard_failure_does_not_stop_other_tasks(tmp_path) -> None:
         return {"accepted_pairs": 1000}
     summary = ShardSupervisor(tmp_path, retry_limit=1).run(plan, worker)
     assert summary.completed == ("bad", "good")
+
+
+def test_supervisor_uses_task_specific_accepted_pair_target(tmp_path) -> None:
+    class Task:
+        accepted_query_pairs = 3
+
+    plan = RunPlan("test", 2, (Task(),), 3, SourceRevision(None, None, None))  # type: ignore[arg-type]
+    summary = ShardSupervisor(tmp_path).run(plan, lambda task: {"accepted_pairs": 3})
+    assert len(summary.completed) == 1
