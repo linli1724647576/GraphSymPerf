@@ -16,3 +16,12 @@ def test_two_fresh_sessions_are_required_for_validation_passed() -> None:
     report = IssueValidator().validate(pair, FakeIndependentRunner(), discovery_ratio=5.0)
     assert report.stage.value == "validation_passed"
     assert report.validated_ratio == 4.0
+
+
+def test_validation_rejects_a_ratio_that_is_within_aa_noise_floor() -> None:
+    pair = EquivalentQueryPair("MATCH (n) RETURN n ORDER BY n", "MATCH (n) RETURN n ORDER BY n", {}, "graph", "dbms")
+
+    report = IssueValidator().validate(pair, FakeIndependentRunner(), discovery_ratio=5.0, noise_floor_ms=40.0)
+
+    assert report.stage.value == "rejected"
+    assert "absolute_delta_within_noise" in report.reason_codes

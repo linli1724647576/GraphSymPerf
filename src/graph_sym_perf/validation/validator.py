@@ -7,8 +7,6 @@ candidate can advance.
 
 from __future__ import annotations
 
-from dataclasses import replace
-from statistics import median
 from typing import Protocol
 
 from graph_sym_perf.equivalence.purity import assess_query_purity
@@ -27,7 +25,17 @@ class IndependentSessionRunner(Protocol):
 
 
 class IssueValidator:
-    def validate(self, pair: EquivalentQueryPair, runner: IndependentSessionRunner, *, discovery_ratio: float | None) -> IssueValidationReport:
+    def validate(
+        self,
+        pair: EquivalentQueryPair,
+        runner: IndependentSessionRunner,
+        *,
+        discovery_ratio: float | None,
+        noise_floor_ms: float = 0.0,
+        min_ratio: float = 3.0,
+        min_ci_low: float = 2.0,
+        timer_resolution_ms: float = 0.001,
+    ) -> IssueValidationReport:
         for query in (pair.query_a, pair.query_b):
             purity = assess_query_purity(query)
             if not purity.safe:
@@ -47,6 +55,12 @@ class IssueValidator:
         directions = tuple(1 if (evidence.median_delta_ms or 0) > 0 else -1 for evidence in evidences)
         ratio = min(evidence.median_ratio or 0 for evidence in evidences)
         stable = "stable" if discovery_ratio and ratio >= discovery_ratio * 0.5 else "shrunk_but_real"
-        if directions[0] != directions[1] or ratio < 3.0 or any((evidence.ci_ratio_low or 0) < 2.0 for evidence in evidences):
-            return IssueValidationReport(PipelineStage.REJECTED, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, ratio, "unstable", ("runtime_gate_failed",))
+        absolute_floor = max(noise_floor_ms, 10 * timer_resolution_ms)
+        reasons: list[str] = []
+        if directions[0] != directions[1] or ratio < min_ratio or any((evidence.ci_ratio_low or 0) < min_ci_low for evidence in evidences):
+            reasons.append("runtime_gate_failed")
+        if any((evidence.median_delta_ms or 0) <= absolute_floor for evidence in evidences):
+            reasons.append("absolute_delta_within_noise")
+        if reasons:
+            return IssueValidationReport(PipelineStage.REJECTED, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, ratio, "unstable", tuple(reasons))
         return IssueValidationReport(PipelineStage.VALIDATION_PASSED, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, ratio, stable, ())
