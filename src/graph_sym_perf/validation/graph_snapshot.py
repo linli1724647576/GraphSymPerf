@@ -75,23 +75,27 @@ def _expected_graph_shape(snapshot: GraphSnapshot) -> tuple[object, ...]:
     return (
         tuple(
             sorted(
-                (
+                ((
                     canonical_value(node.node_id),
                     tuple(sorted(node.labels)),
                     canonical_value(node.properties),
                 )
                 for node in graph.nodes
+                ),
+                key=repr,
             )
         ),
         tuple(
             sorted(
-                (
+                ((
                     canonical_value(relationship.start_id),
                     canonical_value(relationship.end_id),
                     relationship.relationship_type,
                     canonical_value(relationship.properties),
                 )
                 for relationship in graph.relationships
+                ),
+                key=repr,
             )
         ),
     )
@@ -101,23 +105,27 @@ def _actual_graph_shape(actual: dict[str, object]) -> tuple[object, ...]:
     return (
         tuple(
             sorted(
-                (
+                ((
                     canonical_value(row["node_id"]),
                     tuple(sorted(str(label) for label in row["labels"])),
                     canonical_value(row["properties"]),
                 )
                 for row in tuple(actual["validation_graph_nodes"])
+                ),
+                key=repr,
             )
         ),
         tuple(
             sorted(
-                (
+                ((
                     canonical_value(row["start_id"]),
                     canonical_value(row["end_id"]),
                     str(row["relationship_type"]),
                     canonical_value(row["properties"]),
                 )
                 for row in tuple(actual["validation_graph_relationships"])
+                ),
+                key=repr,
             )
         ),
     )

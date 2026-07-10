@@ -69,6 +69,14 @@ class ValidationPolicy:
 
 
 @dataclass(frozen=True)
+class SafetyCertificate:
+    rule_id: str
+    tier: str
+    proof_version: str
+    site_class: str
+
+
+@dataclass(frozen=True)
 class CandidateBundle:
     """Discovery candidate with every validation input bound by content hash."""
 
@@ -79,7 +87,9 @@ class CandidateBundle:
     discovery_slow_query: str
     discovery_ratio: float | None
     validation_policy: ValidationPolicy
+    certificate: SafetyCertificate
     content_hashes: Mapping[str, str]
+    candidate_hash: str
 
     @classmethod
     def create(
@@ -91,6 +101,7 @@ class CandidateBundle:
         resolved_config: Mapping[str, object],
         discovery_slow_query: str,
         discovery_ratio: float | None,
+        certificate: SafetyCertificate,
         validation_policy: ValidationPolicy | None = None,
     ) -> "CandidateBundle":
         frozen_pair = replace(pair, parameters=FrozenMapping.from_mapping(pair.parameters))
@@ -107,6 +118,11 @@ class CandidateBundle:
             "discovery_slow_query": discovery_slow_query,
             "discovery_ratio": discovery_ratio,
             "validation_policy": bound_policy,
+            "certificate": certificate,
+        }
+        hashes = {
+            name: query_text_hash(value) if name in {"query_a", "query_b"} else _content_hash(value)
+            for name, value in content.items()
         }
         return cls(
             pair=frozen_pair,
@@ -116,7 +132,9 @@ class CandidateBundle:
             discovery_slow_query=discovery_slow_query,
             discovery_ratio=discovery_ratio,
             validation_policy=bound_policy,
-            content_hashes=FrozenMapping.from_mapping({name: _content_hash(value) for name, value in content.items()}),
+            certificate=certificate,
+            content_hashes=FrozenMapping.from_mapping(hashes),
+            candidate_hash=_content_hash(hashes),
         )
 
     def verify_integrity(self) -> tuple[str, ...]:
@@ -131,12 +149,16 @@ class CandidateBundle:
             "discovery_slow_query": self.discovery_slow_query,
             "discovery_ratio": self.discovery_ratio,
             "validation_policy": self.validation_policy,
+            "certificate": self.certificate,
         }
         reasons = [
             f"{name}_hash_mismatch"
             for name, value in current.items()
-            if self.content_hashes.get(name) != _content_hash(value)
+            if self.content_hashes.get(name)
+            != (query_text_hash(value) if name in {"query_a", "query_b"} else _content_hash(value))
         ]
+        if self.candidate_hash != _content_hash(dict(self.content_hashes)):
+            reasons.append("candidate_hash_mismatch")
         if self.graph_snapshot.content_hash != GraphSnapshot.from_statements(self.graph_snapshot.statements).content_hash:
             reasons.append("graph_snapshot_content_hash_mismatch")
         if self.pair.graph_snapshot_hash != self.graph_snapshot.content_hash:
@@ -153,11 +175,23 @@ class CandidateBundle:
             reasons.append("resolved_config_unavailable")
         if self.discovery_slow_query not in {"a", "b"}:
             reasons.append("invalid_discovery_slow_query")
+        if not self.certificate.rule_id.strip() or not self.certificate.proof_version.strip():
+            reasons.append("certificate_identity_unavailable")
         return tuple(reasons)
 
 
 def _content_hash(value: object) -> str:
     return hashlib.sha256(stable_json_dumps(value).encode("utf-8")).hexdigest()
+
+
+def query_text_hash(value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError("query hash requires text")
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def safety_certificate_hash(certificate: SafetyCertificate) -> str:
+    return _content_hash(certificate)
 
 
 def _freeze_value(value: object) -> object:
@@ -170,25 +204,76 @@ def _freeze_value(value: object) -> object:
     return value
 
 
-@dataclass(frozen=True)
-class SafetyCertificate:
-    rule_id: str
-    tier: str
-    proof_version: str
-    site_class: str
+_DUPLICATE_CLEARANCE_TOKEN = object()
 
 
-@dataclass(frozen=True)
-class DuplicateDecision:
+@dataclass(frozen=True, init=False)
+class DuplicateClearance:
+    issue_id: str
     possible_duplicate: bool
-    manually_resolved: bool
-    evidence_url: str | None = None
+    cluster_members: tuple[str, ...]
+    cluster_version_hash: str
+    evidence_url: str | None
+    registry_signature: str
+    _active: bool
 
-    @property
-    def cleared(self) -> bool:
-        return not self.possible_duplicate or (
-            self.manually_resolved and bool(self.evidence_url and self.evidence_url.strip())
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("DuplicateClearance can only be issued by IssueRegistry")
+
+    @classmethod
+    def _from_registry(
+        cls,
+        *,
+        issue_id: str,
+        possible_duplicate: bool,
+        cluster_members: tuple[str, ...],
+        cluster_version_hash: str,
+        evidence_url: str | None,
+        token: object,
+    ) -> "DuplicateClearance":
+        if token is not _DUPLICATE_CLEARANCE_TOKEN:
+            raise TypeError("DuplicateClearance can only be issued by IssueRegistry")
+        instance = object.__new__(cls)
+        fields = {
+            "issue_id": issue_id,
+            "possible_duplicate": possible_duplicate,
+            "cluster_members": tuple(sorted(cluster_members)),
+            "cluster_version_hash": cluster_version_hash,
+            "evidence_url": evidence_url,
+        }
+        for name, value in fields.items():
+            object.__setattr__(instance, name, value)
+        object.__setattr__(instance, "registry_signature", _duplicate_signature(fields))
+        object.__setattr__(instance, "_active", True)
+        return instance
+
+    def verify(self) -> bool:
+        fields = {
+            "issue_id": self.issue_id,
+            "possible_duplicate": self.possible_duplicate,
+            "cluster_members": self.cluster_members,
+            "cluster_version_hash": self.cluster_version_hash,
+            "evidence_url": self.evidence_url,
+        }
+        return bool(
+            self._active
+            and self.issue_id in self.cluster_members
+            and self.cluster_version_hash
+            and self.registry_signature == _duplicate_signature(fields)
+            and (
+                not self.possible_duplicate
+                or bool(self.evidence_url and self.evidence_url.strip())
+            )
         )
+
+    def _invalidate(self) -> None:
+        object.__setattr__(self, "_active", False)
+
+
+def _duplicate_signature(fields: Mapping[str, object]) -> str:
+    return hashlib.sha256(
+        ("graph-sym-perf-duplicate-clearance-v1\0" + stable_json_dumps(fields)).encode("utf-8")
+    ).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -249,6 +334,14 @@ class IssueValidationReport:
     magnitude_stability: str
     reason_codes: tuple[str, ...]
     metadata: Mapping[str, object] = field(default_factory=dict)
+    candidate_hash: str = ""
+    query_a_hash: str = ""
+    query_b_hash: str = ""
+    policy_hash: str = ""
+    certificate_hash: str = ""
+    rule_id: str = ""
+    proof_version: str = ""
+    validation_protocol: str = ""
 
 
 _PROMOTION_TOKEN = object()
@@ -261,7 +354,7 @@ class SubmitReadyIssue:
     validation: IssueValidationReport
     reduction: ReductionReport
     certificate: SafetyCertificate
-    duplicate_decision: DuplicateDecision
+    duplicate_clearance: DuplicateClearance
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError("SubmitReadyIssue can only be constructed by promote()")
@@ -272,7 +365,7 @@ class SubmitReadyIssue:
         validation: IssueValidationReport,
         reduction: ReductionReport,
         certificate: SafetyCertificate,
-        duplicate_decision: DuplicateDecision,
+        duplicate_clearance: DuplicateClearance,
         *,
         token: object,
     ) -> "SubmitReadyIssue":
@@ -284,7 +377,7 @@ class SubmitReadyIssue:
         object.__setattr__(instance, "validation", validation)
         object.__setattr__(instance, "reduction", reduction)
         object.__setattr__(instance, "certificate", certificate)
-        object.__setattr__(instance, "duplicate_decision", duplicate_decision)
+        object.__setattr__(instance, "duplicate_clearance", duplicate_clearance)
         return instance
 
 

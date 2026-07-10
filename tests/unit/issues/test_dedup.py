@@ -46,6 +46,24 @@ def test_exact_pair_hash_normalizes_variables_but_preserves_constants_and_labels
     assert canonical_reduced_pair_hash(*first) != canonical_reduced_pair_hash(*renamed)
 
 
+def test_exact_pair_hash_alpha_renames_path_node_and_relationship_variables() -> None:
+    first = (
+        "MATCH p=(n:Person)-[r:KNOWS]->(m:Person) RETURN p, r, n, m",
+        "MATCH p=(n:Person)-[r:KNOWS]->(m:Person) WHERE true RETURN p, r, n, m",
+    )
+    renamed = (
+        "MATCH route=(left:Person)-[edge:KNOWS]->(right:Person) RETURN route, edge, left, right",
+        "MATCH route=(left:Person)-[edge:KNOWS]->(right:Person) WHERE true RETURN route, edge, left, right",
+    )
+    changed_type = (
+        "MATCH route=(left:Person)-[edge:LIKES]->(right:Person) RETURN route, edge, left, right",
+        "MATCH route=(left:Person)-[edge:LIKES]->(right:Person) WHERE true RETURN route, edge, left, right",
+    )
+
+    assert canonical_reduced_pair_hash(*first) == canonical_reduced_pair_hash(*renamed)
+    assert canonical_reduced_pair_hash(*first) != canonical_reduced_pair_hash(*changed_type)
+
+
 def test_same_normalized_pair_is_one_report_within_a_dbms_but_not_across_dbms() -> None:
     first = _record("one", "MATCH (n:A) RETURN n", "MATCH (n:A) WHERE true RETURN n")
     renamed = _record("two", "MATCH (x:A) RETURN x", "MATCH (x:A) WHERE true RETURN x")
@@ -75,12 +93,41 @@ def test_possible_duplicate_cluster_requires_manual_resolution_before_submission
 
     assert registry.possible_duplicate_ids("two") == ("one",)
     assert registry.possible_duplicate_ids("one") == ("two",)
-    assert not registry.can_submit("one")
-    assert not registry.can_submit("two")
+    assert not registry.can_submit("one", None)
+    assert not registry.can_submit("two", None)
 
     registry.resolve_possible_duplicate("two", distinct=True, evidence_url="https://example.test/review/2")
 
-    assert registry.can_submit("two")
+    clearance = registry.duplicate_clearance("two")
+    assert clearance is not None
+    assert registry.can_submit("two", clearance)
+
+
+def test_adding_a_cluster_member_invalidates_previously_issued_clearance() -> None:
+    registry = IssueRegistry()
+    registry.record(_record("one", "MATCH (n:A) RETURN n", "MATCH (n:A) WHERE true RETURN n"))
+    registry.record(
+        _record(
+            "two",
+            "MATCH (n:A)-[:R]->(m) RETURN n",
+            "MATCH (n:A)-[:R]->(m) WHERE true RETURN n",
+        )
+    )
+    registry.resolve_possible_duplicate("two", distinct=True, evidence_url="https://example.test/review/2")
+    clearance = registry.duplicate_clearance("two")
+    assert clearance is not None and registry.can_submit("two", clearance)
+
+    registry.record(
+        _record(
+            "three",
+            "MATCH (n:A)-[:S]->(m) RETURN n",
+            "MATCH (n:A)-[:S]->(m) WHERE true RETURN n",
+        )
+    )
+
+    assert not clearance.verify()
+    assert not registry.can_submit("two", clearance)
+    assert registry.duplicate_clearance("two") is None
 
 
 def test_bug_family_key_groups_cross_dbms_reports_without_collapsing_them() -> None:

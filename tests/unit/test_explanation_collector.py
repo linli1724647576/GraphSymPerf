@@ -3,11 +3,11 @@ import pytest
 from graph_sym_perf.explanation.collector import collect_explanation
 from graph_sym_perf.validation.models import PipelineStage, SubmitReadyIssue
 from graph_sym_perf.validation.promotion import promote
-from tests.unit.validation.test_promotion import _certificate, _duplicate_decision, _reduction, _report
+from tests.unit.validation.test_promotion import _certificate, _duplicate_clearance, _reduction, _report
 
 
 def _issue() -> SubmitReadyIssue:
-    issue = promote(_report(), reduction_report=_reduction(), certificate=_certificate(), duplicate_decision=_duplicate_decision())
+    issue = promote(_report(), reduction_report=_reduction(), certificate=_certificate(), duplicate_clearance=_duplicate_clearance())
     assert issue is not None
     return issue
 

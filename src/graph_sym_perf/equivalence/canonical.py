@@ -1,10 +1,21 @@
-"""Typed canonical values: never stringify results for equivalence."""
+"""Collision-free typed canonical values for equivalence checks."""
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
+
+from graph_sym_perf.core import (
+    MissingValue,
+    TypedBytes,
+    TypedNode,
+    TypedPath,
+    TypedRelationship,
+    TypedTemporal,
+)
 
 
 class NonFiniteResultValue(ValueError):
@@ -15,62 +26,86 @@ class UnsupportedTypedResultValue(ValueError):
     pass
 
 
-def canonical_value(value: Any) -> tuple[Any, ...]:
+class CanonicalKind(str, Enum):
+    NULL = "null"
+    BOOL = "bool"
+    INT = "int"
+    FLOAT = "float"
+    STRING = "string"
+    LIST = "list"
+    MAP = "map"
+    NODE = "node"
+    RELATIONSHIP = "relationship"
+    PATH = "path"
+    TEMPORAL = "temporal"
+    BYTES = "bytes"
+    MISSING = "missing"
+
+
+@dataclass(frozen=True)
+class CanonicalValue:
+    kind: CanonicalKind
+    payload: tuple[object, ...] = ()
+
+
+def canonical_value(value: Any) -> CanonicalValue:
     if value is None:
-        return ("null",)
+        return CanonicalValue(CanonicalKind.NULL)
+    if isinstance(value, MissingValue):
+        return CanonicalValue(CanonicalKind.MISSING)
     if isinstance(value, bool):
-        return ("bool", value)
+        return CanonicalValue(CanonicalKind.BOOL, (value,))
     if isinstance(value, int):
-        return ("int", value)
+        return CanonicalValue(CanonicalKind.INT, (value,))
     if isinstance(value, float):
         if not math.isfinite(value):
             raise NonFiniteResultValue("typed result contains NaN or infinity")
-        return ("float", value)
+        return CanonicalValue(CanonicalKind.FLOAT, (value,))
     if isinstance(value, str):
-        return ("str", value)
+        return CanonicalValue(CanonicalKind.STRING, (value,))
+    if isinstance(value, TypedBytes):
+        return CanonicalValue(CanonicalKind.BYTES, (value.value,))
+    if isinstance(value, TypedTemporal):
+        return CanonicalValue(CanonicalKind.TEMPORAL, (value.kind.value, value.iso_value))
+    if isinstance(value, TypedNode):
+        return CanonicalValue(
+            CanonicalKind.NODE,
+            (value.element_id, value.labels, tuple((key, canonical_value(item)) for key, item in value.properties)),
+        )
+    if isinstance(value, TypedRelationship):
+        return CanonicalValue(
+            CanonicalKind.RELATIONSHIP,
+            (
+                value.element_id,
+                value.relationship_type,
+                value.start_element_id,
+                value.end_element_id,
+                tuple((key, canonical_value(item)) for key, item in value.properties),
+            ),
+        )
+    if isinstance(value, TypedPath):
+        return CanonicalValue(
+            CanonicalKind.PATH,
+            (
+                tuple(canonical_value(node) for node in value.nodes),
+                tuple(canonical_value(rel) for rel in value.relationships),
+            ),
+        )
     if isinstance(value, list | tuple):
-        return ("list", tuple(canonical_value(item) for item in value))
-    if _is_graph_relationship(value):
-        return (
-            "relationship",
-            str(getattr(value, "element_id", getattr(value, "id", ""))),
-            str(getattr(value, "type", "")),
-            str(getattr(value, "start_node_element_id", "")),
-            str(getattr(value, "end_node_element_id", "")),
-            tuple(sorted((str(key), canonical_value(item)) for key, item in value.items())),
-        )
-    if _is_graph_node(value):
-        return (
-            "node",
-            str(getattr(value, "element_id", getattr(value, "id", ""))),
-            tuple(sorted(str(label) for label in getattr(value, "labels", ()))),
-            tuple(sorted((str(key), canonical_value(item)) for key, item in value.items())),
-        )
-    if isinstance(value, Mapping) and value.get("__graph_type__") in {"node", "relationship", "path"}:
-        graph_type = str(value["__graph_type__"])
-        return (graph_type, tuple(sorted((str(key), canonical_value(item)) for key, item in value.items() if key != "__graph_type__")))
-    if isinstance(value, Mapping) and value.get("__typed_value__") in {"date", "datetime", "bytes"}:
-        return ("typed", str(value["__typed_value__"]), canonical_value(value.get("value")))
+        return CanonicalValue(CanonicalKind.LIST, tuple(canonical_value(item) for item in value))
     if isinstance(value, Mapping):
-        return ("map", tuple(sorted((str(key), canonical_value(item)) for key, item in value.items())))
-    raise UnsupportedTypedResultValue(f"unsupported typed result value: {type(value).__module__}.{type(value).__qualname__}")
+        return CanonicalValue(
+            CanonicalKind.MAP,
+            tuple(sorted((str(key), canonical_value(item)) for key, item in value.items())),
+        )
+    raise UnsupportedTypedResultValue(
+        f"unsupported typed result value: {type(value).__module__}.{type(value).__qualname__}"
+    )
 
 
 def canonical_row(row: Any) -> tuple[Any, ...]:
-    if isinstance(row, tuple):
+    if isinstance(row, tuple | list):
         return tuple(canonical_value(value) for value in row)
-    if isinstance(row, list):
-        return tuple(canonical_value(value) for value in row)
-    if isinstance(row, dict):
+    if isinstance(row, Mapping):
         return tuple(sorted((str(key), canonical_value(value)) for key, value in row.items()))
     return (canonical_value(row),)
-
-
-def _is_graph_node(value: Any) -> bool:
-    return hasattr(value, "labels") and hasattr(value, "items")
-
-
-def _is_graph_relationship(value: Any) -> bool:
-    return hasattr(value, "type") and hasattr(value, "items") and (
-        hasattr(value, "start_node") or hasattr(value, "start_node_element_id")
-    )

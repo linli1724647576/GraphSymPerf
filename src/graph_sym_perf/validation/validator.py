@@ -46,7 +46,7 @@ class IssueValidator:
         discovery_ratio = candidate.discovery_ratio
         integrity_reasons = candidate.verify_integrity()
         if integrity_reasons:
-            return IssueValidationReport(
+            return _bound_report(candidate,
                 PipelineStage.INVALID,
                 EquivalenceEvidence(False, False, integrity_reasons),
                 (),
@@ -61,7 +61,7 @@ class IssueValidator:
         for query in (pair.query_a, pair.query_b):
             purity = assess_query_purity(query, volatile_functions=volatile_functions)
             if not purity.safe:
-                return IssueValidationReport(PipelineStage.REJECTED, EquivalenceEvidence(False, False, purity.reason_codes), (), discovery_ratio, None, "unvalidated", purity.reason_codes)
+                return _bound_report(candidate, PipelineStage.REJECTED, EquivalenceEvidence(False, False, purity.reason_codes), (), discovery_ratio, None, "unvalidated", purity.reason_codes)
         run_options = {
             "expected_slow_query": candidate.discovery_slow_query,
             "noise_floor_ms": policy.noise_floor_ms,
@@ -71,14 +71,14 @@ class IssueValidator:
         second_equivalence, second = runner.run_session(candidate, 2, **run_options)
         sessions = (first, second)
         if any(session.lifecycle is None or not session.lifecycle.complete for session in sessions):
-            return IssueValidationReport(PipelineStage.INVALID, EquivalenceEvidence(False, False, ("session_lifecycle_incomplete",)), sessions, discovery_ratio, None, "unstable", ("session_lifecycle_incomplete",))
+            return _bound_report(candidate, PipelineStage.INVALID, EquivalenceEvidence(False, False, ("session_lifecycle_incomplete",)), sessions, discovery_ratio, None, "unstable", ("session_lifecycle_incomplete",))
         connection_ids = tuple(session.lifecycle.connection_id for session in sessions if session.lifecycle is not None)
         if (
             first.session_id == second.session_id
             or first.process_id == second.process_id
             or len(set(connection_ids)) != 2
         ):
-            return IssueValidationReport(PipelineStage.INVALID, EquivalenceEvidence(False, False, ("sessions_not_independent",)), sessions, discovery_ratio, None, "unstable", ("sessions_not_independent",))
+            return _bound_report(candidate, PipelineStage.INVALID, EquivalenceEvidence(False, False, ("sessions_not_independent",)), sessions, discovery_ratio, None, "unstable", ("sessions_not_independent",))
         if any(not equivalence.equivalent or not equivalence.complete_result for equivalence in (first_equivalence, second_equivalence)):
             equivalence_reasons = tuple(
                 dict.fromkeys(
@@ -87,7 +87,7 @@ class IssueValidator:
                     for reason in equivalence.reason_codes
                 )
             ) or ("equivalence_failed",)
-            return IssueValidationReport(
+            return _bound_report(candidate,
                 PipelineStage.REJECTED,
                 EquivalenceEvidence(False, False, equivalence_reasons),
                 sessions,
@@ -101,13 +101,15 @@ class IssueValidator:
             or session.dbms_fingerprint != pair.dbms_fingerprint
             or session.evidence.graph_snapshot_hash != pair.graph_snapshot_hash
             or session.evidence.dbms_fingerprint != pair.dbms_fingerprint
+            or session.evidence.query_a_hash != candidate.content_hashes["query_a"]
+            or session.evidence.query_b_hash != candidate.content_hashes["query_b"]
             or session.health_event
             for session in sessions
         ):
-            return IssueValidationReport(PipelineStage.REJECTED, EquivalenceEvidence(False, False, ("session_fingerprint_or_health_failure",)), sessions, discovery_ratio, None, "unvalidated", ("session_fingerprint_or_health_failure",))
+            return _bound_report(candidate, PipelineStage.REJECTED, EquivalenceEvidence(False, False, ("session_fingerprint_or_health_failure",)), sessions, discovery_ratio, None, "unvalidated", ("session_fingerprint_or_health_failure",))
         evidences = tuple(session.evidence for session in sessions)
         if any(not _eligible_for_combined_gate(evidence) for evidence in evidences):
-            return IssueValidationReport(PipelineStage.INCONCLUSIVE, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, None, "unstable", ("runtime_inconclusive",))
+            return _bound_report(candidate, PipelineStage.INCONCLUSIVE, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, None, "unstable", ("runtime_inconclusive",))
         slow_queries = tuple(evidence.slow_query for evidence in evidences)
         reasons: list[str] = []
         if (
@@ -120,7 +122,7 @@ class IssueValidator:
             reasons.append("invalid_measurement_protocol")
         combined = _combined_samples(sessions, slow_queries[0]) if not reasons else ()
         if not combined:
-            return IssueValidationReport(PipelineStage.REJECTED, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, None, "unstable", tuple(reasons or ("missing_paired_samples",)))
+            return _bound_report(candidate, PipelineStage.REJECTED, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, None, "unstable", tuple(reasons or ("missing_paired_samples",)))
         ratios = tuple(slow / fast for fast, slow in combined if fast > 0)
         ratio = float(median(ratios)) if ratios else None
         delta = float(median(slow - fast for fast, slow in combined))
@@ -137,8 +139,37 @@ class IssueValidator:
             reasons.append("negative_control_noise")
         stable = "stable" if discovery_ratio and ratio is not None and ratio >= discovery_ratio * 0.5 else "shrunk_but_real"
         if reasons:
-            return IssueValidationReport(PipelineStage.REJECTED, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, ratio, "unstable", tuple(reasons))
-        return IssueValidationReport(PipelineStage.VALIDATION_PASSED, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, ratio, stable, ())
+            return _bound_report(candidate, PipelineStage.REJECTED, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, ratio, "unstable", tuple(reasons))
+        return _bound_report(candidate, PipelineStage.VALIDATION_PASSED, EquivalenceEvidence(True, True, ()), sessions, discovery_ratio, ratio, stable, ())
+
+
+def _bound_report(
+    candidate: CandidateBundle,
+    stage: PipelineStage,
+    equivalence: EquivalenceEvidence,
+    sessions: tuple[ValidationSession, ...],
+    discovery_ratio: float | None,
+    validated_ratio: float | None,
+    magnitude_stability: str,
+    reason_codes: tuple[str, ...],
+) -> IssueValidationReport:
+    return IssueValidationReport(
+        stage=stage,
+        equivalence=equivalence,
+        sessions=sessions,
+        discovery_ratio=discovery_ratio,
+        validated_ratio=validated_ratio,
+        magnitude_stability=magnitude_stability,
+        reason_codes=reason_codes,
+        candidate_hash=candidate.candidate_hash,
+        query_a_hash=str(candidate.content_hashes["query_a"]),
+        query_b_hash=str(candidate.content_hashes["query_b"]),
+        policy_hash=str(candidate.content_hashes["validation_policy"]),
+        certificate_hash=str(candidate.content_hashes["certificate"]),
+        rule_id=candidate.certificate.rule_id,
+        proof_version=candidate.certificate.proof_version,
+        validation_protocol="independent-two-session-v1",
+    )
 
 
 def _combined_samples(sessions: tuple[ValidationSession, ...], slow_query: str | None) -> tuple[tuple[float, float], ...]:

@@ -1,6 +1,6 @@
 import pytest
 
-from graph_sym_perf.equivalence.purity import assess_query_purity
+from graph_sym_perf.equivalence.purity import PurityContext, assess_query_purity
 
 
 def test_purity_rejects_writes_volatile_and_nondeterministic_result_shapes() -> None:
@@ -47,7 +47,14 @@ def test_purity_uses_adapter_declared_volatile_functions() -> None:
 
 
 def test_purity_accepts_collect_only_when_input_was_ordered_before_aggregation() -> None:
-    evidence = assess_query_purity("MATCH (n) WITH n ORDER BY n.id RETURN collect(n)")
+    evidence = assess_query_purity(
+        "MATCH (n) WITH n ORDER BY n.id RETURN collect(n)",
+        context=PurityContext(
+            unique_order_keys=("n.id",),
+            collect_input_order=("n.id",),
+            expected_final_clause="RETURN",
+        ),
+    )
 
     assert evidence.safe
 
@@ -57,3 +64,37 @@ def test_collect_rejects_an_order_by_invalidated_by_a_later_data_source() -> Non
 
     assert not evidence.safe
     assert "unstable_collect" in evidence.reason_codes
+
+
+def test_limit_requires_explicit_unique_total_order_on_the_final_clause() -> None:
+    query = "MATCH (n) RETURN n.name, n.id ORDER BY n.name, n.id LIMIT 3"
+
+    assert not assess_query_purity(query).safe
+    assert not assess_query_purity(
+        query,
+        context=PurityContext(unique_order_keys=("n.id",), expected_final_clause="RETURN"),
+    ).safe
+    assert assess_query_purity(
+        query,
+        context=PurityContext(
+            unique_order_keys=("n.name", "n.id"),
+            expected_final_clause="RETURN",
+        ),
+    ).safe
+
+
+def test_collect_context_must_match_the_full_immediate_input_order() -> None:
+    query = "MATCH (n) WITH n ORDER BY n.name, n.id RETURN collect(n)"
+    partial = PurityContext(
+        unique_order_keys=("n.id",),
+        collect_input_order=("n.id",),
+        expected_final_clause="RETURN",
+    )
+    full = PurityContext(
+        unique_order_keys=("n.name", "n.id"),
+        collect_input_order=("n.name", "n.id"),
+        expected_final_clause="RETURN",
+    )
+
+    assert not assess_query_purity(query, context=partial).safe
+    assert assess_query_purity(query, context=full).safe

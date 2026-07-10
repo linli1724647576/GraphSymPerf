@@ -62,7 +62,8 @@ def test_registry_requires_all_version_and_provenance_fields() -> None:
 def test_reported_and_developer_validated_counts_use_orthogonal_axes() -> None:
     registry = IssueRegistry()
     registry.record(_record("submitted-waiting"))
-    registry.mark_submitted("submitted-waiting", evidence_url="https://example.test/issues/1", submitted_at="2026-07-01")
+    clearance = registry.duplicate_clearance("submitted-waiting")
+    registry.mark_submitted("submitted-waiting", duplicate_clearance=clearance, evidence_url="https://example.test/issues/1", submitted_at="2026-07-01")
     registry.record(
         _record(
             "fixed-not-submitted",
@@ -87,9 +88,27 @@ def test_registry_forbids_direct_submitted_insertion() -> None:
 def test_waiting_reply_within_90_days_is_right_censored_not_negative() -> None:
     registry = IssueRegistry()
     registry.record(_record("waiting"))
-    registry.mark_submitted("waiting", evidence_url="https://example.test/issues/2", submitted_at="2026-07-01")
+    clearance = registry.duplicate_clearance("waiting")
+    registry.mark_submitted("waiting", duplicate_clearance=clearance, evidence_url="https://example.test/issues/2", submitted_at="2026-07-01")
 
     counts = registry.developer_outcome_counts(as_of="2026-07-10")
 
     assert counts["right_censored_waiting"] == 1
     assert counts["responded_negative"] == 0
+
+
+def test_waiting_reply_is_not_right_censored_at_the_exact_90_day_boundary() -> None:
+    registry = IssueRegistry()
+    registry.record(_record("waiting-boundary"))
+    clearance = registry.duplicate_clearance("waiting-boundary")
+    registry.mark_submitted(
+        "waiting-boundary",
+        duplicate_clearance=clearance,
+        evidence_url="https://example.test/issues/boundary",
+        submitted_at="2026-04-11",
+    )
+
+    counts = registry.developer_outcome_counts(as_of="2026-07-10")
+
+    assert counts["right_censored_waiting"] == 0
+    assert counts["unresolved_beyond_window"] == 1

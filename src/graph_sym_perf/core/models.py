@@ -12,6 +12,60 @@ from typing import Any, Mapping
 from graph_sym_perf.core.capabilities import EngineCapabilities
 from graph_sym_perf.core.status import ClaimLevel, DeveloperStatus, ToolSupportLevel
 
+
+class TypedValueKind(str, Enum):
+    NODE = "node"
+    RELATIONSHIP = "relationship"
+    PATH = "path"
+    DATE = "date"
+    DATETIME = "datetime"
+    BYTES = "bytes"
+
+
+class MissingValue(str, Enum):
+    VALUE = "missing"
+
+
+@dataclass(frozen=True)
+class TypedNode:
+    element_id: str
+    labels: tuple[str, ...]
+    properties: tuple[tuple[str, object], ...]
+    kind: TypedValueKind = field(default=TypedValueKind.NODE, init=False)
+
+
+@dataclass(frozen=True)
+class TypedRelationship:
+    element_id: str
+    relationship_type: str
+    start_element_id: str
+    end_element_id: str
+    properties: tuple[tuple[str, object], ...]
+    kind: TypedValueKind = field(default=TypedValueKind.RELATIONSHIP, init=False)
+
+
+@dataclass(frozen=True)
+class TypedPath:
+    nodes: tuple[TypedNode, ...]
+    relationships: tuple[TypedRelationship, ...]
+    kind: TypedValueKind = field(default=TypedValueKind.PATH, init=False)
+
+
+@dataclass(frozen=True)
+class TypedTemporal:
+    kind: TypedValueKind
+    iso_value: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in {TypedValueKind.DATE, TypedValueKind.DATETIME}:
+            raise ValueError("TypedTemporal kind must be date or datetime")
+
+
+@dataclass(frozen=True)
+class TypedBytes:
+    value: bytes
+    kind: TypedValueKind = field(default=TypedValueKind.BYTES, init=False)
+
 class TargetSystem(str, Enum):
     """Supported graph database targets."""
 
@@ -531,21 +585,92 @@ class ClusteredSummary:
     generation_metadata: Mapping[str, Any]
 
 
-def to_jsonable(value: Any) -> Any:
-    """Convert project objects and common driver values to JSON-safe values."""
+def to_typed_value(value: Any) -> Any:
+    """Preserve driver value types for in-memory equivalence checks."""
+
+    if isinstance(value, TypedNode | TypedRelationship | TypedPath | TypedTemporal | TypedBytes | MissingValue):
+        return value
+    if isinstance(value, datetime):
+        return TypedTemporal(TypedValueKind.DATETIME, value.isoformat())
+    if isinstance(value, date):
+        return TypedTemporal(TypedValueKind.DATE, value.isoformat())
+    if isinstance(value, bytes):
+        return TypedBytes(value)
+    if hasattr(value, "type") and hasattr(value, "items") and (
+        hasattr(value, "start_node") or hasattr(value, "start_node_element_id")
+    ):
+        return TypedRelationship(
+            element_id=str(getattr(value, "element_id", getattr(value, "id", ""))),
+            relationship_type=str(getattr(value, "type", "")),
+            start_element_id=str(getattr(value, "start_node_element_id", getattr(getattr(value, "start_node", None), "element_id", ""))),
+            end_element_id=str(getattr(value, "end_node_element_id", getattr(getattr(value, "end_node", None), "element_id", ""))),
+            properties=tuple(sorted((str(key), to_typed_value(item)) for key, item in dict(value.items()).items())),
+        )
+    if hasattr(value, "labels") and hasattr(value, "items"):
+        return TypedNode(
+            element_id=str(getattr(value, "element_id", getattr(value, "id", ""))),
+            labels=tuple(sorted(str(label) for label in getattr(value, "labels", ()))),
+            properties=tuple(sorted((str(key), to_typed_value(item)) for key, item in dict(value.items()).items())),
+        )
+    if hasattr(value, "nodes") and hasattr(value, "relationships"):
+        nodes = tuple(to_typed_value(node) for node in getattr(value, "nodes", ()))
+        relationships = tuple(to_typed_value(rel) for rel in getattr(value, "relationships", ()))
+        if not all(isinstance(node, TypedNode) for node in nodes) or not all(isinstance(rel, TypedRelationship) for rel in relationships):
+            raise TypeError("path contains unsupported node or relationship values")
+        return TypedPath(nodes=nodes, relationships=relationships)
+    if isinstance(value, Mapping):
+        return {str(key): to_typed_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(to_typed_value(item) for item in value)
+    if isinstance(value, list):
+        return [to_typed_value(item) for item in value]
+    return value
+
+
+def to_artifact_jsonable(value: Any) -> Any:
+    """Encode values for JSON artifacts; this is not an equivalence representation."""
+
+    if isinstance(value, TypedNode):
+        return {
+            "__graph_type__": value.kind.value,
+            "element_id": value.element_id,
+            "labels": list(value.labels),
+            "properties": {key: to_artifact_jsonable(item) for key, item in value.properties},
+        }
+    if isinstance(value, TypedRelationship):
+        return {
+            "__graph_type__": value.kind.value,
+            "element_id": value.element_id,
+            "type": value.relationship_type,
+            "start": value.start_element_id,
+            "end": value.end_element_id,
+            "properties": {key: to_artifact_jsonable(item) for key, item in value.properties},
+        }
+    if isinstance(value, TypedPath):
+        return {
+            "__graph_type__": value.kind.value,
+            "nodes": [to_artifact_jsonable(node) for node in value.nodes],
+            "relationships": [to_artifact_jsonable(rel) for rel in value.relationships],
+        }
+    if isinstance(value, TypedTemporal):
+        return {"__typed_value__": value.kind.value, "value": value.iso_value}
+    if isinstance(value, TypedBytes):
+        return {"__typed_value__": value.kind.value, "value": value.value.hex()}
+    if isinstance(value, MissingValue):
+        return {"__typed_value__": "missing"}
 
     if is_dataclass(value):
-        return {field.name: to_jsonable(getattr(value, field.name)) for field in fields(value)}
+        return {field.name: to_artifact_jsonable(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, datetime):
-        return {"__typed_value__": "datetime", "value": value.isoformat()}
+        return to_artifact_jsonable(to_typed_value(value))
     if isinstance(value, date):
-        return {"__typed_value__": "date", "value": value.isoformat()}
+        return to_artifact_jsonable(to_typed_value(value))
     if isinstance(value, bytes):
-        return {"__typed_value__": "bytes", "value": value.hex()}
+        return to_artifact_jsonable(to_typed_value(value))
     if hasattr(value, "type") and hasattr(value, "items") and (
         hasattr(value, "start_node") or hasattr(value, "start_node_element_id")
     ):
@@ -555,27 +680,27 @@ def to_jsonable(value: Any) -> Any:
             "type": str(getattr(value, "type", "")),
             "start": str(getattr(value, "start_node_element_id", getattr(getattr(value, "start_node", None), "element_id", ""))),
             "end": str(getattr(value, "end_node_element_id", getattr(getattr(value, "end_node", None), "element_id", ""))),
-            "properties": {str(key): to_jsonable(item) for key, item in dict(value.items()).items()},
+            "properties": {str(key): to_artifact_jsonable(item) for key, item in dict(value.items()).items()},
         }
     if hasattr(value, "labels") and hasattr(value, "items"):
         return {
             "__graph_type__": "node",
             "element_id": str(getattr(value, "element_id", getattr(value, "id", ""))),
             "labels": sorted(str(label) for label in getattr(value, "labels", ())),
-            "properties": {str(key): to_jsonable(item) for key, item in dict(value.items()).items()},
+            "properties": {str(key): to_artifact_jsonable(item) for key, item in dict(value.items()).items()},
         }
     if hasattr(value, "nodes") and hasattr(value, "relationships"):
         return {
             "__graph_type__": "path",
-            "nodes": tuple(to_jsonable(node) for node in getattr(value, "nodes", ())),
-            "relationships": tuple(to_jsonable(rel) for rel in getattr(value, "relationships", ())),
+            "nodes": tuple(to_artifact_jsonable(node) for node in getattr(value, "nodes", ())),
+            "relationships": tuple(to_artifact_jsonable(rel) for rel in getattr(value, "relationships", ())),
         }
     if isinstance(value, Mapping):
-        return {str(key): to_jsonable(item) for key, item in value.items()}
+        return {str(key): to_artifact_jsonable(item) for key, item in value.items()}
     if isinstance(value, tuple | list):
-        return [to_jsonable(item) for item in value]
+        return [to_artifact_jsonable(item) for item in value]
     if isinstance(value, set | frozenset):
-        return sorted(to_jsonable(item) for item in value)
+        return sorted(to_artifact_jsonable(item) for item in value)
     if hasattr(value, "isoformat"):
         try:
             return value.isoformat()
@@ -583,11 +708,17 @@ def to_jsonable(value: Any) -> Any:
             pass
     if hasattr(value, "items"):
         try:
-            return {str(key): to_jsonable(item) for key, item in value.items()}
+            return {str(key): to_artifact_jsonable(item) for key, item in value.items()}
         except Exception:
             pass
     return value
 
 
+def to_jsonable(value: Any) -> Any:
+    """Backward-compatible artifact encoder."""
+
+    return to_artifact_jsonable(value)
+
+
 def stable_json_dumps(value: Any) -> str:
-    return json.dumps(to_jsonable(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(to_artifact_jsonable(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))

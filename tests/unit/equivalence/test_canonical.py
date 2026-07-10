@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from graph_sym_perf.core import to_jsonable
+from graph_sym_perf.core import to_typed_value
 from graph_sym_perf.equivalence.checker import compare_typed_results
 
 
@@ -43,24 +43,47 @@ def test_missing_null_empty_and_numeric_types_remain_distinct() -> None:
 def test_graph_entities_keep_their_type_and_content_after_adapter_serialization() -> None:
     node = FakeNode(name="Ada")
     relationship = FakeRelationship(since=2026)
-    serialized_node = to_jsonable(node)
-    serialized_relationship = to_jsonable(relationship)
+    serialized_node = to_typed_value(node)
+    serialized_relationship = to_typed_value(relationship)
 
-    assert serialized_node["__graph_type__"] == "node"
-    assert serialized_relationship["__graph_type__"] == "relationship"
     assert not compare_typed_results(((serialized_node,),), (({"name": "Ada"},),), ordered=False).equivalent
-    assert not compare_typed_results(((serialized_node,),), ((to_jsonable(FakeNode(name="Grace")),),), ordered=False).equivalent
+    assert not compare_typed_results(((serialized_node,),), ((to_typed_value(FakeNode(name="Grace")),),), ordered=False).equivalent
+
+
+def test_real_node_never_collides_with_a_same_field_user_map() -> None:
+    node = to_typed_value(FakeNode(name="Ada"))
+    lookalike = {
+        "kind": "node",
+        "element_id": "node-1",
+        "labels": ["Person"],
+        "properties": {"name": "Ada"},
+    }
+
+    assert not compare_typed_results(((node,),), ((lookalike,),), ordered=False).equivalent
 
 
 def test_temporal_and_bytes_values_do_not_collapse_into_plain_strings() -> None:
     assert not compare_typed_results(
-        ((to_jsonable(date(2026, 7, 10)),),),
+        ((to_typed_value(date(2026, 7, 10)),),),
         (("2026-07-10",),),
         ordered=False,
     ).equivalent
     assert not compare_typed_results(
-        ((to_jsonable(datetime(2026, 7, 10, 12, 30)),),),
+        ((to_typed_value(datetime(2026, 7, 10, 12, 30)),),),
         (("2026-07-10T12:30:00",),),
         ordered=False,
     ).equivalent
-    assert not compare_typed_results(((to_jsonable(b"abc"),),), (("616263",),), ordered=False).equivalent
+    assert not compare_typed_results(((to_typed_value(b"abc"),),), (("616263",),), ordered=False).equivalent
+
+
+def test_temporal_and_bytes_never_collide_with_tag_shaped_user_maps() -> None:
+    assert not compare_typed_results(
+        ((to_typed_value(date(2026, 7, 10)),),),
+        (({"__typed_value__": "date", "value": "2026-07-10"},),),
+        ordered=False,
+    ).equivalent
+    assert not compare_typed_results(
+        ((to_typed_value(b"abc"),),),
+        (({"__typed_value__": "bytes", "value": "616263"},),),
+        ordered=False,
+    ).equivalent

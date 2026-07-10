@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass, field
 from datetime import date
 
-from graph_sym_perf.validation.models import DeveloperStatus, DuplicateDecision, PipelineStage, VersionedIssueRecord
+from graph_sym_perf.core import stable_json_dumps
+from graph_sym_perf.cypher.parser import alpha_normalize_query
+from graph_sym_perf.validation.models import (
+    DeveloperStatus,
+    DuplicateClearance,
+    PipelineStage,
+    VersionedIssueRecord,
+    _DUPLICATE_CLEARANCE_TOKEN,
+)
 
 
 @dataclass
 class IssueRegistry:
     records: dict[str, VersionedIssueRecord] = field(default_factory=dict)
     _possible_duplicates: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    _duplicate_decisions: dict[str, bool] = field(default_factory=dict)
+    _duplicate_clearances: dict[str, DuplicateClearance] = field(default_factory=dict)
 
     def record(self, record: VersionedIssueRecord) -> None:
         self._validate_record(record)
@@ -35,6 +42,8 @@ class IssueRegistry:
             for existing_id in possible:
                 linked = self._possible_duplicates.get(existing_id, ())
                 self._possible_duplicates[existing_id] = tuple(dict.fromkeys((*linked, record.issue_id)))
+            for issue_id in (*possible, record.issue_id):
+                self._invalidate_clearance(issue_id)
 
     def exact_duplicate(self, candidate: VersionedIssueRecord) -> VersionedIssueRecord | None:
         for record in self.records.values():
@@ -51,28 +60,61 @@ class IssueRegistry:
     def possible_duplicate_ids(self, issue_id: str) -> tuple[str, ...]:
         return self._possible_duplicates.get(issue_id, ())
 
-    def can_submit(self, issue_id: str) -> bool:
-        return not self.possible_duplicate_ids(issue_id) or self._duplicate_decisions.get(issue_id) is True
+    def can_submit(self, issue_id: str, clearance: DuplicateClearance | None) -> bool:
+        return bool(
+            clearance is not None
+            and clearance.verify()
+            and clearance.issue_id == issue_id
+            and clearance.cluster_version_hash == self._cluster_version_hash(issue_id)
+            and clearance.cluster_members == self._cluster_members(issue_id)
+        )
 
-    def duplicate_decision(self, issue_id: str) -> DuplicateDecision:
+    def duplicate_clearance(self, issue_id: str) -> DuplicateClearance | None:
         possible = bool(self.possible_duplicate_ids(issue_id))
-        resolved = self._duplicate_decisions.get(issue_id) is True
-        return DuplicateDecision(possible, resolved, self.records[issue_id].status_evidence_url if resolved else None)
+        if possible:
+            clearance = self._duplicate_clearances.get(issue_id)
+            return clearance if clearance is not None and self.can_submit(issue_id, clearance) else None
+        clearance = DuplicateClearance._from_registry(
+            issue_id=issue_id,
+            possible_duplicate=False,
+            cluster_members=self._cluster_members(issue_id),
+            cluster_version_hash=self._cluster_version_hash(issue_id),
+            evidence_url=None,
+            token=_DUPLICATE_CLEARANCE_TOKEN,
+        )
+        self._duplicate_clearances[issue_id] = clearance
+        return clearance
 
     def resolve_possible_duplicate(self, issue_id: str, *, distinct: bool, evidence_url: str) -> None:
         if not self.possible_duplicate_ids(issue_id):
             raise ValueError("issue is not in a possible-duplicate cluster")
         if not evidence_url.strip():
             raise ValueError("possible-duplicate resolution requires an evidence URL")
-        self._duplicate_decisions[issue_id] = distinct
+        self._invalidate_clearance(issue_id)
         record = self.records[issue_id]
         self.records[issue_id] = VersionedIssueRecord(**{**record.__dict__, "status_evidence_url": evidence_url})
+        if distinct:
+            self._duplicate_clearances[issue_id] = DuplicateClearance._from_registry(
+                issue_id=issue_id,
+                possible_duplicate=True,
+                cluster_members=self._cluster_members(issue_id),
+                cluster_version_hash=self._cluster_version_hash(issue_id),
+                evidence_url=evidence_url,
+                token=_DUPLICATE_CLEARANCE_TOKEN,
+            )
 
-    def mark_submitted(self, issue_id: str, *, evidence_url: str, submitted_at: str) -> None:
+    def mark_submitted(
+        self,
+        issue_id: str,
+        *,
+        duplicate_clearance: DuplicateClearance | None,
+        evidence_url: str,
+        submitted_at: str,
+    ) -> None:
         record = self.records[issue_id]
         if record.stage is not PipelineStage.SUBMIT_READY:
             raise ValueError("only SUBMIT_READY can transition to SUBMITTED")
-        if not self.can_submit(issue_id):
+        if not self.can_submit(issue_id, duplicate_clearance):
             raise ValueError("possible duplicate requires manual distinct resolution before submission")
         if not evidence_url.strip():
             raise ValueError("submission requires an evidence URL")
@@ -107,7 +149,7 @@ class IssueRegistry:
             if record.developer_status is not DeveloperStatus.WAITING_REPLY or not record.submitted_at:
                 continue
             age = (observed_on - date.fromisoformat(record.submitted_at)).days
-            if age <= observation_days:
+            if age < observation_days:
                 censored_waiting += 1
             else:
                 unresolved_beyond_window += 1
@@ -145,6 +187,27 @@ class IssueRegistry:
             record.normalized_predicate,
         )
 
+    def _cluster_members(self, issue_id: str) -> tuple[str, ...]:
+        return tuple(sorted((issue_id, *self.possible_duplicate_ids(issue_id))))
+
+    def _cluster_version_hash(self, issue_id: str) -> str:
+        members = self._cluster_members(issue_id)
+        payload = tuple(
+            (
+                member,
+                self.records[member].pair_hash,
+                self.records[member].dbms_version,
+                self.records[member].rule_version,
+            )
+            for member in members
+        )
+        return hashlib.sha256(stable_json_dumps(payload).encode("utf-8")).hexdigest()
+
+    def _invalidate_clearance(self, issue_id: str) -> None:
+        clearance = self._duplicate_clearances.pop(issue_id, None)
+        if clearance is not None:
+            clearance._invalidate()
+
     @staticmethod
     def _validate_record(record: VersionedIssueRecord) -> None:
         required = {
@@ -171,36 +234,5 @@ class IssueRegistry:
 
 
 def canonical_reduced_pair_hash(query_a: str, query_b: str) -> str:
-    payload = f"{_normalized_query_skeleton(query_a)}\0{_normalized_query_skeleton(query_b)}"
+    payload = f"{alpha_normalize_query(query_a)}\0{alpha_normalize_query(query_b)}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _normalized_query_skeleton(query: str) -> str:
-    variables: dict[str, str] = {}
-    declarations = re.finditer(r"(?:[\(\[]\s*|\bAS\s+)([A-Za-z_]\w*)", query, re.IGNORECASE)
-    for match in declarations:
-        name = match.group(1)
-        if name.upper() in _CYPHER_KEYWORDS:
-            continue
-        variables.setdefault(name, f"v{len(variables)}")
-    normalized = query
-    for source, replacement in sorted(variables.items(), key=lambda item: -len(item[0])):
-        normalized = re.sub(rf"\b{re.escape(source)}\b", replacement, normalized)
-    return " ".join(normalized.upper().split())
-
-
-_CYPHER_KEYWORDS = {
-    "MATCH",
-    "OPTIONAL",
-    "WHERE",
-    "RETURN",
-    "WITH",
-    "ORDER",
-    "BY",
-    "AS",
-    "AND",
-    "OR",
-    "TRUE",
-    "FALSE",
-    "NULL",
-}

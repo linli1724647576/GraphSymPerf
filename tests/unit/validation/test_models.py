@@ -2,7 +2,7 @@ from dataclasses import replace
 
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
-from graph_sym_perf.validation.models import CandidateBundle
+from graph_sym_perf.validation.models import CandidateBundle, SafetyCertificate
 
 
 def _bundle() -> CandidateBundle:
@@ -21,6 +21,7 @@ def _bundle() -> CandidateBundle:
         resolved_config={"runtime": {"pairs": 20}, "system": "neo4j"},
         discovery_slow_query="b",
         discovery_ratio=8.0,
+        certificate=SafetyCertificate("pattern_order_symmetry", "core", "v1", "match"),
     )
 
 
@@ -39,6 +40,7 @@ def test_candidate_bundle_binds_all_validation_inputs_by_content_hash() -> None:
         "discovery_slow_query",
         "discovery_ratio",
         "validation_policy",
+        "certificate",
     }
 
 
@@ -102,6 +104,7 @@ def test_candidate_bundle_fail_closes_when_versioned_dbms_identity_is_unavailabl
         resolved_config={},
         discovery_slow_query="b",
         discovery_ratio=8.0,
+        certificate=bundle.certificate,
     )
 
     assert "dbms_fingerprint_unavailable" in unavailable.verify_integrity()

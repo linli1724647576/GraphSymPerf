@@ -7,7 +7,7 @@ from graph_sym_perf.adapters.base import DBMSFingerprint
 from graph_sym_perf.core import ExecutionResult, QueryTimeoutError, TargetSystem
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
-from graph_sym_perf.validation.models import CandidateBundle
+from graph_sym_perf.validation.models import CandidateBundle, SafetyCertificate
 from graph_sym_perf.validation.validator import IssueValidator, SubprocessSessionRunner
 
 
@@ -83,6 +83,7 @@ def _bundle(event_log: Path, *, mode: str | None = None) -> CandidateBundle:
         resolved_config={"event_log": str(event_log), "mode": mode},
         discovery_slow_query="b",
         discovery_ratio=4.0,
+        certificate=SafetyCertificate("pattern_order_symmetry", "core", "v1", "match"),
     )
 
 

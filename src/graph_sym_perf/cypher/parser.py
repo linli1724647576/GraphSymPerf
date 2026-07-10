@@ -66,6 +66,112 @@ FORBIDDEN_PREDICATE_RE = re.compile(
     re.I,
 )
 
+_ALPHA_KEYWORDS = frozenset(
+    {
+        "AS",
+        "AND",
+        "BY",
+        "CALL",
+        "CREATE",
+        "DELETE",
+        "FALSE",
+        "LIMIT",
+        "MATCH",
+        "MERGE",
+        "NULL",
+        "OPTIONAL",
+        "OR",
+        "ORDER",
+        "REMOVE",
+        "RETURN",
+        "SET",
+        "SKIP",
+        "TRUE",
+        "UNWIND",
+        "WHERE",
+        "WITH",
+    }
+)
+
+
+def alpha_normalize_query(query: str) -> str:
+    """Normalize declared Cypher variables without touching labels or literals."""
+
+    tokens = _identifier_spans(query)
+    variables: dict[str, str] = {}
+    for index, (start, end, name) in enumerate(tokens):
+        previous_char = _previous_nonspace(query, start)
+        next_char = _next_nonspace(query, end)
+        previous_token = tokens[index - 1][2].upper() if index else ""
+        is_path_variable = next_char == "=" and _next_nonspace(query, _next_nonspace_index(query, end) + 1) == "("
+        is_node_or_relationship_variable = previous_char in {"(", "["}
+        is_alias = previous_token == "AS"
+        if (
+            name.upper() not in _ALPHA_KEYWORDS
+            and (is_path_variable or is_node_or_relationship_variable or is_alias)
+        ):
+            variables.setdefault(name, f"v{len(variables)}")
+
+    pieces: list[str] = []
+    cursor = 0
+    for start, end, name in tokens:
+        pieces.append(query[cursor:start])
+        previous_char = _previous_nonspace(query, start)
+        next_char = _next_nonspace(query, end)
+        is_map_key = previous_char in {"{", ","} and next_char == ":"
+        is_non_variable_role = previous_char in {":", ".", "$"} or is_map_key
+        pieces.append(variables.get(name, name) if not is_non_variable_role else name)
+        cursor = end
+    pieces.append(query[cursor:])
+    return " ".join("".join(pieces).upper().split())
+
+
+def _identifier_spans(query: str) -> tuple[tuple[int, int, str], ...]:
+    spans: list[tuple[int, int, str]] = []
+    index = 0
+    quote: str | None = None
+    while index < len(query):
+        char = query[index]
+        if quote is not None:
+            if char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+            index += 1
+            continue
+        if char.isalpha() or char == "_":
+            end = index + 1
+            while end < len(query) and (query[end].isalnum() or query[end] == "_"):
+                end += 1
+            spans.append((index, end, query[index:end]))
+            index = end
+            continue
+        index += 1
+    return tuple(spans)
+
+
+def _previous_nonspace(query: str, index: int) -> str:
+    index -= 1
+    while index >= 0 and query[index].isspace():
+        index -= 1
+    return query[index] if index >= 0 else ""
+
+
+def _next_nonspace_index(query: str, index: int) -> int:
+    while index < len(query) and query[index].isspace():
+        index += 1
+    return index
+
+
+def _next_nonspace(query: str, index: int) -> str:
+    index = _next_nonspace_index(query, index)
+    return query[index] if index < len(query) else ""
+
 
 def parse_query(query: str) -> CypherQuery:
     return CypherQuery(text=query, clauses=_clauses(query))

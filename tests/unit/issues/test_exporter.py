@@ -5,7 +5,7 @@ import pytest
 from graph_sym_perf.issues.exporter import export_issue
 from graph_sym_perf.validation.models import PipelineStage
 from graph_sym_perf.validation.promotion import promote
-from tests.unit.validation.test_promotion import _certificate, _duplicate_decision, _reduction, _report
+from tests.unit.validation.test_promotion import _certificate, _duplicate_clearance, _reduction, _report
 
 
 def test_exporter_rejects_untyped_raw_candidate(tmp_path) -> None:
@@ -17,7 +17,7 @@ def test_exporter_rejects_untyped_raw_candidate(tmp_path) -> None:
 
 
 def test_exporter_rechecks_runtime_gates_even_for_a_forged_submit_ready_instance(tmp_path) -> None:
-    issue = promote(_report(), reduction_report=_reduction(), certificate=_certificate(), duplicate_decision=_duplicate_decision())
+    issue = promote(_report(), reduction_report=_reduction(), certificate=_certificate(), duplicate_clearance=_duplicate_clearance())
     assert issue is not None
     object.__setattr__(issue, "stage", PipelineStage.SCREENED)
 
@@ -26,7 +26,7 @@ def test_exporter_rechecks_runtime_gates_even_for_a_forged_submit_ready_instance
 
 
 def test_exporter_serializes_only_a_fully_gated_submit_ready_issue(tmp_path) -> None:
-    issue = promote(_report(), reduction_report=_reduction(), certificate=_certificate(), duplicate_decision=_duplicate_decision())
+    issue = promote(_report(), reduction_report=_reduction(), certificate=_certificate(), duplicate_clearance=_duplicate_clearance())
     assert issue is not None
 
     path = export_issue(issue, tmp_path / "issue.json")

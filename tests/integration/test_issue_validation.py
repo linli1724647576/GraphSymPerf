@@ -1,4 +1,5 @@
 import os
+import hashlib
 from dataclasses import replace
 
 import pytest
@@ -12,6 +13,7 @@ from graph_sym_perf.validation.models import (
     SessionLifecycle,
     ValidationPolicy,
     ValidationSession,
+    SafetyCertificate,
 )
 from graph_sym_perf.validation.validator import IssueValidator
 
@@ -33,6 +35,7 @@ def _bundle(*, discovery_slow_query: str = "b", noise_floor_ms: float = 0.0) -> 
         discovery_slow_query=discovery_slow_query,
         discovery_ratio=5.0,
         validation_policy=ValidationPolicy(noise_floor_ms=noise_floor_ms),
+        certificate=SafetyCertificate("pattern_order_symmetry", "core", "v1", "match"),
     )
 
 
@@ -57,8 +60,8 @@ class FakeIndependentRunner:
         samples = tuple(PairedSample("AB" if index % 2 == 0 else "BA", a_ms, b_ms) for index in range(20))
         evidence = RuntimeEvidence(
             RuntimeVerdict.PASS,
-            "a",
-            "b",
+            hashlib.sha256(candidate.pair.query_a.encode("utf-8")).hexdigest(),
+            hashlib.sha256(candidate.pair.query_b.encode("utf-8")).hexdigest(),
             samples,
             4.0,
             30.0,
@@ -88,9 +91,16 @@ class FakeIndependentRunner:
 
 
 def test_two_fresh_sessions_are_required_for_validation_passed() -> None:
-    report = IssueValidator().validate(_bundle(), FakeIndependentRunner())
+    bundle = _bundle()
+    report = IssueValidator().validate(bundle, FakeIndependentRunner())
     assert report.stage.value == "validation_passed"
     assert report.validated_ratio == 4.0
+    assert report.candidate_hash == bundle.candidate_hash
+    assert report.query_a_hash == bundle.content_hashes["query_a"]
+    assert report.query_b_hash == bundle.content_hashes["query_b"]
+    assert report.policy_hash == bundle.content_hashes["validation_policy"]
+    assert report.certificate_hash == bundle.content_hashes["certificate"]
+    assert report.rule_id == bundle.certificate.rule_id
 
 
 def test_validation_rejects_a_ratio_that_is_within_aa_noise_floor() -> None:
