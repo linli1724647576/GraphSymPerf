@@ -17,6 +17,7 @@ generation:
   source: gdsmith
   commit_source: vendored_checkout
   checkout: ../../GDsmith-src
+  required_env: [GRAPHSYMPERF_GDSMITH_JAR]
 scheduling:
   max_parallel_generation_systems: 3
   max_parallel_measurement_systems: 1
@@ -51,8 +52,6 @@ reducer:
   partial_requires_manual_review: true
 rules:
   safety_tier: core
-  scheduling: exploration_floor_then_validated_yield
-  minimum_accepted_pairs_per_core_rule: 20
   yield_update_epoch_accepted_pairs: 100
   forbidden_feedback: [plan, profile, pmc, developer_status]
 artifacts:

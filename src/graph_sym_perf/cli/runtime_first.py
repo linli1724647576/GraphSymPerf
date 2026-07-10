@@ -11,6 +11,7 @@ from graph_sym_perf.experiment import (
     RuntimeFirstShardWorker,
     build_run_plan,
     load_experiment_spec,
+    migrate_legacy_config_to_v2,
     run_doctor,
     write_resolved_manifest,
 )
@@ -30,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
     resume.add_argument("--run-id", required=True)
     status = experiment_commands.add_parser("status")
     status.add_argument("--run-id", required=True)
+    migrate = experiment_commands.add_parser("migrate-config")
+    migrate.add_argument("--input", required=True)
+    migrate.add_argument("--output", required=True)
+    migrate.add_argument("--template", default="config/experiment.yaml")
     issue = root.add_parser("issue")
     issue_commands = issue.add_subparsers(dest="issue_command")
     export = issue_commands.add_parser("export")
@@ -39,6 +44,14 @@ def main(argv: list[str] | None = None) -> int:
         command = issue_commands.add_parser(name)
         command.add_argument("--candidate", required=True)
     args = parser.parse_args(argv)
+    if args.command == "experiment" and args.experiment_command == "migrate-config":
+        try:
+            destination = migrate_legacy_config_to_v2(args.input, args.output, template_path=args.template)
+        except Exception as exc:
+            print(f"migration error: {exc}")
+            return 2
+        print(f"migrated schema-v2 experiment: {destination}")
+        return 0
     if args.command == "experiment" and args.experiment_command in {"plan", "doctor", "run"}:
         try:
             spec = load_experiment_spec(args.config)

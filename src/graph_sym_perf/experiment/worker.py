@@ -19,17 +19,8 @@ from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 
 from graph_sym_perf.adapters import create_adapter
-from graph_sym_perf.core import (
-    ConfirmationConfig,
-    DatasetConfig,
-    EquivalenceConfig,
-    GdsmithConfig,
-    QueryGenerationConfig,
-    RunConfig,
-    RunPaths,
-    SystemConfig,
-    TargetSystem,
-)
+from graph_sym_perf.config import migrate_experiment_spec_to_run_config
+from graph_sym_perf.core import GdsmithConfig, TargetSystem
 from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
 from graph_sym_perf.dialects.apache_age import ApacheAgeDialect
 from graph_sym_perf.dialects.base import DecisionKind, PortableQuery
@@ -212,17 +203,8 @@ class RuntimeFirstShardWorker:
         return candidates
 
     def _create_adapter(self, task: ShardTask) -> Any:
-        definition = self.spec.systems[task.target]
-        system = SystemConfig(task.target, definition.required_env, _optional_env(task.target), {})
-        run_config = RunConfig(
-            source_path=str(self.spec.source_path),
-            paths=RunPaths(),
-            systems=(system,),
-            dataset=DatasetConfig(),
-            query_generation=QueryGenerationConfig(gdsmith=GdsmithConfig()),
-            equivalence=EquivalenceConfig(max_result_rows=int(self.spec.validation["max_result_rows"])),
-            confirmation=ConfirmationConfig(),
-        )
+        run_config = migrate_experiment_spec_to_run_config(self.spec, task.target)
+        system = run_config.systems[0]
         return create_adapter(system, run_config, self.environment, allow_create=True)
 
     def _generate_with_gdsmith(self, task: ShardTask, raw_dir: Path) -> GeneratedShard:
@@ -295,16 +277,6 @@ def _pair_hash(query_a: str, query_b: str) -> str:
 def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(dict(payload), sort_keys=True) + "\n")
-
-
-def _optional_env(target: TargetSystem) -> Mapping[str, str]:
-    return {
-        TargetSystem.NEO4J: {"database": "GRAPHSYMPERF_NEO4J_DATABASE"},
-        TargetSystem.MEMGRAPH: {"username": "GRAPHSYMPERF_MEMGRAPH_USER", "password": "GRAPHSYMPERF_MEMGRAPH_PASSWORD"},
-        TargetSystem.FALKORDB: {"username": "GRAPHSYMPERF_FALKORDB_USER", "password": "GRAPHSYMPERF_FALKORDB_PASSWORD"},
-        TargetSystem.AGENSGRAPH: {"database": "GRAPHSYMPERF_AGENSGRAPH_DATABASE"},
-        TargetSystem.APACHE_AGE: {"database": "GRAPHSYMPERF_APACHE_AGE_DATABASE"},
-    }.get(target, {})
 
 
 def _gdsmith_connection(target: TargetSystem, env: Mapping[str, str]) -> tuple[str, str, int, str, str]:

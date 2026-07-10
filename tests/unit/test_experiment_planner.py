@@ -1,9 +1,69 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
+from dataclasses import replace
+from pathlib import Path
 
+import pytest
+import yaml
+
+from graph_sym_perf.core import ConfigError
+from graph_sym_perf.experiment.plan_models import SourceRevision
 from graph_sym_perf.experiment.planner import build_run_plan, write_resolved_manifest
 from graph_sym_perf.experiment.spec import load_experiment_spec
+
+
+def test_planner_resolves_repository_commit_from_config_parent_by_default() -> None:
+    spec = load_experiment_spec("config/experiment.yaml")
+    expected = subprocess.run(
+        ("git", "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    plan = build_run_plan(spec)
+
+    assert plan.source_revision.repository_commit == expected
+
+
+def test_planner_records_exact_gdsmith_commit_and_clean_or_dirty_state(tmp_path: Path) -> None:
+    checkout = tmp_path / "gdsmith"
+    checkout.mkdir()
+    subprocess.run(("git", "init", "-q", str(checkout)), check=True)
+    (checkout / "README.md").write_text("clean\n", encoding="utf-8")
+    subprocess.run(("git", "-C", str(checkout), "add", "README.md"), check=True)
+    subprocess.run(
+        (
+            "git", "-C", str(checkout), "-c", "user.name=GraphSymPerf Tests",
+            "-c", "user.email=tests@example.invalid", "commit", "-qm", "fixture",
+        ),
+        check=True,
+    )
+    expected_commit = subprocess.run(
+        ("git", "-C", str(checkout), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    spec = load_experiment_spec("config/experiment.yaml")
+    spec = replace(spec, generation=replace(spec.generation, checkout=checkout))
+
+    clean = build_run_plan(spec, repository_root=checkout)
+    (checkout / "README.md").write_text("dirty\n", encoding="utf-8")
+    dirty = build_run_plan(spec, repository_root=checkout)
+
+    assert clean.source_revision.repository_dirty is False
+    assert clean.source_revision.gdsmith_commit == expected_commit
+    assert clean.source_revision.gdsmith_dirty is False
+    assert dirty.source_revision.repository_dirty is True
+    assert dirty.source_revision.gdsmith_commit == expected_commit
+    assert dirty.source_revision.gdsmith_dirty is True
+    assert clean.source_revision.provenance_complete
+    assert dirty.source_revision.provenance_complete
+    assert not SourceRevision(None, expected_commit, True, spec.rules_schema_sha256).provenance_complete
 
 
 def test_planner_is_deterministic_and_assigns_one_unique_seed_per_shard(tmp_path) -> None:
@@ -23,7 +83,12 @@ def test_planner_is_deterministic_and_assigns_one_unique_seed_per_shard(tmp_path
 
 def test_resolved_manifest_is_a_secret_free_auditable_plan(tmp_path) -> None:
     spec = load_experiment_spec("config/experiment.yaml")
-    plan = build_run_plan(spec, repository_root=tmp_path)
+    marker = "do-not-serialize-this-secret"
+    plan = build_run_plan(
+        spec,
+        repository_root=Path.cwd(),
+        environment={"GRAPHSYMPERF_NEO4J_URI": marker},
+    )
     path = tmp_path / "resolved_manifest.json"
 
     write_resolved_manifest(plan, path)
@@ -31,4 +96,53 @@ def test_resolved_manifest_is_a_secret_free_auditable_plan(tmp_path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["total_accepted_pair_budget"] == 112_000
     assert len(payload["tasks"]) == 112
-    assert "password" not in path.read_text(encoding="utf-8").lower()
+    assert payload["environment"]["GRAPHSYMPERF_NEO4J_URI"] == "present"
+    assert payload["environment"]["GRAPHSYMPERF_NEO4J_PASSWORD"] == "missing"
+    assert payload["environment"]["GRAPHSYMPERF_GDSMITH_JAR"] == "missing"
+    assert payload["resolved_spec"]["generation"]["backend"] == "gdsmith"
+    assert payload["resolved_spec"]["systems"]["neo4j"]["dialect"] == "cypher"
+    assert payload["resolved_spec"]["rules_catalog"]["schema_version"] == 1
+    assert payload["validator_protocol_version"] == "runtime-first-v3"
+    assert payload["reducer_protocol_version"] == "paired-ast-ddmin-v1"
+    assert payload["source_revision"]["repository_commit"]
+    assert payload["source_revision"]["gdsmith_commit"]
+    assert isinstance(payload["source_revision"]["gdsmith_dirty"], bool)
+    assert payload["source_revision"]["rules_schema_sha256"] == hashlib.sha256(
+        Path("config/rules.yaml").read_bytes()
+    ).hexdigest()
+    serialized = path.read_text(encoding="utf-8")
+    assert marker not in serialized
+    assert "password" not in serialized.lower().replace("GRAPHSYMPERF_NEO4J_PASSWORD".lower(), "")
+
+
+def test_resolved_manifest_cannot_be_overwritten(tmp_path: Path) -> None:
+    plan = build_run_plan(load_experiment_spec("config/experiment.yaml"), repository_root=Path.cwd())
+    path = tmp_path / "resolved_manifest.json"
+    write_resolved_manifest(plan, path)
+
+    with pytest.raises(FileExistsError):
+        write_resolved_manifest(plan, path)
+
+
+def test_resolved_manifest_serialization_failure_does_not_claim_destination(tmp_path: Path) -> None:
+    plan = build_run_plan(load_experiment_spec("config/experiment.yaml"), repository_root=Path.cwd())
+    invalid = replace(plan, spec_name=object())  # type: ignore[arg-type]
+    path = tmp_path / "resolved_manifest.json"
+
+    with pytest.raises(TypeError):
+        write_resolved_manifest(invalid, path)
+
+    assert not path.exists()
+
+
+def test_planner_rejects_total_accepted_pair_budget_overflow(tmp_path: Path) -> None:
+    raw = yaml.safe_load(Path("config/experiment.yaml").read_text(encoding="utf-8"))
+    raw["workload"]["accepted_query_pairs_per_shard"] = 1001
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    for name in ("systems.yaml", "rules.yaml"):
+        (tmp_path / name).write_bytes((Path("config") / name).read_bytes())
+    spec = load_experiment_spec(path)
+
+    with pytest.raises(ConfigError, match="budget"):
+        build_run_plan(spec, repository_root=Path.cwd())

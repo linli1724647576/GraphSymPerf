@@ -2,11 +2,47 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from graph_sym_perf.core import TargetSystem
+
+
+class FrozenMapping(Mapping[Any, Any]):
+    """Small recursively immutable mapping used by resolved configuration."""
+
+    __slots__ = ("_items",)
+
+    def __init__(self, values: Mapping[Any, Any]) -> None:
+        object.__setattr__(self, "_items", tuple((key, freeze_value(value)) for key, value in values.items()))
+
+    def __setattr__(self, _name: str, _value: Any) -> None:
+        raise AttributeError("FrozenMapping is immutable")
+
+    def __getitem__(self, key: Any) -> Any:
+        for candidate, value in self._items:
+            if candidate == key:
+                return value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[Any]:
+        return (key for key, _ in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __repr__(self) -> str:
+        return f"FrozenMapping({dict(self._items)!r})"
+
+
+def freeze_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return FrozenMapping(value)
+    if isinstance(value, list | tuple):
+        return tuple(freeze_value(item) for item in value)
+    return value
 
 
 @dataclass(frozen=True)
@@ -28,6 +64,7 @@ class GenerationSpec:
     backend: str
     commit_source: str
     checkout: Path
+    required_env: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -57,6 +94,9 @@ class ExperimentSpec:
     rules: Mapping[str, object]
     artifacts: Mapping[str, object]
     systems: Mapping[TargetSystem, SystemDefinition]
+    rules_catalog: Mapping[str, object]
+    rules_schema_sha256: str
+    rules_source_path: Path
     source_path: Path
 
     @property
@@ -79,6 +119,24 @@ class SourceRevision:
     repository_commit: str | None
     gdsmith_commit: str | None
     gdsmith_dirty: bool | None
+    rules_schema_sha256: str | None = None
+    repository_dirty: bool | None = None
+
+    @property
+    def provenance_complete(self) -> bool:
+        return (
+            bool(self.repository_commit)
+            and self.repository_dirty is not None
+            and bool(self.gdsmith_commit)
+            and self.gdsmith_dirty is not None
+            and bool(self.rules_schema_sha256)
+        )
+
+
+@dataclass(frozen=True)
+class EnvironmentVariableState:
+    name: str
+    status: str
 
 
 @dataclass(frozen=True)
@@ -90,3 +148,5 @@ class RunPlan:
     source_revision: SourceRevision
     validator_protocol_version: str = "runtime-first-v3"
     reducer_protocol_version: str = "paired-ast-ddmin-v1"
+    resolved_spec: ExperimentSpec | None = None
+    environment: tuple[EnvironmentVariableState, ...] = ()

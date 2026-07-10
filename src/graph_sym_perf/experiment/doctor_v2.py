@@ -10,18 +10,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Mapping
 
-from graph_sym_perf.core import (
-    ConfirmationConfig,
-    DatasetConfig,
-    EquivalenceConfig,
-    GdsmithConfig,
-    QueryGenerationConfig,
-    RunConfig,
-    RunPaths,
-    SystemConfig,
-    TargetSystem,
-)
 from graph_sym_perf.adapters import create_adapter
+from graph_sym_perf.config import migrate_experiment_spec_to_run_config
+from graph_sym_perf.core import GdsmithConfig, TargetSystem
 from graph_sym_perf.experiment.planner import build_run_plan
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.gdsmith.runner import check_gdsmith_tooling
@@ -73,7 +64,12 @@ def run_doctor(
     disk_free = shutil.disk_usage(Path(output_root)).free
     disk_required = len(plan.tasks) * int(spec.artifacts["shard_budget_mb"]) * 1024 * 1024
     disk_ready = disk_free >= disk_required
-    ready = gdsmith.ready and plan.source_revision.gdsmith_dirty is False and disk_ready and all(
+    source_ready = (
+        plan.source_revision.provenance_complete
+        and plan.source_revision.repository_dirty is False
+        and plan.source_revision.gdsmith_dirty is False
+    )
+    ready = gdsmith.ready and source_ready and disk_ready and all(
         result.required_env_present and result.generation_env_present and result.driver_available and result.connectivity == "ready" and result.graph_isolation for result in results
     )
     report = DoctorReport(ready, gdsmith.ready, plan.source_revision.gdsmith_dirty, disk_free, disk_required, disk_ready, results)
@@ -89,15 +85,7 @@ def _check_system(target, definition, spec, env: Mapping[str, str]) -> SystemDoc
     driver_available = importlib.util.find_spec(_DRIVERS[target]) is not None
     connectivity = "not_attempted"
     if required_env_present and driver_available:
-        config = RunConfig(
-            source_path=str(spec.source_path),
-            paths=RunPaths(),
-            systems=(SystemConfig(target, definition.required_env, _optional_env(target), {}),),
-            dataset=DatasetConfig(),
-            query_generation=QueryGenerationConfig(gdsmith=GdsmithConfig()),
-            equivalence=EquivalenceConfig(),
-            confirmation=ConfirmationConfig(),
-        )
+        config = migrate_experiment_spec_to_run_config(spec, target)
         adapter = create_adapter(config.systems[0], config, env)
         try:
             dependency_ok, _ = adapter.check_dependency()
@@ -107,13 +95,3 @@ def _check_system(target, definition, spec, env: Mapping[str, str]) -> SystemDoc
         finally:
             adapter.close()
     return SystemDoctorResult(target.value, required_env_present, generation_env_present, driver_available, connectivity, definition.graph_isolation)
-
-
-def _optional_env(target: TargetSystem) -> Mapping[str, str]:
-    return {
-        TargetSystem.NEO4J: {"database": "GRAPHSYMPERF_NEO4J_DATABASE"},
-        TargetSystem.MEMGRAPH: {"username": "GRAPHSYMPERF_MEMGRAPH_USER", "password": "GRAPHSYMPERF_MEMGRAPH_PASSWORD"},
-        TargetSystem.FALKORDB: {"username": "GRAPHSYMPERF_FALKORDB_USER", "password": "GRAPHSYMPERF_FALKORDB_PASSWORD"},
-        TargetSystem.AGENSGRAPH: {"database": "GRAPHSYMPERF_AGENSGRAPH_DATABASE"},
-        TargetSystem.APACHE_AGE: {"database": "GRAPHSYMPERF_APACHE_AGE_DATABASE"},
-    }.get(target, {})

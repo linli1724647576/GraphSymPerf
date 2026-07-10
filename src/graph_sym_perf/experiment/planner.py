@@ -4,16 +4,37 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
-from dataclasses import asdict
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from graph_sym_perf.experiment.plan_models import ExperimentSpec, RunPlan, ShardTask, SourceRevision
+from graph_sym_perf.core import ConfigError, to_jsonable
+from graph_sym_perf.experiment.plan_models import (
+    EnvironmentVariableState,
+    ExperimentSpec,
+    RunPlan,
+    ShardTask,
+    SourceRevision,
+)
 
 
-def build_run_plan(spec: ExperimentSpec, *, repository_root: str | Path | None = None) -> RunPlan:
-    root = Path(repository_root) if repository_root is not None else spec.source_path.parents[2]
+MAX_TOTAL_ACCEPTED_PAIR_BUDGET = 112_000
+
+
+def build_run_plan(
+    spec: ExperimentSpec,
+    *,
+    repository_root: str | Path | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> RunPlan:
+    root = Path(repository_root) if repository_root is not None else spec.source_path.parents[1]
+    if spec.total_accepted_pair_budget > MAX_TOTAL_ACCEPTED_PAIR_BUDGET:
+        raise ConfigError(
+            "total accepted-pair budget exceeds formal limit: "
+            f"{spec.total_accepted_pair_budget} > {MAX_TOTAL_ACCEPTED_PAIR_BUDGET}"
+        )
     tasks = tuple(
         ShardTask(
             target=target,
@@ -26,6 +47,16 @@ def build_run_plan(spec: ExperimentSpec, *, repository_root: str | Path | None =
         for target in spec.targets
         for shard_index in range(spec.matrix.shards_per_system)
     )
+    if len({task.seed for task in tasks}) != len(tasks):
+        raise ConfigError("deterministic shard seed collision")
+    env = os.environ if environment is None else environment
+    environment_names = sorted(
+        {
+            *spec.generation.required_env,
+            *(name for definition in spec.systems.values() for name in definition.required_env),
+            *(name for definition in spec.systems.values() for name in definition.generation_required_env),
+        }
+    )
     return RunPlan(
         spec_name=spec.name,
         schema_version=spec.schema_version,
@@ -35,6 +66,13 @@ def build_run_plan(spec: ExperimentSpec, *, repository_root: str | Path | None =
             repository_commit=_git_output(root, "rev-parse", "HEAD"),
             gdsmith_commit=_git_output(spec.generation.checkout, "rev-parse", "HEAD"),
             gdsmith_dirty=_git_dirty(spec.generation.checkout),
+            rules_schema_sha256=spec.rules_schema_sha256,
+            repository_dirty=_git_dirty(root),
+        ),
+        resolved_spec=spec,
+        environment=tuple(
+            EnvironmentVariableState(name, "present" if env.get(name) else "missing")
+            for name in environment_names
         ),
     )
 
@@ -42,13 +80,34 @@ def build_run_plan(spec: ExperimentSpec, *, repository_root: str | Path | None =
 def write_resolved_manifest(plan: RunPlan, path: str | Path) -> Path:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    payload = asdict(plan)
-    payload["tasks"] = [
-        {**task, "target": task["target"].value}
-        for task in payload["tasks"]
-    ]
-    destination.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    payload = _manifest_payload(plan)
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(serialized)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
     return destination
+
+
+def _manifest_payload(plan: RunPlan) -> dict[str, Any]:
+    payload = to_jsonable(plan)
+    payload["environment"] = {state.name: state.status for state in plan.environment}
+    if plan.resolved_spec is not None:
+        payload["resolved_spec"]["systems"] = {
+            target.value: to_jsonable(definition)
+            for target, definition in plan.resolved_spec.systems.items()
+        }
+    return payload
 
 
 def _shard_seed(experiment_seed: int, target: str, shard_index: int) -> int:
@@ -71,7 +130,16 @@ def _git_output(directory: Path, *args: str) -> str | None:
 
 
 def _git_dirty(directory: Path) -> bool | None:
-    output = _git_output(directory, "status", "--porcelain")
-    if output is None:
+    try:
+        completed = subprocess.run(
+            ("git", "-C", str(directory), "status", "--porcelain"),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
-    return bool(output)
+    if completed.returncode != 0:
+        return None
+    return bool(completed.stdout.strip())
