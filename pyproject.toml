@@ -52,6 +52,7 @@ db = [
 
 [project.scripts]
 graph-sym-perf = "graph_sym_perf.cli.__main__:main"
+graphsymperf = "graph_sym_perf.cli.runtime_first:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -59,3 +60,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "contract: characterization and architecture contracts used during the runtime-first migration",
+]
