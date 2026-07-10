@@ -8,6 +8,7 @@ from pathlib import Path
 
 from graph_sym_perf.experiment.planner import build_run_plan, write_resolved_manifest
 from graph_sym_perf.experiment.spec import load_experiment_spec
+from graph_sym_perf.experiment.doctor_v2 import run_doctor
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,9 +46,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"runtime-first plan: systems=7 shards={len(plan.tasks)} accepted_pair_budget={plan.total_accepted_pair_budget}")
             return 0
         if args.experiment_command == "doctor":
-            missing = [name for system in spec.systems.values() for name in system.required_env if not __import__("os").environ.get(name)]
-            print(f"doctor: targets={len(spec.targets)} gdsmith_dirty={plan.source_revision.gdsmith_dirty} missing_env={len(missing)}")
-            return 0 if not missing and plan.source_revision.gdsmith_dirty is False else 4
+            report = run_doctor(args.config)
+            print(f"doctor: targets={len(report.systems)} gdsmith_dirty={report.gdsmith_dirty} ready={report.ready}")
+            return 0 if report.ready else 4
         print("experiment run refused: run doctor first; formal runs require a clean GDsmith checkout and configured targets")
         return 4
     if args.command == "experiment" and args.experiment_command in {"resume", "status"}:
