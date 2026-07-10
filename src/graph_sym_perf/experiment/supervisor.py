@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import threading
+import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 from graph_sym_perf.core import to_jsonable
+from graph_sym_perf.experiment.evidence_validation import (
+    CONTENT_HASH,
+    artifact_hashes,
+    canonical_hash,
+    read_json_object,
+    validate_failure_evidence,
+    validate_shard_evidence,
+)
 from graph_sym_perf.experiment.plan_models import RunPlan
 from graph_sym_perf.experiment.planner import resolved_manifest_hash
 from graph_sym_perf.experiment.process_monitor import ProcessMonitor, WorkerProcessError, bind_worker_attempt
@@ -22,6 +30,8 @@ from graph_sym_perf.experiment.state import (
     ShardJournal,
     ShardState,
     _append_jsonl_fsync,
+    _atomic_write_json,
+    can_transition,
 )
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
 
@@ -105,6 +115,8 @@ class ShardSupervisor:
                     index = futures[future]
                     try:
                         statuses[index] = future.result()
+                    except ManifestMismatchError:
+                        raise
                     except BaseException as exc:
                         statuses[index] = self._fail_unhandled_task(plan.tasks[index], index, manifest_hash, exc)
         return RunSummary(
@@ -124,6 +136,8 @@ class ShardSupervisor:
     ) -> str:
         try:
             return self._run_task(task, task_index, worker, manifest_hash, resume=resume)
+        except ManifestMismatchError:
+            raise
         except BaseException as exc:
             return self._fail_unhandled_task(task, task_index, manifest_hash, exc)
 
@@ -136,18 +150,45 @@ class ShardSupervisor:
     ) -> str:
         shard_dir = self._shard_dir(task, task_index)
         task_identity = _task_identity(task)
-        journal = ShardJournal(shard_dir, manifest_hash=manifest_hash, task_identity=task_identity)
-        if journal.state is not ShardState.FAILED_FINAL:
-            attempt = max(0, _latest_attempt(shard_dir))
-            self._record_failure(
-                task,
-                journal,
-                attempt,
-                ErrorKind.INFRASTRUCTURE_ERROR,
-                f"unhandled shard infrastructure error: {type(exc).__name__}: {exc}",
-                final=True,
-            )
+        reason = f"unhandled shard infrastructure error: {type(exc).__name__}: {exc}"
+        try:
+            journal = ShardJournal(shard_dir, manifest_hash=manifest_hash, task_identity=task_identity)
+            if journal.state is ShardState.FAILED_FINAL:
+                return "failed"
+            if can_transition(journal.state, ShardState.FAILED_FINAL):
+                self._record_failure(
+                    task,
+                    journal,
+                    max(0, _latest_attempt(shard_dir)),
+                    ErrorKind.INFRASTRUCTURE_ERROR,
+                    reason,
+                    final=True,
+                )
+                return "failed"
+        except BaseException as journal_exc:
+            reason = f"{reason}; journal unavailable: {type(journal_exc).__name__}: {journal_exc}"
+        self._persist_isolated_failure(shard_dir, manifest_hash, task_identity, reason)
         return "failed"
+
+    def _persist_isolated_failure(
+        self,
+        shard_dir: Path,
+        manifest_hash: str,
+        task_identity: str,
+        reason: str,
+    ) -> None:
+        payload = {
+            "error_kind": ErrorKind.INFRASTRUCTURE_ERROR.value,
+            "manifest_hash": manifest_hash,
+            "reason": reason,
+            "state": ShardState.FAILED_FINAL.value,
+            "task_identity": task_identity,
+            "timestamp": time.time(),
+        }
+        try:
+            _atomic_write_json(shard_dir / "failure.json", payload)
+        except OSError:
+            pass
 
     def _run_task(
         self,
@@ -160,22 +201,36 @@ class ShardSupervisor:
     ) -> str:
         shard_dir = self._shard_dir(task, task_index)
         task_identity = _task_identity(task)
+        if validate_failure_evidence(
+            shard_dir / "failure.json",
+            manifest_hash=manifest_hash,
+            task_identity=task_identity,
+        ) is not None:
+            return "failed"
         journal = ShardJournal(shard_dir, manifest_hash=manifest_hash, task_identity=task_identity)
-        recovered_accepted = _artifact_hashes(shard_dir / "accepted_pairs.jsonl", "pair_hash")
-        recovered_candidates = _artifact_hashes(shard_dir / "candidates.jsonl", "pair_hash")
-        if recovered_accepted or recovered_candidates:
-            journal.update_progress(
-                attempt=max(0, _latest_attempt(shard_dir)),
-                accepted_pair_hashes=recovered_accepted,
-                candidate_hashes=recovered_candidates,
-            )
         terminal_status = {
             ShardState.COMPLETED: "completed",
             ShardState.INCOMPLETE: "incomplete",
             ShardState.FAILED_FINAL: "failed",
         }.get(journal.state)
         if resume and terminal_status is not None:
+            checkpoint = read_json_object(journal.checkpoint_path)
+            validate_shard_evidence(
+                shard_dir,
+                checkpoint,
+                manifest_hash=manifest_hash,
+                task_identity=task_identity,
+                accepted_target=int(getattr(task, "accepted_query_pairs", 1000)),
+            )
             return terminal_status
+        recovered_accepted = artifact_hashes(shard_dir / "accepted_pairs.jsonl", "pair_hash")
+        recovered_candidates = artifact_hashes(shard_dir / "candidates.jsonl", "pair_hash")
+        if recovered_accepted or recovered_candidates:
+            journal.update_progress(
+                attempt=max(0, _latest_attempt(shard_dir)),
+                accepted_pair_hashes=recovered_accepted,
+                candidate_hashes=recovered_candidates,
+            )
         if resume:
             latest_attempt = _latest_attempt(shard_dir)
             if latest_attempt >= self.retry_limit and journal.state is not ShardState.PLANNED:
@@ -259,7 +314,7 @@ class ShardSupervisor:
             accepted_pairs = int(result.get("accepted_pairs", 0))
             accepted_hashes = _result_hashes(result, "accepted_pair_hashes", required=True)
             candidate_hashes = _result_hashes(result, "candidate_hashes", required=False) or set()
-            canonical_hashes = _artifact_hashes(
+            canonical_hashes = artifact_hashes(
                 shard_dir / "accepted_pairs.jsonl",
                 "pair_hash",
                 required=True,
@@ -415,9 +470,7 @@ def _manifest_hash(plan: RunPlan) -> str:
 
 
 def _task_identity(task: object) -> str:
-    payload = to_jsonable(task)
-    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=repr)
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return canonical_hash(to_jsonable(task))
 
 
 def _latest_attempt(shard_dir: Path) -> int:
@@ -428,33 +481,6 @@ def _latest_attempt(shard_dir: Path) -> int:
         except ValueError:
             continue
     return max(attempts, default=-1)
-
-
-_CONTENT_HASH = re.compile(r"^[0-9a-f]{64}$")
-
-
-def _artifact_hashes(path: Path, key: str, *, required: bool = False) -> set[str]:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        if required:
-            raise OSError(f"required append-only artifact is missing: {path}")
-        return set()
-    hashes: set[str] = set()
-    for line in lines:
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise OSError(f"corrupt append-only artifact: {path}") from exc
-        if not isinstance(value, Mapping):
-            raise OSError(f"append-only artifact record is not an object: {path}")
-        content_hash = value.get(key)
-        if not isinstance(content_hash, str) or _CONTENT_HASH.fullmatch(content_hash) is None:
-            raise OSError(f"append-only artifact has invalid {key}: {path}")
-        if content_hash in hashes:
-            raise OSError(f"append-only artifact contains duplicate {key}: {path}")
-        hashes.add(content_hash)
-    return hashes
 
 
 def _target_key(task: object, task_index: int) -> str:
@@ -472,7 +498,7 @@ def _result_hashes(result: Mapping[str, object], key: str, *, required: bool) ->
         return None
     value = result[key]
     if not isinstance(value, list | tuple) or not all(
-        isinstance(item, str) and _CONTENT_HASH.fullmatch(item) is not None for item in value
+        isinstance(item, str) and CONTENT_HASH.fullmatch(item) is not None for item in value
     ):
         raise TypeError(f"{key} must be a list of lowercase 64-hex strings")
     hashes = set(value)
@@ -492,7 +518,7 @@ def _verified_stage_evidence(result: Mapping[str, object], shard_dir: Path) -> d
             raise ValueError("invalid stage evidence reference")
         relative = reference.get("path")
         expected = reference.get("sha256")
-        if not isinstance(relative, str) or not isinstance(expected, str) or _CONTENT_HASH.fullmatch(expected) is None:
+        if not isinstance(relative, str) or not isinstance(expected, str) or CONTENT_HASH.fullmatch(expected) is None:
             raise ValueError("invalid stage evidence path or hash")
         path = (shard_dir / relative).resolve()
         if path != root and root not in path.parents:

@@ -549,3 +549,66 @@ def test_status_rejects_checkpoint_copied_from_another_manifest_task(tmp_path) -
     assert status.completed == 1
     assert status.failed == 1
     assert status.invalid == 1
+
+
+def test_terminal_resume_revalidates_missing_canonical_artifact_before_completed(tmp_path) -> None:
+    task = ShardTask(TargetSystem.NEO4J, 0, 41, 1, 1, 60)
+    plan = RunPlan("terminal-revalidate", 2, (task,), 1, SourceRevision(None, None, None))
+    run_id = "terminal-revalidate"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    write_resolved_manifest(plan, run_dir / "resolved_manifest.json")
+    supervisor = ShardSupervisor(run_dir, retry_limit=0)
+    assert supervisor.run(plan, _DurableStageWorker()).completed == (task,)
+    accepted_path = run_dir / "shards" / "neo4j-000" / "accepted_pairs.jsonl"
+    accepted_path.unlink()
+
+    summary = supervisor.resume(plan, lambda _task: pytest.fail("invalid terminal evidence must not rerun"))
+
+    assert summary.completed == ()
+    assert summary.failed == (task,)
+    assert supervisor.resume(plan, lambda _task: pytest.fail("typed terminal failure must be stable")).failed == (task,)
+    status = ExperimentLifecycle(tmp_path).status(run_id)
+    assert (status.completed, status.failed, status.invalid) == (0, 1, 1)
+    failure = json.loads((run_dir / "shards" / "neo4j-000" / "failure.json").read_text(encoding="utf-8"))
+    assert failure["state"] == "failed_final"
+    assert failure["error_kind"] == "INFRASTRUCTURE_ERROR"
+    (run_dir / "shards" / "neo4j-000" / "checkpoint.json").unlink()
+    marker_only_status = ExperimentLifecycle(tmp_path).status(run_id)
+    assert (marker_only_status.active, marker_only_status.failed, marker_only_status.invalid) == (0, 1, 1)
+
+
+def test_corrupt_checkpoint_and_events_are_preserved_while_other_shard_continues(tmp_path) -> None:
+    bad = ShardTask(TargetSystem.NEO4J, 0, 51, 1, 1, 60)
+    good = ShardTask(TargetSystem.MEMGRAPH, 0, 52, 1, 1, 60)
+    plan = RunPlan("corrupt-journal", 2, (bad, good), 2, SourceRevision(None, None, None))
+    run_id = "corrupt-journal"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    write_resolved_manifest(plan, run_dir / "resolved_manifest.json")
+    bad_dir = run_dir / "shards" / "neo4j-000"
+    bad_dir.mkdir(parents=True)
+    checkpoint_bytes = b"{broken-checkpoint}\n"
+    event_bytes = b"{broken-event}\n"
+    (bad_dir / "checkpoint.json").write_bytes(checkpoint_bytes)
+    (bad_dir / "events.jsonl").write_bytes(event_bytes)
+
+    summary = ShardSupervisor(
+        run_dir,
+        retry_limit=0,
+        process_isolation=True,
+        max_parallel_generation_systems=2,
+    ).resume(plan, _ParallelRecoveryWorker())
+
+    assert summary.failed == (bad,)
+    assert summary.completed == (good,)
+    assert (bad_dir / "checkpoint.json").read_bytes() == checkpoint_bytes
+    assert (bad_dir / "events.jsonl").read_bytes() == event_bytes
+    failure = json.loads((bad_dir / "failure.json").read_text(encoding="utf-8"))
+    assert failure["state"] == "failed_final"
+    assert failure["error_kind"] == "INFRASTRUCTURE_ERROR"
+    repeated = ShardSupervisor(run_dir, retry_limit=0).resume(plan, _ParallelRecoveryWorker())
+    assert repeated.failed == (bad,)
+    assert repeated.completed == (good,)
+    status = ExperimentLifecycle(tmp_path).status(run_id)
+    assert (status.completed, status.failed, status.invalid) == (1, 1, 1)
