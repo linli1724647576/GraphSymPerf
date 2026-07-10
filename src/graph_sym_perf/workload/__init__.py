@@ -1,0 +1,1 @@
+"""Accepted query-pair construction."""
