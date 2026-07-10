@@ -1,9 +1,9 @@
 schema_version: 1
 systems:
   neo4j: {required_env: [GRAPHSYMPERF_NEO4J_URI, GRAPHSYMPERF_NEO4J_USER, GRAPHSYMPERF_NEO4J_PASSWORD], dialect: cypher, graph_isolation: database, default_timeout_seconds: 60}
-  memgraph: {required_env: [GRAPHSYMPERF_MEMGRAPH_URI], dialect: cypher, graph_isolation: database, default_timeout_seconds: 60}
+  memgraph: {required_env: [GRAPHSYMPERF_MEMGRAPH_HOST], dialect: cypher, graph_isolation: database, default_timeout_seconds: 60}
   falkordb: {required_env: [GRAPHSYMPERF_FALKORDB_HOST], dialect: cypher, graph_isolation: graph_key, default_timeout_seconds: 60}
-  agensgraph: {required_env: [GRAPHSYMPERF_AGENSGRAPH_DSN], dialect: agensgraph, graph_isolation: graph_name, default_timeout_seconds: 60}
-  arcadedb: {required_env: [GRAPHSYMPERF_ARCADEDB_URL], dialect: cypher, graph_isolation: database, default_timeout_seconds: 60}
-  apache_age: {required_env: [GRAPHSYMPERF_APACHE_AGE_DSN], dialect: apache_age, graph_isolation: graph_name, default_timeout_seconds: 60}
+  agensgraph: {required_env: [GRAPHSYMPERF_AGENSGRAPH_URI], dialect: agensgraph, graph_isolation: graph_name, default_timeout_seconds: 60}
+  arcadedb: {required_env: [GRAPHSYMPERF_ARCADEDB_HTTP_URL], dialect: cypher, graph_isolation: database, default_timeout_seconds: 60}
+  apache_age: {required_env: [GRAPHSYMPERF_APACHE_AGE_URI], dialect: apache_age, graph_isolation: graph_name, default_timeout_seconds: 60}
   ladybugdb: {required_env: [GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH], dialect: cypher, graph_isolation: database_file, default_timeout_seconds: 60}
