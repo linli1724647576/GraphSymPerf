@@ -1,13 +1,13 @@
 from dataclasses import replace
 
-from graph_sym_perf.reducer.models import MinimalityProof
+from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 
 
 def _pair() -> EquivalentQueryPair:
     return EquivalentQueryPair(
-        "MATCH (n) WHERE n.x > 0 RETURN n ORDER BY n.x",
-        "MATCH (n) WHERE true RETURN n ORDER BY n.x",
+        "MATCH (n), (m) WHERE n.x > 0 AND m.x = 1 RETURN n ORDER BY n.x",
+        "MATCH (n), (m) WHERE n.x > 0 AND m.x = 1 RETURN n ORDER BY n.x",
         {},
         "graph",
         "dbms",
@@ -15,13 +15,9 @@ def _pair() -> EquivalentQueryPair:
 
 
 def _full_results() -> tuple[tuple[str, str, str], ...]:
-    return (
-        ("a:drop_clause_0", "symptom_not_preserved", "1" * 64),
-        ("a:drop_clause_1", "symptom_not_preserved", "2" * 64),
-        ("a:drop_clause_3", "symptom_not_preserved", "3" * 64),
-        ("b:drop_clause_0", "symptom_not_preserved", "4" * 64),
-        ("b:drop_clause_1", "symptom_not_preserved", "5" * 64),
-        ("b:drop_clause_3", "symptom_not_preserved", "6" * 64),
+    return tuple(
+        (deletion.canonical_id, "symptom_not_preserved", f"{index:x}" * 64)
+        for index, deletion in enumerate(MinimalityUniverse.recompute(_pair()).deletions, start=1)
     )
 
 

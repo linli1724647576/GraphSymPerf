@@ -241,6 +241,39 @@ def test_only_validation_passed_reduced_core_certificate_becomes_submit_ready() 
     assert issue.issue_id == _expected_issue_id(report, reduction)
 
 
+def test_unchanged_pair_cannot_promote_as_reduced_valid() -> None:
+    pair = _original_pair()
+    final_validation = _report(pair=pair)
+    universe = MinimalityUniverse.recompute(pair)
+    reduction = ReductionReport(
+        ReductionStatus.REDUCED_VALID,
+        pair,
+        pair,
+        (),
+        (),
+        _evidence(pair=pair),
+        minimality_proof=MinimalityProof.from_results(
+            pair,
+            tuple(
+                (deletion.canonical_id, "symptom_not_preserved", f"{index:x}" * 64)
+                for index, deletion in enumerate(universe.deletions, start=1)
+            ),
+        ),
+        final_validation=final_validation,
+        reduced_candidate_hash=final_validation.candidate_hash,
+        validation_policy_hash=final_validation.policy_hash,
+        certificate_hash=safety_certificate_hash(_certificate()),
+    )
+    report = _report(pair=pair)
+
+    assert promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=_duplicate_clearance(issue_id=_expected_issue_id(report, reduction)),
+    ) is None
+
+
 def test_promotion_rejects_clearance_for_a_different_deterministic_issue_id() -> None:
     assert promote(
         _report(),

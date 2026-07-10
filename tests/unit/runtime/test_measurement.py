@@ -56,6 +56,8 @@ def test_discovery_binds_queries_parameters_and_pair_identity() -> None:
     assert all(parameters == {"tenant": 7} for _query, parameters in executor.calls)
     assert evidence.graph_snapshot_hash == "graph-hash"
     assert evidence.dbms_fingerprint == "dbms-hash"
+    assert evidence.measurement_source == "ordinary_execute"
+    assert evidence.measurement_protocol == "ordinary-execute-5-pair-v1"
 
 
 def test_paired_schedule_is_seeded_and_balanced_for_discovery_and_validation() -> None:

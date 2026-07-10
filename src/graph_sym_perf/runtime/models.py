@@ -59,6 +59,8 @@ class RuntimeEvidence:
     slow_query: str | None = None
     graph_snapshot_hash: str | None = None
     dbms_fingerprint: str | None = None
+    measurement_source: str | None = None
+    measurement_protocol: str | None = None
 
 
 @dataclass(frozen=True)

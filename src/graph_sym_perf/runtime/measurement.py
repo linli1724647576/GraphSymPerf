@@ -65,6 +65,8 @@ class RuntimeHarness:
             evidence,
             graph_snapshot_hash=pair.graph_snapshot_hash,
             dbms_fingerprint=pair.dbms_fingerprint,
+            measurement_source="ordinary_execute",
+            measurement_protocol="ordinary-execute-5-pair-v1",
         )
 
     def measure_validation(
@@ -98,6 +100,8 @@ class RuntimeHarness:
             verdict,
             graph_snapshot_hash=pair.graph_snapshot_hash,
             dbms_fingerprint=pair.dbms_fingerprint,
+            measurement_source="ordinary_execute",
+            measurement_protocol="ordinary-execute-20-pair-v1",
         )
 
     def measure_pair(
