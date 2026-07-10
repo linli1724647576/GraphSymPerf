@@ -11,8 +11,10 @@ import hashlib
 import json
 import os
 import re
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -21,7 +23,7 @@ from urllib.parse import unquote, urlparse
 from graph_sym_perf.adapters import create_adapter
 from graph_sym_perf.adapters.base import DBMSFingerprint
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
-from graph_sym_perf.core import GdsmithConfig, TargetSystem
+from graph_sym_perf.core import GdsmithConfig, QueryTimeoutError, TargetSystem
 from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
 from graph_sym_perf.dialects.apache_age import ApacheAgeDialect
 from graph_sym_perf.dialects.base import DecisionKind, PortableQuery
@@ -29,10 +31,13 @@ from graph_sym_perf.dialects.native import NativeCypherDialect
 from graph_sym_perf.equivalence.checker import compare_typed_results
 from graph_sym_perf.equivalence.purity import assess_query_purity
 from graph_sym_perf.experiment.plan_models import ExperimentSpec, ShardTask
+from graph_sym_perf.experiment.scheduling import AttemptContext
+from graph_sym_perf.experiment.state import ErrorKind, ShardState, _append_jsonl_fsync, _atomic_write_json, _fsync_directory
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
 from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, RuntimeVerdict
+from graph_sym_perf.reliability.findings import ReliabilityFindingStore
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,113 @@ class _AdapterFactory(Protocol):
 
 class _GenerationRunner(Protocol):
     def __call__(self, task: ShardTask, raw_dir: Path) -> GeneratedShard: ...
+
+
+class WorkerFailure(RuntimeError):
+    def __init__(self, kind: ErrorKind, message: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+class AdapterQueryProxy:
+    """Expose an adapter while publishing each execute call's hard deadline."""
+
+    def __init__(
+        self,
+        adapter: Any,
+        *,
+        attempt_dir: str | Path,
+        graph_hash: str,
+        dbms_fingerprint: str,
+        default_timeout_seconds: float,
+        on_error: Callable[[ErrorKind, Mapping[str, object]], None] | None = None,
+    ) -> None:
+        self._adapter = adapter
+        self.attempt_dir = Path(attempt_dir)
+        self.graph_hash = graph_hash
+        self._dbms_fingerprint = dbms_fingerprint
+        self.default_timeout_seconds = default_timeout_seconds
+        self.on_error = on_error
+
+    def update_dbms_fingerprint(self, value: str) -> None:
+        self._dbms_fingerprint = value
+
+    def execute(
+        self,
+        query: str,
+        parameters: Mapping[str, Any],
+        query_kind: str,
+        **kwargs: Any,
+    ) -> Any:
+        timeout = kwargs.get("timeout_seconds")
+        if not isinstance(timeout, int | float) or isinstance(timeout, bool) or timeout <= 0:
+            timeout = self.default_timeout_seconds
+            kwargs["timeout_seconds"] = timeout
+        return self._call_with_inflight(
+            query_identity=query,
+            query_kind=query_kind,
+            timeout_seconds=float(timeout),
+            operation=lambda: self._adapter.execute(query, parameters, query_kind, **kwargs),
+        )
+
+    def ensure_schema(self) -> Any:
+        operation = getattr(self._adapter, "ensure_schema", None)
+        if not callable(operation):
+            return None
+        return self._call_with_inflight(
+            query_identity="adapter.ensure_schema",
+            query_kind="schema_setup",
+            timeout_seconds=self.default_timeout_seconds,
+            operation=operation,
+        )
+
+    def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> Any:
+        operation = getattr(self._adapter, "load_gdsmith_graph")
+        identity = "\n".join(statement.strip() for statement in statements)
+        return self._call_with_inflight(
+            query_identity=identity,
+            query_kind="graph_load",
+            timeout_seconds=self.default_timeout_seconds,
+            operation=lambda: operation(statements),
+        )
+
+    def _call_with_inflight(
+        self,
+        *,
+        query_identity: str,
+        query_kind: str,
+        timeout_seconds: float,
+        operation: Callable[[], Any],
+    ) -> Any:
+        started_at = time.time()
+        inflight = {
+            "dbms_fingerprint": self._dbms_fingerprint,
+            "deadline": started_at + timeout_seconds,
+            "graph_hash": self.graph_hash,
+            "query_hash": _query_hash(query_identity),
+            "query_kind": query_kind,
+            "started_at": started_at,
+        }
+        _atomic_write_json(self.attempt_dir / "inflight.json", inflight)
+        try:
+            return operation()
+        except QueryTimeoutError:
+            self._notify(ErrorKind.QUERY_TIMEOUT, inflight)
+            raise
+        except TimeoutError:
+            self._notify(ErrorKind.DRIVER_TIMEOUT, inflight)
+            raise
+        finally:
+            inflight_path = self.attempt_dir / "inflight.json"
+            inflight_path.unlink(missing_ok=True)
+            _fsync_directory(self.attempt_dir)
+
+    def _notify(self, kind: ErrorKind, inflight: Mapping[str, object]) -> None:
+        if self.on_error is not None:
+            self.on_error(kind, inflight)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._adapter, name)
 
 
 class RuntimeFirstShardWorker:
@@ -74,43 +186,125 @@ class RuntimeFirstShardWorker:
         self._generation_runner = generation_runner or self._generate_with_gdsmith
         self._adapter_factory = adapter_factory or self._create_adapter
         self._run_dir: Path | None = None
+        self._attempt_dir: Path | None = None
+        self._attempt_context: AttemptContext | None = None
 
     def bind_run_dir(self, run_dir: str | Path) -> None:
         self._run_dir = Path(run_dir)
+
+    def bind_attempt_dir(self, attempt_dir: str | Path) -> None:
+        self._attempt_dir = Path(attempt_dir)
+
+    def bind_attempt_context(self, context: AttemptContext) -> None:
+        self._attempt_context = context
+        attempt_dir = getattr(context, "attempt_dir", None)
+        if attempt_dir is not None:
+            self._attempt_dir = Path(attempt_dir)
 
     def __call__(self, task: ShardTask) -> dict[str, object]:
         if self._run_dir is None:
             raise RuntimeError("shard worker was not bound to an immutable run directory")
         shard_dir = self._run_dir / "shards" / f"{task.target.value}-{task.shard_index:03d}"
-        shard_dir.mkdir(parents=True, exist_ok=False)
-        generated = self._generation_runner(task, shard_dir / "gdsmith_raw")
-        adapter = self._adapter_factory(task)
+        shard_dir.mkdir(parents=True, exist_ok=True)
+        attempt_dir = self._attempt_dir
+        if attempt_dir is None:
+            # Direct unit/integration use still gets an explicit attempt scope;
+            # the formal supervisor always binds the numbered attempt itself.
+            attempt_dir = shard_dir / "attempt-000"
+            attempt_dir.mkdir(parents=True, exist_ok=False)
+            self._attempt_dir = attempt_dir
+        generation_lease = self._attempt_context.generation_lease() if self._attempt_context else nullcontext()
+        with generation_lease:
+            generated = self._generation_runner(task, attempt_dir / "gdsmith_raw")
+        self._transition_attempt(ShardState.LOADING)
+        graph_hash = _graph_snapshot_hash(generated.graph_statements)
+        timeout = float(self.spec.systems[task.target].default_timeout_seconds)
+        measurement_lease = self._attempt_context.measurement_lease() if self._attempt_context else nullcontext()
+        with measurement_lease:
+            return self._measure_generated(task, shard_dir, attempt_dir, generated, graph_hash, timeout)
+
+    def _measure_generated(
+        self,
+        task: ShardTask,
+        shard_dir: Path,
+        attempt_dir: Path,
+        generated: GeneratedShard,
+        graph_hash: str,
+        timeout: float,
+    ) -> dict[str, object]:
+        load_adapter = self._adapter_factory(task)
+        load_proxy = AdapterQueryProxy(
+            load_adapter,
+            attempt_dir=attempt_dir,
+            graph_hash=graph_hash,
+            dbms_fingerprint="unverified",
+            default_timeout_seconds=timeout,
+            on_error=lambda kind, inflight: self._record_query_failure(kind, inflight, attempt_dir),
+        )
         try:
-            self._reset_and_load(adapter, generated.graph_statements)
-            fingerprint = _adapter_dbms_fingerprint(adapter)
+            self._reset_and_load(load_proxy, generated.graph_statements)
+            fingerprint = _adapter_dbms_fingerprint(load_proxy)
             if fingerprint.available:
-                accepted, rejects = self._build_accepted_pairs(
-                    adapter,
+                assert fingerprint.value is not None
+                load_proxy.update_dbms_fingerprint(fingerprint.value)
+                self._transition_attempt(ShardState.BUILDING_ACCEPTED_PAIRS)
+                accepted, rejects, accepted_hashes = self._build_accepted_pairs(
+                    load_proxy,
                     task,
                     generated.query_texts,
                     shard_dir,
-                    graph_snapshot_hash=_graph_snapshot_hash(generated.graph_statements),
+                    graph_snapshot_hash=graph_hash,
                     dbms_fingerprint=fingerprint.value,
                 )
-                candidates = self._screen_pairs(adapter, task, accepted, shard_dir)
             else:
                 accepted = []
+                accepted_hashes = set()
                 rejects = Counter({"DBMS_FINGERPRINT_UNAVAILABLE": 1})
-                candidates = 0
         finally:
-            adapter.close()
+            load_adapter.close()
+
+        candidate_hashes: set[str] = set()
+        candidates = 0
+        if fingerprint.available:
+            self._transition_attempt(ShardState.SCREENING)
+            measurement_adapter = self._adapter_factory(task)
+            measurement_proxy = AdapterQueryProxy(
+                measurement_adapter,
+                attempt_dir=attempt_dir,
+                graph_hash=graph_hash,
+                dbms_fingerprint="unverified",
+                default_timeout_seconds=timeout,
+                on_error=lambda kind, inflight: self._record_query_failure(kind, inflight, attempt_dir),
+            )
+            try:
+                measurement_fingerprint = _adapter_dbms_fingerprint(measurement_proxy)
+                self._require_same_health_epoch(fingerprint, measurement_fingerprint, attempt_dir)
+                assert measurement_fingerprint.value is not None
+                measurement_proxy.update_dbms_fingerprint(measurement_fingerprint.value)
+                candidate_records = self._screen_pairs(measurement_proxy, task, accepted)
+                final_fingerprint = _adapter_dbms_fingerprint(measurement_proxy)
+                self._require_same_health_epoch(fingerprint, final_fingerprint, attempt_dir)
+                candidate_path = shard_dir / "candidates.jsonl"
+                existing_candidates = _jsonl_hashes(candidate_path, "pair_hash")
+                for record in candidate_records:
+                    pair_hash = str(record["pair_hash"])
+                    if pair_hash in existing_candidates:
+                        continue
+                    _append_jsonl(candidate_path, record)
+                    existing_candidates.add(pair_hash)
+                candidate_hashes = existing_candidates
+                candidates = len(candidate_hashes)
+            finally:
+                measurement_adapter.close()
         summary = {
             "target": task.target.value,
             "shard_index": task.shard_index,
             "generation": dict(generated.generator_metadata),
             "generated_query_records": len(generated.query_texts),
-            "accepted_pairs": len(accepted),
+            "accepted_pairs": len(accepted_hashes),
+            "accepted_pair_hashes": sorted(accepted_hashes),
             "screened_candidates": candidates,
+            "candidate_hashes": sorted(candidate_hashes),
             "reject_reasons": dict(sorted(rejects.items())),
             "dbms_fingerprint": {
                 "available": fingerprint.available,
@@ -118,8 +312,47 @@ class RuntimeFirstShardWorker:
                 "reason": fingerprint.reason,
             },
         }
-        (shard_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (attempt_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return summary
+
+    def _transition_attempt(self, state: ShardState) -> None:
+        transition_attempt = getattr(self._attempt_context, "transition", None)
+        if callable(transition_attempt):
+            transition_attempt(state)
+
+    def _record_query_failure(
+        self,
+        kind: ErrorKind,
+        inflight: Mapping[str, object],
+        attempt_dir: Path,
+    ) -> None:
+        if self._run_dir is None:
+            return
+        ReliabilityFindingStore(self._run_dir).record(
+            kind=kind,
+            query_hash=str(inflight.get("query_hash", "")),
+            graph_hash=str(inflight.get("graph_hash", "")),
+            dbms_fingerprint=str(inflight.get("dbms_fingerprint", "")),
+            attempt_evidence=str(attempt_dir.relative_to(self._run_dir)),
+        )
+
+    @staticmethod
+    def _require_same_health_epoch(
+        expected: DBMSFingerprint,
+        actual: DBMSFingerprint,
+        attempt_dir: Path,
+    ) -> None:
+        if expected.available and actual.available and expected.value == actual.value:
+            return
+        _atomic_write_json(
+            attempt_dir / "runtime_invalidated.json",
+            {
+                "after": actual.value,
+                "before": expected.value,
+                "reason": actual.reason or "dbms_fingerprint_changed",
+            },
+        )
+        raise WorkerFailure(ErrorKind.DBMS_CRASHED, "DBMS health epoch changed during shard execution")
 
     def _reset_and_load(self, adapter: Any, graph_statements: tuple[str, ...]) -> None:
         # A shard can only start from a known empty graph.  Failure to reset is
@@ -139,16 +372,19 @@ class RuntimeFirstShardWorker:
         *,
         graph_snapshot_hash: str,
         dbms_fingerprint: str,
-    ) -> tuple[list[EquivalentQueryPair], Counter[str]]:
+    ) -> tuple[list[EquivalentQueryPair], Counter[str], set[str]]:
         accepted: list[EquivalentQueryPair] = []
         rejects: Counter[str] = Counter()
-        seen: set[str] = set()
         max_rows = int(self.spec.validation["max_result_rows"])
         timeout = self.spec.systems[task.target].default_timeout_seconds
         records_path = shard_dir / "accepted_pairs.jsonl"
+        seen = _accepted_pair_hashes(
+            records_path,
+            graph_snapshot_hash=graph_snapshot_hash,
+            dbms_fingerprint=dbms_fingerprint,
+        )
+        materialized: set[str] = set()
         for query in queries[: task.max_generated_seeds]:
-            if len(accepted) >= task.accepted_query_pairs:
-                break
             pair = _certified_boolean_pair(query)
             if pair is None:
                 rejects["RULE_NOT_APPLICABLE"] += 1
@@ -165,7 +401,21 @@ class RuntimeFirstShardWorker:
                 continue
             pair_hash = _pair_hash(base, transformed)
             if pair_hash in seen:
-                rejects["DUPLICATE_AST"] += 1
+                if pair_hash not in materialized:
+                    accepted.append(
+                        EquivalentQueryPair(
+                            base,
+                            transformed,
+                            {},
+                            graph_snapshot_hash,
+                            dbms_fingerprint,
+                        )
+                    )
+                    materialized.add(pair_hash)
+                else:
+                    rejects["DUPLICATE_AST"] += 1
+                continue
+            if len(seen) >= task.accepted_query_pairs:
                 continue
             try:
                 left = adapter.execute(base, {}, "acceptance_base", max_rows=max_rows, timeout_seconds=timeout)
@@ -189,6 +439,7 @@ class RuntimeFirstShardWorker:
                 dbms_fingerprint,
             )
             accepted.append(accepted_pair)
+            materialized.add(pair_hash)
             _append_jsonl(
                 records_path,
                 {
@@ -201,9 +452,14 @@ class RuntimeFirstShardWorker:
                     "equivalence": "complete_typed_equivalent",
                 },
             )
-        return accepted, rejects
+        return accepted, rejects, seen
 
-    def _screen_pairs(self, adapter: Any, task: ShardTask, pairs: list[EquivalentQueryPair], shard_dir: Path) -> int:
+    def _screen_pairs(
+        self,
+        adapter: Any,
+        task: ShardTask,
+        pairs: list[EquivalentQueryPair],
+    ) -> list[dict[str, object]]:
         policy_config = self.spec.runtime["screen"]
         policy = RuntimePolicy(
             warmups=int(policy_config["warmups"]),
@@ -214,7 +470,7 @@ class RuntimeFirstShardWorker:
         )
         threshold = float(policy_config["ratio"])
         harness = RuntimeHarness()
-        candidates = 0
+        candidates: list[dict[str, object]] = []
         for index, pair in enumerate(pairs):
             evidence = harness.measure_discovery(
                 adapter,
@@ -223,9 +479,7 @@ class RuntimeFirstShardWorker:
             )
             if evidence.verdict is not RuntimeVerdict.PASS or evidence.median_ratio is None or evidence.median_ratio < threshold:
                 continue
-            candidates += 1
-            _append_jsonl(
-                shard_dir / "candidates.jsonl",
+            candidates.append(
                 {
                     "pair_hash": _pair_hash(pair.query_a, pair.query_b),
                     "query_a": pair.query_a,
@@ -237,7 +491,7 @@ class RuntimeFirstShardWorker:
                     "discovery_median_delta_ms": evidence.median_delta_ms,
                     "discovery_slow_query": evidence.slow_query,
                     "runtime_protocol": "execute-only-screen-v3",
-                },
+                }
             )
         return candidates
 
@@ -330,8 +584,52 @@ def _adapter_dbms_fingerprint(adapter: Any) -> DBMSFingerprint:
 
 
 def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(dict(payload), sort_keys=True) + "\n")
+    _append_jsonl_fsync(path, payload)
+
+
+def _jsonl_hashes(path: Path, key: str) -> set[str]:
+    hashes: set[str] = set()
+    for record in _read_jsonl(path):
+        value = record.get(key)
+        if isinstance(value, str):
+            hashes.add(value)
+    return hashes
+
+
+def _accepted_pair_hashes(
+    path: Path,
+    *,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+) -> set[str]:
+    hashes: set[str] = set()
+    for record in _read_jsonl(path):
+        pair_hash = record.get("pair_hash")
+        if not isinstance(pair_hash, str):
+            continue
+        if record.get("graph_snapshot_hash") != graph_snapshot_hash:
+            raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "accepted-pair graph hash changed across resume")
+        if record.get("dbms_fingerprint") != dbms_fingerprint:
+            raise WorkerFailure(ErrorKind.DBMS_CRASHED, "accepted-pair DBMS fingerprint changed across resume")
+        hashes.add(pair_hash)
+    return hashes
+
+
+def _read_jsonl(path: Path) -> tuple[dict[str, object], ...]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return ()
+    records = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, f"invalid append-only record in {path}") from exc
+        if not isinstance(value, dict):
+            raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, f"non-object append-only record in {path}")
+        records.append(value)
+    return tuple(records)
 
 
 def _gdsmith_connection(target: TargetSystem, env: Mapping[str, str]) -> tuple[str, str, int, str, str]:

@@ -28,8 +28,11 @@ def main(argv: list[str] | None = None) -> int:
     experiment_commands.choices["plan"].add_argument("--output")
     resume = experiment_commands.add_parser("resume")
     resume.add_argument("--run-id", required=True)
+    resume.add_argument("--config", default="config/experiment.yaml")
+    resume.add_argument("--output-root", default="runs")
     status = experiment_commands.add_parser("status")
     status.add_argument("--run-id", required=True)
+    status.add_argument("--output-root", default="runs")
     migrate = experiment_commands.add_parser("migrate-config")
     migrate.add_argument("--input", required=True)
     migrate.add_argument("--output", required=True)
@@ -79,9 +82,32 @@ def main(argv: list[str] | None = None) -> int:
             f"incomplete={len(result.summary.incomplete)} failed={len(result.summary.failed)}"
         )
         return 0 if not result.summary.incomplete and not result.summary.failed else 5
-    if args.command == "experiment" and args.experiment_command in {"resume", "status"}:
-        print(f"{args.experiment_command}: run_id={args.run_id}")
-        return 0
+    if args.command == "experiment" and args.experiment_command == "resume":
+        try:
+            spec = load_experiment_spec(args.config)
+            worker = RuntimeFirstShardWorker(spec)
+            result = ExperimentLifecycle(args.output_root).resume(spec, worker, run_id=args.run_id)
+        except Exception as exc:
+            print(f"resume error: {exc}")
+            return 2
+        print(
+            "runtime-first resume: "
+            f"run_id={result.run_id} completed={len(result.summary.completed)} "
+            f"incomplete={len(result.summary.incomplete)} failed={len(result.summary.failed)}"
+        )
+        return 0 if not result.summary.incomplete and not result.summary.failed else 5
+    if args.command == "experiment" and args.experiment_command == "status":
+        try:
+            report = ExperimentLifecycle(args.output_root).status(args.run_id)
+        except Exception as exc:
+            print(f"status error: {exc}")
+            return 2
+        print(
+            "runtime-first status: "
+            f"run_id={report.run_id} total={report.total} completed={report.completed} "
+            f"incomplete={report.incomplete} failed={report.failed} active={report.active} invalid={report.invalid}"
+        )
+        return 0 if report.invalid == 0 else 5
     if args.command == "issue" and args.issue_command == "export":
         path = Path(args.issue)
         if not path.exists():

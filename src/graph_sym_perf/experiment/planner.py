@@ -80,7 +80,7 @@ def build_run_plan(
 def write_resolved_manifest(plan: RunPlan, path: str | Path) -> Path:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    payload = _manifest_payload(plan)
+    payload = resolved_manifest_payload(plan)
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
@@ -99,7 +99,7 @@ def write_resolved_manifest(plan: RunPlan, path: str | Path) -> Path:
     return destination
 
 
-def _manifest_payload(plan: RunPlan) -> dict[str, Any]:
+def resolved_manifest_payload(plan: RunPlan) -> dict[str, Any]:
     payload = to_jsonable(plan)
     payload["environment"] = {state.name: state.status for state in plan.environment}
     if plan.resolved_spec is not None:
