@@ -21,8 +21,16 @@ class LifecycleResult:
 
 
 class ExperimentLifecycle:
-    def __init__(self, output_root: str | Path = "runs") -> None:
+    def __init__(
+        self,
+        output_root: str | Path = "runs",
+        *,
+        process_isolation: bool = True,
+        hard_timeout_seconds: float | None = None,
+    ) -> None:
         self.output_root = Path(output_root)
+        self.process_isolation = process_isolation
+        self.hard_timeout_seconds = hard_timeout_seconds
 
     def run(self, spec: ExperimentSpec, worker: Callable[[object], dict], *, run_id: str | None = None) -> LifecycleResult:
         plan = build_run_plan(spec)
@@ -32,7 +40,12 @@ class ExperimentLifecycle:
             raise FileExistsError(f"run id already exists: {identifier}")
         run_dir.mkdir(parents=True)
         write_resolved_manifest(plan, run_dir / "resolved_manifest.json")
-        summary = ShardSupervisor(run_dir, retry_limit=int(spec.scheduling["shard_retry_limit"])).run(plan, worker)
+        summary = ShardSupervisor(
+            run_dir,
+            retry_limit=int(spec.scheduling["shard_retry_limit"]),
+            process_isolation=self.process_isolation,
+            hard_timeout_seconds=self.hard_timeout_seconds,
+        ).run(plan, worker)
         (run_dir / "run_summary.json").write_text(
             json.dumps(
                 {
