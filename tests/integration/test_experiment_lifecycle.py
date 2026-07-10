@@ -29,3 +29,22 @@ def test_formal_lifecycle_enables_process_isolation(monkeypatch, tmp_path) -> No
     ExperimentLifecycle(tmp_path).run(spec, lambda _task: {"accepted_pairs": 0})
 
     assert captured["process_isolation"] is True
+
+
+def test_lifecycle_binds_the_immutable_run_directory_to_a_shard_worker(tmp_path) -> None:
+    class _Worker:
+        bound_run_dir = None
+
+        def bind_run_dir(self, run_dir) -> None:
+            self.bound_run_dir = run_dir
+
+        def __call__(self, task):
+            return {"accepted_pairs": task.accepted_query_pairs}
+
+    worker = _Worker()
+    result = ExperimentLifecycle(tmp_path, process_isolation=False).run(
+        load_experiment_spec("config/experiment.yaml"),
+        worker,
+    )
+
+    assert worker.bound_run_dir == result.run_dir

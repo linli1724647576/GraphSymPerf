@@ -40,6 +40,9 @@ class ExperimentLifecycle:
             raise FileExistsError(f"run id already exists: {identifier}")
         run_dir.mkdir(parents=True)
         write_resolved_manifest(plan, run_dir / "resolved_manifest.json")
+        bind_run_dir = getattr(worker, "bind_run_dir", None)
+        if callable(bind_run_dir):
+            bind_run_dir(run_dir)
         summary = ShardSupervisor(
             run_dir,
             retry_limit=int(spec.scheduling["shard_retry_limit"]),

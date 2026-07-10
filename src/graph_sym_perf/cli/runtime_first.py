@@ -9,6 +9,8 @@ from pathlib import Path
 from graph_sym_perf.experiment.planner import build_run_plan, write_resolved_manifest
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.doctor_v2 import run_doctor
+from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle
+from graph_sym_perf.experiment.worker import RuntimeFirstShardWorker
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("plan", "doctor", "run"):
         command = experiment_commands.add_parser(name)
         command.add_argument("--config", default="config/experiment.yaml")
+    experiment_commands.choices["run"].add_argument("--output-root", default="runs")
     experiment_commands.choices["plan"].add_argument("--output")
     resume = experiment_commands.add_parser("resume")
     resume.add_argument("--run-id", required=True)
@@ -49,8 +52,18 @@ def main(argv: list[str] | None = None) -> int:
             report = run_doctor(args.config)
             print(f"doctor: targets={len(report.systems)} gdsmith_dirty={report.gdsmith_dirty} ready={report.ready}")
             return 0 if report.ready else 4
-        print("experiment run refused: run doctor first; formal runs require a clean GDsmith checkout and configured targets")
-        return 4
+        report = run_doctor(args.config, output_root=args.output_root)
+        if not report.ready:
+            print("experiment run refused: doctor is not ready; inspect the generated doctor report")
+            return 4
+        worker = RuntimeFirstShardWorker(spec)
+        result = ExperimentLifecycle(args.output_root).run(spec, worker)
+        print(
+            "runtime-first run: "
+            f"run_id={result.run_id} completed={len(result.summary.completed)} "
+            f"incomplete={len(result.summary.incomplete)} failed={len(result.summary.failed)}"
+        )
+        return 0 if not result.summary.incomplete and not result.summary.failed else 5
     if args.command == "experiment" and args.experiment_command in {"resume", "status"}:
         print(f"{args.experiment_command}: run_id={args.run_id}")
         return 0
