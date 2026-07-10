@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any, Mapping
 from urllib.parse import urlparse, urlunparse
 
-from graph_sym_perf.adapters.base import BaseAdapter
+from graph_sym_perf.adapters.base import BaseAdapter, normalized_uri_endpoint
 from graph_sym_perf.adapters.common_cypher import _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_jsonable
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
@@ -179,6 +179,17 @@ class ApacheAgeAdapter(BaseAdapter):
             self._conn.close()
         self._conn = None
 
+    def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
+        endpoint = dict(
+            normalized_uri_endpoint(
+                self.env_value("GRAPHSYMPERF_APACHE_AGE_URI"),
+                default_port=5432,
+                database=self.optional_env_value("database"),
+            )
+        )
+        endpoint["graph"] = self.env_value("GRAPHSYMPERF_APACHE_AGE_GRAPH", "graph_sym_perf")
+        return endpoint
+
     def _run_wrapped(self, cypher: str, query_kind: str) -> ExecutionResult:
         query = cypher if re.search(r"\bRETURN\b", cypher, flags=re.IGNORECASE) else f"{cypher} RETURN 1 AS ok"
         return self.execute(query, {}, query_kind)
@@ -226,6 +237,13 @@ class ApacheAgeAdapter(BaseAdapter):
                 uri = _uri_with_db(uri, database)
             self._graph_name = self.env_value("GRAPHSYMPERF_APACHE_AGE_GRAPH", "graph_sym_perf")
             self._conn = psycopg.connect(uri)
+            with self._conn.cursor() as cursor:
+                cursor.execute("SELECT version()")
+                postgres_row = cursor.fetchone()
+                cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'age'")
+                age_row = cursor.fetchone()
+            if postgres_row and age_row:
+                self._cache_server_version(f"{postgres_row[0]}|age:{age_row[0]}")
         except Exception as exc:
             raise AdapterError(f"cannot connect to Apache AGE: {exc}") from exc
 

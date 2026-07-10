@@ -6,7 +6,7 @@ import re
 from time import perf_counter
 from typing import Any, Mapping
 
-from graph_sym_perf.adapters.base import BaseAdapter
+from graph_sym_perf.adapters.base import BaseAdapter, normalized_uri_endpoint
 from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_jsonable
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, GdsmithReplayNode, parse_gdsmith_replay_graph
@@ -183,6 +183,17 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
             self._conn.close()
         self._conn = None
 
+    def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
+        endpoint = dict(
+            normalized_uri_endpoint(
+                self.env_value("GRAPHSYMPERF_AGENSGRAPH_URI"),
+                default_port=5432,
+                database=self.optional_env_value("database"),
+            )
+        )
+        endpoint["graph"] = self.env_value("GRAPHSYMPERF_AGENSGRAPH_GRAPH", "graph_sym_perf")
+        return endpoint
+
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         if _has_multi_label_node(query):
             return False
@@ -235,6 +246,10 @@ SET n += $properties
                 uri = _uri_with_db(uri, database)
             self._graph_name = self.env_value("GRAPHSYMPERF_AGENSGRAPH_GRAPH", "graph_sym_perf")
             self._conn = psycopg.connect(uri)
+            with self._conn.cursor() as cursor:
+                cursor.execute("SELECT version()")
+                row = cursor.fetchone()
+            self._cache_server_version(row[0] if row else None)
         except Exception as exc:
             raise AdapterError(f"cannot connect to AgensGraph: {exc}") from exc
 

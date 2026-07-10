@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+from dataclasses import dataclass
+from hashlib import sha256
+from importlib import metadata
+from pathlib import Path
 from typing import Any, Mapping, Protocol
+from urllib.parse import urlparse
 
 from graph_sym_perf.core import ExecutionResult, PlanRecord, RunConfig, SystemConfig, TargetSystem
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph
@@ -55,6 +61,19 @@ class GraphAdapter(Protocol):
     def close(self) -> None:
         ...
 
+    def dbms_fingerprint(self) -> "DBMSFingerprint":
+        ...
+
+
+@dataclass(frozen=True)
+class DBMSFingerprint:
+    value: str | None
+    reason: str | None = None
+
+    @property
+    def available(self) -> bool:
+        return self.value is not None
+
 
 class BaseAdapter:
     dependency_modules: tuple[str, ...] = ()
@@ -72,6 +91,8 @@ class BaseAdapter:
         self.env = env
         self.allow_create = allow_create
         self.target = system_config.target
+        self._server_version: str | None = None
+        self._driver_version: str | None = None
 
     def check_dependency(self) -> tuple[bool, str]:
         missing = [name for name in self.dependency_modules if importlib.util.find_spec(name) is None]
@@ -92,3 +113,59 @@ class BaseAdapter:
         if env_name is None:
             return default
         return self.env_value(env_name, default)
+
+    def dbms_fingerprint(self) -> DBMSFingerprint:
+        server_version = getattr(self, "_server_version", None)
+        if not server_version:
+            return DBMSFingerprint(None, "server_version_unavailable")
+        driver_package = self.dependency_modules[0] if self.dependency_modules else None
+        driver_version = getattr(self, "_driver_version", None) or _package_version(driver_package)
+        if not driver_package or not driver_version:
+            return DBMSFingerprint(None, "driver_version_unavailable")
+        endpoint = self._fingerprint_endpoint_identity()
+        if not endpoint:
+            return DBMSFingerprint(None, "endpoint_identity_unavailable")
+        payload = {
+            "target": self.target.value,
+            "adapter_type": f"{type(self).__module__}.{type(self).__qualname__}",
+            "driver_package": driver_package,
+            "driver_version": str(driver_version),
+            "endpoint": endpoint,
+            "server_version": str(server_version),
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return DBMSFingerprint(sha256(canonical.encode("utf-8")).hexdigest())
+
+    def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
+        return {}
+
+    def _cache_server_version(self, value: object) -> None:
+        if value not in (None, ""):
+            self._server_version = str(value)
+
+
+def normalized_uri_endpoint(uri: str | None, *, default_port: int, database: str | None = None) -> Mapping[str, object]:
+    if not uri:
+        return {}
+    parsed = urlparse(uri)
+    return {
+        "scheme": parsed.scheme.lower(),
+        "host": (parsed.hostname or "").lower(),
+        "port": parsed.port or default_port,
+        "database": database or parsed.path.lstrip("/") or None,
+    }
+
+
+def normalized_file_endpoint(path: str | None) -> Mapping[str, object]:
+    if not path:
+        return {}
+    return {"database_path": str(Path(path).expanduser().resolve(strict=False))}
+
+
+def _package_version(package: str | None) -> str | None:
+    if not package:
+        return None
+    try:
+        return metadata.version(package)
+    except metadata.PackageNotFoundError:
+        return None

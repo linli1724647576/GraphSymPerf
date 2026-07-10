@@ -5,7 +5,7 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any, Mapping
 
-from graph_sym_perf.adapters.base import BaseAdapter
+from graph_sym_perf.adapters.base import BaseAdapter, normalized_uri_endpoint
 from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryTimeoutError, TargetSystem, to_jsonable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
@@ -105,6 +105,13 @@ class Neo4jAdapter(CypherLoaderMixin, BaseAdapter):
             self._driver.close()
             self._driver = None
 
+    def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
+        return normalized_uri_endpoint(
+            self.env_value("GRAPHSYMPERF_NEO4J_URI"),
+            default_port=7687,
+            database=self.optional_env_value("database"),
+        )
+
     def _connect(self) -> None:
         if self._driver is not None:
             return
@@ -117,6 +124,8 @@ class Neo4jAdapter(CypherLoaderMixin, BaseAdapter):
             self._database = self.optional_env_value("database")
             self._driver = GraphDatabase.driver(uri, auth=(user, password))
             self._driver.verify_connectivity()
+            info = self._driver.get_server_info()
+            self._cache_server_version(getattr(info, "agent", None))
         except Exception as exc:
             raise AdapterError(f"cannot connect to Neo4j: {exc}") from exc
 

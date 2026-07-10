@@ -142,6 +142,13 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
         self._graph = None
         self._db = None
 
+    def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
+        return {
+            "host": (self.env_value("GRAPHSYMPERF_FALKORDB_HOST", "127.0.0.1") or "").lower(),
+            "port": int(self.env_value("GRAPHSYMPERF_FALKORDB_PORT", "6379")),
+            "graph": self.env_value("GRAPHSYMPERF_FALKORDB_GRAPH", "graph_sym_perf"),
+        }
+
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         upper = query.upper()
         if " STARTS WITH " in upper or " ENDS WITH " in upper:
@@ -168,6 +175,7 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
                 kwargs["password"] = password
             self._db = FalkorDB(**kwargs)
             self._graph = self._db.select_graph(graph_name)
+            self._cache_server_version(_falkordb_server_version(self._db))
         except Exception as exc:
             raise AdapterError(f"cannot connect to FalkorDB: {exc}") from exc
 
@@ -190,6 +198,24 @@ def _run_graph_query(graph: Any, query: str, parameters: Mapping[str, Any]) -> A
         return graph.query(query, dict(parameters))
     except TypeError:
         return graph.query(_query_with_params(query, parameters))
+
+
+def _falkordb_server_version(database: Any) -> str | None:
+    try:
+        modules = database.connection.execute_command("MODULE", "LIST")
+    except Exception:
+        return None
+    for raw_module in modules or ():
+        if isinstance(raw_module, Mapping):
+            module = {str(key).lower(): value for key, value in raw_module.items()}
+        elif isinstance(raw_module, list | tuple):
+            module = {str(raw_module[index]).lower(): raw_module[index + 1] for index in range(0, len(raw_module) - 1, 2)}
+        else:
+            continue
+        name = str(module.get("name") or module.get("b'name'") or "").lower()
+        if "graph" in name or "falkor" in name:
+            return str(module.get("ver") or module.get("version") or module.get("b'ver'") or "") or None
+    return None
 
 
 def _query_with_params(query: str, parameters: Mapping[str, Any]) -> str:

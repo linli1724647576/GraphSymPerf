@@ -100,6 +100,13 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
             self._driver.close()
         self._driver = None
 
+    def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
+        return {
+            "host": (self.env_value("GRAPHSYMPERF_MEMGRAPH_HOST") or "").lower(),
+            "port": int(self.env_value("GRAPHSYMPERF_MEMGRAPH_PORT", "7687")),
+            "database": "default",
+        }
+
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         upper = query.upper()
         if " STARTS WITH " in upper or " ENDS WITH " in upper:
@@ -121,6 +128,8 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
             auth = (username, password) if username or password else None
             self._driver = GraphDatabase.driver(f"bolt://{host}:{port}", auth=auth)
             self._driver.verify_connectivity()
+            info = self._driver.get_server_info()
+            self._cache_server_version(getattr(info, "agent", None))
         except Exception as exc:
             raise AdapterError(f"cannot connect to Memgraph: {exc}") from exc
 

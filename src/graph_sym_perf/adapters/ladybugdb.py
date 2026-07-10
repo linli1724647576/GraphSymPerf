@@ -14,7 +14,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Mapping
 
-from graph_sym_perf.adapters.base import BaseAdapter
+from graph_sym_perf.adapters.base import BaseAdapter, normalized_file_endpoint
 from graph_sym_perf.adapters.common_cypher import _compact, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_jsonable
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
@@ -141,6 +141,9 @@ class LadybugDBAdapter(BaseAdapter):
         self._conn = None
         self._db = None
 
+    def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
+        return normalized_file_endpoint(self.env_value("GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH"))
+
     # ── private helpers ──────────────────────────────────────────────
 
     def _connect(self) -> None:
@@ -161,6 +164,7 @@ class LadybugDBAdapter(BaseAdapter):
                 )
             self._db = ladybug.Database(str(path))
             self._conn = ladybug.Connection(self._db)
+            self._cache_server_version(getattr(ladybug, "__version__", None))
         except Exception as exc:
             if isinstance(exc, AdapterError):
                 raise

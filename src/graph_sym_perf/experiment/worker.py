@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 
 from graph_sym_perf.adapters import create_adapter
+from graph_sym_perf.adapters.base import DBMSFingerprint
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
 from graph_sym_perf.core import GdsmithConfig, TargetSystem
 from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
@@ -86,15 +87,21 @@ class RuntimeFirstShardWorker:
         adapter = self._adapter_factory(task)
         try:
             self._reset_and_load(adapter, generated.graph_statements)
-            accepted, rejects = self._build_accepted_pairs(
-                adapter,
-                task,
-                generated.query_texts,
-                shard_dir,
-                graph_snapshot_hash=_graph_snapshot_hash(generated.graph_statements),
-                dbms_fingerprint=_adapter_dbms_fingerprint(adapter, task),
-            )
-            candidates = self._screen_pairs(adapter, task, accepted, shard_dir)
+            fingerprint = _adapter_dbms_fingerprint(adapter)
+            if fingerprint.available:
+                accepted, rejects = self._build_accepted_pairs(
+                    adapter,
+                    task,
+                    generated.query_texts,
+                    shard_dir,
+                    graph_snapshot_hash=_graph_snapshot_hash(generated.graph_statements),
+                    dbms_fingerprint=fingerprint.value,
+                )
+                candidates = self._screen_pairs(adapter, task, accepted, shard_dir)
+            else:
+                accepted = []
+                rejects = Counter({"DBMS_FINGERPRINT_UNAVAILABLE": 1})
+                candidates = 0
         finally:
             adapter.close()
         summary = {
@@ -105,6 +112,11 @@ class RuntimeFirstShardWorker:
             "accepted_pairs": len(accepted),
             "screened_candidates": candidates,
             "reject_reasons": dict(sorted(rejects.items())),
+            "dbms_fingerprint": {
+                "available": fingerprint.available,
+                "value": fingerprint.value,
+                "reason": fingerprint.reason,
+            },
         }
         (shard_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return summary
@@ -307,11 +319,14 @@ def _graph_snapshot_hash(statements: tuple[str, ...]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _adapter_dbms_fingerprint(adapter: Any, task: ShardTask) -> str:
+def _adapter_dbms_fingerprint(adapter: Any) -> DBMSFingerprint:
     fingerprint = getattr(adapter, "dbms_fingerprint", None)
-    if callable(fingerprint):
-        fingerprint = fingerprint()
-    return str(fingerprint or task.target.value)
+    if not callable(fingerprint):
+        return DBMSFingerprint(None, "adapter_fingerprint_contract_missing")
+    result = fingerprint()
+    if not isinstance(result, DBMSFingerprint):
+        return DBMSFingerprint(None, "adapter_fingerprint_contract_invalid")
+    return result
 
 
 def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:

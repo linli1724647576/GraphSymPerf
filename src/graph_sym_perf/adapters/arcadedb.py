@@ -7,7 +7,7 @@ import re
 from time import perf_counter
 from typing import Any, Mapping
 
-from graph_sym_perf.adapters.base import BaseAdapter
+from graph_sym_perf.adapters.base import BaseAdapter, normalized_uri_endpoint
 from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
@@ -26,6 +26,7 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
         try:
             self._connect()
             response = self._request("GET", "/api/v1/ready")
+            self._cache_server_version(_arcadedb_server_version(response))
             if response.status_code >= 400:
                 return False, response.text
             if self.allow_create:
@@ -150,6 +151,13 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
             self._session.close()
         self._session = None
 
+    def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
+        return normalized_uri_endpoint(
+            self.env_value("GRAPHSYMPERF_ARCADEDB_HTTP_URL"),
+            default_port=2480,
+            database=self.env_value("GRAPHSYMPERF_ARCADEDB_DATABASE", "graph_sym_perf"),
+        )
+
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         upper = query.upper()
         if "MATCH" not in upper:
@@ -208,6 +216,8 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
             self._session = requests.Session()
             self._session.auth = (username, password)
             self._session.headers.update({"Content-Type": "application/json", "Accept": "application/json"})
+            ready = self._session.request("GET", f"{self._base_url}/api/v1/ready", timeout=30)
+            self._cache_server_version(_arcadedb_server_version(ready))
         except Exception as exc:
             raise AdapterError(f"cannot configure ArcadeDB HTTP client: {exc}") from exc
 
@@ -247,6 +257,21 @@ def _arcade_rows(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
                 rows.append({"value": to_jsonable(item)})
         return tuple(rows)
     return ({"value": to_jsonable(result)},)
+
+
+def _arcadedb_server_version(response: Any) -> str | None:
+    headers = getattr(response, "headers", {}) or {}
+    for key in ("X-ArcadeDB-Version", "ArcadeDB-Version", "Server"):
+        if headers.get(key):
+            return str(headers[key])
+    try:
+        payload = response.json()
+    except Exception:
+        return None
+    if isinstance(payload, Mapping):
+        version = payload.get("version") or payload.get("serverVersion")
+        return str(version) if version else None
+    return None
 
 
 def _arcade_statistics(payload: Mapping[str, Any]) -> Any:

@@ -1,5 +1,6 @@
 import json
 
+from graph_sym_perf.adapters.base import DBMSFingerprint
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import ShardTask
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -37,6 +38,9 @@ class _Adapter:
     def close(self) -> None:
         self.closed = True
 
+    def dbms_fingerprint(self) -> DBMSFingerprint:
+        return DBMSFingerprint("a" * 64)
+
 
 class _RuntimeGapAdapter(_Adapter):
     def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
@@ -50,6 +54,11 @@ class _RuntimeGapAdapter(_Adapter):
             elapsed_ms=5.0 if "OR NOT" in query else 1.0,
             summary=result.summary,
         )
+
+
+class _FingerprintUnavailableAdapter(_Adapter):
+    def dbms_fingerprint(self) -> DBMSFingerprint:
+        return DBMSFingerprint(None, "server_version_unavailable")
 
 
 def test_worker_graph_identity_matches_validation_snapshot_contract() -> None:
@@ -113,4 +122,28 @@ def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) ->
     assert records[0]["discovery_slow_query"] == "b"
     assert records[0]["parameters"] == {}
     assert records[0]["graph_snapshot_hash"]
-    assert records[0]["dbms_fingerprint"] == "neo4j"
+    assert records[0]["dbms_fingerprint"] == "a" * 64
+
+
+def test_worker_rejects_shard_when_dbms_fingerprint_is_unavailable(tmp_path) -> None:
+    adapter = _FingerprintUnavailableAdapter()
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+        query_texts=("MATCH (n) WHERE n.value = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    task = ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: adapter,
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(task)
+
+    assert result["accepted_pairs"] == 0
+    assert result["screened_candidates"] == 0
+    assert result["reject_reasons"] == {"DBMS_FINGERPRINT_UNAVAILABLE": 1}
+    assert result["dbms_fingerprint"] == {"available": False, "value": None, "reason": "server_version_unavailable"}
+    assert not (tmp_path / "shards" / "neo4j-000" / "candidates.jsonl").exists()
