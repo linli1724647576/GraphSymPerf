@@ -6,6 +6,9 @@ __pycache__/
 /.mypy_cache/
 /logs/
 /runs
+/results/
+/reports/
+/deletion_manifest.json
 .DS_Store
 .env
 /BUG list

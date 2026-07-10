@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {"id":"neo4j-13783","metadata_sha256":"a83d9703e6dee6c9f44aa4c9a247698f05f7f8620abcbbbd501089d30c8fcb4d"},
+    {"id":"neo4j-13814","metadata_sha256":"c73ffd5931a7f6f85390d0fd458a02c977aac58c630dfee7a6d1712a0535442b"},
+    {"id":"neo4j-13813","metadata_sha256":"af1c1662f61f5011fdfed56aefff4940cd0eb31298903aa229eb246c077c4f94"},
+    {"id":"memgraph-4208","metadata_sha256":"ab70642482cc6c761bde9e9d2d2109fdb071328b347bc6c28a52bc008f283166"},
+    {"id":"falkordb-2081","metadata_sha256":"dbd22ee2b28aec68cb56c1a7a627b81531eaab52ee61ba4cccb7f4f801e0d30f"},
+    {"id":"arcadedb-4405","metadata_sha256":"1539ee7e2559e44c6a365e4b0336b115228be9c66daf9ecccc9b68a376320f7d"},
+    {"id":"arcadedb-5116","metadata_sha256":"1acf3a3f91c6b7b5368cd4d402ddcf2bea42a52a1cdfd056d9ba558dc12790fb"},
+    {"id":"arcadedb-5117","metadata_sha256":"d029733ff690b47eb3bc8bcef7f151f4ef7290552dd17a83abeef24e13781222"},
+    {"id":"apache-age-2428","metadata_sha256":"c96de0734c925ea59071a28690dbffaf0e4cfadefb7c1e2301241bc31b129765"},
+    {"id":"ladybugdb-668","metadata_sha256":"705f327c9bffb8cf3a3b046db2ebc6c2483134db7f4e9aec57776c5952f73336"},
+    {"id":"ladybugdb-669","metadata_sha256":"dce7dbc1030cff1b12ee94b30de9d3a38ece4053c5321703a193322e32f3a40b"}
+  ]
+}
