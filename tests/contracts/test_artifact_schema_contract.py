@@ -5,6 +5,9 @@ Until then, a query pair must still be written with its two query texts and
 parameter payload so migration can account for every legacy record.
 """
 
+import json
+from pathlib import Path
+
 from graph_sym_perf.core import QueryPair, RunConfig, RunPaths
 from graph_sym_perf.reporter.artifacts import ArtifactWriter
 
@@ -34,4 +37,5 @@ def test_query_pair_artifact_contains_both_queries_and_parameters(tmp_path) -> N
     assert set(paths) == {"query", "query_transformed", "parameters"}
     assert (run_dir / paths["query"]).read_text(encoding="utf-8").strip() == pair.original_query
     assert (run_dir / paths["query_transformed"]).read_text(encoding="utf-8").strip() == pair.transformed_query
-    assert '"limit": 1' in (run_dir / paths["parameters"]).read_text(encoding="utf-8")
+    assert json.loads((run_dir / paths["parameters"]).read_text(encoding="utf-8")) == {"limit": 1}
+    assert all(not Path(relative).is_absolute() for relative in paths.values())
