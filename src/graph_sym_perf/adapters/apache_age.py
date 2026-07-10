@@ -45,20 +45,6 @@ class ApacheAgeAdapter(BaseAdapter):
                 cursor.execute("SELECT * FROM ag_catalog.create_graph(%s)", (self._graph_name,))
         self._conn.commit()
 
-    def load_mini_ldbc(self, graph) -> None:
-        self.ensure_schema()
-        for node in graph.nodes:
-            labels = (node.label,)
-            self._run_wrapped(_create_node_cypher(labels, node.properties), "gdsmith_load_node")
-        for relationship in graph.relationships:
-            props = dict(relationship.properties)
-            query = (
-                f"MATCH (a:{relationship.start_label} {{gbp_id: {_literal(relationship.start_id)}}}), "
-                f"(b:{relationship.end_label} {{gbp_id: {_literal(relationship.end_id)}}}) "
-                f"CREATE (a)-[r:{relationship.relationship_type} {_map_literal(props)}]->(b)"
-            )
-            self._run_wrapped(query, "gdsmith_load_relationship")
-
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
         graph = parse_gdsmith_replay_graph(statements)
         self.ensure_schema()

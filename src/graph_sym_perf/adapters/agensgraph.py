@@ -9,7 +9,6 @@ from typing import Any, Mapping
 from graph_sym_perf.adapters.base import BaseAdapter
 from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
-from graph_sym_perf.datasets import MiniLdbcGraph
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, GdsmithReplayNode, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
@@ -51,14 +50,6 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
         except Exception as exc:
             self._conn.rollback()
             raise AdapterError(f"cannot reset AgensGraph graph: {exc}") from exc
-
-    def load_mini_ldbc(self, graph: MiniLdbcGraph) -> None:
-        self.ensure_schema()
-        self._ensure_labels(
-            vertex_labels=tuple(sorted({node.label for node in graph.nodes})),
-            edge_labels=tuple(sorted({relationship.relationship_type for relationship in graph.relationships})),
-        )
-        CypherLoaderMixin.load_mini_ldbc(self, graph)
 
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
         graph = parse_gdsmith_replay_graph(statements)

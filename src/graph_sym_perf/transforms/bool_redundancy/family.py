@@ -196,7 +196,7 @@ def generate_bool_redundancy_family(
             rules = rules[: max(0, config.max_variants_per_case)]
         for rule in rules:
             try:
-                variants.append(_named_variant(query_case.case_id, len(variants) + 1, _ldbc_variant(query_case, query, rule=rule)))
+                variants.append(_named_variant(query_case.case_id, len(variants) + 1, _portable_variant(query_case, query, rule=rule)))
             except TransformSkipError as exc:
                 skipped.append(_skipped_variant(query_case.case_id, rule, query, exc))
         return QueryFamily(
@@ -586,7 +586,7 @@ def _has_variable_length_path(query: str) -> bool:
     return bool(re.search(r"\[[^\]]*\*", query))
 
 
-def _ldbc_variant(query_case: QueryCase, query: str, *, rule: str | None = None) -> QueryVariant:
+def _portable_variant(query_case: QueryCase, query: str, *, rule: str | None = None) -> QueryVariant:
     site = analyze_gdsmith_injection_site(query)
     if _normalize_predicate_text(site.base_predicate) != _normalize_predicate_text(query_case.base_predicate):
         raise TransformSkipError(

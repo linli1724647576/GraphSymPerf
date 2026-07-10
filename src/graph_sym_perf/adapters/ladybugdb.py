@@ -17,7 +17,6 @@ from typing import Any, Mapping
 from graph_sym_perf.adapters.base import BaseAdapter
 from graph_sym_perf.adapters.common_cypher import _compact
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
-from graph_sym_perf.datasets import MiniLdbcGraph, MiniLdbcNode, MiniLdbcRelationship
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
@@ -45,14 +44,6 @@ class LadybugDBAdapter(BaseAdapter):
     def ensure_schema(self) -> None:
         for query in _ladybugdb_schema_statements():
             self.execute(query, {}, "schema")
-
-    def load_mini_ldbc(self, graph: MiniLdbcGraph) -> None:
-        if self._dataset_present(graph.dataset_id):
-            return
-        for node in graph.nodes:
-            self._create_node(node)
-        for relationship in graph.relationships:
-            self._create_relationship(relationship)
 
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
         graph = parse_gdsmith_replay_graph(statements)
@@ -174,41 +165,6 @@ class LadybugDBAdapter(BaseAdapter):
             if isinstance(exc, AdapterError):
                 raise
             raise AdapterError(f"cannot connect to LadybugDB: {exc}") from exc
-
-    def _dataset_present(self, dataset_id: str) -> bool:
-        try:
-            result = self.execute(
-                "MATCH (p:Person) WHERE p.gbp_dataset = $dataset_id RETURN count(*) AS count",
-                {"dataset_id": dataset_id},
-                "dataset_check",
-            )
-            if not result.rows:
-                return False
-            count = next(iter(result.rows[0].values()))
-            return int(count) > 0
-        except Exception:
-            return False
-
-    def _create_node(self, node: MiniLdbcNode) -> None:
-        props = ", ".join(f"{key}: ${key}" for key in node.properties)
-        self.execute(f"CREATE (n:{node.label} {{{props}}})", dict(node.properties), "load_node")
-
-    def _create_relationship(self, relationship: MiniLdbcRelationship) -> None:
-        props = ", ".join(f"{key}: ${key}" for key in relationship.properties)
-        query = f"""
-MATCH (a:{relationship.start_label}), (b:{relationship.end_label})
-WHERE a.gbp_id = $start_id AND b.gbp_id = $end_id AND a.gbp_dataset = $dataset_id AND b.gbp_dataset = $dataset_id
-CREATE (a)-[r:{relationship.relationship_type} {{{props}}}]->(b)
-"""
-        parameters = dict(relationship.properties)
-        parameters.update(
-            {
-                "start_id": relationship.start_id,
-                "end_id": relationship.end_id,
-                "dataset_id": relationship.properties["gbp_dataset"],
-            }
-        )
-        self.execute(_compact(query), parameters, "load_relationship")
 
     def _ensure_gdsmith_schema(self, graph: GdsmithReplayGraph) -> None:
         # Single pass over nodes: build label-by-id map and property map together.

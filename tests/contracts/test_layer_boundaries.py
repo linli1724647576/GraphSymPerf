@@ -1,27 +1,16 @@
-"""Protect leaf layers while the legacy runner is being migrated.
-
-``app`` and ``experiment.runner`` are documented legacy exceptions in
-``docs/architecture-baseline.md``.  New leaf layers may not recreate those
-dependencies; the exceptions are removed in Tasks 6 and 11.
-"""
-
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2] / "src" / "graph_sym_perf"
-FORBIDDEN = ("graph_sym_perf.cli", "graph_sym_perf.app", "graph_sym_perf.experiment", "graph_sym_perf.adapters")
 
 
-def _imports_under(package: str) -> str:
-    return "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / package).rglob("*.py"))
+def test_runtime_first_tree_has_no_legacy_orchestration_packages() -> None:
+    for relative in ("app/mining.py", "coverage/pmc.py", "feedback/scheduler.py", "oracle/plan_oracle.py", "experiment/runner.py"):
+        assert not (ROOT / relative).exists(), relative
 
 
-def test_current_leaf_layers_do_not_depend_on_orchestration_or_specific_adapters() -> None:
-    for package in ("equivalence", "transforms"):
-        imports = _imports_under(package)
-        assert all(forbidden not in imports for forbidden in FORBIDDEN), package
-
-
-def test_legacy_cross_layer_dependencies_are_explicitly_confined() -> None:
-    runner = (ROOT / "experiment" / "runner.py").read_text(encoding="utf-8")
-    assert "graph_sym_perf.app.gdsmith_mining" in runner
+def test_leaf_layers_do_not_depend_on_cli_or_adapters() -> None:
+    forbidden = ("graph_sym_perf.cli", "graph_sym_perf.adapters")
+    for package in ("runtime", "equivalence", "validation", "transforms"):
+        imports = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / package).rglob("*.py"))
+        assert all(token not in imports for token in forbidden), package

@@ -6,7 +6,6 @@ from graph_sym_perf.core import (
     DatasetConfig,
     EquivalenceConfig,
     GdsmithConfig,
-    OracleConfig,
     QueryGenerationConfig,
     RunConfig,
     RunPaths,
@@ -25,7 +24,6 @@ def _run_config() -> RunConfig:
         query_generation=QueryGenerationConfig(gdsmith=GdsmithConfig()),
         equivalence=EquivalenceConfig(),
         confirmation=ConfirmationConfig(),
-        oracle=OracleConfig(),
         transforms=TransformConfig(),
     )
 

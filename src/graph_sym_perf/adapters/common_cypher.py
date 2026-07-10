@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
-from graph_sym_perf.datasets import MiniLdbcGraph, MiniLdbcNode, MiniLdbcRelationship
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, GdsmithReplayNode, GdsmithReplayRelationship, parse_gdsmith_replay_graph
 
 _logger = logging.getLogger(__name__)
@@ -26,12 +25,6 @@ class CypherLoaderMixin:
     def schema_statements(self) -> tuple[str, ...]:
         return ()
 
-    def load_mini_ldbc(self, graph: MiniLdbcGraph) -> None:
-        for node in graph.nodes:
-            self._merge_node(node)
-        for relationship in graph.relationships:
-            self._merge_relationship(relationship)
-
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
         graph = parse_gdsmith_replay_graph(statements)
         for node in graph.nodes:
@@ -39,35 +32,6 @@ class CypherLoaderMixin:
         for relationship in graph.relationships:
             self._merge_gdsmith_relationship(relationship)
         return graph
-
-    def _merge_node(self, node: MiniLdbcNode) -> None:
-        query = f"""
-MERGE (n:{node.label} {{gbp_id: $gbp_id}})
-SET n += $properties
-"""
-        self.execute(
-            _compact(query),
-            {"gbp_id": node.properties["gbp_id"], "properties": dict(node.properties)},
-            "load_node",
-        )
-
-    def _merge_relationship(self, relationship: MiniLdbcRelationship) -> None:
-        query = f"""
-MATCH (a:{relationship.start_label} {{gbp_id: $start_id, gbp_dataset: $dataset_id}})
-MATCH (b:{relationship.end_label} {{gbp_id: $end_id, gbp_dataset: $dataset_id}})
-MERGE (a)-[r:{relationship.relationship_type} {{gbp_dataset: $dataset_id}}]->(b)
-SET r += $properties
-"""
-        self.execute(
-            _compact(query),
-            {
-                "start_id": relationship.start_id,
-                "end_id": relationship.end_id,
-                "dataset_id": relationship.properties["gbp_dataset"],
-                "properties": dict(relationship.properties),
-            },
-            "load_relationship",
-        )
 
     def _merge_gdsmith_node(self, node: GdsmithReplayNode) -> None:
         labels = "".join(f":{label}" for label in (node.labels or ("GdsmithNode",)))

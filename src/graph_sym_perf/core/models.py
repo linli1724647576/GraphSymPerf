@@ -7,14 +7,10 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import Any, Mapping
 
 from graph_sym_perf.core.capabilities import EngineCapabilities
 from graph_sym_perf.core.status import ClaimLevel, DeveloperStatus, ToolSupportLevel
-
-if TYPE_CHECKING:
-    from graph_sym_perf.coverage import PMCEvidence
-
 
 class TargetSystem(str, Enum):
     """Supported graph database targets."""
@@ -56,8 +52,8 @@ class SystemConfig:
 
 @dataclass(frozen=True)
 class DatasetConfig:
-    kind: str = "ldbc_snb_mini"
-    dataset_id: str = "graph_sym_perf_ldbc_mini"
+    kind: str = "neutral_gdsmith_graph"
+    dataset_id: str = "graph_sym_perf_neutral_graph"
     seed: int = 20260513
     person_count: int = 8
     post_count: int = 6
@@ -131,79 +127,6 @@ class ConfirmationConfig:
 
 
 @dataclass(frozen=True)
-class OracleConfig:
-    enable_structural_diff: bool = True
-    enable_profile_metrics: bool = True
-
-
-@dataclass(frozen=True)
-class CoverageConfig:
-    enabled: bool = True
-    include_transformation_context: bool = True
-    write_per_case_evidence: bool = True
-    ratio_buckets: tuple[float, ...] = (1.5, 2.0, 5.0, 10.0, 50.0, 100.0, 1000.0)
-    # Per-metric minimum ratio thresholds for cardinality/work PMC units.
-    # Metrics below threshold are excluded from coverage to reduce noise.
-    metric_thresholds: Mapping[str, float] = field(
-        default_factory=lambda: {
-            "rows": 1.5,
-            "db_hits": 1.5,
-            "estimated_rows": 2.0,
-            "memory_bytes": 1.5,
-            "page_cache_misses": 1.5,
-        }
-    )
-    novelty_weights: Mapping[str, float] = field(
-        default_factory=lambda: {
-            "structural": 0.5,
-            "operator_delta": 1.0,
-            "access_delta": 2.0,
-            "expand_delta": 1.5,
-            "join_delta": 2.0,
-            "predicate_delta": 2.0,
-            "barrier_delta": 1.5,
-            "cardinality_delta": 1.5,
-            "work_delta": 2.0,
-            "transformation_context": 0.2,
-        }
-    )
-
-
-@dataclass(frozen=True)
-class FeedbackConfig:
-    enabled: bool = False
-    exploration_rate: float = 0.15
-    seed: int = 20260522
-    min_rules_per_case: int = 1
-    max_rules_per_case: int | None = None
-    write_artifacts: bool = True
-    reward_weights: Mapping[str, float] = field(
-        default_factory=lambda: {
-            "generated": 1.0,
-            "equivalence_passed": 2.0,
-            "profile_available": 3.0,
-            "candidate_count": 5.0,
-            "strong_candidate_count": 8.0,
-            "pmc_new_units": 1.5,
-            "pmc_units": 0.2,
-            "equivalence_failed": -2.0,
-            "timeout": -3.0,
-            "error": -2.0,
-            "skipped": -1.0,
-        }
-    )
-
-
-@dataclass(frozen=True)
-class ClusteringConfig:
-    enabled: bool = True
-    write_signatures: bool = True
-    representative_policy: str = "support_then_ratio_then_size"
-    include_plan_only: bool = True
-    include_exploratory: bool = False
-
-
-@dataclass(frozen=True)
 class RunConfig:
     source_path: str
     paths: RunPaths
@@ -212,10 +135,6 @@ class RunConfig:
     query_generation: QueryGenerationConfig
     equivalence: EquivalenceConfig
     confirmation: ConfirmationConfig
-    oracle: OracleConfig = field(default_factory=OracleConfig)
-    coverage: CoverageConfig = field(default_factory=CoverageConfig)
-    feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
-    clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
     transforms: TransformConfig = field(default_factory=TransformConfig)
 
     def system_config(self, target: TargetSystem) -> SystemConfig | None:
@@ -248,7 +167,7 @@ class QueryCase:
     parameters: Mapping[str, Any]
     base_predicate: str
     safe_expression: str
-    source: str = "ldbc_mini"
+    source: str = "gdsmith"
     generator_case_id: str | None = None
     raw_query: str | None = None
     skip_reason: str | None = None
@@ -541,7 +460,7 @@ class ConfirmationRecord:
     transformed_samples_ms: tuple[float, ...]
     reason: str
     level: str = "none"
-    support_level: ToolSupportLevel | str = ToolSupportLevel.PLAN_ONLY
+    support_level: ToolSupportLevel | str = ToolSupportLevel.NONE
     developer_status: DeveloperStatus | str = DeveloperStatus.UNKNOWN
     claim_level: ClaimLevel | str = ClaimLevel.CANDIDATE
     metric_deltas: tuple[MetricDelta, ...] = ()
@@ -566,11 +485,6 @@ class CaseRecord:
     claim_level: ClaimLevel | str = ClaimLevel.CANDIDATE
     exploratory_oracle: OracleRecord | None = None
     exploratory_confirmation: ConfirmationRecord | None = None
-    pmc: PMCEvidence | None = None
-    exploratory_pmc: PMCEvidence | None = None
-    # Per-variant PMC evidences (bool_redundancy pairwise strategy).  Observed
-    # for coverage but not used for case-level candidate state.
-    _per_variant_pmcs: tuple[Any, ...] = ()
 
     @property
     def equivalence(self) -> EquivalenceRecord:
@@ -602,8 +516,7 @@ class ClusterRecord:
     expression_family_counts: Mapping[str, int]
     transform_rule_counts: Mapping[str, int]
     confirmation_level_counts: Mapping[str, int]
-    plan_bug_kind: str = "unknown"
-    support_level: ToolSupportLevel | str = ToolSupportLevel.PLAN_ONLY
+    support_level: ToolSupportLevel | str = ToolSupportLevel.NONE
     support_level_counts: Mapping[str, int] = field(default_factory=dict)
 
 

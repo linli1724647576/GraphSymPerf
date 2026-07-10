@@ -7,7 +7,6 @@ from enum import Enum
 
 class ToolSupportLevel(str, Enum):
     NONE = "none"
-    PLAN_ONLY = "plan_only"
     PROFILE_SUPPORTED = "profile_supported"
     PROFILE_SUPPORTED_WITHOUT_DB_HITS = "profile_supported_without_db_hits"
     PROFILE_AND_RUNTIME_SUPPORTED = "profile_and_runtime_supported"
@@ -73,6 +72,5 @@ def support_rank(value: object) -> int:
         ToolSupportLevel.PROFILE_SUPPORTED.value: 4,
         ToolSupportLevel.PROFILE_SUPPORTED_WITHOUT_DB_HITS.value: 3,
         ToolSupportLevel.LATENCY_SUPPORTED.value: 2,
-        ToolSupportLevel.PLAN_ONLY.value: 1,
         ToolSupportLevel.NONE.value: 0,
     }.get(support_level_value(value), 0)

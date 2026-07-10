@@ -6,7 +6,6 @@ import importlib.util
 from typing import Any, Mapping, Protocol
 
 from graph_sym_perf.core import ExecutionResult, PlanRecord, RunConfig, SystemConfig, TargetSystem
-from graph_sym_perf.datasets import MiniLdbcGraph
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph
 
 
@@ -23,9 +22,6 @@ class GraphAdapter(Protocol):
         ...
 
     def ensure_schema(self) -> None:
-        ...
-
-    def load_mini_ldbc(self, graph: MiniLdbcGraph) -> None:
         ...
 
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph | None:
