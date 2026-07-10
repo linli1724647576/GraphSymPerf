@@ -19,6 +19,7 @@ def export_issue(issue: SubmitReadyIssue, destination: str | Path) -> Path:
     path.write_text(
         json.dumps(
             {
+                "issue_id": issue.issue_id,
                 "stage": issue.stage.value,
                 "rule_id": issue.certificate.rule_id,
                 "validated_ratio": issue.validation.validated_ratio,

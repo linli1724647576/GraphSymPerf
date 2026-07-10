@@ -40,8 +40,41 @@ def reduction_pair_hash(pair: EquivalentQueryPair) -> str:
 
 
 @dataclass(frozen=True)
+class MinimalityDeletion:
+    canonical_id: str
+    proposal_hash: str
+
+
+@dataclass(frozen=True)
+class MinimalityUniverse:
+    reduced_pair_hash: str
+    deletions: tuple[MinimalityDeletion, ...]
+    universe_hash: str
+
+    @classmethod
+    def recompute(cls, pair: EquivalentQueryPair) -> "MinimalityUniverse":
+        from graph_sym_perf.reducer.proposals import paired_reduction_proposals
+
+        deletions = tuple(
+            MinimalityDeletion(proposal.canonical_id, reduction_pair_hash(proposal.candidate))
+            for proposal in paired_reduction_proposals(pair)
+        )
+        pair_hash = reduction_pair_hash(pair)
+        universe_hash = hashlib.sha256(
+            stable_json_dumps(
+                {
+                    "reduced_pair_hash": pair_hash,
+                    "deletions": deletions,
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        return cls(pair_hash, deletions, universe_hash)
+
+
+@dataclass(frozen=True)
 class MinimalityAttempt:
     deletion_id: str
+    proposal_hash: str
     outcome: str
     evidence_hash: str
     previous_hash: str
@@ -55,7 +88,8 @@ class MinimalityProof:
     reduced_pair_hash: str
     protocol: str
     protocol_version: str
-    enumerated_deletions: tuple[str, ...]
+    universe_hash: str
+    enumerated_deletions: tuple[MinimalityDeletion, ...]
     attempts: tuple[MinimalityAttempt, ...]
     chain_hash: str
 
@@ -67,41 +101,77 @@ class MinimalityProof:
         *,
         protocol_version: str = "v1",
     ) -> "MinimalityProof":
-        pair_hash = reduction_pair_hash(pair)
+        universe = MinimalityUniverse.recompute(pair)
+        pair_hash = universe.reduced_pair_hash
         previous = _minimality_seed(pair_hash, protocol_version)
         attempts: list[MinimalityAttempt] = []
         for deletion_id, outcome, evidence_hash in results:
-            attempt_hash = _attempt_hash(deletion_id, outcome, evidence_hash, previous)
-            attempts.append(MinimalityAttempt(deletion_id, outcome, evidence_hash, previous, attempt_hash))
+            deletion = next(
+                (item for item in universe.deletions if item.canonical_id == deletion_id),
+                MinimalityDeletion(deletion_id, ""),
+            )
+            attempt_hash = _attempt_hash(
+                deletion_id,
+                deletion.proposal_hash,
+                outcome,
+                evidence_hash,
+                previous,
+            )
+            attempts.append(
+                MinimalityAttempt(
+                    deletion_id,
+                    deletion.proposal_hash,
+                    outcome,
+                    evidence_hash,
+                    previous,
+                    attempt_hash,
+                )
+            )
             previous = attempt_hash
         return cls(
             reduced_pair_hash=pair_hash,
             protocol="exhaustive-one-deletion",
             protocol_version=protocol_version,
-            enumerated_deletions=tuple(item[0] for item in results),
+            universe_hash=universe.universe_hash,
+            enumerated_deletions=universe.deletions,
             attempts=tuple(attempts),
             chain_hash=previous,
         )
 
     def verify(self, pair: EquivalentQueryPair) -> bool:
+        universe = MinimalityUniverse.recompute(pair)
         if (
             self.protocol != "exhaustive-one-deletion"
             or not self.protocol_version.strip()
-            or self.reduced_pair_hash != reduction_pair_hash(pair)
-            or not self.enumerated_deletions
-            or len(set(self.enumerated_deletions)) != len(self.enumerated_deletions)
-            or tuple(attempt.deletion_id for attempt in self.attempts) != self.enumerated_deletions
+            or self.reduced_pair_hash != universe.reduced_pair_hash
+            or self.universe_hash != universe.universe_hash
+            or self.enumerated_deletions != universe.deletions
+            or tuple(
+                (attempt.deletion_id, attempt.proposal_hash)
+                for attempt in self.attempts
+            )
+            != tuple(
+                (deletion.canonical_id, deletion.proposal_hash)
+                for deletion in universe.deletions
+            )
         ):
             return False
         previous = _minimality_seed(self.reduced_pair_hash, self.protocol_version)
         for attempt in self.attempts:
             if (
                 attempt.outcome != "symptom_not_preserved"
+                or not attempt.proposal_hash
                 or len(attempt.evidence_hash) != 64
                 or any(char not in "0123456789abcdef" for char in attempt.evidence_hash.lower())
                 or attempt.previous_hash != previous
                 or attempt.attempt_hash
-                != _attempt_hash(attempt.deletion_id, attempt.outcome, attempt.evidence_hash, previous)
+                != _attempt_hash(
+                    attempt.deletion_id,
+                    attempt.proposal_hash,
+                    attempt.outcome,
+                    attempt.evidence_hash,
+                    previous,
+                )
             ):
                 return False
             previous = attempt.attempt_hash
@@ -112,11 +182,18 @@ def _minimality_seed(pair_hash: str, version: str) -> str:
     return hashlib.sha256(f"minimality\0{version}\0{pair_hash}".encode("utf-8")).hexdigest()
 
 
-def _attempt_hash(deletion_id: str, outcome: str, evidence_hash: str, previous: str) -> str:
+def _attempt_hash(
+    deletion_id: str,
+    proposal_hash: str,
+    outcome: str,
+    evidence_hash: str,
+    previous: str,
+) -> str:
     return hashlib.sha256(
         stable_json_dumps(
             {
                 "deletion_id": deletion_id,
+                "proposal_hash": proposal_hash,
                 "outcome": outcome,
                 "evidence_hash": evidence_hash,
                 "previous_hash": previous,

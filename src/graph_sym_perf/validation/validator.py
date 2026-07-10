@@ -19,6 +19,7 @@ from graph_sym_perf.validation.models import (
     IssueValidationReport,
     PipelineStage,
     ValidationSession,
+    _VALIDATION_REPORT_TOKEN,
 )
 from graph_sym_perf.validation.session_runner import SubprocessSessionRunner
 
@@ -153,7 +154,7 @@ def _bound_report(
     magnitude_stability: str,
     reason_codes: tuple[str, ...],
 ) -> IssueValidationReport:
-    return IssueValidationReport(
+    return IssueValidationReport._from_validator(
         stage=stage,
         equivalence=equivalence,
         sessions=sessions,
@@ -161,14 +162,9 @@ def _bound_report(
         validated_ratio=validated_ratio,
         magnitude_stability=magnitude_stability,
         reason_codes=reason_codes,
-        candidate_hash=candidate.candidate_hash,
-        query_a_hash=str(candidate.content_hashes["query_a"]),
-        query_b_hash=str(candidate.content_hashes["query_b"]),
-        policy_hash=str(candidate.content_hashes["validation_policy"]),
-        certificate_hash=str(candidate.content_hashes["certificate"]),
-        rule_id=candidate.certificate.rule_id,
-        proof_version=candidate.certificate.proof_version,
-        validation_protocol="independent-two-session-v1",
+        candidate=candidate,
+        metadata=None,
+        token=_VALIDATION_REPORT_TOKEN,
     )
 
 

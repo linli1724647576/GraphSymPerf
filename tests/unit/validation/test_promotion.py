@@ -1,13 +1,22 @@
 import os
 import hashlib
+import copy
 from dataclasses import replace
 
 import pytest
 
-from graph_sym_perf.reducer.models import MinimalityProof, ReductionReport, ReductionStatus
+from graph_sym_perf.reducer.models import (
+    MinimalityProof,
+    MinimalityUniverse,
+    ReductionReport,
+    ReductionStatus,
+    reduction_pair_hash,
+)
+from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.runtime.models import EquivalentQueryPair, PairedSample, RuntimeEvidence, RuntimeVerdict
 from graph_sym_perf.validation.models import (
     DeveloperStatus,
+    CandidateBundle,
     DuplicateClearance,
     EquivalenceEvidence,
     IssueValidationReport,
@@ -16,28 +25,34 @@ from graph_sym_perf.validation.models import (
     SessionLifecycle,
     SubmitReadyIssue,
     ValidationSession,
+    ValidationPolicy,
+    FrozenMapping,
     safety_certificate_hash,
     _DUPLICATE_CLEARANCE_TOKEN,
+    _VALIDATION_REPORT_TOKEN,
 )
+from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.promotion import promote
 
 
 def _original_pair() -> EquivalentQueryPair:
+    snapshot = GraphSnapshot.from_statements(("CREATE (n:Person {id: 1})",))
     return EquivalentQueryPair(
         "MATCH (n) WHERE n.id >= 0 RETURN n.id ORDER BY n.id",
         "MATCH (n) WHERE true AND n.id >= 0 RETURN n.id ORDER BY n.id",
         {},
-        "graph",
+        snapshot.content_hash,
         "dbms",
     )
 
 
 def _reduced_pair() -> EquivalentQueryPair:
+    snapshot = GraphSnapshot.from_statements(("CREATE (n:Person {id: 1})",))
     return EquivalentQueryPair(
         "MATCH (n) RETURN n.id ORDER BY n.id",
         "MATCH (n) WHERE true RETURN n.id ORDER BY n.id",
         {},
-        "graph",
+        snapshot.content_hash,
         "dbms",
     )
 
@@ -67,7 +82,7 @@ def _evidence(
         0.01,
         (),
         slow_query=slow_query,
-        graph_snapshot_hash="graph",
+        graph_snapshot_hash=pair.graph_snapshot_hash,
         dbms_fingerprint="dbms",
     )
 
@@ -84,7 +99,6 @@ def _control() -> RuntimeEvidence:
 def _report(
     *,
     pair: EquivalentQueryPair | None = None,
-    candidate_hash: str = "candidate-original",
     stage: PipelineStage = PipelineStage.VALIDATION_PASSED,
     metadata=None,
 ) -> IssueValidationReport:
@@ -93,7 +107,7 @@ def _report(
         ValidationSession(
             f"session-{index}",
             os.getpid() + index + 100,
-            "graph",
+            pair.graph_snapshot_hash,
             "dbms",
             _evidence(pair=pair),
             (_control(), _control()),
@@ -101,7 +115,18 @@ def _report(
         )
         for index in (1, 2)
     )
-    return IssueValidationReport(
+    snapshot = GraphSnapshot.from_statements(("CREATE (n:Person {id: 1})",))
+    candidate = CandidateBundle.create(
+        pair,
+        graph_snapshot=snapshot,
+        dbms_version="dbms-version",
+        resolved_config={"runtime": {"validation_pairs": 20}},
+        discovery_slow_query="b",
+        discovery_ratio=8.0,
+        certificate=_certificate(),
+        validation_policy=ValidationPolicy(),
+    )
+    return IssueValidationReport._from_validator(
         stage=stage,
         equivalence=EquivalenceEvidence(True, True, ()),
         sessions=sessions,
@@ -109,21 +134,17 @@ def _report(
         validated_ratio=4.0,
         magnitude_stability="stable",
         reason_codes=(),
+        candidate=candidate,
         metadata={} if metadata is None else metadata,
-        candidate_hash=candidate_hash,
-        query_a_hash=_query_hash(pair.query_a),
-        query_b_hash=_query_hash(pair.query_b),
-        policy_hash="policy-v1",
-        certificate_hash=safety_certificate_hash(_certificate()),
-        rule_id="pattern_order_symmetry",
-        proof_version="v1",
-        validation_protocol="independent-two-session-v1",
+        token=_VALIDATION_REPORT_TOKEN,
     )
 
 
 def _reduction(*, status: ReductionStatus = ReductionStatus.REDUCED_VALID, verdict: RuntimeVerdict = RuntimeVerdict.PASS) -> ReductionReport:
     original_pair = _original_pair()
     reduced_pair = _reduced_pair()
+    final_validation = _report(pair=reduced_pair)
+    universe = MinimalityUniverse.recompute(reduced_pair)
     return ReductionReport(
         status,
         original_pair,
@@ -133,13 +154,30 @@ def _reduction(*, status: ReductionStatus = ReductionStatus.REDUCED_VALID, verdi
         _evidence(pair=reduced_pair, verdict=verdict),
         minimality_proof=MinimalityProof.from_results(
             reduced_pair,
-            (("delete-where", "symptom_not_preserved", "a" * 64),),
+            tuple(
+                (deletion.canonical_id, "symptom_not_preserved", f"{index:x}" * 64)
+                for index, deletion in enumerate(universe.deletions, start=1)
+            ),
         ),
-        final_validation=_report(pair=reduced_pair, candidate_hash="candidate-reduced"),
-        reduced_candidate_hash="candidate-reduced",
-        validation_policy_hash="policy-v1",
+        final_validation=final_validation,
+        reduced_candidate_hash=final_validation.candidate_hash,
+        validation_policy_hash=final_validation.policy_hash,
         certificate_hash=safety_certificate_hash(_certificate()),
     )
+
+
+def _tamper_report(report: IssueValidationReport, **changes) -> IssueValidationReport:
+    forged = copy.copy(report)
+    for name, value in changes.items():
+        object.__setattr__(forged, name, value)
+    return forged
+
+
+def _tamper_manifest_hash(report: IssueValidationReport, name: str, value: str) -> IssueValidationReport:
+    hashes = dict(report.manifest.content_hashes)
+    hashes[name] = value
+    manifest = replace(report.manifest, content_hashes=FrozenMapping.from_mapping(hashes))
+    return _tamper_report(report, manifest=manifest)
 
 
 def _certificate(**changes) -> SafetyCertificate:
@@ -148,10 +186,32 @@ def _certificate(**changes) -> SafetyCertificate:
     return SafetyCertificate(**values)
 
 
-def _duplicate_clearance(*, possible: bool = False, resolved: bool = False) -> DuplicateClearance:
-    members = ("candidate-original", "possible-other") if possible else ("candidate-original",)
+def _expected_issue_id(
+    report: IssueValidationReport | None = None,
+    reduction: ReductionReport | None = None,
+) -> str:
+    report = report or _report()
+    reduction = reduction or _reduction()
+    payload = {
+        "dbms_fingerprint": report.manifest.pair.dbms_fingerprint,
+        "dbms_version": report.manifest.dbms_version,
+        "original_candidate_hash": report.candidate_hash,
+        "reduced_pair_hash": reduction_pair_hash(reduction.reduced_pair),
+        "direction": reduction.final_evidence.slow_query,
+    }
+    return hashlib.sha256(stable_json_dumps(payload).encode("utf-8")).hexdigest()
+
+
+def _duplicate_clearance(
+    *,
+    possible: bool = False,
+    resolved: bool = False,
+    issue_id: str | None = None,
+) -> DuplicateClearance:
+    issue_id = issue_id or _expected_issue_id()
+    members = (issue_id, "possible-other") if possible else (issue_id,)
     return DuplicateClearance._from_registry(
-        issue_id="candidate-original",
+        issue_id=issue_id,
         possible_duplicate=possible,
         cluster_members=members,
         cluster_version_hash="f" * 64,
@@ -170,12 +230,24 @@ def test_profile_or_plan_like_metadata_cannot_promote_without_validation() -> No
 
 
 def test_only_validation_passed_reduced_core_certificate_becomes_submit_ready() -> None:
-    issue = promote(_report(), reduction_report=_reduction(), certificate=_certificate(), duplicate_clearance=_duplicate_clearance())
+    report = _report()
+    reduction = _reduction()
+    issue = promote(report, reduction_report=reduction, certificate=_certificate(), duplicate_clearance=_duplicate_clearance())
 
     assert issue is not None
     assert issue.stage is PipelineStage.SUBMIT_READY
     assert issue.developer_status is DeveloperStatus.WAITING_REPLY
     assert issue.reduction.status is ReductionStatus.REDUCED_VALID
+    assert issue.issue_id == _expected_issue_id(report, reduction)
+
+
+def test_promotion_rejects_clearance_for_a_different_deterministic_issue_id() -> None:
+    assert promote(
+        _report(),
+        reduction_report=_reduction(),
+        certificate=_certificate(),
+        duplicate_clearance=_duplicate_clearance(issue_id="wrong-issue"),
+    ) is None
 
 
 def test_manually_resolved_possible_duplicate_can_promote_with_evidence() -> None:
@@ -232,7 +304,7 @@ def test_promotion_recomputes_combined_samples_instead_of_trusting_report_summar
     )
 
     assert promote(
-        replace(report, sessions=weak_sessions),
+        _tamper_report(report, sessions=weak_sessions),
         reduction_report=_reduction(),
         certificate=_certificate(),
         duplicate_clearance=_duplicate_clearance(),
@@ -249,7 +321,7 @@ def test_promotion_rechecks_negative_control_noise() -> None:
     )
 
     assert promote(
-        replace(report, sessions=noisy_sessions),
+        _tamper_report(report, sessions=noisy_sessions),
         reduction_report=_reduction(),
         certificate=_certificate(),
         duplicate_clearance=_duplicate_clearance(),
@@ -261,7 +333,7 @@ def test_promotion_rechecks_session_fingerprints_and_protocol_shape() -> None:
     forged_session = replace(report.sessions[0], graph_fingerprint="other-graph")
 
     assert promote(
-        replace(report, sessions=(forged_session, report.sessions[1])),
+        _tamper_report(report, sessions=(forged_session, report.sessions[1])),
         reduction_report=_reduction(),
         certificate=_certificate(),
         duplicate_clearance=_duplicate_clearance(),
@@ -307,9 +379,18 @@ def test_reduction_requires_complete_samples_independent_revalidation_and_minima
     "tampered",
     (
         lambda reduction: replace(reduction.final_evidence, query_a_hash="forged"),
-        lambda reduction: replace(reduction.final_validation, candidate_hash="candidate-original"),
-        lambda reduction: replace(reduction.final_validation, policy_hash="other-policy"),
-        lambda reduction: replace(reduction.final_validation, query_b_hash="forged"),
+        lambda reduction: _tamper_report(
+            reduction.final_validation,
+            manifest=replace(
+                reduction.final_validation.manifest,
+                candidate_hash=_report().candidate_hash,
+            ),
+        ),
+        lambda reduction: _tamper_report(
+            reduction.final_validation,
+            validation_policy=replace(reduction.final_validation.validation_policy, min_ratio=99.0),
+        ),
+        lambda reduction: _tamper_manifest_hash(reduction.final_validation, "query_b", "forged"),
     ),
 )
 def test_reduced_evidence_chain_cannot_be_swapped_with_original_or_forged(tampered) -> None:
@@ -353,7 +434,7 @@ def test_promotion_uses_combined_samples_not_single_session_ci_or_oriented_delta
             reason_codes=("ci_lower_below_threshold", "delta_within_noise"),
         ),
     )
-    report = replace(report, sessions=(aggregate_only, report.sessions[1]))
+    report = _tamper_report(report, sessions=(aggregate_only, report.sessions[1]))
 
     assert promote(
         report,

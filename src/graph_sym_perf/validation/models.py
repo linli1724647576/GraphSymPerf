@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from graph_sym_perf.core import stable_json_dumps
@@ -180,6 +180,47 @@ class CandidateBundle:
         return tuple(reasons)
 
 
+@dataclass(frozen=True)
+class CandidateManifest:
+    pair: EquivalentQueryPair
+    graph_snapshot: GraphSnapshot
+    dbms_version: str
+    resolved_config: Mapping[str, object]
+    discovery_slow_query: str
+    discovery_ratio: float | None
+    certificate: SafetyCertificate
+    content_hashes: Mapping[str, str]
+    candidate_hash: str
+
+    @classmethod
+    def from_candidate(cls, candidate: CandidateBundle) -> "CandidateManifest":
+        return cls(
+            pair=replace(candidate.pair, parameters=FrozenMapping.from_mapping(candidate.pair.parameters)),
+            graph_snapshot=candidate.graph_snapshot,
+            dbms_version=candidate.dbms_version,
+            resolved_config=FrozenMapping.from_mapping(candidate.resolved_config),
+            discovery_slow_query=candidate.discovery_slow_query,
+            discovery_ratio=candidate.discovery_ratio,
+            certificate=candidate.certificate,
+            content_hashes=FrozenMapping.from_mapping(candidate.content_hashes),
+            candidate_hash=candidate.candidate_hash,
+        )
+
+    def verify_integrity(self, policy: ValidationPolicy) -> tuple[str, ...]:
+        return CandidateBundle(
+            pair=self.pair,
+            graph_snapshot=self.graph_snapshot,
+            dbms_version=self.dbms_version,
+            resolved_config=self.resolved_config,
+            discovery_slow_query=self.discovery_slow_query,
+            discovery_ratio=self.discovery_ratio,
+            validation_policy=policy,
+            certificate=self.certificate,
+            content_hashes=self.content_hashes,
+            candidate_hash=self.candidate_hash,
+        ).verify_integrity()
+
+
 def _content_hash(value: object) -> str:
     return hashlib.sha256(stable_json_dumps(value).encode("utf-8")).hexdigest()
 
@@ -324,7 +365,10 @@ class ValidationSession:
     lifecycle: SessionLifecycle | None = None
 
 
-@dataclass(frozen=True)
+_VALIDATION_REPORT_TOKEN = object()
+
+
+@dataclass(frozen=True, init=False)
 class IssueValidationReport:
     stage: PipelineStage
     equivalence: EquivalenceEvidence
@@ -333,15 +377,79 @@ class IssueValidationReport:
     validated_ratio: float | None
     magnitude_stability: str
     reason_codes: tuple[str, ...]
-    metadata: Mapping[str, object] = field(default_factory=dict)
-    candidate_hash: str = ""
-    query_a_hash: str = ""
-    query_b_hash: str = ""
-    policy_hash: str = ""
-    certificate_hash: str = ""
-    rule_id: str = ""
-    proof_version: str = ""
-    validation_protocol: str = ""
+    manifest: CandidateManifest
+    validation_policy: ValidationPolicy
+    validation_protocol: str
+    metadata: Mapping[str, object]
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("IssueValidationReport can only be constructed by validator")
+
+    @classmethod
+    def _from_validator(
+        cls,
+        *,
+        stage: PipelineStage,
+        equivalence: EquivalenceEvidence,
+        sessions: tuple[ValidationSession, ...],
+        discovery_ratio: float | None,
+        validated_ratio: float | None,
+        magnitude_stability: str,
+        reason_codes: tuple[str, ...],
+        candidate: CandidateBundle,
+        metadata: Mapping[str, object] | None,
+        token: object,
+    ) -> "IssueValidationReport":
+        if token is not _VALIDATION_REPORT_TOKEN:
+            raise TypeError("IssueValidationReport can only be constructed by validator")
+        instance = object.__new__(cls)
+        values = {
+            "stage": stage,
+            "equivalence": equivalence,
+            "sessions": tuple(sessions),
+            "discovery_ratio": discovery_ratio,
+            "validated_ratio": validated_ratio,
+            "magnitude_stability": magnitude_stability,
+            "reason_codes": tuple(reason_codes),
+            "manifest": CandidateManifest.from_candidate(candidate),
+            "validation_policy": candidate.validation_policy,
+            "validation_protocol": "independent-two-session-v1",
+            "metadata": FrozenMapping.from_mapping(metadata or {}),
+        }
+        for name, value in values.items():
+            object.__setattr__(instance, name, value)
+        return instance
+
+    @property
+    def candidate_hash(self) -> str:
+        return self.manifest.candidate_hash
+
+    @property
+    def query_a_hash(self) -> str:
+        return str(self.manifest.content_hashes["query_a"])
+
+    @property
+    def query_b_hash(self) -> str:
+        return str(self.manifest.content_hashes["query_b"])
+
+    @property
+    def policy_hash(self) -> str:
+        return str(self.manifest.content_hashes["validation_policy"])
+
+    @property
+    def certificate_hash(self) -> str:
+        return str(self.manifest.content_hashes["certificate"])
+
+    @property
+    def rule_id(self) -> str:
+        return self.manifest.certificate.rule_id
+
+    @property
+    def proof_version(self) -> str:
+        return self.manifest.certificate.proof_version
+
+    def verify_integrity(self) -> tuple[str, ...]:
+        return self.manifest.verify_integrity(self.validation_policy)
 
 
 _PROMOTION_TOKEN = object()
@@ -349,6 +457,7 @@ _PROMOTION_TOKEN = object()
 
 @dataclass(frozen=True, init=False)
 class SubmitReadyIssue:
+    issue_id: str
     stage: PipelineStage
     developer_status: DeveloperStatus
     validation: IssueValidationReport
@@ -367,11 +476,13 @@ class SubmitReadyIssue:
         certificate: SafetyCertificate,
         duplicate_clearance: DuplicateClearance,
         *,
+        issue_id: str,
         token: object,
     ) -> "SubmitReadyIssue":
         if token is not _PROMOTION_TOKEN:
             raise TypeError("SubmitReadyIssue can only be constructed by promote()")
         instance = object.__new__(cls)
+        object.__setattr__(instance, "issue_id", issue_id)
         object.__setattr__(instance, "stage", PipelineStage.SUBMIT_READY)
         object.__setattr__(instance, "developer_status", DeveloperStatus.WAITING_REPLY)
         object.__setattr__(instance, "validation", validation)

@@ -2,7 +2,15 @@ from dataclasses import replace
 
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
-from graph_sym_perf.validation.models import CandidateBundle, SafetyCertificate
+import pytest
+
+from graph_sym_perf.validation.models import (
+    CandidateBundle,
+    EquivalenceEvidence,
+    IssueValidationReport,
+    PipelineStage,
+    SafetyCertificate,
+)
 
 
 def _bundle() -> CandidateBundle:
@@ -110,3 +118,16 @@ def test_candidate_bundle_fail_closes_when_versioned_dbms_identity_is_unavailabl
     assert "dbms_fingerprint_unavailable" in unavailable.verify_integrity()
     assert "dbms_version_unavailable" in unavailable.verify_integrity()
     assert "resolved_config_unavailable" in unavailable.verify_integrity()
+
+
+def test_issue_validation_report_cannot_be_publicly_constructed() -> None:
+    with pytest.raises(TypeError, match="validator"):
+        IssueValidationReport(
+            stage=PipelineStage.VALIDATION_PASSED,
+            equivalence=EquivalenceEvidence(True, True, ()),
+            sessions=(),
+            discovery_ratio=4.0,
+            validated_ratio=4.0,
+            magnitude_stability="stable",
+            reason_codes=(),
+        )

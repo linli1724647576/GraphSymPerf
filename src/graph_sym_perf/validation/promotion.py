@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 from statistics import median
 
-from graph_sym_perf.reducer.models import ReductionReport, ReductionStatus
+from graph_sym_perf.core import stable_json_dumps
+from graph_sym_perf.reducer.models import ReductionReport, ReductionStatus, reduction_pair_hash
 from graph_sym_perf.runtime.models import RuntimeVerdict
 from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci, percentile
 from graph_sym_perf.validation.models import (
@@ -28,13 +29,15 @@ def promote(
         return None
     if not _reduction_gate_complete(reduction_report, report, certificate) or not _direction_preserved(report, reduction_report):
         return None
-    if not duplicate_clearance.verify():
+    issue_id = deterministic_issue_id(report, reduction_report)
+    if not duplicate_clearance.verify() or duplicate_clearance.issue_id != issue_id:
         return None
     return SubmitReadyIssue._from_promotion(
         report,
         reduction_report,
         certificate,
         duplicate_clearance,
+        issue_id=issue_id,
         token=_PROMOTION_TOKEN,
     )
 
@@ -43,6 +46,8 @@ def submit_ready_issue_is_valid(issue: SubmitReadyIssue) -> bool:
     return (
         isinstance(issue, SubmitReadyIssue)
         and issue.stage is PipelineStage.SUBMIT_READY
+        and issue.issue_id == deterministic_issue_id(issue.validation, issue.reduction)
+        and issue.duplicate_clearance.issue_id == issue.issue_id
         and _validation_gate_complete(issue.validation)
         and _reduction_gate_complete(issue.reduction, issue.validation, issue.certificate)
         and _direction_preserved(issue.validation, issue.reduction)
@@ -54,6 +59,7 @@ def submit_ready_issue_is_valid(issue: SubmitReadyIssue) -> bool:
 def _validation_gate_complete(report: IssueValidationReport) -> bool:
     if (
         report.stage is not PipelineStage.VALIDATION_PASSED
+        or report.verify_integrity()
         or not report.equivalence.equivalent
         or not report.equivalence.complete_result
         or report.reason_codes
@@ -244,3 +250,17 @@ def _eligible_for_combined_gate(evidence) -> bool:
 
 def _query_hash(query: str) -> str:
     return hashlib.sha256(query.encode("utf-8")).hexdigest()
+
+
+def deterministic_issue_id(
+    report: IssueValidationReport,
+    reduction: ReductionReport,
+) -> str:
+    payload = {
+        "dbms_fingerprint": report.manifest.pair.dbms_fingerprint,
+        "dbms_version": report.manifest.dbms_version,
+        "original_candidate_hash": report.candidate_hash,
+        "reduced_pair_hash": reduction_pair_hash(reduction.reduced_pair),
+        "direction": reduction.final_evidence.slow_query,
+    }
+    return hashlib.sha256(stable_json_dumps(payload).encode("utf-8")).hexdigest()
