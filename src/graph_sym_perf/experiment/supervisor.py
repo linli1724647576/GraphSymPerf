@@ -165,6 +165,8 @@ class ShardSupervisor:
                     final=True,
                 )
                 return "failed"
+        except ManifestMismatchError:
+            raise
         except BaseException as journal_exc:
             reason = f"{reason}; journal unavailable: {type(journal_exc).__name__}: {journal_exc}"
         self._persist_isolated_failure(shard_dir, manifest_hash, task_identity, reason)

@@ -8,7 +8,7 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
-from graph_sym_perf.experiment.state import ErrorKind, ShardState, can_transition
+from graph_sym_perf.experiment.state import ErrorKind, ManifestMismatchError, ShardState, can_transition
 
 
 CONTENT_HASH = re.compile(r"^[0-9a-f]{64}$")
@@ -66,12 +66,11 @@ def validate_failure_evidence(
     if not path.is_file():
         return None
     failure = read_json_object(path)
-    if (
-        failure.get("manifest_hash") != manifest_hash
-        or failure.get("task_identity") != task_identity
-        or failure.get("state") != ShardState.FAILED_FINAL.value
-        or not isinstance(failure.get("reason"), str)
-    ):
+    if failure.get("manifest_hash") != manifest_hash:
+        raise ManifestMismatchError("failure evidence belongs to a different immutable manifest")
+    if failure.get("task_identity") != task_identity:
+        raise ManifestMismatchError("failure evidence belongs to a different shard task")
+    if failure.get("state") != ShardState.FAILED_FINAL.value or not isinstance(failure.get("reason"), str):
         raise ValueError("failure evidence does not match immutable manifest task")
     try:
         ErrorKind(str(failure.get("error_kind")))

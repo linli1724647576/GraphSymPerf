@@ -612,3 +612,26 @@ def test_corrupt_checkpoint_and_events_are_preserved_while_other_shard_continues
     assert repeated.completed == (good,)
     status = ExperimentLifecycle(tmp_path).status(run_id)
     assert (status.completed, status.failed, status.invalid) == (1, 1, 1)
+
+
+def test_marker_only_failure_identity_mismatch_is_run_level_refusal_without_rewrite(tmp_path) -> None:
+    task = ShardTask(TargetSystem.NEO4J, 0, 61, 1, 1, 60)
+    original = RunPlan("marker-original", 2, (task,), 1, SourceRevision("original", None, None))
+    changed = RunPlan("marker-changed", 2, (task,), 1, SourceRevision("changed", None, None))
+    supervisor = ShardSupervisor(tmp_path, retry_limit=0)
+    assert supervisor.run(original, _DurableStageWorker()).completed == (task,)
+    shard_dir = tmp_path / "shards" / "neo4j-000"
+    (shard_dir / "accepted_pairs.jsonl").unlink()
+    assert supervisor.resume(original, lambda _task: pytest.fail("invalid terminal evidence must not rerun")).failed == (
+        task,
+    )
+    (shard_dir / "checkpoint.json").unlink()
+    marker_before = (shard_dir / "failure.json").read_bytes()
+    events_before = (shard_dir / "events.jsonl").read_bytes()
+
+    with pytest.raises(ManifestMismatchError):
+        supervisor.resume(changed, lambda _task: pytest.fail("identity drift must refuse before worker execution"))
+
+    assert not (shard_dir / "checkpoint.json").exists()
+    assert (shard_dir / "failure.json").read_bytes() == marker_before
+    assert (shard_dir / "events.jsonl").read_bytes() == events_before
