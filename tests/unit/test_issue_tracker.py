@@ -27,7 +27,8 @@ def test_issue_tracking_writes_reportable_and_status_artifacts(tmp_path: Path) -
                 "case_id": "case001",
                 "system": "neo4j",
                 "equivalence_passed": True,
-                "support_level": "profile_supported",
+                "pipeline_stage": "submit_ready",
+                "reduction_status": "reduced_valid",
                 "latency_ratio": 5.0,
                 "db_hits_ratio": 8.0,
                 "reducer": {
@@ -70,7 +71,8 @@ def test_issue_tracking_uses_searcher_for_possible_duplicates(tmp_path: Path) ->
                 "case_id": "case002",
                 "system": "memgraph",
                 "equivalence_passed": True,
-                "support_level": "latency_supported",
+                "pipeline_stage": "submit_ready",
+                "reduction_status": "reduced_valid",
                 "latency_ratio": 12.0,
                 "reducer": {},
             }
@@ -92,7 +94,7 @@ def test_issue_tracking_uses_searcher_for_possible_duplicates(tmp_path: Path) ->
     assert reportable["issues"][0]["duplicate_of"].endswith("/4208")
 
 
-def test_issue_tracking_treats_profile_and_runtime_supported_as_runtime_supported(tmp_path: Path) -> None:
+def test_issue_tracking_requires_submit_ready_stage_not_profile_support(tmp_path: Path) -> None:
     triage_payload = {
         "items": [
             {
@@ -110,6 +112,8 @@ def test_issue_tracking_treats_profile_and_runtime_supported_as_runtime_supporte
                 "system": "neo4j",
                 "equivalence_passed": True,
                 "support_level": "profile_and_runtime_supported",
+                "pipeline_stage": "screened",
+                "reduction_status": "reduced_valid",
                 "latency_ratio": 12.0,
                 "reducer": {},
             }
@@ -119,4 +123,4 @@ def test_issue_tracking_treats_profile_and_runtime_supported_as_runtime_supporte
     build_issue_tracking_artifacts(tmp_path, triage_payload, validation_summary, issue_search=False)
 
     reportable = json.loads((tmp_path / "reportable_issues.json").read_text(encoding="utf-8"))
-    assert reportable["issues"][0]["runtime_supported"] is True
+    assert reportable["issues"] == []

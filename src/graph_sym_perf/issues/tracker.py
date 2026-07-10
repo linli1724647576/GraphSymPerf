@@ -15,7 +15,8 @@ from urllib.request import Request, urlopen
 
 import yaml
 
-from graph_sym_perf.core import is_profile_supported_level, is_runtime_supported_level, support_level_value, to_jsonable
+from graph_sym_perf.core import to_jsonable
+from graph_sym_perf.validation.models import PipelineStage
 
 SYSTEM_ISSUE_REPOSITORIES: Mapping[str, str] = {
     "neo4j": "neo4j/neo4j",
@@ -69,9 +70,9 @@ def build_issue_tracking_artifacts(
             "unique_issue_key": triage_item.get("unique_issue_key"),
             "status": status,
             "developer_status": _developer_status(triage_item, validation),
-            "support_level": _support_value(validation.get("support_level")),
+            "pipeline_stage": _stage_value(validation.get("pipeline_stage")),
             "equivalence_passed": bool(validation.get("equivalence_passed")),
-            "runtime_supported": is_runtime_supported_level(validation.get("support_level")),
+            "runtime_supported": _stage_value(validation.get("pipeline_stage")) == PipelineStage.SUBMIT_READY.value,
             "root_cause_labels": tuple(triage_item.get("root_cause_labels") or ()),
             "transform_rules": triage_item.get("transform_rules") or {},
             "latency_ratio": validation.get("latency_ratio") or triage_item.get("latency_ratio"),
@@ -215,12 +216,7 @@ def _github_issue_payload(item: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _is_reportable(validation: Mapping[str, Any]) -> bool:
-    if not validation:
-        return False
-    if not validation.get("equivalence_passed"):
-        return False
-    support_level = _support_value(validation.get("support_level"))
-    return is_profile_supported_level(support_level) or is_runtime_supported_level(support_level)
+    return bool(validation) and _stage_value(validation.get("pipeline_stage")) == PipelineStage.SUBMIT_READY.value and str(validation.get("reduction_status") or "") == "reduced_valid"
 
 
 def _external_issue_status(search_payload: Mapping[str, Any]) -> str:
@@ -271,7 +267,7 @@ def _status_row(entry: Mapping[str, Any]) -> Mapping[str, Any]:
         "developer_status": entry.get("developer_status"),
         "issue_url": entry.get("issue_url"),
         "duplicate_of": entry.get("duplicate_of"),
-        "support_level": entry.get("support_level"),
+        "pipeline_stage": entry.get("pipeline_stage"),
         "latency_ratio": entry.get("latency_ratio"),
         "db_hits_ratio": entry.get("db_hits_ratio"),
         "rows_ratio": entry.get("rows_ratio"),
@@ -359,8 +355,8 @@ def _csv_value(value: Any) -> Any:
     return value
 
 
-def _support_value(value: Any) -> str:
-    return support_level_value(value)
+def _stage_value(value: Any) -> str:
+    return value.value if isinstance(value, PipelineStage) else str(value or "")
 
 
 def _utc_now() -> str:
