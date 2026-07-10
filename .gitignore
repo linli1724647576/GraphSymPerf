@@ -9,6 +9,7 @@ __pycache__/
 /results/
 /reports/
 /deletion_manifest.json
+/doctor.json
 .DS_Store
 .env
 /BUG list
