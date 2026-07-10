@@ -445,7 +445,6 @@ def _final_validation_failure_is_conclusive(validation: object) -> bool:
         "absolute_delta_within_noise",
         "negative_control_noise",
         "direction_mismatch",
-        "missing_paired_samples",
     }
     return bool(set(validation.reason_codes) & runtime_loss_reasons)
 

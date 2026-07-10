@@ -410,6 +410,41 @@ def test_explicit_final_typed_equivalence_mismatch_invalidates_reduction() -> No
     assert report.stop_reason == "final_validation_failed"
 
 
+def test_final_missing_timing_samples_is_partial_not_runtime_loss() -> None:
+    class MissingSamplesRunner(IndependentRunner):
+        def run_session(self, candidate, session_number, **kwargs):
+            equivalence, session = super().run_session(candidate, session_number, **kwargs)
+            samples = tuple(
+                PairedSample("AB" if index % 2 == 0 else "BA", None, None)
+                for index in range(20)
+            )
+            return equivalence, replace(
+                session,
+                evidence=replace(
+                    session.evidence,
+                    paired_samples=samples,
+                    median_ratio=None,
+                    median_delta_ms=None,
+                    ci_ratio_low=None,
+                    ci_ratio_high=None,
+                    direction_consistency=0.0,
+                ),
+            )
+
+    class MissingSamplesFinal(FinalIssueValidator):
+        def validate(self, candidate):
+            self.candidates.append(candidate)
+            return IssueValidator().validate(candidate, MissingSamplesRunner())
+
+    report = CandidateReducer(max_attempts=20).reduce(_bundle(final=MissingSamplesFinal()))
+
+    assert report.status is ReductionStatus.REDUCTION_PARTIAL
+    assert report.stop_reason == "final_validation_inconclusive"
+    assert report.final_validation is not None
+    assert report.final_validation.reason_codes == ("missing_paired_samples",)
+    assert report.attempts
+
+
 def test_final_validator_exception_is_partial_with_attempt_and_reason_evidence() -> None:
     class RaisingFinal(FinalIssueValidator):
         def validate(self, candidate):
