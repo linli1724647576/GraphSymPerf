@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from graph_sym_perf.reducer.models import ReductionReport, ReductionStatus, ReductionStep, SymptomPredicate
 from graph_sym_perf.reducer.proposals import clause_removal_proposals
-from graph_sym_perf.runtime.models import RuntimeVerdict
-from graph_sym_perf.validation.models import EquivalentQueryPair
+from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimeVerdict
 
 
 class CandidateReducer:

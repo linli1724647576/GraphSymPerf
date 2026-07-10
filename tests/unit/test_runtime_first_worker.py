@@ -3,7 +3,8 @@ import json
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import ShardTask
 from graph_sym_perf.experiment.spec import load_experiment_spec
-from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
+from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker, _graph_snapshot_hash
+from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 
 
 class _Adapter:
@@ -49,6 +50,12 @@ class _RuntimeGapAdapter(_Adapter):
             elapsed_ms=5.0 if "OR NOT" in query else 1.0,
             summary=result.summary,
         )
+
+
+def test_worker_graph_identity_matches_validation_snapshot_contract() -> None:
+    statements = (" CREATE (a) ", "", "CREATE (b)")
+
+    assert _graph_snapshot_hash(statements) == GraphSnapshot.from_statements(statements).content_hash
 
 
 def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minimal_records(tmp_path) -> None:
@@ -104,3 +111,6 @@ def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) ->
     ]
     assert result["screened_candidates"] == 1
     assert records[0]["discovery_slow_query"] == "b"
+    assert records[0]["parameters"] == {}
+    assert records[0]["graph_snapshot_hash"]
+    assert records[0]["dbms_fingerprint"] == "neo4j"

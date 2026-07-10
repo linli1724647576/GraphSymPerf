@@ -9,8 +9,8 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter
-from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _has_bare_property_predicate, _has_boolean_property_operand
-from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
+from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _has_bare_property_predicate, _has_boolean_property_operand, _query_execution_error
+from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_jsonable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
 _logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
                 truncated = True
                 rows = rows[: max_rows + 1]
         except Exception as exc:
-            raise QueryExecutionError(f"FalkorDB query failed: {exc}") from exc
+            raise _query_execution_error(f"FalkorDB query failed: {exc}", exc) from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
         return ExecutionResult(
             system=TargetSystem.FALKORDB,

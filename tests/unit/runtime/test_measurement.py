@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from graph_sym_perf.runtime import models as runtime_models
 from graph_sym_perf.runtime.measurement import RuntimeHarness, paired_schedule
 from graph_sym_perf.runtime.models import RuntimePolicy, RuntimeVerdict
+from graph_sym_perf.validation import models as validation_models
 
 
 class ExecuteOnlyFake:
@@ -26,6 +28,36 @@ class QueryRuntimeFake:
         return self.runtimes[query]
 
 
+class PairBindingFake:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def execute(self, query: str, parameters, **_kwargs) -> float:
+        self.calls.append((query, dict(parameters)))
+        return 10.0 if query == "A" else 50.0
+
+
+def test_equivalent_query_pair_has_one_neutral_runtime_type_source() -> None:
+    assert hasattr(runtime_models, "EquivalentQueryPair")
+    assert validation_models.EquivalentQueryPair is runtime_models.EquivalentQueryPair
+
+
+def test_discovery_binds_queries_parameters_and_pair_identity() -> None:
+    pair = runtime_models.EquivalentQueryPair("A", "B", {"tenant": 7}, "graph-hash", "dbms-hash")
+    executor = PairBindingFake()
+
+    evidence = RuntimeHarness().measure_discovery(
+        executor,
+        pair,
+        policy=RuntimePolicy(warmups=0, pairs=5, seed=7),
+    )
+
+    assert {query for query, _parameters in executor.calls} == {"A", "B"}
+    assert all(parameters == {"tenant": 7} for _query, parameters in executor.calls)
+    assert evidence.graph_snapshot_hash == "graph-hash"
+    assert evidence.dbms_fingerprint == "dbms-hash"
+
+
 def test_paired_schedule_is_seeded_and_balanced_for_discovery_and_validation() -> None:
     discovery = paired_schedule(5, seed=7, require_exact_balance=False)
     validation = paired_schedule(20, seed=7, require_exact_balance=True)
@@ -37,10 +69,10 @@ def test_paired_schedule_is_seeded_and_balanced_for_discovery_and_validation() -
 
 def test_discovery_public_path_requires_five_approximately_balanced_pairs() -> None:
     harness = RuntimeHarness()
+    pair = runtime_models.EquivalentQueryPair("A", "B", {}, "graph", "dbms")
     evidence = harness.measure_discovery(
         QueryRuntimeFake({"A": 10.0, "B": 50.0}),
-        "A",
-        "B",
+        pair,
         policy=RuntimePolicy(warmups=0, pairs=5, seed=7),
     )
 
@@ -49,8 +81,7 @@ def test_discovery_public_path_requires_five_approximately_balanced_pairs() -> N
     with pytest.raises(ValueError, match="discovery requires exactly 5 pairs"):
         harness.measure_discovery(
             QueryRuntimeFake({"A": 10.0, "B": 50.0}),
-            "A",
-            "B",
+            pair,
             policy=RuntimePolicy(warmups=0, pairs=20, seed=7, require_exact_balance=True),
         )
 

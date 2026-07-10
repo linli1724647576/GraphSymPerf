@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping
 
-from graph_sym_perf.runtime.models import RuntimeEvidence
+from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimeEvidence
 
 
 class PipelineStage(str, Enum):
@@ -42,15 +42,6 @@ class EquivalenceEvidence:
     equivalent: bool
     complete_result: bool
     reason_codes: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class EquivalentQueryPair:
-    query_a: str
-    query_b: str
-    parameters: Mapping[str, object]
-    graph_snapshot_hash: str
-    dbms_fingerprint: str
 
 
 @dataclass(frozen=True)

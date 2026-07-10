@@ -7,8 +7,8 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter
-from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin
-from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
+from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _query_execution_error
+from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_jsonable
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, GdsmithReplayNode, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
@@ -91,7 +91,7 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
             self._conn.commit()
         except Exception as exc:
             self._conn.rollback()
-            raise QueryExecutionError(f"AgensGraph query failed: {exc}") from exc
+            raise _query_execution_error(f"AgensGraph query failed: {exc}", exc) from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
         return ExecutionResult(
             system=TargetSystem.AGENSGRAPH,

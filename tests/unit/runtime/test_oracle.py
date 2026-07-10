@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from graph_sym_perf.runtime.measurement import RuntimeHarness
-from graph_sym_perf.runtime.models import RuntimePolicy, RuntimeVerdict
+from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, RuntimeVerdict
 from graph_sym_perf.runtime.noise import calibrate_aa_noise
 from graph_sym_perf.runtime.oracle import evaluate_runtime
 
@@ -141,10 +141,10 @@ def test_runtime_gate_rejects_evidence_without_a_stable_majority_direction() -> 
 
 def test_validation_public_path_forces_twenty_balanced_pairs_and_strict_gate() -> None:
     harness = RuntimeHarness()
+    pair = EquivalentQueryPair("A", "B", {"tenant": 7}, "graph-hash", "dbms-hash")
     passing = harness.measure_validation(
         TimeoutFake(),
-        "A",
-        "B",
+        pair,
         policy=RuntimePolicy(warmups=0, pairs=20, seed=2, require_exact_balance=True),
         expected_slow_query="b",
         noise_floor_ms=0.0,
@@ -152,8 +152,7 @@ def test_validation_public_path_forces_twenty_balanced_pairs_and_strict_gate() -
     )
     failing = harness.measure_validation(
         BelowRatioFake(),
-        "A",
-        "B",
+        pair,
         policy=RuntimePolicy(warmups=0, pairs=20, seed=2, require_exact_balance=True),
         expected_slow_query="b",
         noise_floor_ms=0.0,
@@ -164,13 +163,24 @@ def test_validation_public_path_forces_twenty_balanced_pairs_and_strict_gate() -
     assert len(passing.paired_samples) == 20
     assert sum(sample.order == "AB" for sample in passing.paired_samples) == 10
     assert sum(sample.order == "BA" for sample in passing.paired_samples) == 10
+    assert passing.graph_snapshot_hash == "graph-hash"
+    assert passing.dbms_fingerprint == "dbms-hash"
     assert failing.verdict is RuntimeVerdict.FAIL
     assert "ratio_below_threshold" in failing.reason_codes
+    with pytest.raises(TypeError, match="unexpected keyword argument 'parameters'"):
+        harness.measure_validation(
+            TimeoutFake(),
+            pair,
+            policy=RuntimePolicy(warmups=0, pairs=20, seed=2, require_exact_balance=True),
+            expected_slow_query="b",
+            noise_floor_ms=0.0,
+            timer_resolution_ms=0.001,
+            parameters={"tenant": 999},
+        )
     with pytest.raises(ValueError, match="validation requires exactly 20 pairs"):
         harness.measure_validation(
             TimeoutFake(),
-            "A",
-            "B",
+            pair,
             policy=RuntimePolicy(warmups=0, pairs=5, seed=2),
             expected_slow_query="b",
             noise_floor_ms=0.0,

@@ -9,7 +9,8 @@ from typing import Any, Mapping
 from urllib.parse import urlparse, urlunparse
 
 from graph_sym_perf.adapters.base import BaseAdapter
-from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
+from graph_sym_perf.adapters.common_cypher import _query_execution_error
+from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_jsonable
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
@@ -91,7 +92,7 @@ class ApacheAgeAdapter(BaseAdapter):
             self._conn.commit()
         except Exception as exc:
             self._conn.rollback()
-            raise QueryExecutionError(f"Apache AGE query failed: {exc}") from exc
+            raise _query_execution_error(f"Apache AGE query failed: {exc}", exc) from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
         return ExecutionResult(
             system=TargetSystem.APACHE_AGE,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Mapping
 
 
 class RuntimeVerdict(str, Enum):
@@ -11,6 +12,15 @@ class RuntimeVerdict(str, Enum):
     FAIL = "fail"
     INCONCLUSIVE = "inconclusive"
     INVALID = "invalid"
+
+
+@dataclass(frozen=True)
+class EquivalentQueryPair:
+    query_a: str
+    query_b: str
+    parameters: Mapping[str, object]
+    graph_snapshot_hash: str
+    dbms_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -47,6 +57,8 @@ class RuntimeEvidence:
     reason_codes: tuple[str, ...]
     timeout_lower_bound_ratio: float | None = None
     slow_query: str | None = None
+    graph_snapshot_hash: str | None = None
+    dbms_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)

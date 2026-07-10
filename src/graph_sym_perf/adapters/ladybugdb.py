@@ -15,8 +15,8 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter
-from graph_sym_perf.adapters.common_cypher import _compact
-from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
+from graph_sym_perf.adapters.common_cypher import _compact, _query_execution_error
+from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_jsonable
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
@@ -89,7 +89,7 @@ class LadybugDBAdapter(BaseAdapter):
                 truncated = True
                 rows = rows[: max_rows + 1]
         except Exception as exc:
-            raise QueryExecutionError(f"LadybugDB query failed: {exc}") from exc
+            raise _query_execution_error(f"LadybugDB query failed: {exc}", exc) from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
         return ExecutionResult(
             system=TargetSystem.LADYBUGDB,

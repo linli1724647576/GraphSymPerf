@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
+from graph_sym_perf.core import QueryExecutionError, QueryTimeoutError
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, GdsmithReplayNode, GdsmithReplayRelationship, parse_gdsmith_replay_graph
 
 _logger = logging.getLogger(__name__)
@@ -71,19 +72,35 @@ def _compact(query: str) -> str:
     return "\n".join(line.rstrip() for line in query.strip().splitlines())
 
 
-def _is_timeout_like(exc: Exception) -> bool:
-    """Return True when *exc* is most likely caused by a client or server timeout."""
+def _query_execution_error(message: str, exc: Exception) -> QueryExecutionError:
+    """Classify known typed timeout causes without exposing driver types upstream."""
+
+    if isinstance(exc, QueryTimeoutError):
+        return exc
     if isinstance(exc, TimeoutError):
-        return True
-    name = exc.__class__.__name__.lower()
-    text = str(exc).lower()
-    return (
-        "timeout" in name
-        or "serviceunavailable" in name
-        or "defunct connection" in text
-        or "timed out" in text
-        or "timeout" in text
-    )
+        return QueryTimeoutError(message)
+    if getattr(exc, "sqlstate", None) == "57014":
+        return QueryTimeoutError(message)
+    if getattr(exc, "code", None) in {
+        "Neo.ClientError.Transaction.TransactionTimedOut",
+        "Neo.TransientError.Transaction.TransactionTimedOut",
+    }:
+        return QueryTimeoutError(message)
+    try:
+        import requests
+
+        if isinstance(exc, requests.exceptions.Timeout):
+            return QueryTimeoutError(message)
+    except ImportError:  # pragma: no cover - ArcadeDB dependency probe owns this failure.
+        pass
+    try:
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+
+        if isinstance(exc, RedisTimeoutError):
+            return QueryTimeoutError(message)
+    except ImportError:  # pragma: no cover - FalkorDB dependency probe owns this failure.
+        pass
+    return QueryExecutionError(message)
 
 
 def _has_bare_property_predicate(query: str) -> bool:

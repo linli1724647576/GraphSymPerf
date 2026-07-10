@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import math
 import random
+from dataclasses import replace
 from statistics import median
 from typing import Any, Mapping, Protocol
 
-from graph_sym_perf.runtime.models import PairedSample, RuntimeEvidence, RuntimePolicy, RuntimeVerdict
+from graph_sym_perf.core import QueryTimeoutError
+from graph_sym_perf.runtime.models import EquivalentQueryPair, PairedSample, RuntimeEvidence, RuntimePolicy, RuntimeVerdict
 from graph_sym_perf.runtime.oracle import evaluate_runtime
 from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci, relative_mad
 
@@ -44,25 +46,32 @@ class RuntimeHarness:
     def measure_discovery(
         self,
         executor: ExecuteOnly,
-        query_a: str,
-        query_b: str,
+        pair: EquivalentQueryPair,
         *,
-        parameters: Mapping[str, Any] | None = None,
         policy: RuntimePolicy,
     ) -> RuntimeEvidence:
         """Run the fixed five-pair discovery protocol without an issue-grade verdict."""
 
         if policy.pairs != 5 or policy.require_exact_balance or policy.bootstrap_resamples != 10_000:
             raise ValueError("discovery requires exactly 5 pairs, approximate balance, and 10000 bootstrap resamples")
-        return self.measure_pair(executor, query_a, query_b, parameters=parameters, policy=policy)
+        evidence = self.measure_pair(
+            executor,
+            pair.query_a,
+            pair.query_b,
+            parameters=pair.parameters,
+            policy=policy,
+        )
+        return replace(
+            evidence,
+            graph_snapshot_hash=pair.graph_snapshot_hash,
+            dbms_fingerprint=pair.dbms_fingerprint,
+        )
 
     def measure_validation(
         self,
         executor: ExecuteOnly,
-        query_a: str,
-        query_b: str,
+        pair: EquivalentQueryPair,
         *,
-        parameters: Mapping[str, Any] | None = None,
         policy: RuntimePolicy,
         expected_slow_query: str,
         noise_floor_ms: float,
@@ -74,16 +83,21 @@ class RuntimeHarness:
             raise ValueError("validation requires exactly 20 pairs, exact balance, and 10000 bootstrap resamples")
         raw_evidence = self.measure_pair(
             executor,
-            query_a,
-            query_b,
-            parameters=parameters,
+            pair.query_a,
+            pair.query_b,
+            parameters=pair.parameters,
             policy=policy,
             expected_slow_query=expected_slow_query,
         )
-        return evaluate_runtime(
+        verdict = evaluate_runtime(
             raw_evidence,
             noise_floor_ms=noise_floor_ms,
             timer_resolution_ms=timer_resolution_ms,
+        )
+        return replace(
+            verdict,
+            graph_snapshot_hash=pair.graph_snapshot_hash,
+            dbms_fingerprint=pair.dbms_fingerprint,
         )
 
     def measure_pair(
@@ -130,7 +144,7 @@ class RuntimeHarness:
     def _elapsed(executor: ExecuteOnly, query: str, parameters: Mapping[str, Any], policy: RuntimePolicy) -> tuple[float | None, bool]:
         try:
             result = executor.execute(query, parameters, query_kind="runtime", timeout_seconds=(policy.timeout_ms / 1000 if policy.timeout_ms else None))
-        except TimeoutError:
+        except (QueryTimeoutError, TimeoutError):
             return None, True
         except (AssertionError, AttributeError, TypeError):
             raise

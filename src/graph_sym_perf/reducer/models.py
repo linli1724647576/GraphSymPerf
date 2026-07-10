@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from graph_sym_perf.runtime.models import RuntimeEvidence
-from graph_sym_perf.validation.models import EquivalentQueryPair
+from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimeEvidence
 
 
 class ReductionStatus(str, Enum):

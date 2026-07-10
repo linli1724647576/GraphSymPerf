@@ -7,6 +7,7 @@ from graph_sym_perf.core.errors import (
     GraphSymPerfError,
     PreflightError,
     QueryExecutionError,
+    QueryTimeoutError,
 )
 from graph_sym_perf.core.models import (
     CaseRecord,
@@ -101,6 +102,7 @@ __all__ = [
     "PreflightError",
     "QueryCase",
     "QueryExecutionError",
+    "QueryTimeoutError",
     "QueryGenerationConfig",
     "QueryPair",
     "QueryVariant",

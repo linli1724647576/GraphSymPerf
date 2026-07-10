@@ -6,8 +6,8 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter
-from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _has_bare_property_predicate, _has_boolean_property_operand, _is_timeout_like
-from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_jsonable
+from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _has_bare_property_predicate, _has_boolean_property_operand, _query_execution_error
+from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, QueryTimeoutError, TargetSystem, to_jsonable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
 
@@ -42,7 +42,7 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
                 result = session.run(_query_with_timeout(query, timeout_seconds), dict(parameters))
                 rows, summary, truncated = _collect_rows(result, max_rows)
         except Exception as exc:
-            raise QueryExecutionError(f"Memgraph query failed: {exc}") from exc
+            raise _query_execution_error(f"Memgraph query failed: {exc}", exc) from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
         return ExecutionResult(
             system=TargetSystem.MEMGRAPH,
@@ -82,9 +82,9 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
                 max_rows=max_rows,
                 timeout_seconds=timeout_seconds,
             )
-        except Exception as exc:
-            if _is_timeout_like(exc):
-                raise
+        except QueryTimeoutError:
+            raise
+        except QueryExecutionError:
             return self.execute(query, parameters, query_kind, max_rows=max_rows, timeout_seconds=timeout_seconds)
 
     def schema_statements(self) -> tuple[str, ...]:

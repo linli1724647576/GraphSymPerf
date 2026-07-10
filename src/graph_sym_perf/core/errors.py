@@ -21,3 +21,7 @@ class PreflightError(GraphSymPerfError):
 
 class QueryExecutionError(AdapterError):
     """Raised when a target database rejects or fails a query."""
+
+
+class QueryTimeoutError(QueryExecutionError):
+    """Raised when a query exceeds a client- or server-enforced deadline."""

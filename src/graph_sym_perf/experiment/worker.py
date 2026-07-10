@@ -31,7 +31,7 @@ from graph_sym_perf.experiment.plan_models import ExperimentSpec, ShardTask
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
 from graph_sym_perf.runtime.measurement import RuntimeHarness
-from graph_sym_perf.runtime.models import RuntimePolicy, RuntimeVerdict
+from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, RuntimeVerdict
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,14 @@ class RuntimeFirstShardWorker:
         adapter = self._adapter_factory(task)
         try:
             self._reset_and_load(adapter, generated.graph_statements)
-            accepted, rejects = self._build_accepted_pairs(adapter, task, generated.query_texts, shard_dir)
+            accepted, rejects = self._build_accepted_pairs(
+                adapter,
+                task,
+                generated.query_texts,
+                shard_dir,
+                graph_snapshot_hash=_graph_snapshot_hash(generated.graph_statements),
+                dbms_fingerprint=_adapter_dbms_fingerprint(adapter, task),
+            )
             candidates = self._screen_pairs(adapter, task, accepted, shard_dir)
         finally:
             adapter.close()
@@ -117,8 +124,11 @@ class RuntimeFirstShardWorker:
         task: ShardTask,
         queries: tuple[str, ...],
         shard_dir: Path,
-    ) -> tuple[list[tuple[str, str]], Counter[str]]:
-        accepted: list[tuple[str, str]] = []
+        *,
+        graph_snapshot_hash: str,
+        dbms_fingerprint: str,
+    ) -> tuple[list[EquivalentQueryPair], Counter[str]]:
+        accepted: list[EquivalentQueryPair] = []
         rejects: Counter[str] = Counter()
         seen: set[str] = set()
         max_rows = int(self.spec.validation["max_result_rows"])
@@ -159,20 +169,29 @@ class RuntimeFirstShardWorker:
                 rejects["TYPED_EQUIVALENCE_FAILED"] += 1
                 continue
             seen.add(pair_hash)
-            accepted.append((base, transformed))
+            accepted_pair = EquivalentQueryPair(
+                base,
+                transformed,
+                {},
+                graph_snapshot_hash,
+                dbms_fingerprint,
+            )
+            accepted.append(accepted_pair)
             _append_jsonl(
                 records_path,
                 {
                     "pair_hash": pair_hash,
                     "query_a_hash": _query_hash(base),
                     "query_b_hash": _query_hash(transformed),
+                    "graph_snapshot_hash": graph_snapshot_hash,
+                    "dbms_fingerprint": dbms_fingerprint,
                     "rule_id": "null_complete_excluded_middle",
                     "equivalence": "complete_typed_equivalent",
                 },
             )
         return accepted, rejects
 
-    def _screen_pairs(self, adapter: Any, task: ShardTask, pairs: list[tuple[str, str]], shard_dir: Path) -> int:
+    def _screen_pairs(self, adapter: Any, task: ShardTask, pairs: list[EquivalentQueryPair], shard_dir: Path) -> int:
         policy_config = self.spec.runtime["screen"]
         policy = RuntimePolicy(
             warmups=int(policy_config["warmups"]),
@@ -184,11 +203,10 @@ class RuntimeFirstShardWorker:
         threshold = float(policy_config["ratio"])
         harness = RuntimeHarness()
         candidates = 0
-        for index, (base, transformed) in enumerate(pairs):
+        for index, pair in enumerate(pairs):
             evidence = harness.measure_discovery(
                 adapter,
-                base,
-                transformed,
+                pair,
                 policy=RuntimePolicy(**{**policy.__dict__, "seed": task.seed + index}),
             )
             if evidence.verdict is not RuntimeVerdict.PASS or evidence.median_ratio is None or evidence.median_ratio < threshold:
@@ -197,9 +215,12 @@ class RuntimeFirstShardWorker:
             _append_jsonl(
                 shard_dir / "candidates.jsonl",
                 {
-                    "pair_hash": _pair_hash(base, transformed),
-                    "query_a": base,
-                    "query_b": transformed,
+                    "pair_hash": _pair_hash(pair.query_a, pair.query_b),
+                    "query_a": pair.query_a,
+                    "query_b": pair.query_b,
+                    "parameters": dict(pair.parameters),
+                    "graph_snapshot_hash": pair.graph_snapshot_hash,
+                    "dbms_fingerprint": pair.dbms_fingerprint,
                     "discovery_median_ratio": evidence.median_ratio,
                     "discovery_median_delta_ms": evidence.median_delta_ms,
                     "discovery_slow_query": evidence.slow_query,
@@ -278,6 +299,19 @@ def _query_hash(query: str) -> str:
 
 def _pair_hash(query_a: str, query_b: str) -> str:
     return hashlib.sha256(f"{_query_hash(query_a)}:{_query_hash(query_b)}".encode("ascii")).hexdigest()
+
+
+def _graph_snapshot_hash(statements: tuple[str, ...]) -> str:
+    normalized = tuple(statement.strip() for statement in statements if statement.strip())
+    payload = "\n".join(normalized).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _adapter_dbms_fingerprint(adapter: Any, task: ShardTask) -> str:
+    fingerprint = getattr(adapter, "dbms_fingerprint", None)
+    if callable(fingerprint):
+        fingerprint = fingerprint()
+    return str(fingerprint or task.target.value)
 
 
 def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
