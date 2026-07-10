@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -209,14 +210,22 @@ def _load_rules(path: Path) -> tuple[Mapping[str, object], str]:
     if raw.get("schema_version") != 1:
         raise ConfigError("rules.yaml must use schema_version: 1")
     tiers = _mapping(raw.get("tiers"), "rules.tiers")
-    if not tiers:
-        raise ConfigError("rules.tiers must not be empty")
-    allowed_tier_fields = {"minimum_accepted_pairs_per_rule", "scheduling", "auto_submit"}
-    for name, tier in tiers.items():
-        item = _mapping(tier, f"rules.tiers.{name}")
-        _only_keys(item, allowed_tier_fields, f"rules.tiers.{name}")
-        if not item:
-            raise ConfigError(f"rules.tiers.{name} must not be empty")
+    _exact_keys(tiers, {"core", "experimental", "control"}, "rules.tiers")
+    core = _mapping(tiers["core"], "rules.tiers.core")
+    _exact_keys(core, {"minimum_accepted_pairs_per_rule", "scheduling"}, "rules.tiers.core")
+    _positive_int(
+        core["minimum_accepted_pairs_per_rule"],
+        "rules.tiers.core.minimum_accepted_pairs_per_rule",
+    )
+    _enum(
+        core["scheduling"],
+        {"exploration_floor_then_validated_yield"},
+        "rules.tiers.core.scheduling",
+    )
+    for name in ("experimental", "control"):
+        item = _mapping(tiers[name], f"rules.tiers.{name}")
+        _exact_keys(item, {"auto_submit"}, f"rules.tiers.{name}")
+        _bool(item["auto_submit"], f"rules.tiers.{name}.auto_submit")
     return freeze_value(raw), hashlib.sha256(raw_bytes).hexdigest()
 
 
@@ -259,7 +268,9 @@ def _validate_policy_values(name: str, value: Mapping[str, Any]) -> None:
         screen = _mapping(value["screen"], "runtime.screen")
         _positive_int(screen["warmups"], "runtime.screen.warmups", allow_zero=True)
         _positive_int(screen["pairs"], "runtime.screen.pairs")
-        _positive_number(screen["ratio"], "runtime.screen.ratio")
+        screen_ratio = _positive_number(screen["ratio"], "runtime.screen.ratio")
+        if screen_ratio <= 1:
+            raise ConfigError("runtime.screen.ratio must exceed 1")
         _enum(screen["schedule"], {"randomized_ab_ba"}, "runtime.screen.schedule")
         noise = _mapping(value["noise"], "runtime.noise")
         _positive_int(noise["probe_queries"], "runtime.noise.probe_queries")
@@ -278,8 +289,12 @@ def _validate_policy_values(name: str, value: Mapping[str, Any]) -> None:
             "require_same_direction_in_both_sessions",
         ):
             _bool(value[key], f"validation.{key}")
-        _positive_number(value["min_ratio"], "validation.min_ratio")
-        _positive_number(value["min_ci_lower_ratio"], "validation.min_ci_lower_ratio")
+        minimum_ratio = _positive_number(value["min_ratio"], "validation.min_ratio")
+        minimum_ci_ratio = _positive_number(value["min_ci_lower_ratio"], "validation.min_ci_lower_ratio")
+        if minimum_ratio <= 1 or minimum_ci_ratio <= 1:
+            raise ConfigError("validation ratio thresholds must exceed 1")
+        if minimum_ratio < minimum_ci_ratio:
+            raise ConfigError("validation.min_ratio must be at least min_ci_lower_ratio")
         minimum_delta = value["min_absolute_delta"]
         if minimum_delta != "aa_noise_p99":
             _positive_number(minimum_delta, "validation.min_absolute_delta")
@@ -354,9 +369,14 @@ def _bool(value: Any, label: str) -> bool:
 
 
 def _positive_number(value: Any, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise ConfigError(f"{label} must be a positive number")
-    return float(value)
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ConfigError(f"{label} must be finite")
+    if parsed <= 0:
+        raise ConfigError(f"{label} must be a positive number")
+    return parsed
 
 
 def _enum(value: Any, allowed: set[str], label: str) -> str:

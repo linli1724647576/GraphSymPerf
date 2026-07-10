@@ -81,7 +81,7 @@ def write_resolved_manifest(plan: RunPlan, path: str | Path) -> Path:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     payload = _manifest_payload(plan)
-    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
         suffix=".tmp",

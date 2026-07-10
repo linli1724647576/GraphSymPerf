@@ -135,6 +135,17 @@ def test_resolved_manifest_serialization_failure_does_not_claim_destination(tmp_
     assert not path.exists()
 
 
+def test_resolved_manifest_rejects_non_standard_nan_json(tmp_path: Path) -> None:
+    plan = build_run_plan(load_experiment_spec("config/experiment.yaml"), repository_root=Path.cwd())
+    invalid = replace(plan, total_accepted_pair_budget=float("nan"))  # type: ignore[arg-type]
+    path = tmp_path / "resolved_manifest.json"
+
+    with pytest.raises(ValueError):
+        write_resolved_manifest(invalid, path)
+
+    assert not path.exists()
+
+
 def test_planner_rejects_total_accepted_pair_budget_overflow(tmp_path: Path) -> None:
     raw = yaml.safe_load(Path("config/experiment.yaml").read_text(encoding="utf-8"))
     raw["workload"]["accepted_query_pairs_per_shard"] = 1001

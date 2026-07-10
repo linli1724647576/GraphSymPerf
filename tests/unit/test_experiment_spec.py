@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +13,29 @@ import yaml
 
 from graph_sym_perf.cli.runtime_first import main as cli_main
 from graph_sym_perf.core import ConfigError, TargetSystem
+from graph_sym_perf.experiment import migrate_legacy_config_to_v2
 from graph_sym_perf.experiment.spec import load_experiment_spec
+
+
+def _legacy_config_payload() -> dict[str, Any]:
+    return {
+        "experiment_id": "legacy_runtime_campaign",
+        "seed": 20260710,
+        "systems": {
+            "targets": [
+                "neo4j", "memgraph", "falkordb", "agensgraph",
+                "arcadedb", "apache_age", "ladybugdb",
+            ]
+        },
+        "source": {
+            "enabled": ["gdsmith"],
+            "gdsmith": {"max_seed_queries_per_shard": 10_000},
+        },
+        "execution": {
+            "shards": 16,
+            "accepted_query_pairs_per_shard": 1_000,
+        },
+    }
 
 
 def _write_config_bundle(
@@ -111,6 +135,51 @@ def test_rules_yaml_is_loaded_and_strictly_validated(tmp_path: Path) -> None:
         load_experiment_spec(path)
 
 
+def test_rules_yaml_requires_schema_version_one(tmp_path: Path) -> None:
+    rules = yaml.safe_load(Path("config/rules.yaml").read_text(encoding="utf-8"))
+    rules["schema_version"] = 2
+    path = _write_config_bundle(tmp_path, rules=rules)
+
+    with pytest.raises(ConfigError, match="schema_version: 1"):
+        load_experiment_spec(path)
+
+
+@pytest.mark.parametrize("missing_tier", ("core", "experimental", "control"))
+def test_rules_yaml_requires_complete_core_experimental_control_tiers(
+    tmp_path: Path,
+    missing_tier: str,
+) -> None:
+    rules = yaml.safe_load(Path("config/rules.yaml").read_text(encoding="utf-8"))
+    del rules["tiers"][missing_tier]
+    path = _write_config_bundle(tmp_path, rules=rules)
+
+    with pytest.raises(ConfigError, match="rules.tiers"):
+        load_experiment_spec(path)
+
+
+@pytest.mark.parametrize(
+    ("tier", "field", "invalid"),
+    (
+        ("core", "minimum_accepted_pairs_per_rule", 0),
+        ("core", "scheduling", "validated_yield_only"),
+        ("experimental", "auto_submit", "false"),
+        ("control", "auto_submit", 0),
+    ),
+)
+def test_rules_yaml_validates_tier_field_types_and_enums(
+    tmp_path: Path,
+    tier: str,
+    field: str,
+    invalid: object,
+) -> None:
+    rules = yaml.safe_load(Path("config/rules.yaml").read_text(encoding="utf-8"))
+    rules["tiers"][tier][field] = invalid
+    path = _write_config_bundle(tmp_path, rules=rules)
+
+    with pytest.raises(ConfigError, match=f"rules.tiers.{tier}"):
+        load_experiment_spec(path)
+
+
 @pytest.mark.parametrize(
     ("policy_path", "invalid"),
     (
@@ -138,6 +207,51 @@ def test_schema_v2_rejects_invalid_policy_value_types_ranges_and_enums(
     path = _write_config_bundle(tmp_path, experiment=raw)
 
     with pytest.raises(ConfigError):
+        load_experiment_spec(path)
+
+
+@pytest.mark.parametrize(
+    ("policy_path", "invalid"),
+    (
+        (("runtime", "screen", "ratio"), float("nan")),
+        (("runtime", "screen", "ratio"), float("inf")),
+        (("runtime", "screen", "ratio"), float("-inf")),
+        (("validation", "min_ratio"), float("nan")),
+        (("validation", "min_ci_lower_ratio"), float("inf")),
+    ),
+)
+def test_schema_v2_rejects_non_finite_runtime_thresholds(
+    tmp_path: Path,
+    policy_path: tuple[str, ...],
+    invalid: float,
+) -> None:
+    raw = yaml.safe_load(Path("config/experiment.yaml").read_text(encoding="utf-8"))
+    policy = raw
+    for part in policy_path[:-1]:
+        policy = policy[part]
+    policy[policy_path[-1]] = invalid
+    path = _write_config_bundle(tmp_path, experiment=raw)
+
+    with pytest.raises(ConfigError, match="finite"):
+        load_experiment_spec(path)
+
+
+def test_schema_v2_requires_runtime_screen_ratio_above_one(tmp_path: Path) -> None:
+    raw = yaml.safe_load(Path("config/experiment.yaml").read_text(encoding="utf-8"))
+    raw["runtime"]["screen"]["ratio"] = 1.0
+    path = _write_config_bundle(tmp_path, experiment=raw)
+
+    with pytest.raises(ConfigError, match="runtime.screen.ratio"):
+        load_experiment_spec(path)
+
+
+def test_schema_v2_requires_validation_ratio_at_least_ci_lower_ratio(tmp_path: Path) -> None:
+    raw = yaml.safe_load(Path("config/experiment.yaml").read_text(encoding="utf-8"))
+    raw["validation"]["min_ratio"] = 1.5
+    raw["validation"]["min_ci_lower_ratio"] = 2.0
+    path = _write_config_bundle(tmp_path, experiment=raw)
+
+    with pytest.raises(ConfigError, match="at least"):
         load_experiment_spec(path)
 
 
@@ -169,30 +283,33 @@ def test_experiment_spec_has_one_explicit_migration_to_legacy_run_config() -> No
     assert config.transforms.max_variants_per_case == spec.workload.max_variants_per_seed
 
 
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "import graph_sym_perf.config; import graph_sym_perf.experiment",
+        "import graph_sym_perf.experiment; import graph_sym_perf.config",
+        "import graph_sym_perf.config; import graph_sym_perf.cli.runtime_first",
+    ),
+)
+def test_config_import_order_is_safe_in_a_fresh_interpreter(statement: str) -> None:
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-c",
+            f"import sys; sys.path.insert(0, 'src'); {statement}",
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_legacy_config_is_converted_only_by_offline_migration_command(tmp_path: Path) -> None:
     legacy = tmp_path / "legacy.yaml"
     legacy.write_text(
-        yaml.safe_dump(
-            {
-                "experiment_id": "legacy_runtime_campaign",
-                "seed": 20260710,
-                "systems": {
-                    "targets": [
-                        "neo4j", "memgraph", "falkordb", "agensgraph",
-                        "arcadedb", "apache_age", "ladybugdb",
-                    ]
-                },
-                "source": {
-                    "enabled": ["gdsmith"],
-                    "gdsmith": {"max_seed_queries_per_shard": 10_000},
-                },
-                "execution": {
-                    "shards": 16,
-                    "accepted_query_pairs_per_shard": 1_000,
-                },
-            },
-            sort_keys=False,
-        ),
+        yaml.safe_dump(_legacy_config_payload(), sort_keys=False),
         encoding="utf-8",
     )
     output = tmp_path / "migrated" / "experiment.yaml"
@@ -210,6 +327,21 @@ def test_legacy_config_is_converted_only_by_offline_migration_command(tmp_path: 
     assert migrated.total_accepted_pair_budget == 112_000
     assert (output.parent / "systems.yaml").exists()
     assert (output.parent / "rules.yaml").exists()
+
+
+def test_legacy_config_migration_rolls_back_partial_bundle_on_publish_failure(tmp_path: Path) -> None:
+    legacy = tmp_path / "legacy.yaml"
+    legacy.write_text(yaml.safe_dump(_legacy_config_payload(), sort_keys=False), encoding="utf-8")
+    output_dir = tmp_path / "migrated"
+    output_dir.mkdir()
+    (output_dir / "rules.yaml").symlink_to("missing-rules-target")
+    output = output_dir / "experiment.yaml"
+
+    with pytest.raises(FileExistsError):
+        migrate_legacy_config_to_v2(legacy, output, template_path="config/experiment.yaml")
+
+    assert not output.exists()
+    assert not (output_dir / "systems.yaml").exists()
 
 
 @pytest.mark.parametrize(

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Mapping
 
 import yaml
 
@@ -21,24 +23,26 @@ from graph_sym_perf.core import (
     TargetSystem,
     TransformConfig,
 )
-from graph_sym_perf.experiment.plan_models import ExperimentSpec, FrozenMapping
+if TYPE_CHECKING:
+    from graph_sym_perf.experiment.plan_models import ExperimentSpec
 
 
-_OPTIONAL_ENV = FrozenMapping(
+_OPTIONAL_ENV: Mapping[TargetSystem, Mapping[str, str]] = MappingProxyType(
     {
-        TargetSystem.NEO4J: {"database": "GRAPHSYMPERF_NEO4J_DATABASE"},
-        TargetSystem.MEMGRAPH: {
+        TargetSystem.NEO4J: MappingProxyType({"database": "GRAPHSYMPERF_NEO4J_DATABASE"}),
+        TargetSystem.MEMGRAPH: MappingProxyType({
             "username": "GRAPHSYMPERF_MEMGRAPH_USER",
             "password": "GRAPHSYMPERF_MEMGRAPH_PASSWORD",
-        },
-        TargetSystem.FALKORDB: {
+        }),
+        TargetSystem.FALKORDB: MappingProxyType({
             "username": "GRAPHSYMPERF_FALKORDB_USER",
             "password": "GRAPHSYMPERF_FALKORDB_PASSWORD",
-        },
-        TargetSystem.AGENSGRAPH: {"database": "GRAPHSYMPERF_AGENSGRAPH_DATABASE"},
-        TargetSystem.APACHE_AGE: {"database": "GRAPHSYMPERF_APACHE_AGE_DATABASE"},
+        }),
+        TargetSystem.AGENSGRAPH: MappingProxyType({"database": "GRAPHSYMPERF_AGENSGRAPH_DATABASE"}),
+        TargetSystem.APACHE_AGE: MappingProxyType({"database": "GRAPHSYMPERF_APACHE_AGE_DATABASE"}),
     }
 )
+_EMPTY_MAPPING: Mapping[str, str] = MappingProxyType({})
 
 
 def migrate_experiment_spec_to_run_config(spec: ExperimentSpec, target: TargetSystem) -> RunConfig:
@@ -51,8 +55,8 @@ def migrate_experiment_spec_to_run_config(spec: ExperimentSpec, target: TargetSy
     system = SystemConfig(
         target=target,
         required_env=definition.required_env,
-        optional_env=_OPTIONAL_ENV.get(target, FrozenMapping({})),
-        settings=FrozenMapping({}),
+        optional_env=_OPTIONAL_ENV.get(target, _EMPTY_MAPPING),
+        settings=_EMPTY_MAPPING,
     )
     return RunConfig(
         source_path=str(spec.source_path),
@@ -158,18 +162,32 @@ def migrate_legacy_config_to_v2(
 
         build_run_plan(load_experiment_spec(bundle / "experiment.yaml"), repository_root=template.parents[1])
 
+    parent_existed = destination.parent.exists()
     destination.parent.mkdir(parents=True, exist_ok=True)
     bundle_destinations = (
         (destination, serialized.encode("utf-8")),
         (destination.parent / "systems.yaml", systems_bytes),
         (destination.parent / "rules.yaml", rules_bytes),
     )
-    existing = [str(path) for path, _ in bundle_destinations if path.exists()]
+    existing = [str(path) for path, _ in bundle_destinations if os.path.lexists(path)]
     if existing:
         raise FileExistsError(f"migration output already exists: {', '.join(existing)}")
-    for path, content in bundle_destinations:
-        with path.open("xb") as stream:
-            stream.write(content)
+    created: list[Path] = []
+    try:
+        for path, content in bundle_destinations:
+            stream = path.open("xb")
+            created.append(path)
+            with stream:
+                stream.write(content)
+    except BaseException:
+        for path in reversed(created):
+            path.unlink(missing_ok=True)
+        if not parent_existed:
+            try:
+                destination.parent.rmdir()
+            except OSError:
+                pass
+        raise
     return destination
 
 
