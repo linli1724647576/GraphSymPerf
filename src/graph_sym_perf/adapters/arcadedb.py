@@ -261,7 +261,7 @@ def _arcade_rows(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
 
 def _arcadedb_server_version(response: Any) -> str | None:
     headers = getattr(response, "headers", {}) or {}
-    for key in ("X-ArcadeDB-Version", "ArcadeDB-Version", "Server"):
+    for key in ("X-ArcadeDB-Version", "ArcadeDB-Version"):
         if headers.get(key):
             return str(headers[key])
     try:

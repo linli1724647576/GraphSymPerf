@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from graph_sym_perf.adapters.arcadedb import ArcadeDBAdapter, _arcade_plan_payload, _arcade_rows
+from graph_sym_perf.adapters.arcadedb import ArcadeDBAdapter, _arcade_plan_payload, _arcade_rows, _arcadedb_server_version
 from graph_sym_perf.core import TargetSystem
 from graph_sym_perf.plan import normalize_plan
 
@@ -96,3 +96,25 @@ def test_arcadedb_execute_passes_timeout_to_http_request() -> None:
 
     assert result.rows == ({"ok": 1},)
     assert calls[0]["timeout"] == 7
+
+
+def test_arcadedb_version_ignores_generic_server_header_and_uses_payload() -> None:
+    response = SimpleNamespace(headers={"Server": "nginx"}, json=lambda: {"serverVersion": "24.6.1"})
+
+    assert _arcadedb_server_version(response) == "24.6.1"
+
+
+def test_arcadedb_version_is_unavailable_with_only_generic_server_header() -> None:
+    response = SimpleNamespace(headers={"Server": "Jetty"}, json=lambda: {"result": "ok"})
+
+    assert _arcadedb_server_version(response) is None
+
+
+def test_arcadedb_specific_version_header_has_stable_priority() -> None:
+    response = SimpleNamespace(
+        headers={"X-ArcadeDB-Version": "24.7.0", "ArcadeDB-Version": "24.6.0", "Server": "nginx"},
+        json=lambda: {"version": "24.5.0"},
+    )
+
+    assert _arcadedb_server_version(response) == "24.7.0"
+    assert _arcadedb_server_version(response) == "24.7.0"
