@@ -98,3 +98,41 @@ class VersionedIssueRecord:
     validator_version: str
     reducer_version: str
     status_evidence_url: str | None = None
+
+
+@dataclass(frozen=True)
+class ReportedIssueReport:
+    """A report counted by pipeline publication, independent of maintainer outcome."""
+
+    issue_id: str
+    dbms: str
+    developer_status: DeveloperStatus
+
+    @classmethod
+    def from_record(cls, record: VersionedIssueRecord) -> "ReportedIssueReport":
+        if record.stage is not PipelineStage.SUBMITTED:
+            raise ValueError("ReportedIssueReport requires PipelineStage.SUBMITTED")
+        return cls(
+            issue_id=record.issue_id,
+            dbms=record.dbms,
+            developer_status=record.developer_status,
+        )
+
+
+@dataclass(frozen=True)
+class DeveloperValidatedBug:
+    """A maintainer-confirmed outcome counted independently of report publication."""
+
+    issue_id: str
+    dbms: str
+    developer_status: DeveloperStatus
+
+    @classmethod
+    def from_record(cls, record: VersionedIssueRecord) -> "DeveloperValidatedBug":
+        if record.developer_status not in {DeveloperStatus.CONFIRMED, DeveloperStatus.FIXED}:
+            raise ValueError("DeveloperValidatedBug requires DeveloperStatus.CONFIRMED or FIXED")
+        return cls(
+            issue_id=record.issue_id,
+            dbms=record.dbms,
+            developer_status=record.developer_status,
+        )

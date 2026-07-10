@@ -2,8 +2,10 @@
 
 from graph_sym_perf.core.status import ClaimLevel, DeveloperStatus, ToolSupportLevel
 from graph_sym_perf.validation.models import (
+    DeveloperValidatedBug,
     DeveloperStatus as RuntimeFirstDeveloperStatus,
     PipelineStage,
+    ReportedIssueReport,
     VersionedIssueRecord,
 )
 
@@ -61,3 +63,34 @@ def test_reported_issue_reports_and_developer_validated_bugs_are_separate_counts
     assert reported_issue_reports == {"submitted-waiting", "submitted-confirmed"}
     assert developer_validated_bugs == {"fixed-not-submitted", "submitted-confirmed"}
     assert reported_issue_reports != developer_validated_bugs
+
+
+def test_reported_and_developer_validated_records_enforce_independent_gates() -> None:
+    submitted_waiting = _record(
+        "submitted-waiting",
+        PipelineStage.SUBMITTED,
+        RuntimeFirstDeveloperStatus.WAITING_REPLY,
+    )
+    fixed_not_submitted = _record(
+        "fixed-not-submitted",
+        PipelineStage.VALIDATION_PASSED,
+        RuntimeFirstDeveloperStatus.FIXED,
+    )
+
+    assert type(PipelineStage.SUBMITTED) is not type(RuntimeFirstDeveloperStatus.CONFIRMED)
+    assert ReportedIssueReport.from_record(submitted_waiting).issue_id == "submitted-waiting"
+    assert DeveloperValidatedBug.from_record(fixed_not_submitted).issue_id == "fixed-not-submitted"
+
+    try:
+        DeveloperValidatedBug.from_record(submitted_waiting)
+    except ValueError as exc:
+        assert "CONFIRMED or FIXED" in str(exc)
+    else:
+        raise AssertionError("waiting-reply report must not become a developer-validated bug")
+
+    try:
+        ReportedIssueReport.from_record(fixed_not_submitted)
+    except ValueError as exc:
+        assert "SUBMITTED" in str(exc)
+    else:
+        raise AssertionError("a developer outcome must not replace the SUBMITTED pipeline gate")

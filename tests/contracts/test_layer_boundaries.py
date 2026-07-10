@@ -36,15 +36,16 @@ def test_leaf_layers_do_not_depend_on_orchestration_or_concrete_adapters() -> No
 
 
 def test_cli_depends_on_experiment_public_surface_not_leaf_implementations() -> None:
-    forbidden = (
-        "graph_sym_perf.adapters",
-        "graph_sym_perf.dialects",
-        "graph_sym_perf.equivalence",
-        "graph_sym_perf.runtime",
-        "graph_sym_perf.transforms",
-    )
     for path in (ROOT / "cli").rglob("*.py"):
-        assert all(not name.startswith(forbidden) for name in _imports(path)), path
+        application_imports = {
+            name
+            for name in _imports(path)
+            if name.startswith("graph_sym_perf.") and not name.startswith("graph_sym_perf.cli")
+        }
+        assert application_imports <= {"graph_sym_perf.experiment", "graph_sym_perf.issues"}, (
+            path,
+            sorted(application_imports),
+        )
 
 
 def test_experiment_has_no_reverse_dependency_on_removed_app_package() -> None:
