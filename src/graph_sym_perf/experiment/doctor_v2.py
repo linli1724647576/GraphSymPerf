@@ -31,6 +31,7 @@ from graph_sym_perf.gdsmith.runner import check_gdsmith_tooling
 class SystemDoctorResult:
     system: str
     required_env_present: bool
+    generation_env_present: bool
     driver_available: bool
     connectivity: str
     graph_isolation: str
@@ -42,6 +43,8 @@ class DoctorReport:
     gdsmith_ready: bool
     gdsmith_dirty: bool | None
     disk_free_bytes: int
+    disk_required_bytes: int
+    disk_ready: bool
     systems: tuple[SystemDoctorResult, ...]
 
 
@@ -68,10 +71,12 @@ def run_doctor(
     gdsmith = check_gdsmith_tooling(GdsmithConfig(), env)
     results = tuple(_check_system(target, definition, spec, env) for target, definition in spec.systems.items())
     disk_free = shutil.disk_usage(Path(output_root)).free
-    ready = gdsmith.ready and plan.source_revision.gdsmith_dirty is False and all(
-        result.required_env_present and result.driver_available and result.connectivity == "ready" and result.graph_isolation for result in results
+    disk_required = len(plan.tasks) * int(spec.artifacts["shard_budget_mb"]) * 1024 * 1024
+    disk_ready = disk_free >= disk_required
+    ready = gdsmith.ready and plan.source_revision.gdsmith_dirty is False and disk_ready and all(
+        result.required_env_present and result.generation_env_present and result.driver_available and result.connectivity == "ready" and result.graph_isolation for result in results
     )
-    report = DoctorReport(ready, gdsmith.ready, plan.source_revision.gdsmith_dirty, disk_free, results)
+    report = DoctorReport(ready, gdsmith.ready, plan.source_revision.gdsmith_dirty, disk_free, disk_required, disk_ready, results)
     destination = Path(output_root) / "doctor.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")
@@ -80,6 +85,7 @@ def run_doctor(
 
 def _check_system(target, definition, spec, env: Mapping[str, str]) -> SystemDoctorResult:
     required_env_present = all(env.get(name) for name in definition.required_env)
+    generation_env_present = all(env.get(name) for name in definition.generation_required_env)
     driver_available = importlib.util.find_spec(_DRIVERS[target]) is not None
     connectivity = "not_attempted"
     if required_env_present and driver_available:
@@ -100,7 +106,7 @@ def _check_system(target, definition, spec, env: Mapping[str, str]) -> SystemDoc
             connectivity = "ready" if connection_ok else "failed"
         finally:
             adapter.close()
-    return SystemDoctorResult(target.value, required_env_present, driver_available, connectivity, definition.graph_isolation)
+    return SystemDoctorResult(target.value, required_env_present, generation_env_present, driver_available, connectivity, definition.graph_isolation)
 
 
 def _optional_env(target: TargetSystem) -> Mapping[str, str]:

@@ -115,18 +115,24 @@ def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[Targ
     definitions: dict[TargetSystem, SystemDefinition] = {}
     for target in targets:
         item = _mapping(systems_raw.get(target.value), f"systems.{target.value}")
-        _only_keys(item, {"required_env", "dialect", "graph_isolation", "default_timeout_seconds"}, f"systems.{target.value}")
-        env = item.get("required_env")
-        if not isinstance(env, list) or not all(isinstance(value, str) and value for value in env):
-            raise ConfigError(f"systems.{target.value}.required_env must be a list of non-empty environment variable names")
+        _only_keys(item, {"required_env", "generation_required_env", "dialect", "graph_isolation", "default_timeout_seconds"}, f"systems.{target.value}")
+        env = _environment_names(item.get("required_env"), f"systems.{target.value}.required_env")
+        generation_env = _environment_names(item.get("generation_required_env", ()), f"systems.{target.value}.generation_required_env")
         definitions[target] = SystemDefinition(
             target=target,
             required_env=tuple(env),
+            generation_required_env=tuple(generation_env),
             dialect=_nonempty_string(item.get("dialect"), f"systems.{target.value}.dialect"),
             graph_isolation=_nonempty_string(item.get("graph_isolation"), f"systems.{target.value}.graph_isolation"),
             default_timeout_seconds=_positive_int(item.get("default_timeout_seconds"), f"systems.{target.value}.default_timeout_seconds"),
         )
     return definitions
+
+
+def _environment_names(value: Any, label: str) -> tuple[str, ...]:
+    if not isinstance(value, list | tuple) or not all(isinstance(name, str) and name for name in value):
+        raise ConfigError(f"{label} must be a list of non-empty environment variable names")
+    return tuple(value)
 
 
 def _strict_policy(raw: Any, name: str) -> Mapping[str, object]:

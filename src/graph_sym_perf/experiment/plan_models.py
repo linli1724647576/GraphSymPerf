@@ -34,6 +34,7 @@ class GenerationSpec:
 class SystemDefinition:
     target: TargetSystem
     required_env: tuple[str, ...]
+    generation_required_env: tuple[str, ...]
     dialect: str
     graph_isolation: str
     default_timeout_seconds: int
@@ -89,4 +90,3 @@ class RunPlan:
     source_revision: SourceRevision
     validator_protocol_version: str = "runtime-first-v3"
     reducer_protocol_version: str = "paired-ast-ddmin-v1"
-
