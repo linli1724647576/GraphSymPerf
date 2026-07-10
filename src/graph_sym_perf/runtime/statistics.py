@@ -36,10 +36,9 @@ def bootstrap_ratio_ci(
     ratios: list[float] = []
     for _ in range(resamples):
         selected = [samples[random_source.randrange(len(samples))] for _ in range(len(samples))]
-        a_median = float(median(value[0] for value in selected))
-        b_median = float(median(value[1] for value in selected))
-        if a_median > 0:
-            ratios.append(b_median / a_median)
+        paired_ratios = [slow / fast for fast, slow in selected if fast > 0]
+        if paired_ratios:
+            ratios.append(float(median(paired_ratios)))
     if not ratios:
         raise ValueError("bootstrap samples have no positive baseline median")
     ratios.sort()

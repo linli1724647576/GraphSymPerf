@@ -46,6 +46,7 @@ class RuntimeEvidence:
     relative_mad: float | None
     reason_codes: tuple[str, ...]
     timeout_lower_bound_ratio: float | None = None
+    slow_query: str | None = None
 
 
 @dataclass(frozen=True)

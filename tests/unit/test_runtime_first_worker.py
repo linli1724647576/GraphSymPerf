@@ -37,6 +37,20 @@ class _Adapter:
         self.closed = True
 
 
+class _RuntimeGapAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
+        result = super().execute(query, parameters, query_kind, **_kwargs)
+        if query_kind != "runtime":
+            return result
+        return ExecutionResult(
+            system=result.system,
+            query_kind=result.query_kind,
+            rows=result.rows,
+            elapsed_ms=5.0 if "OR NOT" in query else 1.0,
+            summary=result.summary,
+        )
+
+
 def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minimal_records(tmp_path) -> None:
     adapter = _Adapter()
     shard = GeneratedShard(
@@ -65,3 +79,28 @@ def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minima
     records = [json.loads(line) for line in (tmp_path / "shards" / "neo4j-000" / "accepted_pairs.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(records) == 2
     assert all(record["equivalence"] == "complete_typed_equivalent" for record in records)
+
+
+def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) -> None:
+    adapter = _RuntimeGapAdapter()
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+        query_texts=("MATCH (n) WHERE n.value = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    task = ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: adapter,
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(task)
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "shards" / "neo4j-000" / "candidates.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert result["screened_candidates"] == 1
+    assert records[0]["discovery_slow_query"] == "b"

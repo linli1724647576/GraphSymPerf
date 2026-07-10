@@ -20,6 +20,8 @@ def evaluate_runtime(
         reasons.append("ratio_below_threshold")
     if evidence.ci_ratio_low is None or evidence.ci_ratio_low < min_ci_low:
         reasons.append("ci_lower_below_threshold")
+    if evidence.direction_consistency <= 0.5:
+        reasons.append("direction_unstable")
     minimum_delta = max(noise_floor_ms, 10 * timer_resolution_ms)
     if evidence.median_delta_ms is None or evidence.median_delta_ms <= minimum_delta:
         reasons.append("delta_within_noise")

@@ -185,7 +185,12 @@ class RuntimeFirstShardWorker:
         harness = RuntimeHarness()
         candidates = 0
         for index, (base, transformed) in enumerate(pairs):
-            evidence = harness.measure_pair(adapter, base, transformed, policy=RuntimePolicy(**{**policy.__dict__, "seed": task.seed + index}))
+            evidence = harness.measure_discovery(
+                adapter,
+                base,
+                transformed,
+                policy=RuntimePolicy(**{**policy.__dict__, "seed": task.seed + index}),
+            )
             if evidence.verdict is not RuntimeVerdict.PASS or evidence.median_ratio is None or evidence.median_ratio < threshold:
                 continue
             candidates += 1
@@ -197,6 +202,7 @@ class RuntimeFirstShardWorker:
                     "query_b": transformed,
                     "discovery_median_ratio": evidence.median_ratio,
                     "discovery_median_delta_ms": evidence.median_delta_ms,
+                    "discovery_slow_query": evidence.slow_query,
                     "runtime_protocol": "execute-only-screen-v3",
                 },
             )
