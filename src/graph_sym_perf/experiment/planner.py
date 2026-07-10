@@ -110,6 +110,18 @@ def resolved_manifest_payload(plan: RunPlan) -> dict[str, Any]:
     return payload
 
 
+def resolved_manifest_hash(plan: RunPlan) -> str:
+    canonical = json.dumps(
+        resolved_manifest_payload(plan),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=repr,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _shard_seed(experiment_seed: int, target: str, shard_index: int) -> int:
     digest = hashlib.sha256(f"{experiment_seed}:{target}:{shard_index}".encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=False)

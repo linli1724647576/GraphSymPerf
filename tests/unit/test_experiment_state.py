@@ -16,6 +16,10 @@ from graph_sym_perf.experiment.state import (
 def test_shard_state_machine_allows_progress_and_terminal_incomplete() -> None:
     assert can_transition(ShardState.PLANNED, ShardState.GENERATING)
     assert can_transition(ShardState.BUILDING_ACCEPTED_PAIRS, ShardState.INCOMPLETE)
+    assert not can_transition(ShardState.SCREENING, ShardState.COMPLETED)
+    assert can_transition(ShardState.SCREENING, ShardState.VALIDATING)
+    assert can_transition(ShardState.VALIDATING, ShardState.REDUCING)
+    assert can_transition(ShardState.REDUCING, ShardState.COMPLETED)
     assert not can_transition(ShardState.COMPLETED, ShardState.GENERATING)
 
 
@@ -58,6 +62,7 @@ def test_shard_journal_appends_typed_events_and_checkpoints_resume_progress(tmp_
         "generator_progress": {"generated": 9},
         "last_seed": 17,
         "manifest_hash": "manifest-a",
+        "stage_evidence": {},
         "state": "generating",
     }
     assert events[0]["previous_state"] == "planned"

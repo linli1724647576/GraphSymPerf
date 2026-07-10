@@ -3,7 +3,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from graph_sym_perf.adapters.base import DBMSFingerprint
+from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import ShardTask
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -50,6 +50,9 @@ class _Adapter:
     def dbms_fingerprint(self) -> DBMSFingerprint:
         return DBMSFingerprint("a" * 64)
 
+    def dbms_health_epoch(self) -> DBMSHealthEpoch:
+        return DBMSHealthEpoch("e" * 64, "test")
+
 
 class _RuntimeGapAdapter(_Adapter):
     def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
@@ -92,12 +95,16 @@ class _InflightCheckingAdapter(_Adapter):
 
 
 class _FingerprintAdapter(_RuntimeGapAdapter):
-    def __init__(self, fingerprint: str) -> None:
+    def __init__(self, fingerprint: str, health_epoch: str = "e" * 64) -> None:
         super().__init__()
         self.fingerprint = fingerprint
+        self.health_epoch = health_epoch
 
     def dbms_fingerprint(self) -> DBMSFingerprint:
         return DBMSFingerprint(self.fingerprint)
+
+    def dbms_health_epoch(self) -> DBMSHealthEpoch:
+        return DBMSHealthEpoch(self.health_epoch, "test")
 
 
 class _LeaseContext:
@@ -273,6 +280,37 @@ def test_dbms_fingerprint_change_at_measurement_reconnect_invalidates_runtime_ca
     )
     assert invalidation["before"] == "a" * 64
     assert invalidation["after"] == "b" * 64
+
+
+def test_same_version_restart_changes_health_epoch_and_invalidates_runtime_candidates(tmp_path) -> None:
+    first = _FingerprintAdapter("a" * 64, "1" * 64)
+    restarted = _FingerprintAdapter("a" * 64, "2" * 64)
+    adapters = iter((first, restarted))
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+        query_texts=("MATCH (n) WHERE n.value = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    task = ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: next(adapters),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        worker(task)
+
+    assert captured.value.kind is ErrorKind.DBMS_CRASHED
+    invalidation = json.loads(
+        (tmp_path / "shards" / "neo4j-000" / "attempt-000" / "runtime_invalidated.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert invalidation["fingerprint_before"] == invalidation["fingerprint_after"] == "a" * 64
+    assert invalidation["health_epoch_before"] == "1" * 64
+    assert invalidation["health_epoch_after"] == "2" * 64
 
 
 def test_formal_worker_acquires_generation_and_measurement_phase_leases(tmp_path) -> None:

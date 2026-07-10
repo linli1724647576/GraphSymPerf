@@ -149,6 +149,15 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
             "graph": self.env_value("GRAPHSYMPERF_FALKORDB_GRAPH", "graph_sym_perf"),
         }
 
+    def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
+        self._connect()
+        connection = getattr(self._db, "connection", None)
+        if connection is None:
+            return None
+        info = connection.info("server")
+        run_id = info.get("run_id") if isinstance(info, Mapping) else None
+        return ("redis_info_run_id", run_id) if run_id not in (None, "") else None
+
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         upper = query.upper()
         if " STARTS WITH " in upper or " ENDS WITH " in upper:

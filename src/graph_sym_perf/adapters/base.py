@@ -64,10 +64,24 @@ class GraphAdapter(Protocol):
     def dbms_fingerprint(self) -> "DBMSFingerprint":
         ...
 
+    def dbms_health_epoch(self) -> "DBMSHealthEpoch":
+        ...
+
 
 @dataclass(frozen=True)
 class DBMSFingerprint:
     value: str | None
+    reason: str | None = None
+
+    @property
+    def available(self) -> bool:
+        return self.value is not None
+
+
+@dataclass(frozen=True)
+class DBMSHealthEpoch:
+    value: str | None
+    source: str | None = None
     reason: str | None = None
 
     @property
@@ -138,6 +152,30 @@ class BaseAdapter:
 
     def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
         return {}
+
+    def dbms_health_epoch(self) -> DBMSHealthEpoch:
+        try:
+            probe = self._probe_health_epoch_identity()
+        except Exception as exc:
+            return DBMSHealthEpoch(None, reason=f"health_epoch_probe_failed:{type(exc).__name__}")
+        if (
+            not isinstance(probe, tuple)
+            or len(probe) != 2
+            or not isinstance(probe[0], str)
+            or not probe[0]
+            or probe[1] in (None, "")
+        ):
+            return DBMSHealthEpoch(None, reason="health_epoch_identity_unavailable")
+        source, identity = probe
+        endpoint = self._fingerprint_endpoint_identity()
+        if not endpoint:
+            return DBMSHealthEpoch(None, source=source, reason="endpoint_identity_unavailable")
+        payload = {"target": self.target.value, "endpoint": endpoint, "source": source, "identity": identity}
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+        return DBMSHealthEpoch(sha256(canonical.encode("utf-8")).hexdigest(), source=source)
+
+    def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
+        return None
 
     def _cache_server_version(self, value: object) -> None:
         if value not in (None, ""):

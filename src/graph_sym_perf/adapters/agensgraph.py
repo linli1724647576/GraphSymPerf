@@ -197,6 +197,13 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
         endpoint["graph"] = self.env_value("GRAPHSYMPERF_AGENSGRAPH_GRAPH", "graph_sym_perf")
         return endpoint
 
+    def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
+        self._connect()
+        with self._conn.cursor() as cursor:
+            cursor.execute("SELECT pg_postmaster_start_time()")
+            row = cursor.fetchone()
+        return ("pg_postmaster_start_time", row[0]) if row and row[0] not in (None, "") else None
+
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         if _has_multi_label_node(query):
             return False

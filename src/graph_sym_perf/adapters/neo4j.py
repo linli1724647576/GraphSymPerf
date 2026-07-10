@@ -112,6 +112,16 @@ class Neo4jAdapter(CypherLoaderMixin, BaseAdapter):
             database=self.optional_env_value("database"),
         )
 
+    def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
+        self._connect()
+        with self._session() as session:
+            record = session.run(
+                "CALL dbms.queryJmx('java.lang:type=Runtime') YIELD attributes "
+                "RETURN attributes.StartTime.value AS start_time"
+            ).single()
+        value = record.get("start_time") if record is not None else None
+        return ("jvm_runtime_start_time", value) if value not in (None, "") else None
+
     def _connect(self) -> None:
         if self._driver is not None:
             return

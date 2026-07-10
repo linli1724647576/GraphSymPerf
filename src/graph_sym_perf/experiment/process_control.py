@@ -61,10 +61,12 @@ class FileLeasePool:
             os.close(descriptor)
 
 
-def terminate_process_group(pid: int, *, term_grace_seconds: float = 0.05) -> None:
+def terminate_process_group(verified_pgid: int, *, term_grace_seconds: float = 0.05) -> None:
     """Send TERM, wait a bounded grace period, then KILL the remaining group."""
 
-    pgid = os.getpgid(pid)
+    if verified_pgid <= 1:
+        raise ValueError("verified process group id must identify a child group")
+    pgid = verified_pgid
     try:
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:

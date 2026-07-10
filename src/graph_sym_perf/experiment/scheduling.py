@@ -24,9 +24,14 @@ class AttemptContext:
     max_parallel_generation_systems: int
     max_parallel_measurement_systems: int
     max_parallel_shards_per_system: int
+    task_identity: str | None = None
 
     def transition(self, state: ShardState) -> None:
-        journal = ShardJournal(self.shard_dir, manifest_hash=self.manifest_hash)
+        journal = ShardJournal(
+            self.shard_dir,
+            manifest_hash=self.manifest_hash,
+            task_identity=self.task_identity,
+        )
         if journal.state is state:
             return
         journal.transition(state, attempt=self.attempt)

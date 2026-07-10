@@ -193,6 +193,13 @@ class ApacheAgeAdapter(BaseAdapter):
         endpoint["graph"] = self.env_value("GRAPHSYMPERF_APACHE_AGE_GRAPH", "graph_sym_perf")
         return endpoint
 
+    def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
+        self._connect()
+        with self._conn.cursor() as cursor:
+            cursor.execute("SELECT pg_postmaster_start_time()")
+            row = cursor.fetchone()
+        return ("pg_postmaster_start_time", row[0]) if row and row[0] not in (None, "") else None
+
     def _run_wrapped(self, cypher: str, query_kind: str) -> ExecutionResult:
         query = cypher if re.search(r"\bRETURN\b", cypher, flags=re.IGNORECASE) else f"{cypher} RETURN 1 AS ok"
         return self.execute(query, {}, query_kind)

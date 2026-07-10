@@ -158,6 +158,16 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
             database=self.env_value("GRAPHSYMPERF_ARCADEDB_DATABASE", "graph_sym_perf"),
         )
 
+    def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
+        self._connect()
+        payload = self._request("GET", "/api/v1/ready").json()
+        if not isinstance(payload, Mapping):
+            return None
+        for key in ("instanceId", "instance_id", "startTime", "start_time", "startedAt"):
+            if payload.get(key) not in (None, ""):
+                return (f"ready:{key}", payload[key])
+        return None
+
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         upper = query.upper()
         if "MATCH" not in upper:

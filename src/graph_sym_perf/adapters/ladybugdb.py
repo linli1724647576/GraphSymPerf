@@ -9,6 +9,7 @@ compatibility.
 from __future__ import annotations
 
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from time import perf_counter
@@ -140,6 +141,10 @@ class LadybugDBAdapter(BaseAdapter):
 
     def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
         return normalized_file_endpoint(self.env_value("GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH"))
+
+    def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
+        self._connect()
+        return ("embedded_host_process", os.getpid())
 
     # ── private helpers ──────────────────────────────────────────────
 

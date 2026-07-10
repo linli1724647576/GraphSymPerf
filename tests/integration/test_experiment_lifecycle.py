@@ -1,4 +1,5 @@
 import json
+import hashlib
 
 import pytest
 
@@ -7,9 +8,37 @@ from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.supervisor import RunSummary
 
 
+class _CompleteLifecycleWorker:
+    def __init__(self) -> None:
+        self.context = None
+
+    def bind_attempt_context(self, context) -> None:
+        self.context = context
+
+    def __call__(self, task):
+        assert self.context is not None
+        hashes = [
+            hashlib.sha256(f"{task.target.value}:{task.shard_index}:{index}".encode()).hexdigest()
+            for index in range(task.accepted_query_pairs)
+        ]
+        (self.context.shard_dir / "accepted_pairs.jsonl").write_text(
+            "".join(json.dumps({"pair_hash": value}) + "\n" for value in hashes),
+            encoding="utf-8",
+        )
+        stages = {}
+        for stage in ("screening", "validation", "reduction"):
+            path = self.context.attempt_dir / f"{stage}.json"
+            path.write_text(json.dumps({"stage": stage}), encoding="utf-8")
+            stages[stage] = {
+                "path": str(path.relative_to(self.context.shard_dir)),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        return {"accepted_pairs": len(hashes), "accepted_pair_hashes": hashes, "stage_evidence": stages}
+
+
 def test_lifecycle_writes_immutable_manifest_and_summary(tmp_path) -> None:
     spec = load_experiment_spec("config/experiment.yaml")
-    result = ExperimentLifecycle(tmp_path).run(spec, lambda task: {"accepted_pairs": task.accepted_query_pairs})
+    result = ExperimentLifecycle(tmp_path, process_isolation=False).run(spec, _CompleteLifecycleWorker())
     assert (result.run_dir / "resolved_manifest.json").exists()
     summary = json.loads((result.run_dir / "run_summary.json").read_text(encoding="utf-8"))
     assert summary["completed_count"] == 112
@@ -60,7 +89,7 @@ def test_lifecycle_binds_the_immutable_run_directory_to_a_shard_worker(tmp_path)
 def test_lifecycle_resume_reads_existing_terminal_checkpoints_without_rerunning_workers(tmp_path) -> None:
     lifecycle = ExperimentLifecycle(tmp_path, process_isolation=False)
     spec = load_experiment_spec("config/experiment.yaml")
-    original = lifecycle.run(spec, lambda task: {"accepted_pairs": task.accepted_query_pairs}, run_id="resume-me")
+    original = lifecycle.run(spec, _CompleteLifecycleWorker(), run_id="resume-me")
 
     def must_not_run(_task):
         raise AssertionError("completed shards must not rerun during resume")

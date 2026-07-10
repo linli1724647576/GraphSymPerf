@@ -1,19 +1,78 @@
 import json
+import hashlib
 import os
 import signal
+import shutil
 import time
 
 import pytest
 
-from graph_sym_perf.adapters.base import DBMSFingerprint
+from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import RunPlan, ShardTask, SourceRevision
 from graph_sym_perf.experiment.state import ShardJournal, ShardState
 from graph_sym_perf.experiment.spec import load_experiment_spec
-from graph_sym_perf.experiment.supervisor import AttemptContext, ManifestMismatchError, ShardSupervisor, _manifest_hash
+from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle
+from graph_sym_perf.experiment.planner import write_resolved_manifest
+from graph_sym_perf.experiment.supervisor import (
+    AttemptContext,
+    ManifestMismatchError,
+    ShardSupervisor,
+    _manifest_hash,
+    _task_identity,
+)
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
 from graph_sym_perf.experiment.worker import WorkerFailure
 from graph_sym_perf.experiment.state import ErrorKind
+
+
+def _hash_for(label: str) -> str:
+    return hashlib.sha256(label.encode("utf-8")).hexdigest()
+
+
+def _durable_result(
+    context: AttemptContext,
+    task,
+    *,
+    accepted_count: int | None = None,
+    accepted_hashes: list[str] | None = None,
+):
+    count = accepted_count if accepted_count is not None else int(getattr(task, "accepted_query_pairs", 1000))
+    task_label = getattr(getattr(task, "target", None), "value", str(task))
+    hashes = accepted_hashes or [
+        _hash_for(f"{task_label}:{getattr(task, 'shard_index', 0)}:{index}") for index in range(count)
+    ]
+    count = len(hashes)
+    accepted_path = context.shard_dir / "accepted_pairs.jsonl"
+    accepted_path.write_text("".join(json.dumps({"pair_hash": value}) + "\n" for value in hashes), encoding="utf-8")
+    stages = {}
+    for stage in ("screening", "validation", "reduction"):
+        path = context.attempt_dir / f"{stage}.json"
+        path.write_text(json.dumps({"stage": stage, "task": task_label}), encoding="utf-8")
+        stages[stage] = {
+            "path": str(path.relative_to(context.shard_dir)),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+    return {"accepted_pairs": count, "accepted_pair_hashes": hashes, "stage_evidence": stages}
+
+
+class _CompleteWorker:
+    def __init__(self, *, fail_once_for=None, accepted_count=None) -> None:
+        self.context = None
+        self.fail_once_for = fail_once_for
+        self.failed = False
+        self.accepted_count = accepted_count
+
+    def bind_attempt_context(self, context: AttemptContext) -> None:
+        self.context = context
+
+    def __call__(self, task):
+        if task == self.fail_once_for and not self.failed:
+            self.failed = True
+            raise RuntimeError("retryable")
+        assert self.context is not None
+        count = self.accepted_count(task) if callable(self.accepted_count) else self.accepted_count
+        return _durable_result(self.context, task, accepted_count=count)
 
 
 def test_retryable_shard_failure_does_not_stop_other_tasks(tmp_path) -> None:
@@ -22,13 +81,7 @@ def test_retryable_shard_failure_does_not_stop_other_tasks(tmp_path) -> None:
     )
     # Use small stand-in tasks: supervisor only needs a stable task identity.
     plan = RunPlan("test", 2, ("bad", "good"), 2, SourceRevision(None, None, None))  # type: ignore[arg-type]
-    calls = []
-    def worker(task):
-        calls.append(task)
-        if task == "bad" and calls.count("bad") == 1:
-            raise RuntimeError("retryable")
-        return {"accepted_pairs": 1000}
-    summary = ShardSupervisor(tmp_path, retry_limit=1).run(plan, worker)
+    summary = ShardSupervisor(tmp_path, retry_limit=1).run(plan, _CompleteWorker(fail_once_for="bad"))
     assert summary.completed == ("bad", "good")
 
 
@@ -37,7 +90,7 @@ def test_supervisor_uses_task_specific_accepted_pair_target(tmp_path) -> None:
         accepted_query_pairs = 3
 
     plan = RunPlan("test", 2, (Task(),), 3, SourceRevision(None, None, None))  # type: ignore[arg-type]
-    summary = ShardSupervisor(tmp_path).run(plan, lambda task: {"accepted_pairs": 3})
+    summary = ShardSupervisor(tmp_path).run(plan, _CompleteWorker())
     assert len(summary.completed) == 1
 
 
@@ -61,6 +114,9 @@ class _Adapter:
 
     def dbms_fingerprint(self) -> DBMSFingerprint:
         return DBMSFingerprint("a" * 64)
+
+    def dbms_health_epoch(self) -> DBMSHealthEpoch:
+        return DBMSHealthEpoch("e" * 64, "test")
 
     def close(self) -> None:
         return None
@@ -92,7 +148,7 @@ def test_retry_uses_a_new_attempt_directory_instead_of_reusing_the_shard_directo
     summary = ShardSupervisor(tmp_path, retry_limit=1).run(plan, worker)
 
     shard_dir = tmp_path / "shards" / "neo4j-000"
-    assert summary.completed == (task,)
+    assert summary.incomplete == (task,)
     assert (shard_dir / "attempt-000").is_dir()
     assert (shard_dir / "attempt-001").is_dir()
 
@@ -221,22 +277,20 @@ class _ContextAwareResumeWorker:
 
     def __call__(self, _task):
         assert self.context is not None
-        assert self.context.accepted_pair_hashes == frozenset({"pair-a"})
-        return {
-            "accepted_pairs": 2,
-            "accepted_pair_hashes": [*self.context.accepted_pair_hashes, "pair-b"],
-        }
+        first = _hash_for("pair-a")
+        assert self.context.accepted_pair_hashes == frozenset({first})
+        return _durable_result(self.context, _task, accepted_hashes=[first, _hash_for("pair-b")])
 
 
 def test_resume_recovers_checkpoint_and_fsynced_artifact_after_supervisor_sigkill(tmp_path) -> None:
     task = ShardTask(TargetSystem.NEO4J, 0, 7, 2, 2, 60)
     plan = RunPlan("sigkill", 2, (task,), 2, SourceRevision(None, None, None))
     shard_dir = tmp_path / "shards" / "neo4j-000"
-    journal = ShardJournal(shard_dir, manifest_hash=_manifest_hash(plan))
+    journal = ShardJournal(shard_dir, manifest_hash=_manifest_hash(plan), task_identity=_task_identity(task))
     journal.transition(ShardState.GENERATING, attempt=0)
     (shard_dir / "attempt-000").mkdir()
     with (shard_dir / "accepted_pairs.jsonl").open("w", encoding="utf-8") as handle:
-        handle.write(json.dumps({"pair_hash": "pair-a"}) + "\n")
+        handle.write(json.dumps({"pair_hash": _hash_for("pair-a")}) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
 
@@ -244,7 +298,7 @@ def test_resume_recovers_checkpoint_and_fsynced_artifact_after_supervisor_sigkil
 
     assert summary.completed == (task,)
     checkpoint = json.loads((shard_dir / "checkpoint.json").read_text(encoding="utf-8"))
-    assert checkpoint["accepted_pair_hashes"] == ["pair-a", "pair-b"]
+    assert len(checkpoint["accepted_pair_hashes"]) == 2
     assert checkpoint["attempt"] == 1
 
 
@@ -276,7 +330,7 @@ class _LeaseProbeWorker:
             _append_phase(self.trace_path, "measurement", "start")
             time.sleep(0.05)
             _append_phase(self.trace_path, "measurement", "end")
-        return {"accepted_pairs": 1, "accepted_pair_hashes": [task.target.value]}
+        return _durable_result(self.context, task)
 
 
 def _peak_concurrency(records, phase: str) -> int:
@@ -352,3 +406,146 @@ def test_parent_reloads_child_phase_journal_before_recording_failure(tmp_path) -
     assert [event["seq"] for event in events] == [1, 2, 3, 4, 5]
     assert events[-1]["previous_state"] == "screening"
     assert events[-1]["error_kind"] == "DBMS_CRASHED"
+
+
+class _ParallelRecoveryWorker:
+    def __init__(self) -> None:
+        self.context = None
+
+    def bind_attempt_context(self, context: AttemptContext) -> None:
+        self.context = context
+
+    def __call__(self, task):
+        assert self.context is not None
+        return _durable_result(self.context, task)
+
+
+def test_corrupt_artifact_fails_only_its_shard_and_other_future_continues(tmp_path) -> None:
+    bad = ShardTask(TargetSystem.NEO4J, 0, 11, 1, 1, 60)
+    good = ShardTask(TargetSystem.MEMGRAPH, 0, 12, 1, 1, 60)
+    plan = RunPlan("corrupt-one", 2, (bad, good), 2, SourceRevision(None, None, None))
+    bad_dir = tmp_path / "shards" / "neo4j-000"
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "accepted_pairs.jsonl").write_text("{not-json}\n", encoding="utf-8")
+
+    summary = ShardSupervisor(
+        tmp_path,
+        retry_limit=0,
+        process_isolation=True,
+        max_parallel_generation_systems=2,
+    ).resume(plan, _ParallelRecoveryWorker())
+
+    assert summary.failed == (bad,)
+    assert summary.completed == (good,)
+    checkpoint = json.loads((bad_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["state"] == "failed_final"
+    events = (bad_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert "INFRASTRUCTURE_ERROR" in events
+
+
+class _DurableStageWorker:
+    def __init__(self, *, result_hash_override: str | None = None) -> None:
+        self.context = None
+        self.result_hash_override = result_hash_override
+
+    def bind_attempt_context(self, context: AttemptContext) -> None:
+        self.context = context
+
+    def __call__(self, task):
+        assert self.context is not None
+        pair_hash = _hash_for(f"{task.target.value}:{task.shard_index}")
+        accepted_path = self.context.shard_dir / "accepted_pairs.jsonl"
+        accepted_path.write_text(json.dumps({"pair_hash": pair_hash}) + "\n", encoding="utf-8")
+        stages = {}
+        for stage in ("screening", "validation", "reduction"):
+            path = self.context.attempt_dir / f"{stage}.json"
+            path.write_text(json.dumps({"stage": stage, "task": task.target.value}), encoding="utf-8")
+            stages[stage] = {
+                "path": str(path.relative_to(self.context.shard_dir)),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        return {
+            "accepted_pairs": 1,
+            "accepted_pair_hashes": [self.result_hash_override or pair_hash],
+            "stage_evidence": stages,
+        }
+
+
+def test_missing_accepted_hashes_and_canonical_artifact_is_final_failure(tmp_path) -> None:
+    task = ShardTask(TargetSystem.NEO4J, 0, 21, 1, 1, 60)
+    plan = RunPlan("missing-hashes", 2, (task,), 1, SourceRevision(None, None, None))
+
+    summary = ShardSupervisor(tmp_path, retry_limit=0).run(plan, lambda _task: {"accepted_pairs": 1})
+
+    assert summary.failed == (task,)
+    assert summary.completed == ()
+
+
+def test_canonical_and_result_hash_sets_must_match_exactly(tmp_path) -> None:
+    task = ShardTask(TargetSystem.NEO4J, 0, 22, 1, 1, 60)
+    plan = RunPlan("hash-mismatch", 2, (task,), 1, SourceRevision(None, None, None))
+
+    summary = ShardSupervisor(tmp_path, retry_limit=0).run(
+        plan,
+        _DurableStageWorker(result_hash_override=_hash_for("different")),
+    )
+
+    assert summary.failed == (task,)
+    assert summary.completed == ()
+
+
+def test_complete_requires_durable_validation_and_reduction_stage_evidence(tmp_path) -> None:
+    task = ShardTask(TargetSystem.NEO4J, 0, 23, 1, 1, 60)
+    plan = RunPlan("full-chain", 2, (task,), 1, SourceRevision(None, None, None))
+
+    summary = ShardSupervisor(tmp_path, retry_limit=0).run(plan, _DurableStageWorker())
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "shards" / "neo4j-000" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert summary.completed == (task,)
+    assert [event["state"] for event in events][-3:] == ["validating", "reducing", "completed"]
+
+
+def test_resume_interrupted_attempt_three_is_atomically_failed_final(tmp_path) -> None:
+    task = ShardTask(TargetSystem.NEO4J, 0, 24, 1, 1, 60)
+    plan = RunPlan("attempt-exhausted", 2, (task,), 1, SourceRevision(None, None, None))
+    shard_dir = tmp_path / "shards" / "neo4j-000"
+    journal = ShardJournal(shard_dir, manifest_hash=_manifest_hash(plan), task_identity=_task_identity(task))
+    journal.transition(ShardState.GENERATING, attempt=3)
+    (shard_dir / "attempt-003").mkdir()
+
+    summary = ShardSupervisor(tmp_path, retry_limit=3).resume(plan, _DurableStageWorker())
+
+    checkpoint = json.loads((shard_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    events = [json.loads(line) for line in (shard_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert summary.failed == (task,)
+    assert checkpoint["state"] == "failed_final"
+    assert checkpoint["attempt"] == 3
+    assert events[-1]["state"] == "failed_final"
+    assert events[-1]["error_kind"] == "WORKER_CRASHED"
+
+
+def test_status_rejects_checkpoint_copied_from_another_manifest_task(tmp_path) -> None:
+    tasks = (
+        ShardTask(TargetSystem.NEO4J, 0, 31, 1, 1, 60),
+        ShardTask(TargetSystem.MEMGRAPH, 0, 32, 1, 1, 60),
+    )
+    plan = RunPlan("status-identity", 2, tasks, 2, SourceRevision(None, None, None))
+    run_id = "copied-checkpoint"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    write_resolved_manifest(plan, run_dir / "resolved_manifest.json")
+    summary = ShardSupervisor(run_dir, retry_limit=0).run(plan, _DurableStageWorker())
+    assert len(summary.completed) == 2
+    neo = run_dir / "shards" / "neo4j-000"
+    memgraph = run_dir / "shards" / "memgraph-000"
+    for name in ("checkpoint.json", "events.jsonl", "accepted_pairs.jsonl"):
+        shutil.copy2(neo / name, memgraph / name)
+
+    status = ExperimentLifecycle(tmp_path).status(run_id)
+
+    assert status.completed == 1
+    assert status.failed == 1
+    assert status.invalid == 1

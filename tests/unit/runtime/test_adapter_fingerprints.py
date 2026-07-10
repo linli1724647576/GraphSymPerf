@@ -145,3 +145,42 @@ def test_fingerprint_is_unavailable_without_server_version(
     assert not fingerprint.available
     assert fingerprint.value is None
     assert fingerprint.reason == "server_version_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("adapter_type", "target", "env", "optional_env", "_endpoint_key", "_endpoint_value", "_secret_key"),
+    CASES,
+    ids=["neo4j", "memgraph", "falkordb", "agensgraph", "apache-age", "arcadedb", "ladybugdb"],
+)
+def test_health_epoch_is_stable_and_changes_with_boot_identity(
+    adapter_type,
+    target,
+    env,
+    optional_env,
+    _endpoint_key,
+    _endpoint_value,
+    _secret_key,
+) -> None:
+    adapter = _adapter(adapter_type, target, env, optional_env)
+    adapter._probe_health_epoch_identity = lambda: ("test_boot_id", "boot-one")
+
+    first = adapter.dbms_health_epoch()
+    second = adapter.dbms_health_epoch()
+    adapter._probe_health_epoch_identity = lambda: ("test_boot_id", "boot-two")
+    restarted = adapter.dbms_health_epoch()
+
+    assert first.available
+    assert first == second
+    assert first.source == "test_boot_id"
+    assert restarted.value != first.value
+
+
+def test_health_epoch_fails_closed_when_probe_has_no_stable_identity() -> None:
+    adapter_type, target, env, optional_env, *_ = CASES[0]
+    adapter = _adapter(adapter_type, target, env, optional_env)
+    adapter._probe_health_epoch_identity = lambda: None
+
+    epoch = adapter.dbms_health_epoch()
+
+    assert not epoch.available
+    assert epoch.reason == "health_epoch_identity_unavailable"

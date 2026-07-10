@@ -107,6 +107,16 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
             "database": "default",
         }
 
+    def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
+        self._connect()
+        with self._driver.session() as session:
+            rows = session.run("CALL mg.get_info() YIELD name, value RETURN name, value")
+            info = {str(row["name"]).lower(): row["value"] for row in rows}
+        for key in ("instance_id", "startup_time", "start_time", "process_start_time"):
+            if info.get(key) not in (None, ""):
+                return (f"mg.get_info:{key}", info[key])
+        return None
+
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         upper = query.upper()
         if " STARTS WITH " in upper or " ENDS WITH " in upper:

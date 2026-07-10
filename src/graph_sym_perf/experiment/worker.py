@@ -21,7 +21,7 @@ from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
 
 from graph_sym_perf.adapters import create_adapter
-from graph_sym_perf.adapters.base import DBMSFingerprint
+from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
 from graph_sym_perf.core import GdsmithConfig, QueryTimeoutError, TargetSystem
 from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
@@ -123,6 +123,17 @@ class AdapterQueryProxy:
             query_kind="graph_load",
             timeout_seconds=self.default_timeout_seconds,
             operation=lambda: operation(statements),
+        )
+
+    def dbms_health_epoch(self) -> DBMSHealthEpoch:
+        operation = getattr(self._adapter, "dbms_health_epoch", None)
+        if not callable(operation):
+            return DBMSHealthEpoch(None, reason="adapter_health_epoch_contract_missing")
+        return self._call_with_inflight(
+            query_identity="adapter.dbms_health_epoch",
+            query_kind="health_epoch",
+            timeout_seconds=self.default_timeout_seconds,
+            operation=operation,
         )
 
     def _call_with_inflight(
@@ -244,7 +255,8 @@ class RuntimeFirstShardWorker:
         try:
             self._reset_and_load(load_proxy, generated.graph_statements)
             fingerprint = _adapter_dbms_fingerprint(load_proxy)
-            if fingerprint.available:
+            health_epoch = _adapter_dbms_health_epoch(load_proxy)
+            if fingerprint.available and health_epoch.available:
                 assert fingerprint.value is not None
                 load_proxy.update_dbms_fingerprint(fingerprint.value)
                 self._transition_attempt(ShardState.BUILDING_ACCEPTED_PAIRS)
@@ -259,13 +271,15 @@ class RuntimeFirstShardWorker:
             else:
                 accepted = []
                 accepted_hashes = set()
-                rejects = Counter({"DBMS_FINGERPRINT_UNAVAILABLE": 1})
+                reason = "DBMS_FINGERPRINT_UNAVAILABLE" if not fingerprint.available else "DBMS_HEALTH_EPOCH_UNAVAILABLE"
+                rejects = Counter({reason: 1})
+                _ensure_jsonl(shard_dir / "accepted_pairs.jsonl")
         finally:
             load_adapter.close()
 
         candidate_hashes: set[str] = set()
         candidates = 0
-        if fingerprint.available:
+        if fingerprint.available and health_epoch.available:
             self._transition_attempt(ShardState.SCREENING)
             measurement_adapter = self._adapter_factory(task)
             measurement_proxy = AdapterQueryProxy(
@@ -278,12 +292,26 @@ class RuntimeFirstShardWorker:
             )
             try:
                 measurement_fingerprint = _adapter_dbms_fingerprint(measurement_proxy)
-                self._require_same_health_epoch(fingerprint, measurement_fingerprint, attempt_dir)
+                measurement_epoch = _adapter_dbms_health_epoch(measurement_proxy)
+                self._require_same_health_identity(
+                    fingerprint,
+                    measurement_fingerprint,
+                    health_epoch,
+                    measurement_epoch,
+                    attempt_dir,
+                )
                 assert measurement_fingerprint.value is not None
                 measurement_proxy.update_dbms_fingerprint(measurement_fingerprint.value)
                 candidate_records = self._screen_pairs(measurement_proxy, task, accepted)
                 final_fingerprint = _adapter_dbms_fingerprint(measurement_proxy)
-                self._require_same_health_epoch(fingerprint, final_fingerprint, attempt_dir)
+                final_epoch = _adapter_dbms_health_epoch(measurement_proxy)
+                self._require_same_health_identity(
+                    fingerprint,
+                    final_fingerprint,
+                    health_epoch,
+                    final_epoch,
+                    attempt_dir,
+                )
                 candidate_path = shard_dir / "candidates.jsonl"
                 existing_candidates = _jsonl_hashes(candidate_path, "pair_hash")
                 for record in candidate_records:
@@ -311,8 +339,30 @@ class RuntimeFirstShardWorker:
                 "value": fingerprint.value,
                 "reason": fingerprint.reason,
             },
+            "dbms_health_epoch": {
+                "available": health_epoch.available,
+                "value": health_epoch.value,
+                "source": health_epoch.source,
+                "reason": health_epoch.reason,
+            },
         }
-        (attempt_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        screening_path = attempt_dir / "screening.json"
+        _atomic_write_json(
+            screening_path,
+            {
+                "accepted_pair_hashes": sorted(accepted_hashes),
+                "candidate_hashes": sorted(candidate_hashes),
+                "dbms_fingerprint": fingerprint.value,
+                "dbms_health_epoch": health_epoch.value,
+            },
+        )
+        summary["stage_evidence"] = {
+            "screening": {
+                "path": str(screening_path.relative_to(shard_dir)),
+                "sha256": hashlib.sha256(screening_path.read_bytes()).hexdigest(),
+            }
+        }
+        _atomic_write_json(attempt_dir / "summary.json", summary)
         return summary
 
     def _transition_attempt(self, state: ShardState) -> None:
@@ -337,22 +387,39 @@ class RuntimeFirstShardWorker:
         )
 
     @staticmethod
-    def _require_same_health_epoch(
-        expected: DBMSFingerprint,
-        actual: DBMSFingerprint,
+    def _require_same_health_identity(
+        expected_fingerprint: DBMSFingerprint,
+        actual_fingerprint: DBMSFingerprint,
+        expected_epoch: DBMSHealthEpoch,
+        actual_epoch: DBMSHealthEpoch,
         attempt_dir: Path,
     ) -> None:
-        if expected.available and actual.available and expected.value == actual.value:
+        if (
+            expected_fingerprint.available
+            and actual_fingerprint.available
+            and expected_fingerprint.value == actual_fingerprint.value
+            and expected_epoch.available
+            and actual_epoch.available
+            and expected_epoch.value == actual_epoch.value
+        ):
             return
         _atomic_write_json(
             attempt_dir / "runtime_invalidated.json",
             {
-                "after": actual.value,
-                "before": expected.value,
-                "reason": actual.reason or "dbms_fingerprint_changed",
+                "after": actual_fingerprint.value,
+                "before": expected_fingerprint.value,
+                "fingerprint_after": actual_fingerprint.value,
+                "fingerprint_before": expected_fingerprint.value,
+                "health_epoch_after": actual_epoch.value,
+                "health_epoch_before": expected_epoch.value,
+                "reason": (
+                    actual_fingerprint.reason
+                    or actual_epoch.reason
+                    or "dbms_fingerprint_or_health_epoch_changed"
+                ),
             },
         )
-        raise WorkerFailure(ErrorKind.DBMS_CRASHED, "DBMS health epoch changed during shard execution")
+        raise WorkerFailure(ErrorKind.DBMS_CRASHED, "DBMS fingerprint or boot health epoch changed during shard execution")
 
     def _reset_and_load(self, adapter: Any, graph_statements: tuple[str, ...]) -> None:
         # A shard can only start from a known empty graph.  Failure to reset is
@@ -378,6 +445,7 @@ class RuntimeFirstShardWorker:
         max_rows = int(self.spec.validation["max_result_rows"])
         timeout = self.spec.systems[task.target].default_timeout_seconds
         records_path = shard_dir / "accepted_pairs.jsonl"
+        _ensure_jsonl(records_path)
         seen = _accepted_pair_hashes(
             records_path,
             graph_snapshot_hash=graph_snapshot_hash,
@@ -583,8 +651,26 @@ def _adapter_dbms_fingerprint(adapter: Any) -> DBMSFingerprint:
     return result
 
 
+def _adapter_dbms_health_epoch(adapter: Any) -> DBMSHealthEpoch:
+    probe = getattr(adapter, "dbms_health_epoch", None)
+    if not callable(probe):
+        return DBMSHealthEpoch(None, reason="adapter_health_epoch_contract_missing")
+    result = probe()
+    if not isinstance(result, DBMSHealthEpoch):
+        return DBMSHealthEpoch(None, reason="adapter_health_epoch_contract_invalid")
+    return result
+
+
 def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
     _append_jsonl_fsync(path, payload)
+
+
+def _ensure_jsonl(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.flush()
+        os.fsync(handle.fileno())
+    _fsync_directory(path.parent)
 
 
 def _jsonl_hashes(path: Path, key: str) -> set[str]:

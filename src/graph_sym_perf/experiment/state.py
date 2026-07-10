@@ -58,18 +58,22 @@ _NEXT = {
     },
     ShardState.SCREENING: {
         ShardState.VALIDATING,
-        ShardState.COMPLETED,
         ShardState.INCOMPLETE,
         ShardState.FAILED_RETRYABLE,
         ShardState.FAILED_FINAL,
     },
     ShardState.VALIDATING: {
         ShardState.REDUCING,
-        ShardState.COMPLETED,
+        ShardState.INCOMPLETE,
         ShardState.FAILED_RETRYABLE,
         ShardState.FAILED_FINAL,
     },
-    ShardState.REDUCING: {ShardState.COMPLETED, ShardState.FAILED_RETRYABLE, ShardState.FAILED_FINAL},
+    ShardState.REDUCING: {
+        ShardState.COMPLETED,
+        ShardState.INCOMPLETE,
+        ShardState.FAILED_RETRYABLE,
+        ShardState.FAILED_FINAL,
+    },
     ShardState.FAILED_RETRYABLE: {ShardState.GENERATING, ShardState.FAILED_FINAL},
 }
 
@@ -99,15 +103,24 @@ def transition(current: ShardState, target: ShardState) -> ShardState:
 class ShardJournal:
     """One shard's append-only events plus atomic best-known checkpoint."""
 
-    def __init__(self, shard_dir: str | Path, *, manifest_hash: str) -> None:
+    def __init__(
+        self,
+        shard_dir: str | Path,
+        *,
+        manifest_hash: str,
+        task_identity: str | None = None,
+    ) -> None:
         self.shard_dir = Path(shard_dir)
         self.shard_dir.mkdir(parents=True, exist_ok=True)
         self.events_path = self.shard_dir / "events.jsonl"
         self.checkpoint_path = self.shard_dir / "checkpoint.json"
         self.manifest_hash = manifest_hash
+        self.task_identity = task_identity
         checkpoint = _read_mapping(self.checkpoint_path)
         if checkpoint and checkpoint.get("manifest_hash") != manifest_hash:
             raise ManifestMismatchError("checkpoint belongs to a different immutable manifest")
+        if checkpoint and task_identity is not None and checkpoint.get("task_identity") != task_identity:
+            raise ManifestMismatchError("checkpoint belongs to a different shard task")
         self._state = ShardState(str(checkpoint.get("state", ShardState.PLANNED.value)))
         self._event_seq = int(checkpoint.get("event_seq", 0))
         self._attempt = int(checkpoint.get("attempt", 0))
@@ -116,6 +129,8 @@ class ShardJournal:
         self._last_seed = _optional_int(checkpoint.get("last_seed"))
         progress = checkpoint.get("generator_progress", {})
         self._generator_progress = dict(progress) if isinstance(progress, Mapping) else {}
+        stage_evidence = checkpoint.get("stage_evidence", {})
+        self._stage_evidence = dict(stage_evidence) if isinstance(stage_evidence, Mapping) else {}
         if self._replay_event_tail():
             self._write_checkpoint()
 
@@ -156,6 +171,8 @@ class ShardJournal:
             "state": target.value,
             "timestamp": time.time(),
         }
+        if self.task_identity is not None:
+            payload["task_identity"] = self.task_identity
         _append_jsonl_fsync(self.events_path, payload)
         self._write_checkpoint(state=target, event_seq=next_seq, attempt=attempt)
         self._state, self._event_seq, self._attempt = target, next_seq, attempt
@@ -168,6 +185,7 @@ class ShardJournal:
         candidate_hashes: Iterable[str] | None = None,
         last_seed: int | None = None,
         generator_progress: Mapping[str, object] | None = None,
+        stage_evidence: Mapping[str, object] | None = None,
     ) -> None:
         next_accepted = set(self._accepted_pair_hashes)
         next_candidates = set(self._candidate_hashes)
@@ -177,17 +195,20 @@ class ShardJournal:
             next_candidates.update(candidate_hashes)
         next_last_seed = last_seed if last_seed is not None else self._last_seed
         next_progress = dict(generator_progress) if generator_progress is not None else dict(self._generator_progress)
+        next_stage_evidence = dict(stage_evidence) if stage_evidence is not None else dict(self._stage_evidence)
         self._write_checkpoint(
             attempt=attempt,
             accepted_pair_hashes=next_accepted,
             candidate_hashes=next_candidates,
             last_seed=next_last_seed,
             generator_progress=next_progress,
+            stage_evidence=next_stage_evidence,
         )
         self._accepted_pair_hashes = next_accepted
         self._candidate_hashes = next_candidates
         self._last_seed = next_last_seed
         self._generator_progress = next_progress
+        self._stage_evidence = next_stage_evidence
         self._attempt = attempt
 
     def _write_checkpoint(
@@ -200,22 +221,24 @@ class ShardJournal:
         candidate_hashes: set[str] | None = None,
         last_seed: int | None = None,
         generator_progress: Mapping[str, object] | None = None,
+        stage_evidence: Mapping[str, object] | None = None,
     ) -> None:
-        _atomic_write_json(
-            self.checkpoint_path,
-            {
-                "accepted_pair_hashes": sorted(
-                    self._accepted_pair_hashes if accepted_pair_hashes is None else accepted_pair_hashes
-                ),
-                "attempt": self._attempt if attempt is None else attempt,
-                "candidate_hashes": sorted(self._candidate_hashes if candidate_hashes is None else candidate_hashes),
-                "event_seq": self._event_seq if event_seq is None else event_seq,
-                "generator_progress": self._generator_progress if generator_progress is None else dict(generator_progress),
-                "last_seed": self._last_seed if last_seed is None else last_seed,
-                "manifest_hash": self.manifest_hash,
-                "state": (self._state if state is None else state).value,
-            },
-        )
+        payload = {
+            "accepted_pair_hashes": sorted(
+                self._accepted_pair_hashes if accepted_pair_hashes is None else accepted_pair_hashes
+            ),
+            "attempt": self._attempt if attempt is None else attempt,
+            "candidate_hashes": sorted(self._candidate_hashes if candidate_hashes is None else candidate_hashes),
+            "event_seq": self._event_seq if event_seq is None else event_seq,
+            "generator_progress": self._generator_progress if generator_progress is None else dict(generator_progress),
+            "last_seed": self._last_seed if last_seed is None else last_seed,
+            "manifest_hash": self.manifest_hash,
+            "stage_evidence": self._stage_evidence if stage_evidence is None else dict(stage_evidence),
+            "state": (self._state if state is None else state).value,
+        }
+        if self.task_identity is not None:
+            payload["task_identity"] = self.task_identity
+        _atomic_write_json(self.checkpoint_path, payload)
 
     def _replay_event_tail(self) -> bool:
         replayed = False
@@ -228,6 +251,8 @@ class ShardJournal:
             event_manifest = event.get("manifest_hash")
             if event_manifest not in {None, self.manifest_hash}:
                 raise ManifestMismatchError("event stream belongs to a different immutable manifest")
+            if self.task_identity is not None and event.get("task_identity") != self.task_identity:
+                raise ManifestMismatchError("event stream belongs to a different shard task")
             try:
                 previous = ShardState(str(event["previous_state"]))
                 target = ShardState(str(event["state"]))
