@@ -2,6 +2,7 @@ from dataclasses import replace
 
 from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
 from graph_sym_perf.runtime.models import EquivalentQueryPair
+from graph_sym_perf.validation.models import FrozenMapping
 
 
 def _pair() -> EquivalentQueryPair:
@@ -52,3 +53,18 @@ def test_minimality_proof_accepts_exactly_one_failed_attempt_per_recomputed_prop
     proof = MinimalityProof.from_results(_pair(), _full_results())
 
     assert proof.verify(_pair())
+
+
+def test_minimality_proof_survives_persisted_parameter_mapping_round_trip() -> None:
+    frozen_pair = replace(_pair(), parameters=FrozenMapping.from_mapping({"limit": 10}))
+    restored_pair = replace(_pair(), parameters={"limit": 10})
+    universe = MinimalityUniverse.recompute(frozen_pair)
+    proof = MinimalityProof.from_results(
+        frozen_pair,
+        tuple(
+            (deletion.canonical_id, "symptom_not_preserved", "a" * 64)
+            for deletion in universe.deletions
+        ),
+    )
+
+    assert proof.verify(restored_pair)

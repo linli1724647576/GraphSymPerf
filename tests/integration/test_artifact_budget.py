@@ -24,6 +24,7 @@ from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.validation.models import (
     DeveloperStatus,
+    FrozenMapping,
     PipelineStage,
     VersionedIssueRecord,
     candidate_hash_from_content_hashes,
@@ -262,7 +263,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     reduced_pair = EquivalentQueryPair(
         query_a,
         query_b,
-        {},
+        FrozenMapping.from_mapping({}),
         graph_ref["content_hash"],
         "c" * 64,
     )

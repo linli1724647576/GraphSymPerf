@@ -241,11 +241,23 @@ def reduction_pair_hash(pair: EquivalentQueryPair) -> str:
     payload = {
         "query_a_hash": query_a_hash,
         "query_b_hash": query_b_hash,
-        "parameters": pair.parameters,
+        "parameters": _parameter_content(pair.parameters),
         "graph_snapshot_hash": pair.graph_snapshot_hash,
         "dbms_fingerprint": pair.dbms_fingerprint,
     }
     return hashlib.sha256(stable_json_dumps(payload).encode("utf-8")).hexdigest()
+
+
+def _parameter_content(value: object) -> object:
+    """Remove immutable-container implementation details from pair identity."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _parameter_content(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return tuple(_parameter_content(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return tuple(sorted((_parameter_content(item) for item in value), key=repr))
+    return value
 
 
 @dataclass(frozen=True)
