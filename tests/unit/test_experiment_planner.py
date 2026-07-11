@@ -31,6 +31,7 @@ def _gdsmith_artifact_environment(root: Path, source_commit: str) -> dict[str, s
                     "reject_unsafe_double_quoted_tokens",
                     "jdbc_query_timeout_60s",
                     "jdbc_result_row_cap_1000",
+                    "neo4j_transaction_timeout_30s",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ],

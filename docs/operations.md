@@ -26,7 +26,7 @@ GDsmith query-record 请求量由 system capability 决定：声明 `low_yield_g
 
 GDsmith 的 compared 系列算法达到 `--num-queries` 后会以 `RuntimeException: total number reached` 和进程码 1 结束。runner 只在同时满足“原始进程码为 1、精确 sentinel 存在、parser 得到非空可回放语料”时将其记录为 `QUERY_RECORD_LIMIT_REACHED` 并继续；普通 code 1、伪 sentinel 或空语料仍失败关闭，不能触发确定性重试风暴。
 
-兼容 JAR 对 AgensGraph 和 ArcadeDB 的每个 JDBC `Statement` 同时设置 60 秒 query timeout 与 1,000 行 result cap。row cap 只约束 GDsmith 内部 oracle 的结果物化，不改变 GraphSymPerf 后续的 ordinary-execute runtime 协议；它防止高基数生成查询在 PostgreSQL JDBC `processResults` 中耗尽生成器 JVM heap。JAR manifest 必须同时声明 `jdbc_query_timeout_60s` 与 `jdbc_result_row_cap_1000`，否则 doctor 拒绝运行。
+兼容 JAR 对 AgensGraph 和 ArcadeDB 的每个 JDBC `Statement` 同时设置 60 秒 query timeout 与 1,000 行 result cap；对 Neo4j driver 的 write transaction 和 auto-commit `run` 设置 30 秒服务端 transaction timeout，为 60 秒生成停滞 watchdog 留出恢复余量。row cap 只约束 GDsmith 内部 JDBC oracle 的结果物化，不改变 GraphSymPerf 后续的 ordinary-execute runtime 协议；它防止高基数生成查询在 PostgreSQL JDBC `processResults` 中耗尽生成器 JVM heap。JAR manifest 必须同时声明 `jdbc_query_timeout_60s`、`jdbc_result_row_cap_1000` 与 `neo4j_transaction_timeout_30s`，否则 doctor 拒绝运行。
 
 ArcadeDB 的 shard、独立 validation session 和 reducer 使用服务器级 `drop database`/`create database` 重建 `mydb`；这一边界避免对旧图执行 `MATCH (n) DETACH DELETE n` 时的全图扫描与 Java heap 放大。数据库名只接受受限标识符，重建任一步失败都不会继续加载或测量。其他 adapter 未声明 database-level reset 时仍使用 Cypher 清图，再执行各自的 schema reset。
 

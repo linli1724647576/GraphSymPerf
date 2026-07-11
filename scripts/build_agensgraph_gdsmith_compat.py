@@ -16,6 +16,7 @@ import yaml
 
 CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/agensGraph/AgensGraphConnection.java")
 ARCADE_CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/arcadeDB/ArcadeDBConnection.java")
+NEO4J_CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/neo4j/Neo4jConnection.java")
 MAIN_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/Main.java")
 POM_RELATIVE_PATH = Path("pom.xml")
 
@@ -48,6 +49,7 @@ def main() -> int:
     patch_paths = (
         _patch_agens_connection(work_dir),
         _patch_arcadedb_connection(work_dir),
+        _patch_neo4j_connection(work_dir),
         _patch_main_provider_registry(work_dir),
         _patch_maven_build(work_dir),
     )
@@ -74,6 +76,7 @@ def main() -> int:
                     "reject_unsafe_double_quoted_tokens",
                     "jdbc_query_timeout_60s",
                     "jdbc_result_row_cap_1000",
+                    "neo4j_transaction_timeout_30s",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ),
@@ -161,6 +164,14 @@ def _patch_arcadedb_connection(work_dir: Path) -> Path:
     patched = _patch_arcadedb_connection_source(original)
     path.write_text(patched, encoding="utf-8")
     return _write_patch(work_dir, ARCADE_CONNECTION_RELATIVE_PATH, original, patched, "arcadedb-timeout")
+
+
+def _patch_neo4j_connection(work_dir: Path) -> Path:
+    path = work_dir / NEO4J_CONNECTION_RELATIVE_PATH
+    original = path.read_text(encoding="utf-8")
+    patched = _patch_neo4j_connection_source(original)
+    path.write_text(patched, encoding="utf-8")
+    return _write_patch(work_dir, NEO4J_CONNECTION_RELATIVE_PATH, original, patched, "neo4j-timeout")
 
 
 def _patch_maven_build(work_dir: Path) -> Path:
@@ -284,6 +295,38 @@ def _patch_arcadedb_connection_source(source: str) -> str:
     patched = _add_statement_timeouts(source)
     if 'stmt.execute("{cypher}" + arg)' not in patched or 'stmt.executeQuery("{cypher}" + arg)' not in patched:
         raise RuntimeError("required ArcadeDB connection patch anchors are missing")
+    return patched
+
+
+def _patch_neo4j_connection_source(source: str) -> str:
+    import_anchor = "import java.util.Arrays;\n"
+    class_anchor = "public class Neo4jConnection extends CypherConnection {\n"
+    write_anchor = "            } );\n"
+    run_anchor = "session.run(arg)"
+    if (
+        source.count(import_anchor) != 1
+        or source.count(class_anchor) != 1
+        or source.count(write_anchor) != 1
+        or source.count(run_anchor) != 1
+    ):
+        raise RuntimeError("required Neo4j connection patch anchors are missing or ambiguous")
+    patched = source.replace(import_anchor, "import java.time.Duration;\n" + import_anchor)
+    patched = patched.replace(
+        class_anchor,
+        class_anchor
+        + "\n    private static final TransactionConfig QUERY_TIMEOUT = "
+        + "TransactionConfig.builder().withTimeout(Duration.ofSeconds(30)).build();\n",
+    )
+    patched = patched.replace(write_anchor, "            }, QUERY_TIMEOUT );\n")
+    patched = patched.replace(run_anchor, "session.run(arg, QUERY_TIMEOUT)")
+    required = (
+        "import java.time.Duration;",
+        "withTimeout(Duration.ofSeconds(30))",
+        "}, QUERY_TIMEOUT );",
+        "session.run(arg, QUERY_TIMEOUT)",
+    )
+    if any(anchor not in patched for anchor in required):
+        raise RuntimeError("required Neo4j transaction timeout patch was not applied")
     return patched
 
 

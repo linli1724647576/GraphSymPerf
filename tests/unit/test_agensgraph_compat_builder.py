@@ -95,6 +95,60 @@ public class ArcadeDBConnection extends CypherConnection {
     assert patched.count("stmt.setMaxRows(1000);") == 2
 
 
+def test_neo4j_compat_patch_sets_a_per_transaction_timeout() -> None:
+    module = _load_builder_module()
+    original = """package org.example.gdsmith.neo4j;
+
+import org.example.gdsmith.common.query.GDSmithResultSet;
+import org.example.gdsmith.cypher.CypherConnection;
+import org.neo4j.driver.*;
+
+import java.util.Arrays;
+import java.util.List;
+
+public class Neo4jConnection extends CypherConnection {
+
+    @Override
+    public void executeStatement(String arg) throws Exception{
+        try ( Session session = driver.session() )
+        {
+            session.writeTransaction( new TransactionWork<String>()
+            {
+                @Override
+                public String execute( Transaction tx )
+                {
+                    tx.run(arg);
+                    return "";
+                }
+            } );
+        }
+    }
+
+    @Override
+    public List<GDSmithResultSet> executeStatementAndGet(String arg) throws Exception{
+        try ( Session session = driver.session() )
+        {
+            return Arrays.asList(new GDSmithResultSet(session.run(arg)));
+        }
+    }
+}
+"""
+
+    patched = module._patch_neo4j_connection_source(original)
+
+    assert "import java.time.Duration;" in patched
+    assert "withTimeout(Duration.ofSeconds(30))" in patched
+    assert "}, QUERY_TIMEOUT );" in patched
+    assert "session.run(arg, QUERY_TIMEOUT)" in patched
+
+
+def test_neo4j_compat_patch_rejects_drifted_execution_anchors() -> None:
+    module = _load_builder_module()
+
+    with pytest.raises(RuntimeError, match="Neo4j connection patch anchors"):
+        module._patch_neo4j_connection_source("public class Neo4jConnection {}\n")
+
+
 def test_compat_patch_fails_if_connection_execution_anchor_is_missing() -> None:
     module = _load_builder_module()
     source = "import java.sql.Statement;\npublic class ChangedConnection {}\n"
