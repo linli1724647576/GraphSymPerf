@@ -110,6 +110,7 @@ def test_planner_is_deterministic_and_assigns_one_unique_seed_per_shard(tmp_path
     assert first.total_accepted_pair_budget == 112_000
     assert first == second
     assert len({task.seed for task in first.tasks}) == 112
+    assert all(0 <= task.seed <= (1 << 63) - 1 for task in first.tasks)
     assert {(task.target, task.shard_index) for task in first.tasks} == {
         (target, shard) for target in spec.targets for shard in range(16)
     }

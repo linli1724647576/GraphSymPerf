@@ -164,7 +164,7 @@ def resolved_manifest_hash(plan: RunPlan) -> str:
 
 def _shard_seed(experiment_seed: int, target: str, shard_index: int) -> int:
     digest = hashlib.sha256(f"{experiment_seed}:{target}:{shard_index}".encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], byteorder="big", signed=False)
+    return int.from_bytes(digest[:8], byteorder="big", signed=False) & ((1 << 63) - 1)
 
 
 def _git_output(directory: Path, *args: str) -> str | None:
