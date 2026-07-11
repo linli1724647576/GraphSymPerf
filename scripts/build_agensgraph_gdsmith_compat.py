@@ -17,6 +17,7 @@ import yaml
 CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/agensGraph/AgensGraphConnection.java")
 ARCADE_CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/arcadeDB/ArcadeDBConnection.java")
 NEO4J_CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/neo4j/Neo4jConnection.java")
+RESULT_SET_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/common/query/GDSmithResultSet.java")
 MAIN_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/Main.java")
 POM_RELATIVE_PATH = Path("pom.xml")
 
@@ -50,6 +51,7 @@ def main() -> int:
         _patch_agens_connection(work_dir),
         _patch_arcadedb_connection(work_dir),
         _patch_neo4j_connection(work_dir),
+        _patch_neo4j_result_set(work_dir),
         _patch_main_provider_registry(work_dir),
         _patch_maven_build(work_dir),
     )
@@ -77,6 +79,7 @@ def main() -> int:
                     "jdbc_query_timeout_60s",
                     "jdbc_result_row_cap_1000",
                     "neo4j_transaction_timeout_30s",
+                    "neo4j_result_row_cap_1000",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ),
@@ -172,6 +175,14 @@ def _patch_neo4j_connection(work_dir: Path) -> Path:
     patched = _patch_neo4j_connection_source(original)
     path.write_text(patched, encoding="utf-8")
     return _write_patch(work_dir, NEO4J_CONNECTION_RELATIVE_PATH, original, patched, "neo4j-timeout")
+
+
+def _patch_neo4j_result_set(work_dir: Path) -> Path:
+    path = work_dir / RESULT_SET_RELATIVE_PATH
+    original = path.read_text(encoding="utf-8")
+    patched = _patch_neo4j_result_set_source(original)
+    path.write_text(patched, encoding="utf-8")
+    return _write_patch(work_dir, RESULT_SET_RELATIVE_PATH, original, patched, "neo4j-result-cap")
 
 
 def _patch_maven_build(work_dir: Path) -> Path:
@@ -328,6 +339,31 @@ def _patch_neo4j_connection_source(source: str) -> str:
     if any(anchor not in patched for anchor in required):
         raise RuntimeError("required Neo4j transaction timeout patch was not applied")
     return patched
+
+
+def _patch_neo4j_result_set_source(source: str) -> str:
+    start_anchor = "    public GDSmithResultSet(org.neo4j.driver.Result rs) {\n"
+    end_anchor = "    public GDSmithResultSet(ResultSet rs) throws SQLException {\n"
+    if source.count(start_anchor) != 1 or source.count(end_anchor) != 1:
+        raise RuntimeError("required Neo4j result-set constructor anchors are missing or ambiguous")
+    start = source.index(start_anchor)
+    end = source.index(end_anchor, start)
+    original_constructor = source[start:end]
+    if "rs.list()" not in original_constructor:
+        raise RuntimeError("required Neo4j result-set constructor no longer materializes Result.list()")
+    replacement = """    public GDSmithResultSet(org.neo4j.driver.Result rs) {
+        resultRowNum = 0;
+        result = new ArrayList<Map<String, Object>>();
+        while (rs.hasNext() && resultRowNum < 1000) {
+            Record record = rs.next();
+            result.add(record.asMap());
+            resultRowNum++;
+        }
+        System.out.println("result_size=" + resultRowNum);
+    }
+
+"""
+    return source[:start] + replacement + source[end:]
 
 
 def _add_statement_timeouts(source: str) -> str:

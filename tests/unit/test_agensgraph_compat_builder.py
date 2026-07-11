@@ -149,6 +149,39 @@ def test_neo4j_compat_patch_rejects_drifted_execution_anchors() -> None:
         module._patch_neo4j_connection_source("public class Neo4jConnection {}\n")
 
 
+def test_neo4j_result_set_patch_streams_at_most_one_thousand_rows() -> None:
+    module = _load_builder_module()
+    original = """public class GDSmithResultSet {
+    public GDSmithResultSet(org.neo4j.driver.Result rs) {
+        List<Record> resultList = rs.list();
+        resultRowNum = resultList.size();
+        result = new ArrayList<Map<String, Object>>();
+        for (Record x : resultList) {
+            result.add(x.asMap());
+        }
+        System.out.println("result_size=" + resultRowNum);
+    }
+
+    public GDSmithResultSet(ResultSet rs) throws SQLException {
+    }
+}
+"""
+
+    patched = module._patch_neo4j_result_set_source(original)
+
+    assert "rs.list()" not in patched
+    assert "while (rs.hasNext() && resultRowNum < 1000)" in patched
+    assert "Record record = rs.next();" in patched
+    assert "result.add(record.asMap());" in patched
+
+
+def test_neo4j_result_set_patch_rejects_drifted_constructor() -> None:
+    module = _load_builder_module()
+
+    with pytest.raises(RuntimeError, match="Neo4j result-set constructor"):
+        module._patch_neo4j_result_set_source("public class GDSmithResultSet {}\n")
+
+
 def test_compat_patch_fails_if_connection_execution_anchor_is_missing() -> None:
     module = _load_builder_module()
     source = "import java.sql.Statement;\npublic class ChangedConnection {}\n"
