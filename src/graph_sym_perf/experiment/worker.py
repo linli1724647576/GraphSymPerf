@@ -1006,13 +1006,20 @@ class RuntimeFirstShardWorker:
             )
             result_holder["result"] = result
             artifact_budget_reached = bool(getattr(result, "artifact_budget_exceeded", False))
+            query_record_limit_reached = (
+                result.returncode == 1
+                and getattr(result, "process_returncode", None) == 1
+                and bool(getattr(result, "query_record_limit_reached", False))
+            )
+            result_holder["query_record_limit_reached"] = query_record_limit_reached
             partial_corpus = result.returncode == 124 or (
                 result.returncode == 125 and artifact_budget_reached
             )
-            if result.returncode != 0 and not partial_corpus:
+            replayable_nonzero_exit = partial_corpus or query_record_limit_reached
+            if result.returncode != 0 and not replayable_nonzero_exit:
                 reason = "raw artifact budget exceeded" if artifact_budget_reached else "process failure"
                 raise RuntimeError(f"GDsmith failed with code {result.returncode}: {reason}")
-            if partial_corpus and not result.parsed.accepted_queries:
+            if replayable_nonzero_exit and not result.parsed.accepted_queries:
                 raise RuntimeError("GDsmith stopped without a replayable query")
             return tuple(record.statement for record in result.parsed.accepted_queries)
 
@@ -1038,6 +1045,8 @@ class RuntimeFirstShardWorker:
                     if result.returncode == 124 and result.generation_stalled
                     else "TIME_BUDGET_EXHAUSTED"
                     if result.returncode == 124
+                    else "QUERY_RECORD_LIMIT_REACHED"
+                    if bool(result_holder.get("query_record_limit_reached", False))
                     else "PROCESS_COMPLETED"
                 ),
             },

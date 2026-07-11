@@ -24,6 +24,8 @@ GDsmith raw 临时上限为 shard 预算的 70%，且最多 350 MiB；对正式 
 
 GDsmith query-record 请求量由 system capability 决定：声明 `low_yield_generation` 的 AgensGraph/Apache AGE 使用 `min(max_generated_seeds, accepted_target × 5)`，其他目标使用 `×2`。5倍系数来自 AgensGraph 实跑中 4,000 条仅得到 968 对的最弱已观测 yield；2倍路径避免在 Neo4j 等高 yield 目标上执行数小时的无效 oracle 生成。这一 capability 只调整生成容量，不改变规则权重或筛选门槛。`max_generated_seeds=10,000` 仍是 acceptance 硬停止边界；语料不足时 shard 只能为 `INCOMPLETE`，不会降低 accepted target。
 
+GDsmith 的 compared 系列算法达到 `--num-queries` 后会以 `RuntimeException: total number reached` 和进程码 1 结束。runner 只在同时满足“原始进程码为 1、精确 sentinel 存在、parser 得到非空可回放语料”时将其记录为 `QUERY_RECORD_LIMIT_REACHED` 并继续；普通 code 1、伪 sentinel 或空语料仍失败关闭，不能触发确定性重试风暴。
+
 兼容 JAR 对 AgensGraph 和 ArcadeDB 的每个 JDBC `Statement` 同时设置 60 秒 query timeout 与 1,000 行 result cap。row cap 只约束 GDsmith 内部 oracle 的结果物化，不改变 GraphSymPerf 后续的 ordinary-execute runtime 协议；它防止高基数生成查询在 PostgreSQL JDBC `processResults` 中耗尽生成器 JVM heap。JAR manifest 必须同时声明 `jdbc_query_timeout_60s` 与 `jdbc_result_row_cap_1000`，否则 doctor 拒绝运行。
 
 ArcadeDB 的 shard、独立 validation session 和 reducer 使用服务器级 `drop database`/`create database` 重建 `mydb`；这一边界避免对旧图执行 `MATCH (n) DETACH DELETE n` 时的全图扫描与 Java heap 放大。数据库名只接受受限标识符，重建任一步失败都不会继续加载或测量。其他 adapter 未声明 database-level reset 时仍使用 Cypher 清图，再执行各自的 schema reset。

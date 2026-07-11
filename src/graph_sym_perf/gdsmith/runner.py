@@ -21,6 +21,7 @@ from graph_sym_perf.gdsmith.parser import GdsmithParsedLog, parse_gdsmith_log
 _MAX_CAPTURE_ARTIFACT_BYTES = 10 * 1024 * 1024
 _CAPTURE_ARTIFACT_EDGE_BYTES = 2 * 1024 * 1024
 _FATAL_STDERR_RETURNCODE = 1
+_QUERY_RECORD_LIMIT_SENTINEL = "java.lang.RuntimeException: total number reached"
 _FATAL_STDERR_PATTERNS: tuple[tuple[str, str], ...] = (
     ("OutOfMemoryError", "OutOfMemoryError"),
     ("StackOverflowError", "StackOverflowError"),
@@ -62,6 +63,7 @@ class GdsmithRunResult:
     log_path: str | None
     parsed: GdsmithParsedLog
     fatal_stderr_markers: tuple[str, ...] = ()
+    query_record_limit_reached: bool = False
     artifact_budget_exceeded: bool = False
     generation_stalled: bool = False
 
@@ -275,6 +277,7 @@ def run_gdsmith(
             )
 
     fatal_stderr_markers = _detect_fatal_stderr_markers(stderr_path)
+    query_record_limit_reached = _detect_query_record_limit_sentinel(stderr_path)
     returncode = _effective_returncode(process_returncode, fatal_stderr_markers)
 
     log_path = _latest_dbms_log(raw_dir, backend)
@@ -294,6 +297,7 @@ def run_gdsmith(
         log_path=str(log_path) if log_path is not None else None,
         parsed=parsed,
         fatal_stderr_markers=fatal_stderr_markers,
+        query_record_limit_reached=query_record_limit_reached,
         artifact_budget_exceeded=artifact_budget_exceeded,
         generation_stalled=generation_stalled,
     )
@@ -489,6 +493,13 @@ def _detect_fatal_stderr_markers(path: Path) -> tuple[str, ...]:
         if pattern in text and marker not in seen:
             seen.append(marker)
     return tuple(seen)
+
+
+def _detect_query_record_limit_sentinel(path: Path) -> bool:
+    try:
+        return _QUERY_RECORD_LIMIT_SENTINEL in _read_text_excerpt(path)
+    except FileNotFoundError:
+        return False
 
 
 def _read_text_excerpt(path: Path, *, max_bytes: int = 2 * 1024 * 1024) -> str:

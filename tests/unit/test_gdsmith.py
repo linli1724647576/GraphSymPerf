@@ -14,6 +14,7 @@ from graph_sym_perf.gdsmith import runner as gdsmith_runner
 from graph_sym_perf.gdsmith.runner import (
     _compact_large_text_artifact,
     _detect_fatal_stderr_markers,
+    _detect_query_record_limit_sentinel,
     _prune_rotated_dbms_logs,
     _prune_rotated_logs_during_run,
     _redact_sensitive_command_parts,
@@ -308,6 +309,44 @@ def test_run_gdsmith_marks_fatal_stderr_as_failure(tmp_path: Path, monkeypatch) 
     assert result.fatal_stderr_markers == ("OutOfMemoryError",)
 
 
+def test_run_gdsmith_exposes_upstream_query_record_limit_sentinel(tmp_path: Path, monkeypatch) -> None:
+    jar = tmp_path / "GDsmith.jar"
+    jar.write_text("placeholder", encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        kwargs["stderr"].write("java.lang.RuntimeException: total number reached\n")
+        log_dir = Path(kwargs["cwd"]) / "logs" / "neo4j"
+        log_dir.mkdir(parents=True)
+        (log_dir / "database0-cur.log").write_text(
+            "CREATE (n0:L0 {id: 1});\nMATCH (n0:L0) RETURN n0.id;\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(gdsmith_runner.shutil, "which", lambda name: "/usr/bin/java")
+    monkeypatch.setattr(gdsmith_runner.subprocess, "run", fake_run)
+
+    result = gdsmith_runner.run_gdsmith(
+        config=GdsmithConfig(timeout_seconds=1),
+        env={
+            **_gdsmith_artifact_env(jar),
+            "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE": "1",
+        },
+        raw_dir=tmp_path / "raw",
+        backend="neo4j",
+        host="127.0.0.1",
+        port=7687,
+        username="neo4j",
+        password="secret",
+        num_queries=1,
+        seed=1,
+    )
+
+    assert result.process_returncode == 1
+    assert result.returncode == 1
+    assert result.query_record_limit_reached is True
+
+
 def test_gdsmith_database_connection_loss_is_fatal_even_when_upstream_exits_zero(tmp_path: Path) -> None:
     stderr = tmp_path / "gdsmith_stderr.txt"
     stderr.write_text(
@@ -316,6 +355,19 @@ def test_gdsmith_database_connection_loss_is_fatal_even_when_upstream_exits_zero
     )
 
     assert _detect_fatal_stderr_markers(stderr) == ("DatabaseConnectionLost",)
+
+
+def test_gdsmith_query_record_limit_sentinel_is_detected_exactly(tmp_path: Path) -> None:
+    stderr = tmp_path / "gdsmith_stderr.txt"
+    stderr.write_text(
+        "java.lang.RuntimeException: total number reached\n",
+        encoding="utf-8",
+    )
+
+    assert _detect_query_record_limit_sentinel(stderr) is True
+
+    stderr.write_text("java.lang.RuntimeException: query failed\n", encoding="utf-8")
+    assert _detect_query_record_limit_sentinel(stderr) is False
 
 
 def test_compact_large_text_artifact_keeps_head_and_tail(tmp_path: Path) -> None:

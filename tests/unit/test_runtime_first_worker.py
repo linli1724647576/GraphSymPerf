@@ -261,6 +261,101 @@ def test_formal_gdsmith_seam_keeps_partial_stalled_corpus_and_deduplicates_ast(t
     assert generated.generator_metadata["duplicate_ast_records"] == 1
 
 
+def test_formal_gdsmith_seam_accepts_upstream_query_limit_sentinel(tmp_path, monkeypatch) -> None:
+    record = SimpleNamespace(statement="MATCH (n) RETURN n")
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.worker.run_gdsmith",
+        lambda **_kwargs: SimpleNamespace(
+            returncode=1,
+            process_returncode=1,
+            query_record_limit_reached=True,
+            artifact_budget_exceeded=False,
+            generation_stalled=False,
+            parsed=SimpleNamespace(
+                graph_statements=("CREATE (n:Node {id: 1})",),
+                accepted_queries=(record,),
+            ),
+        ),
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={
+            "GRAPHSYMPERF_NEO4J_URI": "bolt://localhost:7687",
+            "GRAPHSYMPERF_NEO4J_USER": "neo4j",
+            "GRAPHSYMPERF_NEO4J_PASSWORD": "secret",
+        },
+    )
+
+    generated = worker._generate_with_gdsmith(
+        ShardTask(TargetSystem.NEO4J, 0, 7, 1, 2, 60, "neo4j"),
+        tmp_path,
+    )
+
+    assert generated.query_texts == (record.statement,)
+    assert generated.generator_metadata["generation_stop_reason"] == "QUERY_RECORD_LIMIT_REACHED"
+    assert generated.generator_metadata["gdsmith_returncode"] == 1
+
+
+def test_formal_gdsmith_seam_rejects_ordinary_nonzero_exit(tmp_path, monkeypatch) -> None:
+    record = SimpleNamespace(statement="MATCH (n) RETURN n")
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.worker.run_gdsmith",
+        lambda **_kwargs: SimpleNamespace(
+            returncode=1,
+            process_returncode=1,
+            query_record_limit_reached=False,
+            artifact_budget_exceeded=False,
+            generation_stalled=False,
+            parsed=SimpleNamespace(
+                graph_statements=("CREATE (n:Node {id: 1})",),
+                accepted_queries=(record,),
+            ),
+        ),
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={
+            "GRAPHSYMPERF_NEO4J_URI": "bolt://localhost:7687",
+            "GRAPHSYMPERF_NEO4J_USER": "neo4j",
+            "GRAPHSYMPERF_NEO4J_PASSWORD": "secret",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="GDsmith failed with code 1"):
+        worker._generate_with_gdsmith(
+            ShardTask(TargetSystem.NEO4J, 0, 7, 1, 2, 60, "neo4j"),
+            tmp_path,
+        )
+
+
+def test_formal_gdsmith_seam_rejects_empty_query_limit_corpus(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.worker.run_gdsmith",
+        lambda **_kwargs: SimpleNamespace(
+            returncode=1,
+            process_returncode=1,
+            query_record_limit_reached=True,
+            artifact_budget_exceeded=False,
+            generation_stalled=False,
+            parsed=SimpleNamespace(graph_statements=(), accepted_queries=()),
+        ),
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={
+            "GRAPHSYMPERF_NEO4J_URI": "bolt://localhost:7687",
+            "GRAPHSYMPERF_NEO4J_USER": "neo4j",
+            "GRAPHSYMPERF_NEO4J_PASSWORD": "secret",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="without a replayable query"):
+        worker._generate_with_gdsmith(
+            ShardTask(TargetSystem.NEO4J, 0, 7, 1, 2, 60, "neo4j"),
+            tmp_path,
+        )
+
+
 def test_generation_query_limit_is_capability_driven() -> None:
     spec = load_experiment_spec("config/experiment.yaml")
 
