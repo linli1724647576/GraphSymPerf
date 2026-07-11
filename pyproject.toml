@@ -51,8 +51,7 @@ db = [
 ]
 
 [project.scripts]
-graph-sym-perf = "graph_sym_perf.cli.__main__:main"
-graphsymperf = "graph_sym_perf.cli.runtime_first:main"
+graphsymperf = "graph_sym_perf.cli.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -18,7 +18,17 @@ from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import ShardTask
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
-from graph_sym_perf.validation.models import candidate_hash_from_content_hashes, canonical_content_hash
+from graph_sym_perf.issues.commands import IssueCommands
+from graph_sym_perf.issues.registry import IssueRegistry, canonical_reduced_pair_hash
+from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
+from graph_sym_perf.runtime.models import EquivalentQueryPair
+from graph_sym_perf.validation.models import (
+    DeveloperStatus,
+    PipelineStage,
+    VersionedIssueRecord,
+    candidate_hash_from_content_hashes,
+    canonical_content_hash,
+)
 
 
 def test_store_deduplicates_content_and_enforces_per_shard_budget(tmp_path) -> None:
@@ -109,8 +119,31 @@ def test_complete_shard_budget_refuses_to_delete_the_shard_root(tmp_path) -> Non
 
 
 def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_chain(tmp_path) -> None:
-    store = ContentAddressedStore(tmp_path / "store", budget_bytes=1024 * 1024)
-    sample = {"order": "AB", "a_ms": 1.0, "b_ms": 4.0}
+    run_dir = tmp_path / "run"
+    store = ContentAddressedStore(
+        run_dir / "shards" / "neo4j-000" / "artifacts",
+        budget_bytes=1024 * 1024,
+    )
+    paired_samples = [
+        {
+            "order": "AB" if index < 10 else "BA",
+            "a_ms": 1.0,
+            "b_ms": 4.0,
+            "a_timeout": False,
+            "b_timeout": False,
+        }
+        for index in range(20)
+    ]
+    control_samples = [
+        {
+            "order": "AB" if index < 10 else "BA",
+            "a_ms": 1.0,
+            "b_ms": 1.0,
+            "a_timeout": False,
+            "b_timeout": False,
+        }
+        for index in range(20)
+    ]
 
     graph_ref = asdict(store.put("graph", b"CREATE ();"))
 
@@ -127,8 +160,8 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
             "parameters": canonical_content_hash({}),
             "graph_snapshot": graph_ref["content_hash"],
             "dbms_fingerprint": canonical_content_hash("c" * 64),
-            "dbms_version": "1" * 64,
-            "resolved_config": "2" * 64,
+            "dbms_version": canonical_content_hash("dbms/1"),
+            "resolved_config": "e" * 64,
             "discovery_slow_query": canonical_content_hash("b"),
             "discovery_ratio": canonical_content_hash(4.0),
             "validation_policy": "3" * 64,
@@ -143,7 +176,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 "query_a": query_a,
                 "query_b": query_b,
                 "parameters": {},
-                "discovery_paired_timing": [sample],
+                "discovery_paired_timing": paired_samples[:5],
                 "graph_snapshot_ref": graph_ref,
                 "graph_snapshot_hash": graph_ref["content_hash"],
                 "dbms_fingerprint": "c" * 64,
@@ -155,18 +188,29 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         )
         return candidate_hash, asdict(store.put_json(f"candidate-{candidate_hash}", record.to_dict()))
 
-    def validation(candidate_hash: str, candidate_ref: dict[str, object], suffix: str) -> ArtifactRecord:
+    def validation(
+        candidate_hash: str,
+        candidate_ref: dict[str, object],
+        suffix: str,
+        query_a: str,
+        query_b: str,
+    ) -> ArtifactRecord:
         session = lambda name, pid: {
             "session_id": f"{suffix}-{name}",
             "process_id": pid,
-            "graph_fingerprint": "a" * 64,
+            "graph_fingerprint": graph_ref["content_hash"],
             "dbms_fingerprint": "c" * 64,
-            "paired_timing": [sample],
+            "query_a_hash": hashlib.sha256(query_a.encode()).hexdigest(),
+            "query_b_hash": hashlib.sha256(query_b.encode()).hexdigest(),
+            "slow_query": "b",
+            "measurement_source": "ordinary_execute",
+            "measurement_protocol": "ordinary-execute-20-pair-v1",
+            "paired_timing": paired_samples,
             "negative_controls": [
-                {"kind": "A/A", "paired_timing": [sample]},
-                {"kind": "B/B", "paired_timing": [sample]},
+                {"kind": "A/A", "paired_timing": control_samples},
+                {"kind": "B/B", "paired_timing": control_samples},
             ],
-            "lifecycle": {"complete": True},
+            "lifecycle": {"complete": True, "connection_id": f"connection-{suffix}-{name}"},
         }
         return ArtifactRecord.seal_validation(
             {
@@ -184,6 +228,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                     "config_hash": "e" * 64,
                 },
                 "dbms_fingerprint": "c" * 64,
+                "validated_ratio": 4.0,
             }
         )
 
@@ -193,13 +238,46 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     query_b = "MATCH (n) WHERE true RETURN n"
     original_candidate_hash, original_candidate_ref = candidate(original_a, original_b)
     reduced_candidate_hash, reduced_candidate_ref = candidate(query_a, query_b)
-    original = validation(original_candidate_hash, original_candidate_ref, "original")
-    final = validation(reduced_candidate_hash, reduced_candidate_ref, "reduced")
+    original = validation(
+        original_candidate_hash,
+        original_candidate_ref,
+        "original",
+        original_a,
+        original_b,
+    )
+    final = validation(
+        reduced_candidate_hash,
+        reduced_candidate_ref,
+        "reduced",
+        query_a,
+        query_b,
+    )
     original_ref = asdict(store.put_json("original-validation", original.to_dict()))
     final_ref = asdict(store.put_json("final-validation", final.to_dict()))
     reduced_hashes = {
         "query_a": hashlib.sha256(query_a.encode()).hexdigest(),
         "query_b": hashlib.sha256(query_b.encode()).hexdigest(),
+    }
+    reduced_pair = EquivalentQueryPair(
+        query_a,
+        query_b,
+        {},
+        graph_ref["content_hash"],
+        "c" * 64,
+    )
+    universe = MinimalityUniverse.recompute(reduced_pair)
+    proof = MinimalityProof.from_results(
+        reduced_pair,
+        tuple(
+            (deletion.canonical_id, "symptom_not_preserved", "9" * 64)
+            for deletion in universe.deletions
+        ),
+    )
+    certificate = {
+        "rule_id": "constant_true_disjunction",
+        "tier": "core",
+        "proof_version": "kleene_or_true_v1",
+        "site_class": "where_boolean",
     }
     reduction_ref = asdict(
         store.put_json(
@@ -208,12 +286,89 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 "candidate_hash": original_candidate_hash,
                 "reduced_candidate_hash": reduced_candidate_hash,
                 "reduced_content_hashes": reduced_hashes,
+                "status": "reduced_valid",
+                "stop_reason": "exhausted_and_validated",
+                "minimality_proof": asdict(proof),
+                "final_evidence": {
+                    "verdict": "pass",
+                    "query_a_hash": reduced_hashes["query_a"],
+                    "query_b_hash": reduced_hashes["query_b"],
+                    "paired_samples": paired_samples + paired_samples,
+                    "median_ratio": 4.0,
+                    "median_delta_ms": 3.0,
+                    "ci_ratio_low": 4.0,
+                    "ci_ratio_high": 4.0,
+                    "direction_consistency": 1.0,
+                    "relative_mad": 0.0,
+                    "reason_codes": [],
+                    "timeout_lower_bound_ratio": None,
+                    "slow_query": "b",
+                    "graph_snapshot_hash": graph_ref["content_hash"],
+                    "dbms_fingerprint": "c" * 64,
+                    "measurement_source": "ordinary_execute",
+                    "measurement_protocol": "ordinary-execute-40-pair-combined-v1",
+                },
+                "validation_policy_hash": "3" * 64,
+                "certificate_hash": canonical_content_hash(certificate),
             },
         )
     )
     reproducer_ref = asdict(store.put("reproducer", b"CREATE ();"))
+    registry_record = {
+        "issue_id": "issue-1",
+        "stage": "submit_ready",
+        "developer_status": "waiting_reply",
+        "dbms": "neo4j",
+        "dbms_version": "dbms/1",
+        "pair_hash": canonical_reduced_pair_hash(query_a, query_b),
+        "direction": "b",
+        "rule_id": "constant_true_disjunction",
+        "detector_version": "runtime-first-v3",
+        "validator_version": "independent-two-session-v1",
+        "reducer_version": "paired-ast-ddmin-v1",
+        "status_evidence_url": None,
+        "rule_version": "kleene_or_true_v1",
+        "discovered_at": "2026-07-11T00:00:00+00:00",
+        "site_class": "where_boolean",
+        "normalized_pattern": query_a,
+        "normalized_predicate": query_b,
+        "reduced_query_a": query_a,
+        "reduced_query_b": query_b,
+        "submitted_at": None,
+    }
+    registry = IssueRegistry()
+    registry.record(
+        VersionedIssueRecord(
+            **{
+                **registry_record,
+                "stage": PipelineStage.SUBMIT_READY,
+                "developer_status": DeveloperStatus.WAITING_REPLY,
+            }
+        )
+    )
+    clearance = registry.duplicate_clearance("issue-1")
+    assert clearance is not None
     issue = ArtifactRecord.seal_issue(
         {
+            "issue_id": "issue-1",
+            "stage": "submit_ready",
+            "reduction_status": "reduced_valid",
+            "certificate": {
+                "rule_id": "constant_true_disjunction",
+                "tier": "core",
+                "proof_version": "kleene_or_true_v1",
+                "site_class": "where_boolean",
+            },
+            "duplicate_clearance": {
+                "issue_id": "issue-1",
+                "possible_duplicate": clearance.possible_duplicate,
+                "cluster_members": clearance.cluster_members,
+                "cluster_version_hash": clearance.cluster_version_hash,
+                "evidence_url": clearance.evidence_url,
+                "registry_signature": clearance.registry_signature,
+            },
+            "validated_ratio": 4.0,
+            "dbms_version": "dbms/1",
             "candidate_hash": original_candidate_hash,
             "reduced_candidate_hash": reduced_candidate_hash,
             "reduced_query_a": query_a,
@@ -227,6 +382,140 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     )
 
     verify_issue_hash_chain(store, issue)
+    issue_body = {key: value for key, value in issue.payload.items() if key != "issue_hash"}
+
+    foreign_dbms_body = json.loads(json.dumps(dict(final.payload)))
+    foreign_dbms_body.pop("validation_hash")
+    foreign_dbms_body["dbms_fingerprint"] = "d" * 64
+    for session in foreign_dbms_body["sessions"]:
+        session["dbms_fingerprint"] = "d" * 64
+    foreign_dbms = ArtifactRecord.seal_validation(foreign_dbms_body)
+    foreign_dbms_ref = asdict(
+        store.put_json("foreign-dbms-validation", foreign_dbms.to_dict())
+    )
+    foreign_dbms_issue = ArtifactRecord.seal_issue(
+        {**issue_body, "final_validation_ref": foreign_dbms_ref}
+    )
+    with pytest.raises(ValueError, match="session identity does not bind the candidate"):
+        verify_issue_hash_chain(store, foreign_dbms_issue)
+
+    reversed_samples = [
+        {**sample, "a_ms": sample["b_ms"], "b_ms": sample["a_ms"]}
+        for sample in paired_samples
+    ]
+    reversed_validation_body = json.loads(json.dumps(dict(final.payload)))
+    reversed_validation_body.pop("validation_hash")
+    for session in reversed_validation_body["sessions"]:
+        session["slow_query"] = "a"
+        session["paired_timing"] = reversed_samples
+    reversed_validation = ArtifactRecord.seal_validation(reversed_validation_body)
+    reversed_validation_ref = asdict(
+        store.put_json("reversed-validation", reversed_validation.to_dict())
+    )
+    reversed_reduction = json.loads(store.read(reduction_ref))
+    reversed_reduction["final_evidence"].update(
+        {
+            "slow_query": "a",
+            "paired_samples": reversed_samples + reversed_samples,
+        }
+    )
+    reversed_reduction_ref = asdict(
+        store.put_json("reversed-reduction", reversed_reduction)
+    )
+    reversed_issue = ArtifactRecord.seal_issue(
+        {
+            **issue_body,
+            "final_validation_ref": reversed_validation_ref,
+            "reduction_ref": reversed_reduction_ref,
+        }
+    )
+    with pytest.raises(ValueError, match="discovery direction"):
+        verify_issue_hash_chain(store, reversed_issue)
+
+    alternate_samples = [
+        {**sample, "b_ms": 5.0}
+        for sample in paired_samples
+    ]
+    alternate_reduction = json.loads(store.read(reduction_ref))
+    alternate_reduction["final_evidence"].update(
+        {
+            "paired_samples": alternate_samples + alternate_samples,
+            "median_ratio": 5.0,
+            "median_delta_ms": 4.0,
+            "ci_ratio_low": 5.0,
+            "ci_ratio_high": 5.0,
+        }
+    )
+    alternate_reduction_ref = asdict(
+        store.put_json("alternate-reduction", alternate_reduction)
+    )
+    alternate_issue = ArtifactRecord.seal_issue(
+        {**issue_body, "reduction_ref": alternate_reduction_ref}
+    )
+    with pytest.raises(ValueError, match="samples do not bind final validation"):
+        verify_issue_hash_chain(store, alternate_issue)
+
+    forged_ratio_issue = ArtifactRecord.seal_issue(
+        {**issue_body, "validated_ratio": 99.0}
+    )
+    with pytest.raises(ValueError, match="validated_ratio does not bind"):
+        verify_issue_hash_chain(store, forged_ratio_issue)
+
+    reduction_payload = json.loads(store.read(reduction_ref))
+    reduction_payload["final_evidence"]["median_ratio"] = 99.0
+    forged_reduction_ref = asdict(
+        store.put_json("forged-reduction", reduction_payload)
+    )
+    forged_evidence = ArtifactRecord.seal_issue(
+        {**issue_body, "reduction_ref": forged_reduction_ref}
+    )
+    with pytest.raises(ValueError, match="does not satisfy promotion"):
+        verify_issue_hash_chain(store, forged_evidence)
+
+    issue_ref = asdict(store.put_json("issue-1", issue.to_dict()))
+    typed_export = {
+        "issue_id": "issue-1",
+        "stage": "submit_ready",
+        "reduction_status": "reduced_valid",
+        "rule_id": "constant_true_disjunction",
+        "validated_ratio": 4.0,
+        "dbms_version": "dbms/1",
+        "reduced_original": query_a,
+        "reduced_transformed": query_b,
+    }
+    export_path = run_dir / "issues" / "submit-ready" / "issue-1.json"
+    export_path.parent.mkdir(parents=True)
+    export_path.write_text(json.dumps(typed_export) + "\n", encoding="utf-8")
+    receipt = {
+        "artifact_store": "shards/neo4j-000/artifacts",
+        "export_path": "issues/submit-ready/issue-1.json",
+        "export_sha256": hashlib.sha256(export_path.read_bytes()).hexdigest(),
+        "issue_id": "issue-1",
+        "issue_ref": issue_ref,
+    }
+    index_path = run_dir / "issues" / "index" / "issue-1.json"
+    index_path.parent.mkdir()
+    index_path.write_text(json.dumps(receipt), encoding="utf-8")
+    (run_dir / "issues" / "registry.jsonl").write_text(
+        json.dumps(registry_record) + "\n",
+        encoding="utf-8",
+    )
+    commit_path = run_dir / "issues" / "commits" / "issue-1.json"
+    commit_path.parent.mkdir()
+    commit_path.write_text(
+        json.dumps(
+            {
+                **receipt,
+                "registry_record_hash": hashlib.sha256(
+                    json.dumps(registry_record, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    exported = IssueCommands().export(issue=index_path, output=tmp_path / "developer.json")
+    assert json.loads(exported.read_text(encoding="utf-8"))["reduction_status"] == "reduced_valid"
+
     forged_body = {key: value for key, value in issue.payload.items() if key != "issue_hash"}
     forged = ArtifactRecord.seal_issue({**forged_body, "final_validation_ref": original_ref})
     with pytest.raises(ValueError, match="reduced candidate"):

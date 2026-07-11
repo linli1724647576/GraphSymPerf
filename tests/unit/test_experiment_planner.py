@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pickle
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -181,3 +182,12 @@ def test_planner_rejects_total_accepted_pair_budget_overflow(tmp_path: Path) -> 
 
     with pytest.raises(ConfigError, match="budget"):
         build_run_plan(spec, repository_root=Path.cwd())
+
+
+def test_resolved_experiment_spec_is_pickle_safe_for_spawned_workers() -> None:
+    spec = load_experiment_spec("config/experiment.yaml")
+
+    restored = pickle.loads(pickle.dumps(spec))
+
+    assert restored == spec
+    assert restored.runtime["screen"]["pairs"] == 5

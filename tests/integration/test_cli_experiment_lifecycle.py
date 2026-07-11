@@ -1,4 +1,4 @@
-from graph_sym_perf.cli.runtime_first import main
+from graph_sym_perf.cli.__main__ import main
 
 
 class _ReadyReport:
@@ -20,24 +20,18 @@ class _RunStatus:
     invalid = 0
 
 
-def test_runtime_first_run_starts_lifecycle_only_after_doctor_passes(monkeypatch, tmp_path, capsys) -> None:
+def test_runtime_first_run_calls_only_the_public_experiment_interface(monkeypatch, tmp_path, capsys) -> None:
     calls = {}
 
-    class _Lifecycle:
-        def __init__(self, output_root) -> None:
-            calls["output_root"] = output_root
-
-        def run(self, spec, worker) -> _LifecycleResult:
-            calls["spec"] = spec
-            calls["worker"] = worker
+    class _Commands:
+        def run(self, *, config, output_root):
+            calls.update(config=config, output_root=output_root)
             return _LifecycleResult()
 
-    monkeypatch.setattr("graph_sym_perf.cli.runtime_first.run_doctor", lambda _config, **_kwargs: _ReadyReport())
-    monkeypatch.setattr("graph_sym_perf.cli.runtime_first.ExperimentLifecycle", _Lifecycle)
-    monkeypatch.setattr("graph_sym_perf.cli.runtime_first.RuntimeFirstShardWorker", lambda spec: object())
+    monkeypatch.setattr("graph_sym_perf.cli.__main__.ExperimentCommands", _Commands)
 
     assert main(["experiment", "run", "--config", "config/experiment.yaml", "--output-root", str(tmp_path)]) == 0
-    assert calls["worker"]
+    assert calls == {"config": "config/experiment.yaml", "output_root": str(tmp_path)}
     assert "formal-run" in capsys.readouterr().out
 
 
@@ -46,19 +40,15 @@ def test_runtime_first_plan_prints_exact_formal_budget(capsys) -> None:
     assert "shards=112" in capsys.readouterr().out
 
 
-def test_runtime_first_resume_calls_durable_lifecycle_instead_of_echoing_success(monkeypatch, tmp_path, capsys) -> None:
+def test_runtime_first_resume_calls_public_durable_interface(monkeypatch, tmp_path, capsys) -> None:
     calls = {}
 
-    class _Lifecycle:
-        def __init__(self, output_root) -> None:
-            calls["output_root"] = output_root
-
-        def resume(self, spec, worker, *, run_id):
-            calls.update(spec=spec, worker=worker, run_id=run_id)
+    class _Commands:
+        def resume(self, *, config, output_root, run_id):
+            calls.update(config=config, output_root=output_root, run_id=run_id)
             return _LifecycleResult()
 
-    monkeypatch.setattr("graph_sym_perf.cli.runtime_first.ExperimentLifecycle", _Lifecycle)
-    monkeypatch.setattr("graph_sym_perf.cli.runtime_first.RuntimeFirstShardWorker", lambda spec: ("worker", spec.name))
+    monkeypatch.setattr("graph_sym_perf.cli.__main__.ExperimentCommands", _Commands)
 
     exit_code = main(
         [
@@ -75,22 +65,25 @@ def test_runtime_first_resume_calls_durable_lifecycle_instead_of_echoing_success
 
     assert exit_code == 0
     assert calls["run_id"] == "resume-me"
-    assert calls["worker"][0] == "worker"
     assert "formal-run" in capsys.readouterr().out
 
 
 def test_runtime_first_status_reads_checkpoint_summary(monkeypatch, tmp_path, capsys) -> None:
-    class _Lifecycle:
-        def __init__(self, _output_root) -> None:
-            return None
-
-        def status(self, run_id):
+    class _Commands:
+        def status(self, *, output_root, run_id):
             assert run_id == "resume-me"
             return _RunStatus()
 
-    monkeypatch.setattr("graph_sym_perf.cli.runtime_first.ExperimentLifecycle", _Lifecycle)
+    monkeypatch.setattr("graph_sym_perf.cli.__main__.ExperimentCommands", _Commands)
 
     assert main(["experiment", "status", "--run-id", "resume-me", "--output-root", str(tmp_path)]) == 0
     output = capsys.readouterr().out
     assert "completed=100" in output
     assert "active=9" in output
+
+
+def test_advanced_commands_are_explicitly_marked(capsys) -> None:
+    assert main(["experiment", "--help"]) == 0
+    output = capsys.readouterr().out
+    assert "advanced" in output
+    assert "doctor" in output and "plan" in output and "status" in output

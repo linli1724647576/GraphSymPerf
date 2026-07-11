@@ -36,6 +36,11 @@ class FrozenMapping(Mapping[Any, Any]):
     def __repr__(self) -> str:
         return f"FrozenMapping({dict(self._items)!r})"
 
+    def __reduce__(self):
+        """Reconstruct through the public constructor under multiprocessing spawn."""
+
+        return (type(self), (dict(self._items),))
+
 
 def freeze_value(value: Any) -> Any:
     if isinstance(value, Mapping):

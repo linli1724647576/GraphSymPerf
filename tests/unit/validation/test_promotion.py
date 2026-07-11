@@ -174,6 +174,7 @@ def _reduction(*, status: ReductionStatus = ReductionStatus.REDUCED_VALID, verdi
         reduced_candidate_hash=final_validation.candidate_hash,
         validation_policy_hash=final_validation.policy_hash,
         certificate_hash=safety_certificate_hash(_certificate()),
+        stop_reason="exhausted_and_validated",
     )
 
 
@@ -319,7 +320,7 @@ def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(tmp_
         "driver_version": "driver-version",
         "container_image_digest": "sha256:" + "f" * 64,
         "cpu_architecture": "arm64",
-        "config_hash": "e" * 64,
+        "config_hash": report.manifest.content_hashes["resolved_config"],
     }
     writer = ArtifactChainWriter(store)
     original_validation = writer.persist_validation(

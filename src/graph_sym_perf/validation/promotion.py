@@ -70,6 +70,7 @@ def _reduction_gate_complete(
     pair_changed = (original_a_hash, original_b_hash) != (reduced_a_hash, reduced_b_hash)
     return (
         reduction.status is ReductionStatus.REDUCED_VALID
+        and reduction.stop_reason == "exhausted_and_validated"
         and reduction.minimality_proof is not None
         and reduction.minimality_proof.verify(reduction.reduced_pair)
         and isinstance(final_validation, IssueValidationReport)

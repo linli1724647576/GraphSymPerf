@@ -116,3 +116,18 @@ def test_lifecycle_resume_rejects_tampered_resolved_manifest(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="immutable manifest"):
         lifecycle.resume(spec, lambda _task: {"accepted_pairs": 0}, run_id=original.run_id)
+
+
+@pytest.mark.parametrize("run_id", ("../escape", "/tmp/escape", "nested/escape", ".."))
+def test_lifecycle_rejects_run_ids_that_escape_the_output_root(tmp_path, run_id) -> None:
+    lifecycle = ExperimentLifecycle(tmp_path)
+    spec = load_experiment_spec("config/experiment.yaml")
+
+    with pytest.raises(ValueError, match="run id"):
+        lifecycle.run(spec, object(), run_id=run_id)
+
+    with pytest.raises(ValueError, match="run id"):
+        lifecycle.resume(spec, object(), run_id=run_id)
+
+    with pytest.raises(ValueError, match="run id"):
+        lifecycle.status(run_id)

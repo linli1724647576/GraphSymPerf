@@ -52,9 +52,9 @@ class ExperimentLifecycle:
         self.hard_timeout_seconds = hard_timeout_seconds
 
     def run(self, spec: ExperimentSpec, worker: Callable[[object], dict], *, run_id: str | None = None) -> LifecycleResult:
-        plan = build_run_plan(spec)
         identifier = run_id or f"{spec.name}-{uuid4().hex[:12]}"
-        run_dir = self.output_root / identifier
+        run_dir = self._run_dir(identifier)
+        plan = build_run_plan(spec)
         if run_dir.exists():
             raise FileExistsError(f"run id already exists: {identifier}")
         run_dir.mkdir(parents=True)
@@ -76,7 +76,7 @@ class ExperimentLifecycle:
         *,
         run_id: str,
     ) -> LifecycleResult:
-        run_dir = self.output_root / run_id
+        run_dir = self._run_dir(run_id)
         if not (run_dir / "resolved_manifest.json").is_file():
             raise FileNotFoundError(f"run has no immutable manifest: {run_id}")
         plan = build_run_plan(spec)
@@ -94,7 +94,7 @@ class ExperimentLifecycle:
         return LifecycleResult(run_id, run_dir, summary)
 
     def status(self, run_id: str) -> RunStatus:
-        run_dir = self.output_root / run_id
+        run_dir = self._run_dir(run_id)
         manifest_path = run_dir / "resolved_manifest.json"
         if not manifest_path.is_file():
             raise FileNotFoundError(f"run has no immutable manifest: {run_id}")
@@ -192,6 +192,19 @@ class ExperimentLifecycle:
             "max_parallel_shards_per_system": int(spec.scheduling["max_parallel_shards_per_system"]),
             "shard_budget_bytes": int(spec.artifacts["shard_budget_mb"]) * 1024 * 1024,
         }
+
+    def _run_dir(self, run_id: str) -> Path:
+        if (
+            not isinstance(run_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id) is None
+            or run_id in {".", ".."}
+        ):
+            raise ValueError("run id must be a safe basename")
+        root = self.output_root.resolve()
+        candidate = (root / run_id).resolve()
+        if candidate.parent != root:
+            raise ValueError("run id escapes the output root")
+        return self.output_root / run_id
 
     @staticmethod
     def _write_summary(identifier: str, run_dir: Path, summary: RunSummary) -> None:

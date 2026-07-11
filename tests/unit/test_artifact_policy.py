@@ -56,18 +56,44 @@ def _candidate_payload() -> dict[str, object]:
 
 
 def _session(session_id: str, process_id: int) -> dict[str, object]:
-    sample = {"order": "AB", "a_ms": 1.0, "b_ms": 4.0}
+    query_a = "MATCH (n) RETURN n"
+    query_b = "MATCH (n) WHERE true RETURN n"
+    paired = [
+        {
+            "order": "AB" if index < 10 else "BA",
+            "a_ms": 1.0,
+            "b_ms": 4.0,
+            "a_timeout": False,
+            "b_timeout": False,
+        }
+        for index in range(20)
+    ]
+    control = [
+        {
+            "order": "AB" if index < 10 else "BA",
+            "a_ms": 1.0,
+            "b_ms": 1.0,
+            "a_timeout": False,
+            "b_timeout": False,
+        }
+        for index in range(20)
+    ]
     return {
         "session_id": session_id,
         "process_id": process_id,
         "graph_fingerprint": "a" * 64,
         "dbms_fingerprint": "c" * 64,
-        "paired_timing": [sample],
+        "query_a_hash": hashlib.sha256(query_a.encode()).hexdigest(),
+        "query_b_hash": hashlib.sha256(query_b.encode()).hexdigest(),
+        "slow_query": "b",
+        "measurement_source": "ordinary_execute",
+        "measurement_protocol": "ordinary-execute-20-pair-v1",
+        "paired_timing": paired,
         "negative_controls": [
-            {"kind": "A/A", "paired_timing": [sample]},
-            {"kind": "B/B", "paired_timing": [sample]},
+            {"kind": "A/A", "paired_timing": control},
+            {"kind": "B/B", "paired_timing": control},
         ],
-        "lifecycle": {"complete": True},
+        "lifecycle": {"complete": True, "connection_id": f"connection-{session_id}"},
     }
 
 
@@ -87,6 +113,7 @@ def _validation_payload() -> dict[str, object]:
             "config_hash": "d" * 64,
         },
         "dbms_fingerprint": "c" * 64,
+        "validated_ratio": 4.0,
     }
 
 
@@ -94,6 +121,25 @@ def _issue_payload() -> dict[str, object]:
     query_a = "MATCH (n) RETURN n"
     query_b = "MATCH (n) WHERE true RETURN n"
     return {
+        "issue_id": "issue-1",
+        "stage": "submit_ready",
+        "reduction_status": "reduced_valid",
+        "certificate": {
+            "rule_id": "constant_true_disjunction",
+            "tier": "core",
+            "proof_version": "kleene_or_true_v1",
+            "site_class": "where_boolean",
+        },
+        "duplicate_clearance": {
+            "issue_id": "issue-1",
+            "possible_duplicate": False,
+            "cluster_members": ["issue-1"],
+            "cluster_version_hash": "a" * 64,
+            "evidence_url": None,
+            "registry_signature": "c" * 64,
+        },
+        "validated_ratio": 4.0,
+        "dbms_version": "dbms/1",
         "candidate_hash": "b" * 64,
         "reduced_candidate_hash": "d" * 64,
         "reduced_query_a": query_a,
@@ -172,6 +218,20 @@ def test_candidate_validation_and_issue_levels_enforce_their_evidence_boundaries
     duplicate_controls["sessions"][0]["negative_controls"][1]["kind"] = "A/A"
     with pytest.raises(ValueError, match="exactly A/A and B/B"):
         ArtifactRecord.seal_validation(duplicate_controls)
+    undersampled = _validation_payload()
+    undersampled["sessions"][0]["paired_timing"] = undersampled["sessions"][0][
+        "paired_timing"
+    ][:1]
+    with pytest.raises(ValueError, match="exactly 20 balanced paired samples"):
+        ArtifactRecord.seal_validation(undersampled)
+    forged_ratio = _validation_payload()
+    forged_ratio["validated_ratio"] = 99.0
+    with pytest.raises(ValueError, match="validated_ratio does not match raw samples"):
+        ArtifactRecord.seal_validation(forged_ratio)
+    forged_direction = _validation_payload()
+    forged_direction["sessions"][0]["slow_query"] = "a"
+    with pytest.raises(ValueError, match="slow_query contradicts raw samples"):
+        ArtifactRecord.seal_validation(forged_direction)
 
 
 def test_artifact_reference_rejects_parent_traversal_inside_relative_path() -> None:

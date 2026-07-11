@@ -419,6 +419,7 @@ class ReductionReport:
     accepted_steps: tuple[ReductionStep, ...]
     rejected_steps: tuple[ReductionStep, ...]
     final_evidence: RuntimeEvidence
+    screen_evidence: RuntimeEvidence | None = None
     minimality_proof: MinimalityProof | None = None
     final_validation: object | None = None
     reduced_candidate_hash: str = ""

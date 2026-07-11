@@ -361,6 +361,102 @@ def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) ->
         candidate_artifact_hashes(tmp_path / "shards" / "neo4j-000", required=True)
 
 
+def test_formal_worker_runs_every_candidate_through_terminal_validation_and_reduction(tmp_path) -> None:
+    observed = []
+
+    class _Pipeline:
+        def process(self, candidate, **context):
+            observed.append((candidate, context))
+            return {
+                "candidate_hash": candidate.candidate_hash,
+                "validation": {"stage": "rejected", "reason_codes": ["ratio_below_threshold"]},
+                "reduction": {"status": "not_applicable", "reason": "validation_not_passed"},
+            }
+
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+        query_texts=("MATCH (n) WHERE n.value = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _RuntimeGapAdapter(),
+        candidate_pipeline=_Pipeline(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+
+    assert len(observed) == 1
+    assert set(result["stage_evidence"]) == {"screening", "validation", "reduction"}
+    attempt = tmp_path / "shards" / "neo4j-000" / "attempt-000"
+    validation = json.loads((attempt / "validation.json").read_text(encoding="utf-8"))
+    reduction = json.loads((attempt / "reduction.json").read_text(encoding="utf-8"))
+    assert validation["candidate_count"] == 1
+    assert validation["terminal_count"] == 1
+    assert reduction["terminal_count"] == 1
+    assert reduction["outcomes"][0]["status"] == "not_applicable"
+
+    class _MustNotRunAgain:
+        def process(self, *_args, **_kwargs):
+            raise AssertionError("resume must reuse the verified terminal candidate outcome")
+
+    resume_attempt = tmp_path / "shards" / "neo4j-000" / "attempt-001"
+    resume_attempt.mkdir()
+    resumed_worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _Adapter(),
+        candidate_pipeline=_MustNotRunAgain(),
+    )
+    resumed_worker.bind_run_dir(tmp_path)
+    resumed_worker.bind_attempt_dir(resume_attempt)
+
+    resumed = resumed_worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+
+    assert resumed["candidate_hashes"] == result["candidate_hashes"]
+    assert (tmp_path / "shards" / "neo4j-000" / "candidate-outcomes").is_dir()
+
+
+def test_resume_does_not_reinterpret_a_durable_non_candidate_as_a_new_candidate(tmp_path) -> None:
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+        query_texts=("MATCH (n) WHERE n.value = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+
+    class _NoCandidatePipeline:
+        def process(self, *_args, **_kwargs):
+            raise AssertionError("a durable non-candidate must never enter validation")
+
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _Adapter(),
+        candidate_pipeline=_NoCandidatePipeline(),
+    )
+    first.bind_run_dir(tmp_path)
+    task = ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60)
+
+    initial = first(task)
+
+    attempt = tmp_path / "shards" / "neo4j-000" / "attempt-001"
+    attempt.mkdir()
+    resumed_worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _RuntimeGapAdapter(),
+        candidate_pipeline=_NoCandidatePipeline(),
+    )
+    resumed_worker.bind_run_dir(tmp_path)
+    resumed_worker.bind_attempt_dir(attempt)
+    resumed = resumed_worker(task)
+
+    assert initial["screened_candidates"] == resumed["screened_candidates"] == 0
+    assert (tmp_path / "shards" / "neo4j-000" / "screened_non_candidates.jsonl").is_file()
+
+
 def test_worker_rejects_shard_when_dbms_fingerprint_is_unavailable(tmp_path) -> None:
     adapter = _FingerprintUnavailableAdapter()
     shard = GeneratedShard(

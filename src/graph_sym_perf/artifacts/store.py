@@ -13,6 +13,11 @@ import fcntl
 
 from graph_sym_perf.artifacts.policy import ArtifactLevel
 from graph_sym_perf.artifacts.schema import ArtifactRecord, ArtifactReference
+from graph_sym_perf.reducer.models import MinimalityAttempt, MinimalityDeletion, MinimalityProof
+from graph_sym_perf.runtime.models import EquivalentQueryPair
+from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci
+from graph_sym_perf.validation.models import canonical_content_hash
+from statistics import median
 
 
 class ArtifactBudgetExceeded(RuntimeError):
@@ -247,6 +252,7 @@ def verify_issue_hash_chain(
     if original.payload.get("stage") != "validation_passed" or final.payload.get("stage") != "validation_passed":
         raise ValueError("issue hash chain requires passed original and reduced validation")
     resolved_candidates = []
+    validation_directions: list[str] = []
     for validation in (original, final):
         candidate = load_artifact_record(store, validation.payload["candidate_ref"])
         if getattr(candidate.level, "value", candidate.level) != "candidate":
@@ -254,16 +260,52 @@ def verify_issue_hash_chain(
         if candidate.payload.get("candidate_hash") != validation.payload.get("candidate_hash"):
             raise ValueError("validation candidate_ref breaks the candidate hash chain")
         resolved_candidates.append(candidate)
+        graph_hash = candidate.payload.get("graph_snapshot_hash")
+        candidate_hashes = candidate.payload.get("content_hashes")
+        sessions = tuple(validation.payload.get("sessions", ()))
+        if not isinstance(candidate_hashes, Mapping) or any(
+            session.get("graph_fingerprint") != graph_hash
+            or session.get("dbms_fingerprint") != candidate.payload.get("dbms_fingerprint")
+            or session.get("query_a_hash") != candidate_hashes.get("query_a")
+            or session.get("query_b_hash") != candidate_hashes.get("query_b")
+            for session in sessions
+        ):
+            raise ValueError("validation session identity does not bind the candidate")
+        environment = validation.payload.get("environment")
+        if (
+            not isinstance(environment, Mapping)
+            or canonical_content_hash(environment.get("dbms_version"))
+            != candidate_hashes.get("dbms_version")
+            or environment.get("config_hash") != candidate_hashes.get("resolved_config")
+        ):
+            raise ValueError("validation environment does not bind the candidate")
+        directions = {session.get("slow_query") for session in sessions}
+        if len(directions) != 1:
+            raise ValueError("validation sessions disagree on runtime direction")
+        validation_direction = str(next(iter(directions)))
+        if validation_direction != candidate.payload.get("discovery_slow_query"):
+            raise ValueError("validation direction does not preserve candidate discovery direction")
+        validation_directions.append(validation_direction)
     if original.payload["candidate_hash"] != payload["candidate_hash"]:
         raise ValueError("original validation does not bind the issue candidate")
     if final.payload["candidate_hash"] != payload["reduced_candidate_hash"]:
         raise ValueError("final validation does not bind the reduced candidate")
     final_hashes = resolved_candidates[1].payload.get("content_hashes")
-    if not isinstance(final_hashes, Mapping) or (
+    original_hashes = resolved_candidates[0].payload.get("content_hashes")
+    if not isinstance(original_hashes, Mapping) or not isinstance(final_hashes, Mapping) or (
         final_hashes.get("query_a") != payload["reduced_content_hashes"]["query_a"]
         or final_hashes.get("query_b") != payload["reduced_content_hashes"]["query_b"]
     ):
         raise ValueError("reduced candidate does not bind the issue query pair")
+    if (
+        (original_hashes.get("query_a"), original_hashes.get("query_b"))
+        == (final_hashes.get("query_a"), final_hashes.get("query_b"))
+        or any(
+            original_hashes.get(name) != final_hashes.get(name)
+            for name in ("graph_snapshot", "dbms_fingerprint", "dbms_version", "resolved_config", "validation_policy", "certificate")
+        )
+    ):
+        raise ValueError("reduction candidate identity does not preserve the sealed environment")
     reduction = json.loads(store.read(payload["reduction_ref"]))
     if not isinstance(reduction, dict) or (
         reduction.get("candidate_hash") != payload["candidate_hash"]
@@ -271,9 +313,137 @@ def verify_issue_hash_chain(
         or reduction.get("reduced_content_hashes") != dict(payload["reduced_content_hashes"])
     ):
         raise ValueError("reduction artifact breaks the issue hash chain")
+    reduction_evidence = reduction.get("final_evidence")
+    if (
+        not isinstance(reduction_evidence, Mapping)
+        or len(validation_directions) != 2
+        or validation_directions[0] != validation_directions[1]
+        or validation_directions[1] != reduction_evidence.get("slow_query")
+    ):
+        raise ValueError("runtime direction is not preserved across validation and reduction")
+    final_samples = [
+        sample
+        for session in final.payload["sessions"]
+        for sample in session["paired_timing"]
+    ]
+    if reduction_evidence.get("paired_samples") != final_samples:
+        raise ValueError("reduction evidence samples do not bind final validation")
+    if payload.get("validated_ratio") != final.payload.get("validated_ratio"):
+        raise ValueError("issue validated_ratio does not bind final validation")
+    _verify_reduction_promotion_evidence(reduction, resolved_candidates[1], payload)
+    for validation in (original, final):
+        environment = validation.payload.get("environment")
+        if not isinstance(environment, Mapping) or environment.get("dbms_version") != payload.get("dbms_version"):
+            raise ValueError("validation DBMS version does not bind the issue artifact")
     store.read(payload["reproducer_ref"])
     if payload.get("explanation_ref") is not None:
         store.read(payload["explanation_ref"])
+
+
+def _verify_reduction_promotion_evidence(
+    reduction: Mapping[str, object],
+    reduced_candidate: ArtifactRecord,
+    issue: Mapping[str, object],
+) -> None:
+    if (
+        reduction.get("status") != "reduced_valid"
+        or reduction.get("stop_reason") != "exhausted_and_validated"
+    ):
+        raise ValueError("reduction artifact is not REDUCED_VALID")
+    content_hashes = reduced_candidate.payload.get("content_hashes")
+    if not isinstance(content_hashes, Mapping) or (
+        reduction.get("validation_policy_hash") != content_hashes.get("validation_policy")
+        or reduction.get("certificate_hash") != content_hashes.get("certificate")
+        or reduction.get("certificate_hash") != canonical_content_hash(issue.get("certificate"))
+    ):
+        raise ValueError("reduction policy/certificate hashes do not bind the reduced candidate")
+    proof_value = reduction.get("minimality_proof")
+    if not isinstance(proof_value, Mapping):
+        raise ValueError("reduction minimality proof is unavailable")
+    try:
+        proof = MinimalityProof(
+            reduced_pair_hash=str(proof_value["reduced_pair_hash"]),
+            protocol=str(proof_value["protocol"]),
+            protocol_version=str(proof_value["protocol_version"]),
+            universe_hash=str(proof_value["universe_hash"]),
+            enumerated_deletions=tuple(
+                MinimalityDeletion(**item) for item in proof_value["enumerated_deletions"]
+            ),
+            attempts=tuple(MinimalityAttempt(**item) for item in proof_value["attempts"]),
+            chain_hash=str(proof_value["chain_hash"]),
+        )
+        pair = EquivalentQueryPair(
+            str(issue["reduced_query_a"]),
+            str(issue["reduced_query_b"]),
+            dict(reduced_candidate.payload.get("parameters", {})),
+            str(reduced_candidate.payload["graph_snapshot_hash"]),
+            str(reduced_candidate.payload["dbms_fingerprint"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("reduction minimality proof cannot be reconstructed") from exc
+    if not proof.verify(pair):
+        raise ValueError("reduction minimality proof does not verify")
+    evidence = reduction.get("final_evidence")
+    if not isinstance(evidence, Mapping):
+        raise ValueError("reduction final runtime evidence is unavailable")
+    reduced_hashes = issue["reduced_content_hashes"]
+    if (
+        evidence.get("query_a_hash") != reduced_hashes["query_a"]
+        or evidence.get("query_b_hash") != reduced_hashes["query_b"]
+        or evidence.get("graph_snapshot_hash")
+        != reduced_candidate.payload.get("graph_snapshot_hash")
+        or evidence.get("dbms_fingerprint")
+        != reduced_candidate.payload.get("dbms_fingerprint")
+    ):
+        raise ValueError("reduction final runtime evidence does not bind the reduced candidate")
+    samples = evidence.get("paired_samples")
+    if (
+        evidence.get("verdict") != "pass"
+        or evidence.get("measurement_source") != "ordinary_execute"
+        or evidence.get("measurement_protocol") != "ordinary-execute-40-pair-combined-v1"
+        or evidence.get("slow_query") not in {"a", "b"}
+        or not isinstance(samples, list | tuple)
+        or len(samples) != 40
+        or sum(sample.get("order") == "AB" for sample in samples) != 20
+        or sum(sample.get("order") == "BA" for sample in samples) != 20
+    ):
+        raise ValueError("reduction final runtime protocol is incomplete")
+    slow_query = evidence["slow_query"]
+    oriented = []
+    for sample in samples:
+        a_ms = sample.get("a_ms")
+        b_ms = sample.get("b_ms")
+        if (
+            not isinstance(a_ms, int | float)
+            or isinstance(a_ms, bool)
+            or not isinstance(b_ms, int | float)
+            or isinstance(b_ms, bool)
+            or a_ms <= 0
+            or b_ms < 0
+            or sample.get("a_timeout", False)
+            or sample.get("b_timeout", False)
+        ):
+            raise ValueError("reduction final runtime sample is invalid")
+        oriented.append((a_ms, b_ms) if slow_query == "b" else (b_ms, a_ms))
+    ratios = [slow / fast for fast, slow in oriented]
+    ratio = float(median(ratios))
+    delta = float(median(slow - fast for fast, slow in oriented))
+    ci = bootstrap_ratio_ci(tuple(oriented))
+    direction_consistency = sum(sample_ratio > 1.0 for sample_ratio in ratios) / len(ratios)
+    if (
+        ratio < 3.0
+        or ci.low < 2.0
+        or delta <= 0
+        or direction_consistency <= 0.5
+        or tuple(evidence.get("reason_codes", ()))
+        or abs(float(evidence.get("median_ratio", 0.0)) - ratio) > 1e-12
+        or abs(float(evidence.get("median_delta_ms", 0.0)) - delta) > 1e-12
+        or abs(float(evidence.get("ci_ratio_low", 0.0)) - ci.low) > 1e-12
+        or abs(float(evidence.get("ci_ratio_high", 0.0)) - ci.high) > 1e-12
+        or abs(float(evidence.get("direction_consistency", 0.0)) - direction_consistency)
+        > 1e-12
+    ):
+        raise ValueError("reduction final runtime evidence does not satisfy promotion")
 
 
 __all__ = [

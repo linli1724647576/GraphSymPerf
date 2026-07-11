@@ -35,7 +35,10 @@ def test_exporter_serializes_only_a_fully_gated_submit_ready_issue(tmp_path) -> 
     assert payload["issue_id"] == issue.issue_id
     assert payload["stage"] == "submit_ready"
     assert payload["reduction_status"] == "reduced_valid"
-    assert payload["validated_ratio"] == 4.0
+    assert payload["validated_ratio"] == issue.reduction.final_validation.validated_ratio
+    assert payload["dbms_version"] == issue.validation.manifest.dbms_version
+    assert payload["reduced_original"] == issue.reduction.reduced_pair.query_a
+    assert payload["reduced_transformed"] == issue.reduction.reduced_pair.query_b
 
 
 def test_exporter_rejects_a_clearance_for_a_different_issue_identity(tmp_path) -> None:

@@ -16,6 +16,7 @@ from graph_sym_perf.core import GdsmithConfig, TargetSystem
 from graph_sym_perf.experiment.planner import build_run_plan
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.gdsmith.runner import check_gdsmith_tooling
+from graph_sym_perf.experiment.provenance import verified_container_image_digest
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class SystemDoctorResult:
     system: str
     required_env_present: bool
     generation_env_present: bool
+    validation_provenance_present: bool
     driver_available: bool
     connectivity: str
     graph_isolation: str
@@ -72,7 +74,13 @@ def run_doctor(
         and plan.source_revision.gdsmith_commit == spec.generation.expected_commit
     )
     ready = gdsmith.ready and source_ready and disk_ready and all(
-        result.required_env_present and result.generation_env_present and result.driver_available and result.connectivity == "ready" and result.graph_isolation for result in results
+        result.required_env_present
+        and result.generation_env_present
+        and result.validation_provenance_present
+        and result.driver_available
+        and result.connectivity == "ready"
+        and result.graph_isolation
+        for result in results
     )
     report = DoctorReport(
         ready,
@@ -93,6 +101,7 @@ def run_doctor(
 def _check_system(target, definition, spec, env: Mapping[str, str]) -> SystemDoctorResult:
     required_env_present = all(env.get(name) for name in definition.required_env)
     generation_env_present = all(env.get(name) for name in definition.generation_required_env)
+    validation_provenance_present = verified_container_image_digest(env, target) is not None
     driver_available = importlib.util.find_spec(_DRIVERS[target]) is not None
     connectivity = "not_attempted"
     if required_env_present and driver_available:
@@ -105,4 +114,12 @@ def _check_system(target, definition, spec, env: Mapping[str, str]) -> SystemDoc
             connectivity = "ready" if connection_ok else "failed"
         finally:
             adapter.close()
-    return SystemDoctorResult(target.value, required_env_present, generation_env_present, driver_available, connectivity, definition.graph_isolation)
+    return SystemDoctorResult(
+        target.value,
+        required_env_present,
+        generation_env_present,
+        validation_provenance_present,
+        driver_available,
+        connectivity,
+        definition.graph_isolation,
+    )

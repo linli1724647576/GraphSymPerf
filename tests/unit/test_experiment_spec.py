@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 import yaml
 
-from graph_sym_perf.cli.runtime_first import main as cli_main
+from graph_sym_perf.cli.__main__ import main as cli_main
 from graph_sym_perf.core import ConfigError, TargetSystem
 from graph_sym_perf.experiment import migrate_legacy_config_to_v2
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -289,7 +289,7 @@ def test_experiment_spec_has_one_explicit_migration_to_legacy_run_config() -> No
     (
         "import graph_sym_perf.config; import graph_sym_perf.experiment",
         "import graph_sym_perf.experiment; import graph_sym_perf.config",
-        "import graph_sym_perf.config; import graph_sym_perf.cli.runtime_first",
+        "import graph_sym_perf.config; import graph_sym_perf.cli.__main__",
     ),
 )
 def test_config_import_order_is_safe_in_a_fresh_interpreter(statement: str) -> None:

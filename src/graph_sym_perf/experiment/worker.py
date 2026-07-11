@@ -24,7 +24,12 @@ from graph_sym_perf.adapters import create_adapter
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.artifacts.policy import ArtifactLevel
 from graph_sym_perf.artifacts.schema import ArtifactRecord
-from graph_sym_perf.artifacts.store import ContentAddressedStore, enforce_shard_budget
+from graph_sym_perf.artifacts.store import (
+    ContentAddressedStore,
+    enforce_shard_budget,
+    load_artifact_record,
+    verify_candidate_record_reference,
+)
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
 from graph_sym_perf.core import GdsmithConfig, QueryTimeoutError, TargetSystem
 from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
@@ -76,6 +81,10 @@ class _AdapterFactory(Protocol):
 
 class _GenerationRunner(Protocol):
     def __call__(self, task: ShardTask, raw_dir: Path) -> GeneratedShard: ...
+
+
+class _CandidatePipeline(Protocol):
+    def process(self, candidate: CandidateBundle, **context: object) -> Mapping[str, object]: ...
 
 
 class WorkerFailure(RuntimeError):
@@ -226,11 +235,13 @@ class RuntimeFirstShardWorker:
         environment: Mapping[str, str] | None = None,
         generation_runner: _GenerationRunner | None = None,
         adapter_factory: _AdapterFactory | None = None,
+        candidate_pipeline: _CandidatePipeline | None = None,
     ) -> None:
         self.spec = spec
         self.environment = dict(os.environ if environment is None else environment)
         self._generation_runner = generation_runner or self._generate_with_gdsmith
         self._adapter_factory = adapter_factory or self._create_adapter
+        self._candidate_pipeline = candidate_pipeline
         self._run_dir: Path | None = None
         self._attempt_dir: Path | None = None
         self._attempt_context: AttemptContext | None = None
@@ -334,6 +345,7 @@ class RuntimeFirstShardWorker:
 
         candidate_hashes: set[str] = set()
         candidates = 0
+        pipeline_outcomes: list[dict[str, object]] = []
         if fingerprint.available and health_epoch.available and acceptance.status is AcceptanceStatus.COMPLETE:
             self._transition_attempt(ShardState.SCREENING)
             measurement_adapter = self._adapter_factory(task)
@@ -357,7 +369,7 @@ class RuntimeFirstShardWorker:
                 )
                 assert measurement_fingerprint.value is not None
                 measurement_proxy.update_dbms_fingerprint(measurement_fingerprint.value)
-                candidate_records = self._screen_pairs(
+                candidate_records, pipeline_outcomes = self._screen_pairs(
                     measurement_proxy,
                     task,
                     accepted,
@@ -365,6 +377,7 @@ class RuntimeFirstShardWorker:
                     graph_snapshot=graph_snapshot,
                     graph_snapshot_ref=asdict(graph_reference),
                     dbms_version=measurement_fingerprint.server_version,
+                    attempt_dir=attempt_dir,
                 )
                 final_fingerprint = _adapter_dbms_fingerprint(measurement_proxy)
                 final_epoch = _adapter_dbms_health_epoch(measurement_proxy)
@@ -387,6 +400,43 @@ class RuntimeFirstShardWorker:
                 candidates = len(candidate_hashes)
             finally:
                 measurement_adapter.close()
+        if self._candidate_pipeline is not None:
+            if len(pipeline_outcomes) != candidates:
+                raise WorkerFailure(
+                    ErrorKind.INFRASTRUCTURE_ERROR,
+                    "not every runtime candidate reached a terminal pipeline outcome",
+                )
+            validation_path = attempt_dir / "validation.json"
+            reduction_path = attempt_dir / "reduction.json"
+            validation_outcomes = [dict(outcome["validation"]) for outcome in pipeline_outcomes]
+            reduction_outcomes = [dict(outcome["reduction"]) for outcome in pipeline_outcomes]
+            if any(
+                outcome.get("stage") not in {"validation_passed", "rejected", "inconclusive", "invalid"}
+                for outcome in validation_outcomes
+            ):
+                raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "candidate validation outcome is not terminal")
+            if any(
+                outcome.get("status")
+                not in {"not_applicable", "reduced_valid", "reduction_partial", "reduction_invalidated"}
+                for outcome in reduction_outcomes
+            ):
+                raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "candidate reduction outcome is not terminal")
+            _atomic_write_json(
+                validation_path,
+                {
+                    "candidate_count": candidates,
+                    "terminal_count": len(validation_outcomes),
+                    "outcomes": validation_outcomes,
+                },
+            )
+            _atomic_write_json(
+                reduction_path,
+                {
+                    "candidate_count": candidates,
+                    "terminal_count": len(reduction_outcomes),
+                    "outcomes": reduction_outcomes,
+                },
+            )
         summary = {
             "target": task.target.value,
             "shard_index": task.shard_index,
@@ -431,6 +481,19 @@ class RuntimeFirstShardWorker:
                 "sha256": hashlib.sha256(screening_path.read_bytes()).hexdigest(),
             }
         }
+        if self._candidate_pipeline is not None:
+            summary["stage_evidence"].update(
+                {
+                    "validation": {
+                        "path": str(validation_path.relative_to(shard_dir)),
+                        "sha256": hashlib.sha256(validation_path.read_bytes()).hexdigest(),
+                    },
+                    "reduction": {
+                        "path": str(reduction_path.relative_to(shard_dir)),
+                        "sha256": hashlib.sha256(reduction_path.read_bytes()).hexdigest(),
+                    },
+                }
+            )
         _atomic_write_json(attempt_dir / "summary.json", summary)
         budget_bytes = int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024
         budget_report = enforce_shard_budget(
@@ -693,7 +756,8 @@ class RuntimeFirstShardWorker:
         graph_snapshot: GraphSnapshot,
         graph_snapshot_ref: Mapping[str, object],
         dbms_version: str | None,
-    ) -> list[dict[str, object]]:
+        attempt_dir: Path,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         policy_config = self.spec.runtime["screen"]
         policy = RuntimePolicy(
             warmups=int(policy_config["warmups"]),
@@ -705,13 +769,38 @@ class RuntimeFirstShardWorker:
         threshold = float(policy_config["ratio"])
         harness = RuntimeHarness()
         candidates: list[dict[str, object]] = []
+        pipeline_outcomes: list[dict[str, object]] = []
+        terminal_by_pair = _terminal_candidate_outcomes_by_pair(
+            artifact_store.root.parent / "candidate-outcomes",
+            store=artifact_store,
+        )
+        noncandidate_path = artifact_store.root.parent / "screened_non_candidates.jsonl"
+        screened_non_candidates = _jsonl_hashes(noncandidate_path, "pair_hash")
         for index, pair in enumerate(pairs):
+            pair_identity = _pair_hash(pair.query_a, pair.query_b)
+            resumed = terminal_by_pair.get(pair_identity)
+            if resumed is not None:
+                resumed_record, resumed_outcome = resumed
+                candidates.append(resumed_record)
+                pipeline_outcomes.append(resumed_outcome)
+                continue
+            if pair_identity in screened_non_candidates:
+                continue
             evidence = harness.measure_discovery(
                 adapter,
                 pair,
                 policy=RuntimePolicy(**{**policy.__dict__, "seed": task.seed + index}),
             )
             if evidence.verdict is not RuntimeVerdict.PASS or evidence.median_ratio is None or evidence.median_ratio < threshold:
+                _append_jsonl(
+                    noncandidate_path,
+                    {
+                        "pair_hash": pair_identity,
+                        "reason_codes": list(evidence.reason_codes),
+                        "status": "not_candidate",
+                    },
+                )
+                screened_non_candidates.add(pair_identity)
                 continue
             if not dbms_version:
                 raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "candidate DBMS version is unavailable")
@@ -733,7 +822,7 @@ class RuntimeFirstShardWorker:
                     payload={
                     "candidate_hash": bundle.candidate_hash,
                     "content_hashes": dict(bundle.content_hashes),
-                    "pair_hash": _pair_hash(pair.query_a, pair.query_b),
+                    "pair_hash": pair_identity,
                     "query_a": pair.query_a,
                     "query_b": pair.query_b,
                     "parameters": dict(pair.parameters),
@@ -754,7 +843,51 @@ class RuntimeFirstShardWorker:
             )
             candidate_record["record_ref"] = asdict(record_ref)
             candidates.append(candidate_record)
-        return candidates
+            if self._candidate_pipeline is not None:
+                outcome_path = artifact_store.root.parent / "candidate-outcomes" / f"{bundle.candidate_hash}.json"
+                if outcome_path.is_file():
+                    outcome = _load_terminal_candidate_outcome(
+                        outcome_path,
+                        store=artifact_store,
+                        candidate_hash=bundle.candidate_hash,
+                        candidate_ref=record_ref,
+                    )
+                else:
+                    outcome = dict(
+                        self._candidate_pipeline.process(
+                            bundle,
+                            task=task,
+                            artifact_store=artifact_store,
+                            candidate_ref=record_ref,
+                            driver_version=dbms_version and getattr(adapter, "dbms_fingerprint")().driver_version,
+                            graph_snapshot_ref=dict(graph_snapshot_ref),
+                            attempt_dir=attempt_dir,
+                        )
+                    )
+                if outcome.get("candidate_hash") != bundle.candidate_hash:
+                    raise WorkerFailure(
+                        ErrorKind.INFRASTRUCTURE_ERROR,
+                        "candidate pipeline outcome is not bound to its candidate",
+                    )
+                validation = outcome.get("validation")
+                reduction = outcome.get("reduction")
+                if not isinstance(validation, Mapping) or not isinstance(reduction, Mapping):
+                    raise WorkerFailure(
+                        ErrorKind.INFRASTRUCTURE_ERROR,
+                        "candidate pipeline did not return terminal validation and reduction outcomes",
+                    )
+                pipeline_outcomes.append(outcome)
+                if not outcome_path.is_file():
+                    outcome_path.parent.mkdir(parents=True, exist_ok=True)
+                    _atomic_write_json(
+                        outcome_path,
+                        {
+                            **outcome,
+                            "candidate_ref": asdict(record_ref),
+                            "pair_hash": pair_identity,
+                        },
+                    )
+        return candidates, pipeline_outcomes
 
     def _create_adapter(self, task: ShardTask) -> Any:
         run_config = migrate_experiment_spec_to_run_config(self.spec, task.target)
@@ -819,6 +952,20 @@ class RuntimeFirstShardWorker:
                     "TIME_BUDGET_EXHAUSTED" if result.returncode == 124 else "PROCESS_COMPLETED"
                 ),
             },
+        )
+
+
+class FormalRuntimeFirstShardWorker(RuntimeFirstShardWorker):
+    """The production worker, with validation and reduction always enabled."""
+
+    def bind_run_dir(self, run_dir: str | Path) -> None:
+        super().bind_run_dir(run_dir)
+        from graph_sym_perf.experiment.candidate_pipeline import ProductionCandidatePipeline
+
+        self._candidate_pipeline = ProductionCandidatePipeline(
+            self.spec,
+            environment=self.environment,
+            run_dir=run_dir,
         )
 
 
@@ -1050,6 +1197,93 @@ def _read_jsonl(path: Path) -> Iterable[dict[str, object]]:
             if not isinstance(value, dict):
                 raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, f"non-object append-only record in {path}")
             yield value
+
+
+def _load_terminal_candidate_outcome(
+    path: Path,
+    *,
+    store: ContentAddressedStore,
+    candidate_hash: str,
+    candidate_ref: object,
+) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict) or value.get("candidate_hash") != candidate_hash:
+            raise ValueError("candidate outcome identity mismatch")
+        stored_ref = value.get("candidate_ref")
+        expected_ref = asdict(candidate_ref) if is_dataclass(candidate_ref) else dict(candidate_ref)
+        if stored_ref != expected_ref:
+            raise ValueError("candidate outcome reference mismatch")
+        record = verify_candidate_record_reference(
+            store,
+            {
+                **load_artifact_record(store, stored_ref).to_dict(),
+                "record_ref": stored_ref,
+            },
+        )
+        if record.payload.get("candidate_hash") != candidate_hash:
+            raise ValueError("candidate outcome breaks the candidate hash chain")
+        validation = value.get("validation")
+        reduction = value.get("reduction")
+        if (
+            not isinstance(validation, dict)
+            or validation.get("stage") not in {"validation_passed", "rejected", "inconclusive", "invalid"}
+            or not isinstance(reduction, dict)
+            or reduction.get("status")
+            not in {"not_applicable", "reduced_valid", "reduction_partial", "reduction_invalidated"}
+        ):
+            raise ValueError("candidate outcome is not terminal")
+        return value
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(
+            ErrorKind.INFRASTRUCTURE_ERROR,
+            f"cannot resume terminal candidate outcome: {type(exc).__name__}",
+        ) from exc
+
+
+def _terminal_candidate_outcomes_by_pair(
+    root: Path,
+    *,
+    store: ContentAddressedStore,
+) -> dict[str, tuple[dict[str, object], dict[str, object]]]:
+    outcomes: dict[str, tuple[dict[str, object], dict[str, object]]] = {}
+    if not root.is_dir():
+        return outcomes
+    for path in sorted(root.glob("*.json")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError("candidate outcome must be an object")
+            candidate_hash = raw.get("candidate_hash")
+            candidate_ref = raw.get("candidate_ref")
+            pair_hash = raw.get("pair_hash")
+            if (
+                not isinstance(candidate_hash, str)
+                or not isinstance(candidate_ref, dict)
+                or not isinstance(pair_hash, str)
+            ):
+                raise ValueError("candidate outcome identity is incomplete")
+            outcome = _load_terminal_candidate_outcome(
+                path,
+                store=store,
+                candidate_hash=candidate_hash,
+                candidate_ref=candidate_ref,
+            )
+            record = {
+                **load_artifact_record(store, candidate_ref).to_dict(),
+                "record_ref": candidate_ref,
+            }
+            if record.get("pair_hash") != pair_hash:
+                raise ValueError("candidate outcome pair hash mismatch")
+            if pair_hash in outcomes:
+                raise ValueError("multiple terminal candidates bind one accepted pair")
+            outcomes[pair_hash] = (record, outcome)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise WorkerFailure(
+                ErrorKind.INFRASTRUCTURE_ERROR,
+                f"cannot index terminal candidate outcomes: {type(exc).__name__}",
+            ) from exc
+    return outcomes
 
 
 def _gdsmith_connection(target: TargetSystem, env: Mapping[str, str]) -> tuple[str, str, int, str, str]:

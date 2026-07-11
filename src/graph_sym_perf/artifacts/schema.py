@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import hashlib
+from statistics import median
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from types import MappingProxyType
@@ -9,6 +10,8 @@ from typing import Mapping
 
 from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.validation.models import canonical_content_hash
+from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci, percentile
+from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,8 @@ class ArtifactRecord:
                 "candidate_hash", "reduced_candidate_hash", "reduced_query_a",
                 "reduced_query_b", "reduced_content_hashes", "reproducer_ref",
                 "original_validation_ref", "final_validation_ref", "reduction_ref", "issue_hash",
+                "stage", "reduction_status", "certificate", "duplicate_clearance",
+                "validated_ratio", "dbms_version",
             }
             allowed = required | {"explanation_ref", "issue_id", "rule_id"}
             _require_fields(normalized, required, level)
@@ -252,6 +257,13 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
     equivalence = payload["equivalence"]
     if not isinstance(equivalence, Mapping) or not {"equivalent", "complete_result", "reason_codes"} <= set(equivalence):
         raise ValueError("validation artifact equivalence evidence is incomplete")
+    if payload["stage"] == "validation_passed" and (
+        equivalence.get("equivalent") is not True
+        or equivalence.get("complete_result") is not True
+        or tuple(equivalence.get("reason_codes", ()))
+        or tuple(payload.get("reason_codes", ()))
+    ):
+        raise ValueError("passed validation requires complete typed equivalence")
     environment = payload["environment"]
     required_environment = {
         "dbms_version", "driver_version", "container_image_digest",
@@ -267,12 +279,17 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
     sessions = payload["sessions"]
     session_ids: set[str] = set()
     process_ids: set[int] = set()
+    connection_ids: set[str] = set()
+    session_directions: list[str] = []
+    combined_samples: list[tuple[float, float]] = []
+    control_deltas: list[float] = []
     for index, session in enumerate(sessions):
         if not isinstance(session, Mapping):
             raise ValueError("validation session must be an object")
         required_session = {
             "session_id", "process_id", "graph_fingerprint", "dbms_fingerprint",
-            "paired_timing", "negative_controls", "lifecycle",
+            "query_a_hash", "query_b_hash", "slow_query", "measurement_source",
+            "measurement_protocol", "paired_timing", "negative_controls", "lifecycle",
         }
         if not required_session <= set(session):
             raise ValueError("validation session evidence is incomplete")
@@ -284,9 +301,31 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
         process_ids.add(process_id)
         _validate_hash(session["graph_fingerprint"], f"sessions[{index}].graph_fingerprint")
         _validate_hash(session["dbms_fingerprint"], f"sessions[{index}].dbms_fingerprint")
+        _validate_hash(session["query_a_hash"], f"sessions[{index}].query_a_hash")
+        _validate_hash(session["query_b_hash"], f"sessions[{index}].query_b_hash")
         if session["dbms_fingerprint"] != payload["dbms_fingerprint"]:
             raise ValueError("validation session DBMS fingerprint mismatch")
+        if (
+            session["slow_query"] not in {"a", "b"}
+            or session["measurement_source"] != "ordinary_execute"
+            or session["measurement_protocol"] != "ordinary-execute-20-pair-v1"
+        ):
+            raise ValueError("validation session runtime identity is invalid")
         _validate_paired_timing(session["paired_timing"], f"sessions[{index}].paired_timing")
+        paired_timing = tuple(session["paired_timing"])
+        if (
+            len(paired_timing) != 20
+            or sum(sample["order"] == "AB" for sample in paired_timing) != 10
+            or sum(sample["order"] == "BA" for sample in paired_timing) != 10
+        ):
+            raise ValueError("validation session requires exactly 20 balanced paired samples")
+        direction_delta = float(median(sample["b_ms"] - sample["a_ms"] for sample in paired_timing))
+        if direction_delta == 0:
+            raise ValueError("validation session has no runtime direction")
+        measured_direction = "b" if direction_delta > 0 else "a"
+        if session["slow_query"] != measured_direction:
+            raise ValueError("validation session slow_query contradicts raw samples")
+        session_directions.append(measured_direction)
         controls = session["negative_controls"]
         if not isinstance(controls, list | tuple) or len(controls) != 2:
             raise ValueError("validation session requires A/A and B/B negative controls")
@@ -297,13 +336,54 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
                 control.get("paired_timing"),
                 f"sessions[{index}].negative_controls[{control_index}].paired_timing",
             )
+            control_samples = tuple(control["paired_timing"])
+            if (
+                len(control_samples) != 20
+                or sum(sample["order"] == "AB" for sample in control_samples) != 10
+                or sum(sample["order"] == "BA" for sample in control_samples) != 10
+            ):
+                raise ValueError("validation negative control requires 20 balanced paired samples")
+            control_deltas.extend(abs(sample["b_ms"] - sample["a_ms"]) for sample in control_samples)
         if {control.get("kind") for control in controls} != {"A/A", "B/B"}:
             raise ValueError("validation negative controls must be exactly A/A and B/B")
         lifecycle = session["lifecycle"]
         if not isinstance(lifecycle, Mapping) or lifecycle.get("complete") is not True:
             raise ValueError("validation session lifecycle is incomplete")
-    if len(session_ids) != 2 or len(process_ids) != 2:
+        connection_id = lifecycle.get("connection_id")
+        if not isinstance(connection_id, str) or not connection_id:
+            raise ValueError("validation session connection identity is missing")
+        connection_ids.add(connection_id)
+    if len(session_ids) != 2 or len(process_ids) != 2 or len(connection_ids) != 2:
         raise ValueError("validation sessions are not independent")
+    if payload["stage"] == "validation_passed":
+        if len(set(session_directions)) != 1:
+            raise ValueError("validation sessions disagree on runtime direction")
+        slow_query = session_directions[0]
+        for session in sessions:
+            for sample in session["paired_timing"]:
+                combined_samples.append(
+                    (sample["a_ms"], sample["b_ms"])
+                    if slow_query == "b"
+                    else (sample["b_ms"], sample["a_ms"])
+                )
+        if len(combined_samples) != 40 or any(fast <= 0 for fast, _slow in combined_samples):
+            raise ValueError("validation combined sample set is incomplete")
+        ratio = float(median(slow / fast for fast, slow in combined_samples))
+        delta = float(median(slow - fast for fast, slow in combined_samples))
+        ci = bootstrap_ratio_ci(tuple(combined_samples))
+        control_p99 = percentile(tuple(control_deltas), 0.99) if control_deltas else 0.0
+        if ratio < 3.0 or ci.low < 2.0 or delta <= max(control_p99, 0.01):
+            raise ValueError("validation raw samples do not satisfy the runtime promotion gate")
+        recorded_ratio = payload.get("validated_ratio")
+        if not isinstance(recorded_ratio, int | float) or abs(float(recorded_ratio) - ratio) > 1e-12:
+            raise ValueError("validation validated_ratio does not match raw samples")
+        recorded_delta = payload.get("validated_delta_ms")
+        if recorded_delta is not None and (
+            not isinstance(recorded_delta, int | float)
+            or isinstance(recorded_delta, bool)
+            or abs(float(recorded_delta) - delta) > 1e-12
+        ):
+            raise ValueError("validation validated_delta_ms does not match raw samples")
 
 
 def _validate_paired_timing(value: object, field: str) -> None:
@@ -316,9 +396,56 @@ def _validate_paired_timing(value: object, field: str) -> None:
             timing = sample.get(key)
             if not isinstance(timing, int | float) or isinstance(timing, bool) or timing < 0:
                 raise ValueError(f"{field} contains an invalid timing")
+        if sample.get("a_timeout", False) is not False or sample.get("b_timeout", False) is not False:
+            raise ValueError(f"{field} contains a timeout sample")
 
 
 def _validate_issue_payload(payload: Mapping[str, object]) -> None:
+    if payload["stage"] != "submit_ready" or payload["reduction_status"] != "reduced_valid":
+        raise ValueError("issue artifact is not at the submit-ready reduced-valid gate")
+    ratio = payload["validated_ratio"]
+    if not isinstance(ratio, int | float) or isinstance(ratio, bool) or ratio < 3.0:
+        raise ValueError("issue artifact validated_ratio is below the promotion gate")
+    if not isinstance(payload["dbms_version"], str) or not payload["dbms_version"].strip():
+        raise ValueError("issue artifact DBMS version is unavailable")
+    certificate = payload["certificate"]
+    if (
+        not isinstance(certificate, Mapping)
+        or set(certificate) != {"rule_id", "tier", "proof_version", "site_class"}
+        or certificate.get("tier") != "core"
+        or any(not isinstance(certificate.get(key), str) or not certificate.get(key) for key in certificate)
+    ):
+        raise ValueError("issue artifact CORE SafetyCertificate is incomplete")
+    try:
+        rule = RuleRegistry.default().get(str(certificate["rule_id"]))
+    except KeyError as exc:
+        raise ValueError("issue artifact certificate references an unknown rule") from exc
+    if (
+        rule.tier is not SafetyTier.CORE
+        or not rule.submit_eligible
+        or certificate["proof_version"] != rule.proof_id
+        or certificate["site_class"] not in rule.site_classes
+        or (payload.get("rule_id") is not None and payload.get("rule_id") != certificate["rule_id"])
+    ):
+        raise ValueError("issue artifact certificate does not match the audited CORE registry")
+    clearance = payload["duplicate_clearance"]
+    required_clearance = {
+        "issue_id", "possible_duplicate", "cluster_members", "cluster_version_hash",
+        "evidence_url", "registry_signature",
+    }
+    if not isinstance(clearance, Mapping) or set(clearance) != required_clearance:
+        raise ValueError("issue artifact duplicate clearance is incomplete")
+    if clearance.get("issue_id") != payload.get("issue_id"):
+        raise ValueError("issue artifact duplicate clearance identity mismatch")
+    if not isinstance(clearance.get("possible_duplicate"), bool):
+        raise ValueError("issue artifact duplicate clearance type is invalid")
+    members = clearance.get("cluster_members")
+    if not isinstance(members, list | tuple) or clearance.get("issue_id") not in members:
+        raise ValueError("issue artifact duplicate cluster is invalid")
+    _validate_hash(clearance.get("cluster_version_hash"), "duplicate_clearance.cluster_version_hash")
+    _validate_hash(clearance.get("registry_signature"), "duplicate_clearance.registry_signature")
+    if clearance.get("possible_duplicate") and not clearance.get("evidence_url"):
+        raise ValueError("possible duplicate issue requires distinctness evidence")
     hashes = payload["reduced_content_hashes"]
     if not isinstance(hashes, Mapping) or set(hashes) != {"query_a", "query_b"}:
         raise ValueError("issue reduced_content_hashes must bind both reduced queries")
