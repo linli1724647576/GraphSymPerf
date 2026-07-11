@@ -20,3 +20,4 @@ def test_gdsmith_neo4j_proxies_use_independent_containers_and_bolt_ports() -> No
     assert ladybug["container_name"] != arcadedb["container_name"]
     assert "7697:7687" in ladybug["ports"]
     assert "7698:7687" in arcadedb["ports"]
+    assert arcadedb["environment"]["NEO4J_AUTH"] == "none"
