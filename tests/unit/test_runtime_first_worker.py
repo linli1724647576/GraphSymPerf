@@ -215,6 +215,59 @@ def test_formal_gdsmith_seam_keeps_partial_timeout_corpus_and_deduplicates_ast(t
     assert generated.generator_metadata["duplicate_ast_records"] == 1
 
 
+@pytest.mark.parametrize(
+    ("target", "environment"),
+    [
+        (
+            TargetSystem.AGENSGRAPH,
+            {
+                "GRAPHSYMPERF_AGENSGRAPH_URI": "postgresql://postgres:secret@127.0.0.1:5432/postgres",
+            },
+        ),
+        (
+            TargetSystem.APACHE_AGE,
+            {
+                "GRAPHSYMPERF_GDSMITH_PROXY_APACHE_AGE_URI": (
+                    "postgresql://postgres:secret@127.0.0.1:5433/postgres"
+                ),
+            },
+        ),
+    ],
+    ids=["agensgraph", "apache-age-proxy"],
+)
+def test_agensgraph_generation_backend_is_constrained_to_single_label(
+    tmp_path,
+    monkeypatch,
+    target,
+    environment,
+) -> None:
+    record = SimpleNamespace(statement="MATCH (n:L0) RETURN n.id")
+
+    def fake_run_gdsmith(**kwargs):
+        assert kwargs["backend"] == "agensgraph"
+        assert kwargs["config"].backend_extra_args == {"agensgraph": ("--label-num", "1")}
+        return SimpleNamespace(
+            returncode=0,
+            parsed=SimpleNamespace(
+                graph_statements=("CREATE (n:L0 {id: 1})",),
+                accepted_queries=(record,),
+            ),
+        )
+
+    monkeypatch.setattr("graph_sym_perf.experiment.worker.run_gdsmith", fake_run_gdsmith)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment=environment,
+    )
+
+    generated = worker._generate_with_gdsmith(
+        ShardTask(target, 0, 7, 1, 2, 60, "agensgraph_proxy" if target is TargetSystem.APACHE_AGE else "agensgraph"),
+        tmp_path,
+    )
+
+    assert generated.query_texts == (record.statement,)
+
+
 def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minimal_records(tmp_path) -> None:
     adapter = _Adapter()
     shard = GeneratedShard(

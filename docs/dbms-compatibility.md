@@ -16,4 +16,6 @@ GDsmith 是唯一生成器，但并不等于所有目标都能作为 GDsmith 原
 
 Apache AGE 的 proxy URI 使用 `GRAPHSYMPERF_GDSMITH_PROXY_APACHE_AGE_URI`，LadybugDB 使用 `GRAPHSYMPERF_GDSMITH_PROXY_LADYBUGDB_URI`。两者使用独立 proxy 实例、端口和图隔离命名，不与 AgensGraph 正式目标共用可破坏状态。proxy 只负责 GDsmith 生成边界，runtime 必须在目标 DBMS 上测量；resolved manifest 记录 `agensgraph_proxy` 或 `neo4j_proxy`，不能声称为目标原生生成覆盖。
 
-AgensGraph 多标签不能退化为“只取第一个 label”；该结构必须被 capability gate 拒绝。Apache AGE/AgensGraph 的 SQL wrapper 只属于 adapter rendering，不进入 query equivalence 或 runtime oracle。
+AgensGraph 及 Apache AGE 代理的 GDsmith 调用固定加入 `--label-num 1`，从生成空间源头约束为单标签；兼容 JAR 仍保留多标签拒绝守卫，不能退化为“只取第一个 label”。GDsmith 默认字符串策略生成的双引号英数/下划线字面量仅在兼容 JAR 执行边界转换为 AgensGraph 单引号字面量；遇到其他双引号 token 必须失败关闭，不尝试处理转义或任意文本。
+
+Apache AGE/AgensGraph 的 SQL wrapper 只属于 adapter rendering，不进入 query equivalence 或 runtime oracle。

@@ -958,6 +958,11 @@ class RuntimeFirstShardWorker:
             result = run_gdsmith(
                 config=GdsmithConfig(
                     expected_source_commit=self.spec.generation.expected_commit,
+                    backend_extra_args=(
+                        {"agensgraph": ("--label-num", "1")}
+                        if backend == "agensgraph"
+                        else {}
+                    ),
                     timeout_seconds=timeout_seconds,
                     max_raw_artifact_bytes=min(
                         100 * 1024 * 1024,

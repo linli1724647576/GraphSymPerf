@@ -68,7 +68,8 @@ def main() -> int:
                 "sha256": sha256,
                 "compatibility_guards": (
                     "reject_multi_label_node_patterns",
-                    "reject_double_quoted_tokens",
+                    "render_safe_double_quoted_literals",
+                    "reject_unsafe_double_quoted_tokens",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ),
@@ -214,7 +215,7 @@ def _patch_agens_connection_source(source: str) -> str:
         """public class AgensGraphConnection extends CypherConnection {
 
     private static final Pattern MULTI_LABEL_NODE = Pattern.compile("(:[A-Za-z_][A-Za-z0-9_]*)(?::[A-Za-z_][A-Za-z0-9_]*)+(?=\\\\s*[\\\\{\\\\)])");
-    private static final Pattern DOUBLE_QUOTED_STRING = Pattern.compile("\\\"((?:\\\\\\\\.|[^\\\"\\\\\\\\])*)\\\"");
+    private static final Pattern SAFE_DOUBLE_QUOTED_LITERAL = Pattern.compile("\\\"([A-Za-z0-9_]*)\\\"");
 
     private Connection connection;""",
     )
@@ -244,15 +245,17 @@ def _patch_agens_connection_source(source: str) -> str:
         if (MULTI_LABEL_NODE.matcher(query).find()) {
             throw new IllegalArgumentException("GRAPHSYMPERF_REJECT_MULTI_LABEL");
         }
-        if (DOUBLE_QUOTED_STRING.matcher(query).find()) {
-            throw new IllegalArgumentException("GRAPHSYMPERF_REJECT_DOUBLE_QUOTED_STRING");
+        String rendered = SAFE_DOUBLE_QUOTED_LITERAL.matcher(query).replaceAll("'$1'");
+        if (rendered.indexOf('"') >= 0) {
+            throw new IllegalArgumentException("GRAPHSYMPERF_REJECT_UNSAFE_DOUBLE_QUOTED_TOKEN");
         }
-        return query;
+        return rendered;
     }""",
     )
     required = (
         "GRAPHSYMPERF_REJECT_MULTI_LABEL",
-        "GRAPHSYMPERF_REJECT_DOUBLE_QUOTED_STRING",
+        "GRAPHSYMPERF_REJECT_UNSAFE_DOUBLE_QUOTED_TOKEN",
+        "SAFE_DOUBLE_QUOTED_LITERAL.matcher(query).replaceAll(\"'$1'\")",
         "stmt.execute(agensCompatible(arg))",
         "stmt.executeQuery(agensCompatible(arg))",
     )

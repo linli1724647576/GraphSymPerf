@@ -16,7 +16,7 @@ def _load_builder_module():
     return module
 
 
-def test_agensgraph_compat_patch_rejects_unsupported_syntax_without_rewriting() -> None:
+def test_agensgraph_compat_patch_renders_only_safe_gdsmith_literals_and_rejects_the_rest() -> None:
     module = _load_builder_module()
     original = """package org.example.gdsmith.agensGraph;
 
@@ -50,12 +50,12 @@ public class AgensGraphConnection extends CypherConnection {
 
     assert "agensCompatible(arg)" in patched
     assert "MULTI_LABEL_NODE" in patched
-    assert "DOUBLE_QUOTED_STRING" in patched
+    assert "SAFE_DOUBLE_QUOTED_LITERAL" in patched
     assert "GRAPHSYMPERF_REJECT_MULTI_LABEL" in patched
-    assert "GRAPHSYMPERF_REJECT_DOUBLE_QUOTED_STRING" in patched
-    assert 'replaceAll("$1")' not in patched
+    assert "GRAPHSYMPERF_REJECT_UNSAFE_DOUBLE_QUOTED_TOKEN" in patched
+    assert ".replaceAll(\"'$1'\")" in patched
     assert "appendReplacement" not in patched
-    assert "return query;" in patched
+    assert "return rendered;" in patched
 
 
 def test_compat_patch_fails_if_connection_execution_anchor_is_missing() -> None:

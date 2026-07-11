@@ -28,7 +28,8 @@ def _gdsmith_artifact_env(jar: Path) -> dict[str, str]:
                 "source_commit": "a" * 40,
                 "compatibility_guards": [
                     "reject_multi_label_node_patterns",
-                    "reject_double_quoted_tokens",
+                    "render_safe_double_quoted_literals",
+                    "reject_unsafe_double_quoted_tokens",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ],
