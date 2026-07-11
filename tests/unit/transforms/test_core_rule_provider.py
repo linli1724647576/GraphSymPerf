@@ -44,3 +44,22 @@ def test_core_provider_quarantines_dynamic_equivalence_mismatch(tmp_path) -> Non
 
     assert proposal.rule_id not in provider.active_rule_ids
     assert provider.quarantine_store.is_quarantined("neo4j", proposal.rule_id, "1")
+
+
+def test_core_provider_falls_back_to_an_applicable_certified_rule_for_the_same_query(tmp_path) -> None:
+    provider = CoreRulePairProvider(
+        ("MATCH (a:A), (b:B) RETURN a, b",),
+        dbms="neo4j",
+        shard_index=0,
+        capability_hash="cap",
+        exploration_floor=1,
+        epoch_size=100,
+        quarantine_path=tmp_path / "quarantine.jsonl",
+    )
+
+    proposal = provider(SeedContext(1, 1, "neo4j", 0))
+
+    assert proposal is not None
+    assert proposal.rule_id == "pattern_order_symmetry"
+    assert proposal.safety_certificate.rule_id == "pattern_order_symmetry"
+    assert provider.not_applicable_counts["constant_true_disjunction"] == 1

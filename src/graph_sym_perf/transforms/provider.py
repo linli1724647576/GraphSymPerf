@@ -91,11 +91,24 @@ class CoreRulePairProvider:
             exploration_floor=self.exploration_floor,
             epoch_size=self.epoch_size,
         ).select(self.dbms, self.shard_index, context.ordinal - 1, snapshot)
-        rule = self.registry.get(selection.rule_id)
         query = self.queries[context.ordinal - 1]
+        rule_ids = (selection.rule_id, *(rule_id for rule_id in active if rule_id != selection.rule_id))
+        for rule_id in rule_ids:
+            rule = self.registry.get(rule_id)
+            proposal = self._proposal_for_rule(query, rule, context)
+            if proposal is not None:
+                return proposal
+            self._not_applicable[rule.rule_id] += 1
+        return None
+
+    def _proposal_for_rule(
+        self,
+        query: str,
+        rule: RuleSpec,
+        context: SeedContext,
+    ) -> PairProposal | None:
         certificates = enumerate_safety_points(query, rule, self.capability_hash)
         if not certificates:
-            self._not_applicable[rule.rule_id] += 1
             return None
         offset = context.ordinal % len(certificates)
         for index in range(len(certificates)):
@@ -111,7 +124,6 @@ class CoreRulePairProvider:
                 certificate,
                 context.seed,
             )
-        self._not_applicable[rule.rule_id] += 1
         return None
 
     def record_accepted(self, rule_id: str, pair_hash: str | None = None) -> None:
