@@ -21,3 +21,5 @@ Apache AGE 的 proxy URI 使用 `GRAPHSYMPERF_GDSMITH_PROXY_APACHE_AGE_URI`，La
 AgensGraph 与 ArcadeDB 的 GDsmith JDBC 连接在兼容 JAR 中对每个 statement 设置 60 秒查询超时；单条不可终止查询不应占满整个 shard 时间预算。外层 120 秒无进展 watchdog 仍作为 JDBC 驱动/服务端未按时取消时的第二道守卫。
 
 Apache AGE/AgensGraph 的 SQL wrapper 只属于 adapter rendering，不进入 query equivalence 或 runtime oracle。
+
+LadybugDB 的 label/property schema 不能在原文件上改变已有属性类型。每个 shard 加载新 GDsmith 图前，adapter 必须关闭连接并删除 `GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH` 指定的专用普通文件，然后从当前 graph snapshot 重建 schema。相对路径、符号链接和目录一律拒绝，避免扩大破坏边界。

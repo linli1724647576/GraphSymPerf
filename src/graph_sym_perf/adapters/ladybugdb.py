@@ -46,6 +46,16 @@ class LadybugDBAdapter(BaseAdapter):
         for query in _ladybugdb_schema_statements():
             self.execute(query, {}, "schema")
 
+    def reset_schema(self) -> None:
+        raw_path = self.env_value("GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH")
+        if not raw_path:
+            raise AdapterError("LadybugDB reset requires GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH")
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute() or path.is_symlink() or (path.exists() and not path.is_file()):
+            raise AdapterError("LadybugDB reset requires an absolute regular database file")
+        self.close()
+        path.unlink(missing_ok=True)
+
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
         graph = parse_gdsmith_replay_graph(statements)
         self._ensure_gdsmith_schema(graph)
