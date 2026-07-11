@@ -206,7 +206,7 @@ def test_arcadedb_gdsmith_rejects_a_database_the_upstream_provider_cannot_select
         )
 
 
-def test_formal_gdsmith_seam_keeps_partial_timeout_corpus_and_deduplicates_ast(tmp_path, monkeypatch) -> None:
+def test_formal_gdsmith_seam_keeps_partial_stalled_corpus_and_deduplicates_ast(tmp_path, monkeypatch) -> None:
     record = SimpleNamespace(statement="MATCH (n) WHERE n.value = 1 RETURN n")
 
     def fake_run_gdsmith(**kwargs):
@@ -214,6 +214,7 @@ def test_formal_gdsmith_seam_keeps_partial_timeout_corpus_and_deduplicates_ast(t
         assert kwargs["seed"] == 7
         return SimpleNamespace(
             returncode=124,
+            generation_stalled=True,
             parsed=SimpleNamespace(
                 graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
                 accepted_queries=(record, record),
@@ -236,7 +237,7 @@ def test_formal_gdsmith_seam_keeps_partial_timeout_corpus_and_deduplicates_ast(t
     )
 
     assert generated.query_texts == (record.statement,)
-    assert generated.generator_metadata["generation_stop_reason"] == "TIME_BUDGET_EXHAUSTED"
+    assert generated.generator_metadata["generation_stop_reason"] == "NO_PROGRESS_TIMEOUT"
     assert generated.generator_metadata["duplicate_ast_records"] == 1
 
 

@@ -304,15 +304,52 @@ def test_bounded_gdsmith_process_is_killed_before_raw_artifacts_fill_the_shard(t
     monkeypatch.setattr(gdsmith_runner, "_terminate_process_group", lambda process: killed.append(process.pid))
 
     with (raw / "stdout").open("w") as stdout, (raw / "stderr").open("w") as stderr:
-        returncode, exceeded = _run_bounded_process(
+        returncode, exceeded, stalled = _run_bounded_process(
             ("java",),
             cwd=raw,
             env={},
             stdout=stdout,
             stderr=stderr,
             timeout=1,
+            stall_timeout=1,
             max_raw_artifact_bytes=100,
         )
 
-    assert (returncode, exceeded) == (125, True)
+    assert (returncode, exceeded, stalled) == (125, True, False)
     assert killed == [999_999]
+
+
+def test_bounded_gdsmith_process_returns_partial_timeout_after_no_artifact_progress(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+
+    class FakeProcess:
+        pid = 999_998
+
+        def poll(self):
+            return None
+
+    ticks = iter((0.0, 0.0, 2.0))
+    killed = []
+    monkeypatch.setattr(gdsmith_runner.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(gdsmith_runner.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(gdsmith_runner.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gdsmith_runner, "_terminate_process_group", lambda process: killed.append(process.pid))
+
+    with (raw / "stdout").open("w") as stdout, (raw / "stderr").open("w") as stderr:
+        returncode, exceeded, stalled = _run_bounded_process(
+            ("java",),
+            cwd=raw,
+            env={},
+            stdout=stdout,
+            stderr=stderr,
+            timeout=10,
+            stall_timeout=1,
+            max_raw_artifact_bytes=100,
+        )
+
+    assert (returncode, exceeded, stalled) == (124, False, True)
+    assert killed == [999_998]

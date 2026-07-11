@@ -1004,7 +1004,11 @@ class RuntimeFirstShardWorker:
                 "gdsmith_returncode": result.returncode,
                 "duplicate_ast_records": len(corpus.duplicate_ast_hashes),
                 "generation_stop_reason": (
-                    "TIME_BUDGET_EXHAUSTED" if result.returncode == 124 else "PROCESS_COMPLETED"
+                    "NO_PROGRESS_TIMEOUT"
+                    if result.returncode == 124 and result.generation_stalled
+                    else "TIME_BUDGET_EXHAUSTED"
+                    if result.returncode == 124
+                    else "PROCESS_COMPLETED"
                 ),
             },
         )

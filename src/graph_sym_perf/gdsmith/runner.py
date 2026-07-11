@@ -62,6 +62,7 @@ class GdsmithRunResult:
     parsed: GdsmithParsedLog
     fatal_stderr_markers: tuple[str, ...] = ()
     artifact_budget_exceeded: bool = False
+    generation_stalled: bool = False
 
 
 def check_gdsmith_tooling(config: GdsmithConfig, env: Mapping[str, str]) -> GdsmithToolStatus:
@@ -257,14 +258,16 @@ def run_gdsmith(
             except subprocess.TimeoutExpired:
                 process_returncode = 124
             artifact_budget_exceeded = False
+            generation_stalled = False
         else:
-            process_returncode, artifact_budget_exceeded = _run_bounded_process(
+            process_returncode, artifact_budget_exceeded, generation_stalled = _run_bounded_process(
                 command,
                 cwd=raw_dir,
                 env=dict(env),
                 stdout=stdout_file,
                 stderr=stderr_file,
                 timeout=config.timeout_seconds + 15.0,
+                stall_timeout=config.stall_timeout_seconds,
                 max_raw_artifact_bytes=config.max_raw_artifact_bytes,
             )
 
@@ -289,6 +292,7 @@ def run_gdsmith(
         parsed=parsed,
         fatal_stderr_markers=fatal_stderr_markers,
         artifact_budget_exceeded=artifact_budget_exceeded,
+        generation_stalled=generation_stalled,
     )
 
 
@@ -300,10 +304,13 @@ def _run_bounded_process(
     stdout,
     stderr,
     timeout: float,
+    stall_timeout: float,
     max_raw_artifact_bytes: int,
-) -> tuple[int, bool]:
+) -> tuple[int, bool, bool]:
     if max_raw_artifact_bytes <= 0:
         raise ValueError("GDsmith raw artifact budget must be positive")
+    if stall_timeout <= 0:
+        raise ValueError("GDsmith stall timeout must be positive")
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -314,16 +321,26 @@ def _run_bounded_process(
         start_new_session=True,
     )
     deadline = time.monotonic() + timeout
+    last_activity = time.monotonic()
+    last_size = _raw_directory_size(cwd)
     while True:
+        now = time.monotonic()
         returncode = process.poll()
         if returncode is not None:
-            return int(returncode), False
-        if _raw_directory_size(cwd) > max_raw_artifact_bytes:
+            return int(returncode), False, False
+        current_size = _raw_directory_size(cwd)
+        if current_size != last_size:
+            last_size = current_size
+            last_activity = now
+        if current_size > max_raw_artifact_bytes:
             _terminate_process_group(process)
-            return 125, True
-        if time.monotonic() >= deadline:
+            return 125, True, False
+        if now >= deadline:
             _terminate_process_group(process)
-            return 124, False
+            return 124, False, False
+        if now - last_activity >= stall_timeout:
+            _terminate_process_group(process)
+            return 124, False, True
         time.sleep(0.1)
 
 
