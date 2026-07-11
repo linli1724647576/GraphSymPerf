@@ -1,10 +1,14 @@
 import os
 import hashlib
 import copy
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
+from graph_sym_perf.artifacts.chain import ArtifactChainWriter
+from graph_sym_perf.artifacts.policy import ArtifactLevel
+from graph_sym_perf.artifacts.schema import ArtifactRecord
+from graph_sym_perf.artifacts.store import ContentAddressedStore, load_artifact_record
 from graph_sym_perf.reducer.models import (
     MinimalityProof,
     MinimalityUniverse,
@@ -43,7 +47,7 @@ def _original_pair() -> EquivalentQueryPair:
         "MATCH (n) WHERE true AND n.id >= 0 RETURN n.id ORDER BY n.id",
         {},
         snapshot.content_hash,
-        "dbms",
+        "c" * 64,
     )
 
 
@@ -54,7 +58,7 @@ def _reduced_pair() -> EquivalentQueryPair:
         "MATCH (n) WHERE true RETURN n.id ORDER BY n.id",
         {},
         snapshot.content_hash,
-        "dbms",
+        "c" * 64,
     )
 
 
@@ -84,7 +88,7 @@ def _evidence(
         (),
         slow_query=slow_query,
         graph_snapshot_hash=pair.graph_snapshot_hash,
-        dbms_fingerprint="dbms",
+        dbms_fingerprint=pair.dbms_fingerprint,
         measurement_source="ordinary_execute",
         measurement_protocol="ordinary-execute-20-pair-v1",
     )
@@ -111,7 +115,7 @@ def _report(
             f"session-{index}",
             os.getpid() + index + 100,
             pair.graph_snapshot_hash,
-            "dbms",
+            pair.dbms_fingerprint,
             _evidence(pair=pair),
             (_control(), _control()),
             lifecycle=_lifecycle(index),
@@ -270,6 +274,80 @@ def test_only_validation_passed_reduced_core_certificate_becomes_submit_ready() 
     assert issue.developer_status is DeveloperStatus.WAITING_REPLY
     assert issue.reduction.status is ReductionStatus.REDUCED_VALID
     assert issue.issue_id == _expected_issue_id(report, reduction)
+
+
+def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(tmp_path) -> None:
+    report = _report()
+    reduction = _reduction()
+    issue = promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=_duplicate_clearance(),
+    )
+    assert issue is not None and reduction.final_validation is not None
+    store = ContentAddressedStore(tmp_path / "artifacts", budget_bytes=1024 * 1024)
+
+    def candidate_reference(validation_report: IssueValidationReport):
+        manifest = validation_report.manifest
+        graph_payload = "\n".join(manifest.graph_snapshot.statements).encode("utf-8")
+        graph_ref = store.put("graph", graph_payload)
+        candidate = ArtifactRecord(
+            level=ArtifactLevel.CANDIDATE,
+            payload={
+                "candidate_hash": validation_report.candidate_hash,
+                "content_hashes": dict(manifest.content_hashes),
+                "query_a": manifest.pair.query_a,
+                "query_b": manifest.pair.query_b,
+                "parameters": dict(manifest.pair.parameters),
+                "discovery_paired_timing": tuple(
+                    asdict(sample) for sample in validation_report.sessions[0].evidence.paired_samples[:5]
+                ),
+                "graph_snapshot_ref": asdict(graph_ref),
+                "graph_snapshot_hash": manifest.graph_snapshot.content_hash,
+                "dbms_fingerprint": manifest.pair.dbms_fingerprint,
+                "rule_id": manifest.certificate.rule_id,
+                "safety_certificate": asdict(manifest.certificate),
+                "discovery_median_ratio": manifest.discovery_ratio,
+                "discovery_slow_query": manifest.discovery_slow_query,
+            },
+        )
+        return store.put_json("candidate", candidate.to_dict())
+
+    environment = {
+        "dbms_version": "dbms-version",
+        "driver_version": "driver-version",
+        "container_image_digest": "sha256:" + "f" * 64,
+        "cpu_architecture": "arm64",
+        "config_hash": "e" * 64,
+    }
+    writer = ArtifactChainWriter(store)
+    original_validation = writer.persist_validation(
+        report,
+        candidate_ref=candidate_reference(report),
+        environment=environment,
+    )
+    with pytest.raises(ValueError, match="candidate artifact"):
+        writer.persist_validation(
+            report,
+            candidate_ref=original_validation.reference,
+            environment=environment,
+        )
+    final_validation = writer.persist_validation(
+        reduction.final_validation,
+        candidate_ref=candidate_reference(reduction.final_validation),
+        environment=environment,
+    )
+    reproducer = store.put("reproducer", b"CREATE (n:Person {id: 1})")
+
+    stored_issue = writer.persist_issue(
+        issue,
+        original_validation_ref=original_validation.reference,
+        final_validation_ref=final_validation.reference,
+        reproducer_ref=reproducer,
+    )
+
+    assert load_artifact_record(store, stored_issue.reference).payload["issue_hash"] == stored_issue.record.payload["issue_hash"]
 
 
 def test_unchanged_pair_cannot_promote_as_reduced_valid() -> None:

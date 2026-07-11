@@ -13,7 +13,7 @@ import os
 import re
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
@@ -22,6 +22,9 @@ from urllib.parse import unquote, urlparse
 
 from graph_sym_perf.adapters import create_adapter
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
+from graph_sym_perf.artifacts.policy import ArtifactLevel
+from graph_sym_perf.artifacts.schema import ArtifactRecord
+from graph_sym_perf.artifacts.store import ContentAddressedStore, enforce_shard_budget
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
 from graph_sym_perf.core import GdsmithConfig, QueryTimeoutError, TargetSystem
 from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
@@ -40,6 +43,13 @@ from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, RuntimeVerdict
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
 from graph_sym_perf.transforms.provider import CoreRulePairProvider
+from graph_sym_perf.transforms.rule_models import RuleRegistry
+from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
+from graph_sym_perf.validation.models import (
+    CandidateBundle,
+    SafetyCertificate as ValidationSafetyCertificate,
+    ValidationPolicy,
+)
 from graph_sym_perf.workload.acceptance import AcceptedPairBuilder
 from graph_sym_perf.workload.models import (
     AcceptanceStatus,
@@ -270,6 +280,18 @@ class RuntimeFirstShardWorker:
         timeout: float,
         shard_deadline: float,
     ) -> dict[str, object]:
+        artifact_store = ContentAddressedStore(
+            shard_dir / "artifacts",
+            budget_bytes=int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024,
+        )
+        graph_reference = artifact_store.put(
+            "graph_snapshot.cypher",
+            _canonical_graph_payload(generated.graph_statements),
+            media_type="text/plain; charset=utf-8",
+        )
+        graph_snapshot = GraphSnapshot.from_statements(generated.graph_statements)
+        if graph_snapshot.content_hash != graph_hash or graph_reference.content_hash != graph_hash:
+            raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "graph snapshot canonical hash mismatch")
         load_adapter = self._adapter_factory(task)
         load_proxy = AdapterQueryProxy(
             load_adapter,
@@ -335,7 +357,15 @@ class RuntimeFirstShardWorker:
                 )
                 assert measurement_fingerprint.value is not None
                 measurement_proxy.update_dbms_fingerprint(measurement_fingerprint.value)
-                candidate_records = self._screen_pairs(measurement_proxy, task, accepted)
+                candidate_records = self._screen_pairs(
+                    measurement_proxy,
+                    task,
+                    accepted,
+                    artifact_store=artifact_store,
+                    graph_snapshot=graph_snapshot,
+                    graph_snapshot_ref=asdict(graph_reference),
+                    dbms_version=measurement_fingerprint.server_version,
+                )
                 final_fingerprint = _adapter_dbms_fingerprint(measurement_proxy)
                 final_epoch = _adapter_dbms_health_epoch(measurement_proxy)
                 self._require_same_health_identity(
@@ -346,13 +376,13 @@ class RuntimeFirstShardWorker:
                     attempt_dir,
                 )
                 candidate_path = shard_dir / "candidates.jsonl"
-                existing_candidates = _jsonl_hashes(candidate_path, "pair_hash")
+                existing_candidates = _jsonl_hashes(candidate_path, "candidate_hash")
                 for record in candidate_records:
-                    pair_hash = str(record["pair_hash"])
-                    if pair_hash in existing_candidates:
+                    candidate_hash = str(record["candidate_hash"])
+                    if candidate_hash in existing_candidates:
                         continue
                     _append_jsonl(candidate_path, record)
-                    existing_candidates.add(pair_hash)
+                    existing_candidates.add(candidate_hash)
                 candidate_hashes = existing_candidates
                 candidates = len(candidate_hashes)
             finally:
@@ -371,6 +401,8 @@ class RuntimeFirstShardWorker:
             "candidate_hashes": sorted(candidate_hashes),
             "reject_reasons": dict(sorted(rejects.items())),
             "rule_stats": rule_stats,
+            "graph_snapshot_ref": asdict(graph_reference),
+            "artifact_used_bytes": artifact_store.used_bytes,
             "dbms_fingerprint": {
                 "available": fingerprint.available,
                 "value": fingerprint.value,
@@ -399,6 +431,19 @@ class RuntimeFirstShardWorker:
                 "sha256": hashlib.sha256(screening_path.read_bytes()).hexdigest(),
             }
         }
+        _atomic_write_json(attempt_dir / "summary.json", summary)
+        budget_bytes = int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024
+        budget_report = enforce_shard_budget(
+            shard_dir,
+            budget_bytes=budget_bytes,
+            nonessential_paths=tuple(sorted(shard_dir.glob("attempt-*/gdsmith_raw"))),
+            reserve_bytes=min(1024 * 1024, budget_bytes // 100),
+        )
+        if budget_report.warnings:
+            for warning in budget_report.warnings:
+                _append_jsonl(shard_dir / "artifact_warnings.jsonl", {"warning": warning})
+        summary["shard_artifact_bytes"] = budget_report.used_bytes
+        summary["artifact_warnings"] = budget_report.warnings
         _atomic_write_json(attempt_dir / "summary.json", summary)
         return summary
 
@@ -483,12 +528,14 @@ class RuntimeFirstShardWorker:
         default_timeout = self.spec.systems[task.target].default_timeout_seconds
         acceptance_deadline = time.monotonic() + max_seconds
         records_path = shard_dir / "accepted_pairs.jsonl"
-        _ensure_jsonl(records_path)
-        seen = _accepted_pair_hashes(
-            records_path,
+        _bind_accepted_identity(
+            shard_dir / "accepted_identity.json",
+            records_path=records_path,
             graph_snapshot_hash=graph_snapshot_hash,
             dbms_fingerprint=dbms_fingerprint,
         )
+        _ensure_jsonl(records_path)
+        seen = _accepted_pair_hashes(records_path)
         seen_source_asts = _accepted_source_ast_hashes(records_path)
         materialized: set[str] = set()
 
@@ -600,19 +647,16 @@ class RuntimeFirstShardWorker:
             materialized.add(pair_hash)
             _append_jsonl(
                 records_path,
-                {
-                    "pair_hash": pair_hash,
-                    "source_ast_hash": source_ast_hash,
-                    "query_a_ast_hash": portable_ast_hash(base),
-                    "query_b_ast_hash": portable_ast_hash(transformed),
-                    "query_a_hash": _query_hash(base),
-                    "query_b_hash": _query_hash(transformed),
-                    "graph_snapshot_hash": graph_snapshot_hash,
-                    "dbms_fingerprint": dbms_fingerprint,
-                    "rule_id": proposal.rule_id,
-                    "safety_certificate": _certificate_payload(proposal.safety_certificate),
-                    "equivalence": "complete_typed_equivalent",
-                },
+                ArtifactRecord(
+                    level=ArtifactLevel.MINIMAL,
+                    payload={
+                        "pair_hash": pair_hash,
+                        "query_hash": source_ast_hash,
+                        "rule_id": proposal.rule_id,
+                        "site": proposal.safety_certificate.ast_path,
+                        "equivalence": "complete_typed_equivalent",
+                    },
+                ).to_dict(),
             )
             return PairValidation(
                 True,
@@ -644,6 +688,11 @@ class RuntimeFirstShardWorker:
         adapter: Any,
         task: ShardTask,
         pairs: list[EquivalentQueryPair],
+        *,
+        artifact_store: ContentAddressedStore,
+        graph_snapshot: GraphSnapshot,
+        graph_snapshot_ref: Mapping[str, object],
+        dbms_version: str | None,
     ) -> list[dict[str, object]]:
         policy_config = self.spec.runtime["screen"]
         policy = RuntimePolicy(
@@ -664,22 +713,47 @@ class RuntimeFirstShardWorker:
             )
             if evidence.verdict is not RuntimeVerdict.PASS or evidence.median_ratio is None or evidence.median_ratio < threshold:
                 continue
-            candidates.append(
-                {
+            if not dbms_version:
+                raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "candidate DBMS version is unavailable")
+            certificate = _validation_certificate(pair)
+            bundle = CandidateBundle.create(
+                pair,
+                graph_snapshot=graph_snapshot,
+                dbms_version=dbms_version,
+                resolved_config=_candidate_resolved_config(self.spec, task),
+                discovery_slow_query=str(evidence.slow_query),
+                discovery_ratio=evidence.median_ratio,
+                certificate=certificate,
+                validation_policy=_candidate_validation_policy(self.spec, task),
+            )
+            if bundle.verify_integrity():
+                raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "candidate content hash binding failed")
+            candidate_record = ArtifactRecord(
+                    level=ArtifactLevel.CANDIDATE,
+                    payload={
+                    "candidate_hash": bundle.candidate_hash,
+                    "content_hashes": dict(bundle.content_hashes),
                     "pair_hash": _pair_hash(pair.query_a, pair.query_b),
                     "query_a": pair.query_a,
                     "query_b": pair.query_b,
                     "parameters": dict(pair.parameters),
                     "rule_id": pair.rule_id,
-                    "safety_certificate": _certificate_payload(pair.safety_certificate),
+                    "safety_certificate": asdict(certificate),
                     "graph_snapshot_hash": pair.graph_snapshot_hash,
+                    "graph_snapshot_ref": dict(graph_snapshot_ref),
                     "dbms_fingerprint": pair.dbms_fingerprint,
                     "discovery_median_ratio": evidence.median_ratio,
                     "discovery_median_delta_ms": evidence.median_delta_ms,
                     "discovery_slow_query": evidence.slow_query,
-                    "runtime_protocol": "execute-only-screen-v3",
-                }
+                    "discovery_paired_timing": tuple(asdict(sample) for sample in evidence.paired_samples),
+                    },
+                ).to_dict()
+            record_ref = artifact_store.put_json(
+                f"candidate-{bundle.candidate_hash}.json",
+                candidate_record,
             )
+            candidate_record["record_ref"] = asdict(record_ref)
+            candidates.append(candidate_record)
         return candidates
 
     def _create_adapter(self, task: ShardTask) -> Any:
@@ -701,7 +775,13 @@ class RuntimeFirstShardWorker:
             # auditable partial corpus instead of a killed worker process.
             timeout_seconds = max(1.0, min(float(task.max_runtime_seconds) - 300.0, 6 * 3600.0))
             result = run_gdsmith(
-                config=GdsmithConfig(timeout_seconds=timeout_seconds),
+                config=GdsmithConfig(
+                    timeout_seconds=timeout_seconds,
+                    max_raw_artifact_bytes=min(
+                        100 * 1024 * 1024,
+                        int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024 // 4,
+                    ),
+                ),
                 env=self.environment,
                 raw_dir=raw_dir,
                 backend=backend,
@@ -714,7 +794,8 @@ class RuntimeFirstShardWorker:
             )
             result_holder["result"] = result
             if result.returncode not in {0, 124}:
-                raise RuntimeError(f"GDsmith failed with code {result.returncode}")
+                reason = "raw artifact budget exceeded" if result.artifact_budget_exceeded else "process failure"
+                raise RuntimeError(f"GDsmith failed with code {result.returncode}: {reason}")
             if result.returncode == 124 and not result.parsed.accepted_queries:
                 raise RuntimeError("GDsmith exhausted its time budget without a replayable query")
             return tuple(record.statement for record in result.parsed.accepted_queries)
@@ -775,6 +856,70 @@ def _certificate_payload(certificate: object | None) -> dict[str, object] | None
     return asdict(certificate)
 
 
+def _validation_certificate(pair: EquivalentQueryPair) -> ValidationSafetyCertificate:
+    if not pair.rule_id or pair.safety_certificate is None:
+        raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "screen candidate lacks a safety certificate")
+    rule = RuleRegistry.default().get(pair.rule_id)
+    proof_id = getattr(pair.safety_certificate, "proof_id", None)
+    ast_path = str(getattr(pair.safety_certificate, "ast_path", ""))
+    if proof_id != rule.proof_id or not ast_path:
+        raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "screen candidate certificate does not match rule registry")
+    site_class = next((site for site in rule.site_classes if _site_matches_path(site, ast_path)), None)
+    if site_class is None and len(rule.site_classes) == 1:
+        site_class = rule.site_classes[0]
+    if site_class is None:
+        raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "screen candidate site class is ambiguous")
+    return ValidationSafetyCertificate(
+        rule_id=rule.rule_id,
+        tier=rule.tier.value,
+        proof_version=rule.proof_id,
+        site_class=site_class,
+    )
+
+
+def _site_matches_path(site_class: str, ast_path: str) -> bool:
+    markers = {
+        "where_boolean": ".where",
+        "match_pattern_component": ".pattern.components[",
+        "bound_variable": ".variables[",
+        "mandatory_match_clause": ".mandatory_match",
+    }
+    marker = markers.get(site_class)
+    return bool(marker and marker in ast_path)
+
+
+def _candidate_resolved_config(spec: ExperimentSpec, task: ShardTask) -> dict[str, object]:
+    system = spec.systems[task.target]
+    return {
+        "experiment_schema_version": spec.schema_version,
+        "target": task.target.value,
+        "shard_index": task.shard_index,
+        "runtime": dict(spec.runtime),
+        "validation": dict(spec.validation),
+        "rules_schema_sha256": spec.rules_schema_sha256,
+        "system": {
+            "capabilities": system.capabilities,
+            "dialect": system.dialect,
+            "graph_isolation": system.graph_isolation,
+            "default_timeout_seconds": system.default_timeout_seconds,
+        },
+    }
+
+
+def _candidate_validation_policy(spec: ExperimentSpec, task: ShardTask) -> ValidationPolicy:
+    validation = spec.validation
+    timeout = float(spec.systems[task.target].default_timeout_seconds)
+    return ValidationPolicy(
+        noise_floor_ms=0.0,
+        timer_resolution_ms=0.001,
+        min_ratio=float(validation["min_ratio"]),
+        min_ci_low=float(validation["min_ci_lower_ratio"]),
+        max_result_rows=int(validation["max_result_rows"]),
+        query_timeout_seconds=timeout,
+        session_timeout_seconds=max(300.0, timeout * 10.0),
+    )
+
+
 def _is_truncated(result: Any, max_rows: int) -> bool:
     return bool(getattr(result, "summary", {}).get("truncated")) or len(result.rows) > max_rows
 
@@ -793,9 +938,12 @@ def _pair_hash(query_a: str, query_b: str) -> str:
 
 
 def _graph_snapshot_hash(statements: tuple[str, ...]) -> str:
+    return hashlib.sha256(_canonical_graph_payload(statements)).hexdigest()
+
+
+def _canonical_graph_payload(statements: tuple[str, ...] | list[str]) -> bytes:
     normalized = tuple(statement.strip() for statement in statements if statement.strip())
-    payload = "\n".join(normalized).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    return "\n".join(normalized).encode("utf-8")
 
 
 def _adapter_dbms_fingerprint(adapter: Any) -> DBMSFingerprint:
@@ -839,21 +987,12 @@ def _jsonl_hashes(path: Path, key: str) -> set[str]:
     return hashes
 
 
-def _accepted_pair_hashes(
-    path: Path,
-    *,
-    graph_snapshot_hash: str,
-    dbms_fingerprint: str,
-) -> set[str]:
+def _accepted_pair_hashes(path: Path) -> set[str]:
     hashes: set[str] = set()
     for record in _read_jsonl(path):
         pair_hash = record.get("pair_hash")
         if not isinstance(pair_hash, str):
             continue
-        if record.get("graph_snapshot_hash") != graph_snapshot_hash:
-            raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "accepted-pair graph hash changed across resume")
-        if record.get("dbms_fingerprint") != dbms_fingerprint:
-            raise WorkerFailure(ErrorKind.DBMS_CRASHED, "accepted-pair DBMS fingerprint changed across resume")
         hashes.add(pair_hash)
     return hashes
 
@@ -861,27 +1000,56 @@ def _accepted_pair_hashes(
 def _accepted_source_ast_hashes(path: Path) -> set[str]:
     hashes: set[str] = set()
     for record in _read_jsonl(path):
-        value = record.get("source_ast_hash")
+        value = record.get("query_hash")
         if isinstance(value, str):
             hashes.add(value)
     return hashes
 
 
-def _read_jsonl(path: Path) -> tuple[dict[str, object], ...]:
+def _bind_accepted_identity(
+    path: Path,
+    *,
+    records_path: Path,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+) -> None:
+    expected = {
+        "schema_version": 1,
+        "graph_snapshot_hash": graph_snapshot_hash,
+        "dbms_fingerprint": dbms_fingerprint,
+    }
+    if not path.exists():
+        if records_path.exists() and records_path.stat().st_size:
+            raise WorkerFailure(
+                ErrorKind.INFRASTRUCTURE_ERROR,
+                "accepted-pair identity is missing for existing records",
+            )
+        _atomic_write_json(path, expected)
+        return
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        actual = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "accepted-pair identity is corrupt") from exc
+    if not isinstance(actual, dict) or actual.get("graph_snapshot_hash") != graph_snapshot_hash:
+        raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "accepted-pair graph hash changed across resume")
+    if actual.get("dbms_fingerprint") != dbms_fingerprint:
+        raise WorkerFailure(ErrorKind.DBMS_CRASHED, "accepted-pair DBMS fingerprint changed across resume")
+
+
+def _read_jsonl(path: Path) -> Iterable[dict[str, object]]:
+    try:
+        stream = path.open("r", encoding="utf-8")
     except FileNotFoundError:
-        return ()
-    records = []
-    for line in lines:
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, f"invalid append-only record in {path}") from exc
-        if not isinstance(value, dict):
-            raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, f"non-object append-only record in {path}")
-        records.append(value)
-    return tuple(records)
+        return
+    with stream:
+        for line in stream:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, f"invalid append-only record in {path}") from exc
+            if not isinstance(value, dict):
+                raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, f"non-object append-only record in {path}")
+            yield value
 
 
 def _gdsmith_connection(target: TargetSystem, env: Mapping[str, str]) -> tuple[str, str, int, str, str]:

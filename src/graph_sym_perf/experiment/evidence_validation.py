@@ -8,6 +8,8 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+from graph_sym_perf.artifacts.schema import ArtifactRecord
+from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
 from graph_sym_perf.experiment.state import ErrorKind, ManifestMismatchError, ShardState, can_transition
 
 
@@ -35,25 +37,68 @@ def read_json_object(path: Path) -> dict[str, object]:
 
 def artifact_hashes(path: Path, key: str, *, required: bool = False) -> set[str]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        stream = path.open("r", encoding="utf-8")
     except FileNotFoundError:
         if required:
             raise OSError(f"required append-only artifact is missing: {path}")
         return set()
     hashes: set[str] = set()
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise OSError(f"corrupt append-only artifact: {path}") from exc
-        if not isinstance(record, Mapping):
-            raise OSError(f"append-only artifact record is not an object: {path}")
-        value = record.get(key)
-        if not isinstance(value, str) or CONTENT_HASH.fullmatch(value) is None:
-            raise OSError(f"append-only artifact has invalid {key}: {path}")
-        if value in hashes:
-            raise OSError(f"append-only artifact contains duplicate {key}: {path}")
-        hashes.add(value)
+    with stream:
+        for line in stream:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise OSError(f"corrupt append-only artifact: {path}") from exc
+            if not isinstance(record, Mapping):
+                raise OSError(f"append-only artifact record is not an object: {path}")
+            value = record.get(key)
+            if not isinstance(value, str) or CONTENT_HASH.fullmatch(value) is None:
+                raise OSError(f"append-only artifact has invalid {key}: {path}")
+            if value in hashes:
+                raise OSError(f"append-only artifact contains duplicate {key}: {path}")
+            hashes.add(value)
+    return hashes
+
+
+def candidate_artifact_hashes(shard_dir: Path, *, required: bool = False) -> set[str]:
+    path = shard_dir / "candidates.jsonl"
+    try:
+        stream = path.open("r", encoding="utf-8")
+    except FileNotFoundError:
+        if required:
+            raise OSError(f"required candidate artifact is missing: {path}")
+        return set()
+    store = ContentAddressedStore(shard_dir / "artifacts", budget_bytes=(1 << 63) - 1)
+    hashes: set[str] = set()
+    with stream:
+        for line in stream:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise OSError(f"corrupt candidate artifact: {path}") from exc
+            if not isinstance(record, dict):
+                raise OSError(f"candidate artifact record is not an object: {path}")
+            level = record.get("level")
+            protocol = record.get("measurement_protocol")
+            schema_version = record.get("schema_version")
+            payload = {
+                key: value
+                for key, value in record.items()
+                if key not in {"level", "measurement_protocol", "schema_version"}
+            }
+            ArtifactRecord(
+                level=level,
+                payload=payload,
+                schema_version=schema_version,
+                measurement_protocol=protocol,
+            )
+            verify_candidate_record_reference(store, record)
+            candidate_hash = record.get("candidate_hash")
+            if not isinstance(candidate_hash, str) or CONTENT_HASH.fullmatch(candidate_hash) is None:
+                raise OSError(f"candidate artifact has invalid candidate_hash: {path}")
+            if candidate_hash in hashes:
+                raise OSError(f"candidate artifact contains duplicate candidate_hash: {path}")
+            hashes.add(candidate_hash)
     return hashes
 
 
@@ -104,11 +149,7 @@ def validate_shard_evidence(
         "pair_hash",
         required=bool(accepted) or state in {ShardState.COMPLETED, ShardState.INCOMPLETE},
     )
-    artifact_candidates = artifact_hashes(
-        shard_dir / "candidates.jsonl",
-        "pair_hash",
-        required=bool(candidates),
-    )
+    artifact_candidates = candidate_artifact_hashes(shard_dir, required=bool(candidates))
     if accepted != artifact_accepted or candidates != artifact_candidates:
         raise ValueError("checkpoint hashes do not match canonical shard artifacts")
     stages = _validate_stage_evidence(shard_dir, checkpoint)
@@ -149,22 +190,23 @@ def _validated_event_states(
     states: list[ShardState] = []
     expected_seq = 1
     if path.is_file():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            event = json.loads(line)
-            if not isinstance(event, Mapping):
-                raise TypeError("event must be an object")
-            if event.get("manifest_hash") != manifest_hash or event.get("task_identity") != task_identity:
-                raise ValueError("event identity does not match manifest task")
-            if _strict_int(event.get("seq")) != expected_seq:
-                raise ValueError("event sequence is not contiguous")
-            previous = ShardState(str(event.get("previous_state")))
-            state = ShardState(str(event.get("state")))
-            if previous is not expected_previous or not can_transition(previous, state):
-                raise ValueError("event state chain is invalid")
-            _strict_int(event.get("attempt"))
-            states.append(state)
-            expected_previous = state
-            expected_seq += 1
+        with path.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                event = json.loads(line)
+                if not isinstance(event, Mapping):
+                    raise TypeError("event must be an object")
+                if event.get("manifest_hash") != manifest_hash or event.get("task_identity") != task_identity:
+                    raise ValueError("event identity does not match manifest task")
+                if _strict_int(event.get("seq")) != expected_seq:
+                    raise ValueError("event sequence is not contiguous")
+                previous = ShardState(str(event.get("previous_state")))
+                state = ShardState(str(event.get("state")))
+                if previous is not expected_previous or not can_transition(previous, state):
+                    raise ValueError("event state chain is invalid")
+                _strict_int(event.get("attempt"))
+                states.append(state)
+                expected_previous = state
+                expected_seq += 1
     checkpoint_seq = _strict_int(checkpoint.get("event_seq"))
     checkpoint_state = ShardState(str(checkpoint.get("state")))
     if checkpoint_seq != len(states):
@@ -203,6 +245,7 @@ __all__ = [
     "CONTENT_HASH",
     "artifact_hashes",
     "canonical_hash",
+    "candidate_artifact_hashes",
     "read_json_object",
     "validate_failure_evidence",
     "validate_shard_evidence",

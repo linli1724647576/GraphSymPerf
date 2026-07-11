@@ -127,6 +127,7 @@ class GdsmithConfig:
     no_proxy_launcher_env: str = "GRAPHSYMPERF_GDSMITH_NO_PROXY_LAUNCHER"
     backend_extra_args: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     timeout_seconds: float = 180.0
+    max_raw_artifact_bytes: int | None = None
 
 
 @dataclass(frozen=True)

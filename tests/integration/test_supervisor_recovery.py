@@ -113,7 +113,7 @@ class _Adapter:
         return None
 
     def dbms_fingerprint(self) -> DBMSFingerprint:
-        return DBMSFingerprint("a" * 64)
+        return DBMSFingerprint("a" * 64, server_version="test-dbms/1")
 
     def dbms_health_epoch(self) -> DBMSHealthEpoch:
         return DBMSHealthEpoch("e" * 64, "test")
@@ -635,3 +635,35 @@ def test_marker_only_failure_identity_mismatch_is_run_level_refusal_without_rewr
     assert not (shard_dir / "checkpoint.json").exists()
     assert (shard_dir / "failure.json").read_bytes() == marker_before
     assert (shard_dir / "events.jsonl").read_bytes() == events_before
+
+
+def test_retry_degrades_raw_diagnostics_from_all_attempts_and_preserves_final_budget(tmp_path) -> None:
+    task = ShardTask(TargetSystem.NEO4J, 0, 71, 1, 1, 60)
+    plan = RunPlan("budget-retry", 2, (task,), 1, SourceRevision(None, None, None))
+
+    class BudgetRetryWorker:
+        context = None
+
+        def bind_attempt_context(self, context: AttemptContext) -> None:
+            self.context = context
+
+        def __call__(self, current_task):
+            assert self.context is not None
+            if self.context.attempt == 0:
+                raw = self.context.attempt_dir / "gdsmith_raw"
+                raw.mkdir()
+                (raw / "failed.log").write_bytes(b"x" * (90 * 1024))
+                raise RuntimeError("injected failed generation")
+            return _durable_result(self.context, current_task)
+
+    summary = ShardSupervisor(
+        tmp_path,
+        retry_limit=1,
+        shard_budget_bytes=128 * 1024,
+    ).run(plan, BudgetRetryWorker())
+
+    shard = tmp_path / "shards" / "neo4j-000"
+    assert summary.completed == (task,)
+    assert not (shard / "attempt-000" / "gdsmith_raw").exists()
+    assert "SHARD_ARTIFACT_BUDGET_DEGRADED" in (shard / "artifact_warnings.jsonl").read_text()
+    assert sum(path.stat().st_size for path in shard.rglob("*") if path.is_file()) <= 128 * 1024

@@ -5,8 +5,10 @@ from types import SimpleNamespace
 import pytest
 
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
+from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import ShardTask
+from graph_sym_perf.experiment.evidence_validation import candidate_artifact_hashes
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.state import ErrorKind
 from graph_sym_perf.experiment.worker import (
@@ -51,7 +53,7 @@ class _Adapter:
         self.closed = True
 
     def dbms_fingerprint(self) -> DBMSFingerprint:
-        return DBMSFingerprint("a" * 64)
+        return DBMSFingerprint("a" * 64, server_version="test-dbms/1")
 
     def dbms_health_epoch(self) -> DBMSHealthEpoch:
         return DBMSHealthEpoch("e" * 64, "test")
@@ -118,7 +120,7 @@ class _FingerprintAdapter(_RuntimeGapAdapter):
         self.health_epoch = health_epoch
 
     def dbms_fingerprint(self) -> DBMSFingerprint:
-        return DBMSFingerprint(self.fingerprint)
+        return DBMSFingerprint(self.fingerprint, server_version="test-dbms/1")
 
     def dbms_health_epoch(self) -> DBMSHealthEpoch:
         return DBMSHealthEpoch(self.health_epoch, "test")
@@ -223,6 +225,19 @@ def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minima
     records = [json.loads(line) for line in (tmp_path / "shards" / "neo4j-000" / "accepted_pairs.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(records) == 2
     assert all(record["equivalence"] == "complete_typed_equivalent" for record in records)
+    assert all(
+        set(record) <= {
+            "schema_version", "level", "measurement_protocol", "pair_hash", "query_hash",
+            "rule_id", "site", "equivalence", "screen_runtime_ms", "screen_ratio", "error_kind",
+        }
+        for record in records
+    )
+    assert all(record["measurement_protocol"] == "accepted-equivalence-v3" for record in records)
+    identity = json.loads(
+        (tmp_path / "shards" / "neo4j-000" / "accepted_identity.json").read_text(encoding="utf-8")
+    )
+    assert identity["graph_snapshot_hash"] == result["graph_snapshot_ref"]["content_hash"]
+    assert identity["dbms_fingerprint"] == "a" * 64
 
 
 def test_worker_records_incomplete_when_seed_bound_cannot_fill_budget(tmp_path) -> None:
@@ -325,9 +340,25 @@ def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) ->
     assert records[0]["discovery_slow_query"] == "b"
     assert records[0]["parameters"] == {}
     assert records[0]["rule_id"] == "constant_true_disjunction"
-    assert records[0]["safety_certificate"]["proof_id"] == "kleene_or_true_v1"
+    assert records[0]["safety_certificate"]["proof_version"] == "kleene_or_true_v1"
     assert records[0]["graph_snapshot_hash"]
     assert records[0]["dbms_fingerprint"] == "a" * 64
+    assert records[0]["graph_snapshot_ref"]["content_hash"] == records[0]["graph_snapshot_hash"]
+    assert len(records[0]["discovery_paired_timing"]) == 5
+    assert records[0]["candidate_hash"] in result["candidate_hashes"]
+    assert records[0]["candidate_hash"] != records[0]["pair_hash"]
+    assert records[0]["content_hashes"]["graph_snapshot"] == records[0]["graph_snapshot_hash"]
+    store = ContentAddressedStore(
+        tmp_path / "shards" / "neo4j-000" / "artifacts",
+        budget_bytes=500 * 1024 * 1024,
+    )
+    assert verify_candidate_record_reference(store, records[0]).payload["candidate_hash"] == records[0]["candidate_hash"]
+    candidate_path = tmp_path / "shards" / "neo4j-000" / "candidates.jsonl"
+    forged = dict(records[0])
+    forged["query_a"] += " "
+    candidate_path.write_text(json.dumps(forged) + "\n", encoding="utf-8")
+    with pytest.raises((OSError, ValueError), match="candidate|query text"):
+        candidate_artifact_hashes(tmp_path / "shards" / "neo4j-000", required=True)
 
 
 def test_worker_rejects_shard_when_dbms_fingerprint_is_unavailable(tmp_path) -> None:

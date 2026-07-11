@@ -190,6 +190,7 @@ class ExperimentLifecycle:
             "max_parallel_generation_systems": int(spec.scheduling["max_parallel_generation_systems"]),
             "max_parallel_measurement_systems": int(spec.scheduling["max_parallel_measurement_systems"]),
             "max_parallel_shards_per_system": int(spec.scheduling["max_parallel_shards_per_system"]),
+            "shard_budget_bytes": int(spec.artifacts["shard_budget_mb"]) * 1024 * 1024,
         }
 
     @staticmethod

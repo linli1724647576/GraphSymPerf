@@ -1,16 +1,60 @@
 {
-  "schema_version": 1,
   "packages": [
-    {"id":"neo4j-13783","metadata_sha256":"a83d9703e6dee6c9f44aa4c9a247698f05f7f8620abcbbbd501089d30c8fcb4d"},
-    {"id":"neo4j-13814","metadata_sha256":"c73ffd5931a7f6f85390d0fd458a02c977aac58c630dfee7a6d1712a0535442b"},
-    {"id":"neo4j-13813","metadata_sha256":"af1c1662f61f5011fdfed56aefff4940cd0eb31298903aa229eb246c077c4f94"},
-    {"id":"memgraph-4208","metadata_sha256":"ab70642482cc6c761bde9e9d2d2109fdb071328b347bc6c28a52bc008f283166"},
-    {"id":"falkordb-2081","metadata_sha256":"dbd22ee2b28aec68cb56c1a7a627b81531eaab52ee61ba4cccb7f4f801e0d30f"},
-    {"id":"arcadedb-4405","metadata_sha256":"1539ee7e2559e44c6a365e4b0336b115228be9c66daf9ecccc9b68a376320f7d"},
-    {"id":"arcadedb-5116","metadata_sha256":"1acf3a3f91c6b7b5368cd4d402ddcf2bea42a52a1cdfd056d9ba558dc12790fb"},
-    {"id":"arcadedb-5117","metadata_sha256":"d029733ff690b47eb3bc8bcef7f151f4ef7290552dd17a83abeef24e13781222"},
-    {"id":"apache-age-2428","metadata_sha256":"c96de0734c925ea59071a28690dbffaf0e4cfadefb7c1e2301241bc31b129765"},
-    {"id":"ladybugdb-668","metadata_sha256":"705f327c9bffb8cf3a3b046db2ebc6c2483134db7f4e9aec57776c5952f73336"},
-    {"id":"ladybugdb-669","metadata_sha256":"dce7dbc1030cff1b12ee94b30de9d3a38ece4053c5321703a193322e32f3a40b"}
-  ]
+    {
+      "id": "apache-age-2428",
+      "inventory_sha256": "7d7093d8791d77d51ee52c4faa3d275dc9e7b9cfdb9acfed33b35eb1297ef4f8",
+      "metadata_sha256": "3b3e307cec32fdc58a18504c2892eb394f0794259c895ba4f96ee4a69d659917"
+    },
+    {
+      "id": "arcadedb-4405",
+      "inventory_sha256": "01ceeced1dce1fd310badf19770817b650722e7e2c6fced4d604a168f086e552",
+      "metadata_sha256": "f3edd5cc872639f7ff4c38b432bebabd1947b44c84aaedd13e94681ec3da88ee"
+    },
+    {
+      "id": "arcadedb-5116",
+      "inventory_sha256": "46c3d0a5a0c39d6dc6598d7f4c1b7c9cacafdb32c6becc7f08a12eea544e8572",
+      "metadata_sha256": "5240514e2b9d6e1217b9e9193a40fa8bbf6a9b83a5c65307c078f1584b67217e"
+    },
+    {
+      "id": "arcadedb-5117",
+      "inventory_sha256": "9abdaf08a7efcc02fd1873f49da2faf87c896d55bf6fcf9a86f4f2cf2867e6c8",
+      "metadata_sha256": "3d2ba2ece9e799c76c3d2c65387577815fefb3e4efaa1eb5b2569df75208c716"
+    },
+    {
+      "id": "falkordb-2081",
+      "inventory_sha256": "586a44063fc066d1503357a09a70248299175b806e2a6d06d521e11fc44b3f5a",
+      "metadata_sha256": "8dea4de0bf15e7e3058c8a75c8d82020bb7ba670e7141f4957669b2646598865"
+    },
+    {
+      "id": "ladybugdb-668",
+      "inventory_sha256": "d458bb7ad1479cafdb56aae0fe3c4bb6f4f94c665194c78c6550370588f17b86",
+      "metadata_sha256": "f8262c116ae46a3a7ac7773e9f1cbd2ff51834f9ed7121effd89b1e37d1e268a"
+    },
+    {
+      "id": "ladybugdb-669",
+      "inventory_sha256": "e5d3e7e467af18ff66ed951d48f9a3dd74fdadbfee82bc5a943948f47f07bb3e",
+      "metadata_sha256": "e5a016c1aa209fd113b9c18edfc2be30bdfa46e26f655f409419290c7ac0bdbc"
+    },
+    {
+      "id": "memgraph-4208",
+      "inventory_sha256": "464ad2cd49653a9ec363cc9ff0dd5069f7c019f466ff6ef2c864be32d57cfc4a",
+      "metadata_sha256": "1bd6653cd4542f568bb18c00c87c4984ef213d4597369fabcf161c63f17a4e75"
+    },
+    {
+      "id": "neo4j-13783",
+      "inventory_sha256": "234bebaee88dbd93c154e835f7c3be87d4dac086827d84a715d189b85947e725",
+      "metadata_sha256": "c5527ec1b8f49c8ff8fcf7029c85ca0c471f873bfe8e3ef370a99e4ce091b10a"
+    },
+    {
+      "id": "neo4j-13813",
+      "inventory_sha256": "25031436a5979afe2aaefcf939c2f500aff476282a9ecb6ac2345db4a33dd18d",
+      "metadata_sha256": "000404b3e82a83107cd8ead9259b38df2c4dcbcf24e064eec66709dec69e4f87"
+    },
+    {
+      "id": "neo4j-13814",
+      "inventory_sha256": "1ecc22c4cb42134050df578cc664829d24d426d4e8565fbe050d7029cf51b16c",
+      "metadata_sha256": "dc5b6de0ff40d1b2bca952d1d5acdf888f9c3a740d6d4c1e065863a1a49940b2"
+    }
+  ],
+  "schema_version": 2
 }

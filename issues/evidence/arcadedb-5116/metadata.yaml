@@ -1,0 +1,25 @@
+closed_at: '2026-07-09T00:58:56Z'
+dbms: arcadedb
+dbms_version: "Docker image `arcadedata/arcadedb:latest`"
+detector_version: historical_pre_v3_unknown
+developer_status: fixed
+discovery_runtime:
+  median_ratio: 16.2
+  source_url: https://github.com/ArcadeData/arcadedb/issues/5116
+  status: public_issue_claim_only_not_v3
+github_state: closed
+github_state_reason: completed
+issue_url: https://github.com/ArcadeData/arcadedb/issues/5116
+last_checked_at: '2026-07-11'
+reducer_version: not_run_v3
+revalidated_by_v3: false
+rule_id: pattern_order_symmetry
+rule_version: historical_unknown
+setup_source_url: https://github.com/user-attachments/files/29796114/reproducer_graph.cypher.txt
+status_evidence_url: https://github.com/ArcadeData/arcadedb/issues/5116
+status_source: historical_registry_label plus current public GitHub state
+title: Result-equivalent queries show a 16.2x runtime gap across pattern-order variants
+unknown_reason: v3 validation/reducer artifacts do not exist; no deleted local artifact
+  was restored
+validated_runtime: unknown
+validator_version: not_run_v3

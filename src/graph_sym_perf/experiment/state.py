@@ -327,20 +327,21 @@ def _read_mapping(path: Path) -> Mapping[str, Any]:
 
 def _read_events(path: Path) -> tuple[Mapping[str, Any], ...]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        stream = path.open("r", encoding="utf-8")
     except FileNotFoundError:
         return ()
     except OSError as exc:
         raise PersistenceError(f"cannot read event stream: {path}") from exc
     events = []
-    for line in lines:
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise PersistenceError(f"invalid event JSON in {path}") from exc
-        if not isinstance(value, Mapping):
-            raise PersistenceError(f"event is not a JSON object: {path}")
-        events.append(value)
+    with stream:
+        for line in stream:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise PersistenceError(f"invalid event JSON in {path}") from exc
+            if not isinstance(value, Mapping):
+                raise PersistenceError(f"event is not a JSON object: {path}")
+            events.append(value)
     return tuple(events)
 
 

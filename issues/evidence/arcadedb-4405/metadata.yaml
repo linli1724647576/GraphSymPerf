@@ -1,0 +1,26 @@
+closed_at: '2026-05-29T18:33:32Z'
+dbms: arcadedb
+dbms_version: "ArcadeDB 26.6.1-SNAPSHOT, Docker image `arcadedata/arcadedb:latest`, digest `sha256:67979318134d1ae026de78a9b5b5e5800062387ff0a6fc44f414dffb7b53f619`"
+detector_version: historical_pre_v3_unknown
+developer_status: fixed
+discovery_runtime:
+  reason: public issue has no machine-readable ordinary-execute runtime ratio
+  source_url: https://github.com/ArcadeData/arcadedb/issues/4405
+  status: unknown
+github_state: closed
+github_state_reason: completed
+issue_url: https://github.com/ArcadeData/arcadedb/issues/4405
+last_checked_at: '2026-07-11'
+reducer_version: not_run_v3
+revalidated_by_v3: false
+rule_id: multilayer_redundancy_experimental
+rule_version: historical_unknown
+setup_source_url: https://github.com/user-attachments/files/28394132/BUG001_reproducer_graph.cypher.txt
+status_evidence_url: https://github.com/ArcadeData/arcadedb/issues/4405
+status_source: historical_registry_label plus current public GitHub state
+title: 'Missed optimization: redundant AND-true OR-false branch raises ArcadeDB PROFILE
+  rows'
+unknown_reason: v3 validation/reducer artifacts do not exist; no deleted local artifact
+  was restored
+validated_runtime: unknown
+validator_version: not_run_v3

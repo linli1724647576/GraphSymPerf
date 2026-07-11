@@ -1,0 +1,4 @@
+MATCH (n0 :L1)
+WHERE ((n0.k5) = -1862396709) AND true OR false AND (n0.k5 IS NULL OR n0.k5 IS NOT NULL)
+UNWIND [(n0.k6), (n0.k10)] AS a0
+RETURN 1 AS a1;

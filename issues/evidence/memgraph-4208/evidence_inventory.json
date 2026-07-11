@@ -1,0 +1,45 @@
+{
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "2fcee1457568a29258e5df097a4a526bc5645c66b25cb543cfcdbdf243f944cd",
+      "size_bytes": 325
+    },
+    {
+      "path": "metadata.yaml",
+      "sha256": "1bd6653cd4542f568bb18c00c87c4984ef213d4597369fabcf161c63f17a4e75",
+      "size_bytes": 1210
+    },
+    {
+      "path": "original.cypher",
+      "sha256": "1213d76b7a405c5d1b3c77d5f18167239ef28c861499fbd1ade374fb7ce95d63",
+      "size_bytes": 780
+    },
+    {
+      "path": "reduced_original.cypher",
+      "sha256": "427d1f753f4454447e56b42380b4aae3946c825f71b42921ce10cf2f2bb2c7fc",
+      "size_bytes": 68
+    },
+    {
+      "path": "reduced_transformed.cypher",
+      "sha256": "427d1f753f4454447e56b42380b4aae3946c825f71b42921ce10cf2f2bb2c7fc",
+      "size_bytes": 68
+    },
+    {
+      "path": "setup.cypher",
+      "sha256": "510e9812c357f56cf76a19bbd1a46182f461888c6983ac60a82a582aa78163ef",
+      "size_bytes": 54178
+    },
+    {
+      "path": "transformed.cypher",
+      "sha256": "17bde749362aa4cba7789983f889f63708193c87ca97a46ae186797a5fced188",
+      "size_bytes": 937
+    },
+    {
+      "path": "validation.json",
+      "sha256": "15b5aac45e19f364a066ba1156b7fa89c4522ff18ad7a56e96f22d390b544c2f",
+      "size_bytes": 196
+    }
+  ],
+  "schema_version": 1
+}

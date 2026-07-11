@@ -76,6 +76,8 @@ class GraphAdapter(Protocol):
 class DBMSFingerprint:
     value: str | None
     reason: str | None = None
+    server_version: str | None = None
+    driver_version: str | None = None
 
     @property
     def available(self) -> bool:
@@ -157,7 +159,11 @@ class BaseAdapter:
             "server_version": str(server_version),
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        return DBMSFingerprint(sha256(canonical.encode("utf-8")).hexdigest())
+        return DBMSFingerprint(
+            sha256(canonical.encode("utf-8")).hexdigest(),
+            server_version=str(server_version),
+            driver_version=str(driver_version),
+        )
 
     def _fingerprint_endpoint_identity(self) -> Mapping[str, object]:
         return {}

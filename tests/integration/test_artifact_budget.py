@@ -1,10 +1,312 @@
+import json
+import hashlib
+from dataclasses import asdict
+from dataclasses import replace
+
 import pytest
 
-from graph_sym_perf.artifacts.store import ContentAddressedStore
+from graph_sym_perf.artifacts.policy import ArtifactLevel
+from graph_sym_perf.artifacts.schema import ArtifactRecord
+from graph_sym_perf.artifacts.store import (
+    ArtifactBudgetExceeded,
+    ContentAddressedStore,
+    enforce_shard_budget,
+    verify_issue_hash_chain,
+)
+from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
+from graph_sym_perf.core import ExecutionResult, TargetSystem
+from graph_sym_perf.experiment.plan_models import ShardTask
+from graph_sym_perf.experiment.spec import load_experiment_spec
+from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
+from graph_sym_perf.validation.models import candidate_hash_from_content_hashes, canonical_content_hash
 
 
-def test_store_enforces_per_shard_budget(tmp_path) -> None:
+def test_store_deduplicates_content_and_enforces_per_shard_budget(tmp_path) -> None:
     store = ContentAddressedStore(tmp_path, budget_bytes=3)
-    store.put("a", b"abc")
-    with pytest.raises(ValueError):
+    first = store.put("a", b"abc")
+    second = store.put("duplicate", b"abc")
+    assert first == second
+    assert store.used_bytes == 3
+    with pytest.raises(ArtifactBudgetExceeded):
         store.put("b", b"d")
+
+
+def test_store_reconciles_object_tree_after_link_before_counter_crash(tmp_path) -> None:
+    store = ContentAddressedStore(tmp_path, budget_bytes=4)
+    store.put("first", b"abc")
+    # Simulate a stale counter left by a crash after the object link was made.
+    (tmp_path / ".used_bytes").write_text("0", encoding="ascii")
+
+    recovered = ContentAddressedStore(tmp_path, budget_bytes=4)
+
+    assert recovered.used_bytes == 3
+    with pytest.raises(ArtifactBudgetExceeded):
+        recovered.put("would-overflow", b"de")
+
+
+def test_nonessential_minimal_diagnostics_degrade_with_explicit_warning(tmp_path) -> None:
+    store = ContentAddressedStore(tmp_path, budget_bytes=3)
+    store.put("essential", b"abc")
+
+    result = store.put_with_policy("debug", b"d", level=ArtifactLevel.MINIMAL, essential=False)
+
+    assert result.reference is None
+    assert result.warning == "SHARD_ARTIFACT_BUDGET_DEGRADED"
+
+
+def test_one_thousand_minimal_records_are_well_below_500_mb(tmp_path) -> None:
+    store = ContentAddressedStore(tmp_path, budget_bytes=500 * 1024 * 1024)
+    for index in range(1000):
+        payload = json.dumps(
+            {
+                "query_hash": f"{index:064x}",
+                "rule_id": "pattern_order_symmetry",
+                "site": "clauses[0].pattern.components[0]",
+                "equivalence": "complete_typed_equivalent",
+                "screen_runtime_ms": 3.0,
+                "error_kind": None,
+            },
+            separators=(",", ":"),
+        ).encode()
+        store.put(f"record-{index}", payload)
+    assert store.used_bytes < 500 * 1024 * 1024
+
+
+def test_complete_shard_budget_drops_only_declared_nonessential_diagnostics(tmp_path) -> None:
+    shard = tmp_path / "shard"
+    shard.mkdir()
+    (shard / "accepted.jsonl").write_bytes(b"a" * 60)
+    raw = shard / "attempt-001" / "gdsmith_raw"
+    raw.mkdir(parents=True)
+    (raw / "debug.log").write_bytes(b"d" * 60)
+
+    report = enforce_shard_budget(
+        shard,
+        budget_bytes=100,
+        nonessential_paths=(raw,),
+    )
+
+    assert report.used_bytes == 60
+    assert report.warnings == ("SHARD_ARTIFACT_BUDGET_DEGRADED:attempt-001/gdsmith_raw",)
+    assert not raw.exists()
+
+
+def test_complete_shard_budget_never_drops_essential_candidate_evidence(tmp_path) -> None:
+    shard = tmp_path / "shard"
+    shard.mkdir()
+    (shard / "candidates.jsonl").write_bytes(b"c" * 101)
+    with pytest.raises(ArtifactBudgetExceeded, match="complete shard artifacts"):
+        enforce_shard_budget(shard, budget_bytes=100)
+
+
+def test_complete_shard_budget_refuses_to_delete_the_shard_root(tmp_path) -> None:
+    shard = tmp_path / "shard"
+    shard.mkdir()
+    (shard / "essential").write_bytes(b"x" * 101)
+    with pytest.raises(ValueError, match="shard root"):
+        enforce_shard_budget(shard, budget_bytes=100, nonessential_paths=(shard,))
+    assert (shard / "essential").is_file()
+
+
+def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_chain(tmp_path) -> None:
+    store = ContentAddressedStore(tmp_path / "store", budget_bytes=1024 * 1024)
+    sample = {"order": "AB", "a_ms": 1.0, "b_ms": 4.0}
+
+    graph_ref = asdict(store.put("graph", b"CREATE ();"))
+
+    def candidate(query_a: str, query_b: str) -> tuple[str, dict[str, object]]:
+        certificate = {
+            "rule_id": "constant_true_disjunction",
+            "tier": "core",
+            "proof_version": "kleene_or_true_v1",
+            "site_class": "where_boolean",
+        }
+        hashes = {
+            "query_a": hashlib.sha256(query_a.encode()).hexdigest(),
+            "query_b": hashlib.sha256(query_b.encode()).hexdigest(),
+            "parameters": canonical_content_hash({}),
+            "graph_snapshot": graph_ref["content_hash"],
+            "dbms_fingerprint": canonical_content_hash("c" * 64),
+            "dbms_version": "1" * 64,
+            "resolved_config": "2" * 64,
+            "discovery_slow_query": canonical_content_hash("b"),
+            "discovery_ratio": canonical_content_hash(4.0),
+            "validation_policy": "3" * 64,
+            "certificate": canonical_content_hash(certificate),
+        }
+        candidate_hash = candidate_hash_from_content_hashes(hashes)
+        record = ArtifactRecord(
+            level=ArtifactLevel.CANDIDATE,
+            payload={
+                "candidate_hash": candidate_hash,
+                "content_hashes": hashes,
+                "query_a": query_a,
+                "query_b": query_b,
+                "parameters": {},
+                "discovery_paired_timing": [sample],
+                "graph_snapshot_ref": graph_ref,
+                "graph_snapshot_hash": graph_ref["content_hash"],
+                "dbms_fingerprint": "c" * 64,
+                "rule_id": certificate["rule_id"],
+                "safety_certificate": certificate,
+                "discovery_median_ratio": 4.0,
+                "discovery_slow_query": "b",
+            },
+        )
+        return candidate_hash, asdict(store.put_json(f"candidate-{candidate_hash}", record.to_dict()))
+
+    def validation(candidate_hash: str, candidate_ref: dict[str, object], suffix: str) -> ArtifactRecord:
+        session = lambda name, pid: {
+            "session_id": f"{suffix}-{name}",
+            "process_id": pid,
+            "graph_fingerprint": "a" * 64,
+            "dbms_fingerprint": "c" * 64,
+            "paired_timing": [sample],
+            "negative_controls": [
+                {"kind": "A/A", "paired_timing": [sample]},
+                {"kind": "B/B", "paired_timing": [sample]},
+            ],
+            "lifecycle": {"complete": True},
+        }
+        return ArtifactRecord.seal_validation(
+            {
+                "candidate_hash": candidate_hash,
+                "candidate_ref": candidate_ref,
+                "stage": "validation_passed",
+                "validation_protocol": "independent-two-session-v1",
+                "equivalence": {"equivalent": True, "complete_result": True, "reason_codes": []},
+                "sessions": [session("one", 1), session("two", 2)],
+                "environment": {
+                    "dbms_version": "dbms/1",
+                    "driver_version": "driver/1",
+                    "container_image_digest": "sha256:" + "f" * 64,
+                    "cpu_architecture": "arm64",
+                    "config_hash": "e" * 64,
+                },
+                "dbms_fingerprint": "c" * 64,
+            }
+        )
+
+    original_a = "MATCH (n) WHERE n.id >= 0 RETURN n"
+    original_b = "MATCH (n) WHERE true AND n.id >= 0 RETURN n"
+    query_a = "MATCH (n) RETURN n"
+    query_b = "MATCH (n) WHERE true RETURN n"
+    original_candidate_hash, original_candidate_ref = candidate(original_a, original_b)
+    reduced_candidate_hash, reduced_candidate_ref = candidate(query_a, query_b)
+    original = validation(original_candidate_hash, original_candidate_ref, "original")
+    final = validation(reduced_candidate_hash, reduced_candidate_ref, "reduced")
+    original_ref = asdict(store.put_json("original-validation", original.to_dict()))
+    final_ref = asdict(store.put_json("final-validation", final.to_dict()))
+    reduced_hashes = {
+        "query_a": hashlib.sha256(query_a.encode()).hexdigest(),
+        "query_b": hashlib.sha256(query_b.encode()).hexdigest(),
+    }
+    reduction_ref = asdict(
+        store.put_json(
+            "reduction",
+            {
+                "candidate_hash": original_candidate_hash,
+                "reduced_candidate_hash": reduced_candidate_hash,
+                "reduced_content_hashes": reduced_hashes,
+            },
+        )
+    )
+    reproducer_ref = asdict(store.put("reproducer", b"CREATE ();"))
+    issue = ArtifactRecord.seal_issue(
+        {
+            "candidate_hash": original_candidate_hash,
+            "reduced_candidate_hash": reduced_candidate_hash,
+            "reduced_query_a": query_a,
+            "reduced_query_b": query_b,
+            "reduced_content_hashes": reduced_hashes,
+            "reproducer_ref": reproducer_ref,
+            "original_validation_ref": original_ref,
+            "final_validation_ref": final_ref,
+            "reduction_ref": reduction_ref,
+        }
+    )
+
+    verify_issue_hash_chain(store, issue)
+    forged_body = {key: value for key, value in issue.payload.items() if key != "issue_hash"}
+    forged = ArtifactRecord.seal_issue({**forged_body, "final_validation_ref": original_ref})
+    with pytest.raises(ValueError, match="reduced candidate"):
+        verify_issue_hash_chain(store, forged)
+
+    missing_candidate_ref = {
+        "content_hash": "f" * 64,
+        "relative_path": "objects/ff/" + "f" * 64,
+        "size_bytes": 1,
+        "media_type": "application/json",
+        "schema_version": 1,
+    }
+    invalid_validation_body = {
+        key: value for key, value in original.payload.items() if key != "validation_hash"
+    }
+    invalid_validation = ArtifactRecord.seal_validation(
+        {**invalid_validation_body, "candidate_ref": missing_candidate_ref}
+    )
+    invalid_validation_ref = asdict(
+        store.put_json("invalid-validation", invalid_validation.to_dict())
+    )
+    missing_chain = ArtifactRecord.seal_issue(
+        {**forged_body, "original_validation_ref": invalid_validation_ref}
+    )
+    with pytest.raises(FileNotFoundError):
+        verify_issue_hash_chain(store, missing_chain)
+
+
+def test_complete_one_thousand_accepted_pair_worker_shard_stays_below_500_mb(tmp_path) -> None:
+    class Adapter:
+        target = TargetSystem.NEO4J
+
+        def ensure_schema(self):
+            return None
+
+        def load_gdsmith_graph(self, statements):
+            return None
+
+        def execute(self, query, parameters, query_kind, **kwargs):
+            return ExecutionResult(
+                system=self.target,
+                query_kind=query_kind,
+                rows=({"value": 1},),
+                elapsed_ms=1.0,
+                summary={"truncated": False},
+            )
+
+        def dbms_fingerprint(self):
+            return DBMSFingerprint("a" * 64, server_version="test-dbms/1")
+
+        def dbms_health_epoch(self):
+            return DBMSHealthEpoch("e" * 64, "test")
+
+        def close(self):
+            return None
+
+    queries = tuple(
+        f"MATCH (a:L1:L2)--(b:L1:L2), (c:L1:L2)--(d:L1:L2) "
+        f"WHERE a.value = {index} AND b.value = {index} RETURN a, b, c, d"
+        for index in range(1000)
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:L1:L2 {value: 1})",),
+        query_texts=queries,
+        generator_metadata={"backend": "gdsmith"},
+    )
+    spec = load_experiment_spec("config/experiment.yaml")
+    runtime = dict(spec.runtime)
+    runtime["screen"] = {"warmups": 0, "pairs": 5, "ratio": 2.0, "schedule": "randomized_ab_ba"}
+    worker = RuntimeFirstShardWorker(
+        replace(spec, runtime=runtime),
+        generation_runner=lambda task, raw_dir: generated,
+        adapter_factory=lambda task: Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1000, 1000, 600))
+
+    shard = tmp_path / "shards" / "neo4j-000"
+    assert result["accepted_pairs"] == 1000
+    assert result["acceptance_status"] == "complete"
+    assert len((shard / "accepted_pairs.jsonl").read_text().splitlines()) == 1000
+    assert sum(path.stat().st_size for path in shard.rglob("*") if path.is_file()) <= 500 * 1024 * 1024

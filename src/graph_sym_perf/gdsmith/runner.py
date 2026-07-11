@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -53,6 +56,7 @@ class GdsmithRunResult:
     log_path: str | None
     parsed: GdsmithParsedLog
     fatal_stderr_markers: tuple[str, ...] = ()
+    artifact_budget_exceeded: bool = False
 
 
 def check_gdsmith_tooling(config: GdsmithConfig, env: Mapping[str, str]) -> GdsmithToolStatus:
@@ -178,20 +182,32 @@ def run_gdsmith(
     stdout_path = raw_dir / "gdsmith_stdout.txt"
     stderr_path = raw_dir / "gdsmith_stderr.txt"
     with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open("w", encoding="utf-8") as stderr_file:
-        try:
-            completed = subprocess.run(
+        if config.max_raw_artifact_bytes is None:
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=raw_dir,
+                    env=dict(env),
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    text=True,
+                    timeout=config.timeout_seconds + 15.0,
+                    check=False,
+                )
+                process_returncode = completed.returncode
+            except subprocess.TimeoutExpired:
+                process_returncode = 124
+            artifact_budget_exceeded = False
+        else:
+            process_returncode, artifact_budget_exceeded = _run_bounded_process(
                 command,
                 cwd=raw_dir,
                 env=dict(env),
                 stdout=stdout_file,
                 stderr=stderr_file,
-                text=True,
                 timeout=config.timeout_seconds + 15.0,
-                check=False,
+                max_raw_artifact_bytes=config.max_raw_artifact_bytes,
             )
-            process_returncode = completed.returncode
-        except subprocess.TimeoutExpired:
-            process_returncode = 124
 
     fatal_stderr_markers = _detect_fatal_stderr_markers(stderr_path)
     returncode = _effective_returncode(process_returncode, fatal_stderr_markers)
@@ -213,7 +229,59 @@ def run_gdsmith(
         log_path=str(log_path) if log_path is not None else None,
         parsed=parsed,
         fatal_stderr_markers=fatal_stderr_markers,
+        artifact_budget_exceeded=artifact_budget_exceeded,
     )
+
+
+def _run_bounded_process(
+    command: tuple[str, ...],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    stdout,
+    stderr,
+    timeout: float,
+    max_raw_artifact_bytes: int,
+) -> tuple[int, bool]:
+    if max_raw_artifact_bytes <= 0:
+        raise ValueError("GDsmith raw artifact budget must be positive")
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=dict(env),
+        stdout=stdout,
+        stderr=stderr,
+        text=True,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + timeout
+    while True:
+        returncode = process.poll()
+        if returncode is not None:
+            return int(returncode), False
+        if _raw_directory_size(cwd) > max_raw_artifact_bytes:
+            _terminate_process_group(process)
+            return 125, True
+        if time.monotonic() >= deadline:
+            _terminate_process_group(process)
+            return 124, False
+        time.sleep(0.1)
+
+
+def _terminate_process_group(process: subprocess.Popen) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=2.0)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=2.0)
+
+
+def _raw_directory_size(root: Path) -> int:
+    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
 
 
 def _redact_sensitive_command_parts(command: tuple[str, ...]) -> tuple[str, ...]:

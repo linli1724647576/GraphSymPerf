@@ -11,10 +11,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
+from graph_sym_perf.artifacts.store import enforce_shard_budget
 from graph_sym_perf.core import to_jsonable
 from graph_sym_perf.experiment.evidence_validation import (
     CONTENT_HASH,
     artifact_hashes,
+    candidate_artifact_hashes,
     canonical_hash,
     read_json_object,
     validate_failure_evidence,
@@ -56,6 +58,7 @@ class ShardSupervisor:
         max_parallel_generation_systems: int = 1,
         max_parallel_measurement_systems: int = 1,
         max_parallel_shards_per_system: int = 1,
+        shard_budget_bytes: int = 500 * 1024 * 1024,
     ) -> None:
         if retry_limit < 0 or retry_limit > 3:
             raise ValueError("retry_limit must be between 0 and 3")
@@ -67,6 +70,8 @@ class ShardSupervisor:
             max_parallel_shards_per_system,
         ) <= 0:
             raise ValueError("parallel scheduling limits must be positive")
+        if shard_budget_bytes <= 64 * 1024:
+            raise ValueError("shard budget must leave at least 64 KiB for terminal evidence")
         self.run_dir = Path(run_dir)
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.retry_limit = retry_limit
@@ -77,6 +82,7 @@ class ShardSupervisor:
         self.max_parallel_generation_systems = max_parallel_generation_systems
         self.max_parallel_measurement_systems = max_parallel_measurement_systems
         self.max_parallel_shards_per_system = max_parallel_shards_per_system
+        self.shard_budget_bytes = shard_budget_bytes
         self._event_lock = threading.Lock()
         self._reliability_lock = threading.Lock()
 
@@ -216,6 +222,7 @@ class ShardSupervisor:
             ShardState.FAILED_FINAL: "failed",
         }.get(journal.state)
         if resume and terminal_status is not None:
+            self._enforce_shard_artifact_budget(shard_dir)
             checkpoint = read_json_object(journal.checkpoint_path)
             validate_shard_evidence(
                 shard_dir,
@@ -226,7 +233,7 @@ class ShardSupervisor:
             )
             return terminal_status
         recovered_accepted = artifact_hashes(shard_dir / "accepted_pairs.jsonl", "pair_hash")
-        recovered_candidates = artifact_hashes(shard_dir / "candidates.jsonl", "pair_hash")
+        recovered_candidates = candidate_artifact_hashes(shard_dir)
         if recovered_accepted or recovered_candidates:
             journal.update_progress(
                 attempt=max(0, _latest_attempt(shard_dir)),
@@ -259,6 +266,7 @@ class ShardSupervisor:
 
         start_attempt = _latest_attempt(shard_dir) + 1 if resume else 0
         for attempt in range(start_attempt, self.retry_limit + 1):
+            self._enforce_shard_artifact_budget(shard_dir)
             attempt_dir = shard_dir / f"attempt-{attempt:03d}"
             attempt_dir.mkdir(parents=True, exist_ok=False)
             journal.transition(ShardState.GENERATING, attempt=attempt)
@@ -291,6 +299,7 @@ class ShardSupervisor:
                     attempt_dir=attempt_dir,
                     inflight=exc.inflight,
                 )
+                self._enforce_shard_artifact_budget(shard_dir)
                 if attempt >= self.retry_limit:
                     return "failed"
                 continue
@@ -306,11 +315,13 @@ class ShardSupervisor:
                     final=attempt >= self.retry_limit,
                     attempt_dir=attempt_dir,
                 )
+                self._enforce_shard_artifact_budget(shard_dir)
                 if attempt >= self.retry_limit:
                     return "failed"
                 continue
 
             journal = ShardJournal(shard_dir, manifest_hash=manifest_hash, task_identity=task_identity)
+            self._enforce_shard_artifact_budget(shard_dir)
             self._advance_success_states(task, journal, attempt)
             required_pairs = int(getattr(task, "accepted_query_pairs", 1000))
             accepted_pairs = int(result.get("accepted_pairs", 0))
@@ -321,8 +332,14 @@ class ShardSupervisor:
                 "pair_hash",
                 required=True,
             )
+            canonical_candidates = candidate_artifact_hashes(
+                shard_dir,
+                required=bool(candidate_hashes),
+            )
             if accepted_hashes != canonical_hashes:
                 raise ValueError("accepted result hashes do not match canonical artifact hashes")
+            if candidate_hashes != canonical_candidates:
+                raise ValueError("candidate result hashes do not match content-addressed candidate artifacts")
             journal.update_progress(
                 attempt=attempt,
                 accepted_pair_hashes=accepted_hashes,
@@ -337,6 +354,7 @@ class ShardSupervisor:
             accepted_pairs = len(accepted_hashes)
             if accepted_pairs < required_pairs:
                 self._transition(task, journal, ShardState.INCOMPLETE, attempt)
+                self._enforce_shard_artifact_budget(shard_dir)
                 return "incomplete"
             if accepted_pairs == required_pairs:
                 stages = _verified_stage_evidence(result, shard_dir)
@@ -345,15 +363,18 @@ class ShardSupervisor:
                     raise ValueError("reduction evidence exists without validation evidence")
                 if "validation" not in stages:
                     self._transition(task, journal, ShardState.INCOMPLETE, attempt)
+                    self._enforce_shard_artifact_budget(shard_dir)
                     return "incomplete"
                 self._transition(task, journal, ShardState.VALIDATING, attempt)
                 if "reduction" not in stages:
                     self._transition(task, journal, ShardState.INCOMPLETE, attempt)
+                    self._enforce_shard_artifact_budget(shard_dir)
                     return "incomplete"
                 self._transition(task, journal, ShardState.REDUCING, attempt)
                 if "screening" not in stages:
                     raise ValueError("completed shard is missing durable screening evidence")
                 self._transition(task, journal, ShardState.COMPLETED, attempt)
+                self._enforce_shard_artifact_budget(shard_dir)
                 return "completed"
             self._record_failure(
                 task,
@@ -365,6 +386,16 @@ class ShardSupervisor:
             )
             return "failed"
         return "failed"
+
+    def _enforce_shard_artifact_budget(self, shard_dir: Path) -> None:
+        report = enforce_shard_budget(
+            shard_dir,
+            budget_bytes=self.shard_budget_bytes,
+            nonessential_paths=tuple(sorted(shard_dir.glob("attempt-*/gdsmith_raw"))),
+            reserve_bytes=64 * 1024,
+        )
+        for warning in report.warnings:
+            _append_jsonl_fsync(shard_dir / "artifact_warnings.jsonl", {"warning": warning})
 
     def _advance_success_states(self, task: object, journal: ShardJournal, attempt: int) -> None:
         progress = (

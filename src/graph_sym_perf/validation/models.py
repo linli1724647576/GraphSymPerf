@@ -121,7 +121,13 @@ class CandidateBundle:
             "certificate": certificate,
         }
         hashes = {
-            name: query_text_hash(value) if name in {"query_a", "query_b"} else _content_hash(value)
+            name: (
+                query_text_hash(value)
+                if name in {"query_a", "query_b"}
+                else graph_snapshot.content_hash
+                if name == "graph_snapshot"
+                else _content_hash(value)
+            )
             for name, value in content.items()
         }
         return cls(
@@ -155,7 +161,13 @@ class CandidateBundle:
             f"{name}_hash_mismatch"
             for name, value in current.items()
             if self.content_hashes.get(name)
-            != (query_text_hash(value) if name in {"query_a", "query_b"} else _content_hash(value))
+            != (
+                query_text_hash(value)
+                if name in {"query_a", "query_b"}
+                else self.graph_snapshot.content_hash
+                if name == "graph_snapshot"
+                else _content_hash(value)
+            )
         ]
         if self.candidate_hash != _content_hash(dict(self.content_hashes)):
             reasons.append("candidate_hash_mismatch")
@@ -222,7 +234,11 @@ class CandidateManifest:
 
 
 def _content_hash(value: object) -> str:
-    return hashlib.sha256(stable_json_dumps(value).encode("utf-8")).hexdigest()
+    return hashlib.sha256(stable_json_dumps(_hashable_value(value)).encode("utf-8")).hexdigest()
+
+
+def canonical_content_hash(value: object) -> str:
+    return _content_hash(value)
 
 
 def query_text_hash(value: object) -> str:
@@ -235,6 +251,10 @@ def safety_certificate_hash(certificate: SafetyCertificate) -> str:
     return _content_hash(certificate)
 
 
+def candidate_hash_from_content_hashes(content_hashes: Mapping[str, str]) -> str:
+    return _content_hash(dict(content_hashes))
+
+
 def _freeze_value(value: object) -> object:
     if isinstance(value, Mapping):
         return FrozenMapping.from_mapping(value)
@@ -242,6 +262,16 @@ def _freeze_value(value: object) -> object:
         return tuple(_freeze_value(item) for item in value)
     if isinstance(value, set | frozenset):
         return tuple(sorted((_freeze_value(item) for item in value), key=repr))
+    return value
+
+
+def _hashable_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _hashable_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return tuple(_hashable_value(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return tuple(sorted((_hashable_value(item) for item in value), key=repr))
     return value
 
 

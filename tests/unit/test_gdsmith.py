@@ -7,7 +7,12 @@ from types import SimpleNamespace
 from graph_sym_perf.core import GdsmithConfig
 from graph_sym_perf.gdsmith import check_gdsmith_tooling, neo4j_uri_to_host_port, parse_gdsmith_log
 from graph_sym_perf.gdsmith import runner as gdsmith_runner
-from graph_sym_perf.gdsmith.runner import _compact_large_text_artifact, _prune_rotated_dbms_logs, _redact_sensitive_command_parts
+from graph_sym_perf.gdsmith.runner import (
+    _compact_large_text_artifact,
+    _prune_rotated_dbms_logs,
+    _redact_sensitive_command_parts,
+    _run_bounded_process,
+)
 from graph_sym_perf.gdsmith.source import query_cases_from_gdsmith
 
 
@@ -197,3 +202,33 @@ def test_compact_large_text_artifact_keeps_head_and_tail(tmp_path: Path) -> None
     assert compacted.startswith(b"a" * 20)
     assert compacted.endswith(b"z" * 20)
     assert b"truncated this GDsmith stream artifact" in compacted
+
+
+def test_bounded_gdsmith_process_is_killed_before_raw_artifacts_fill_the_shard(tmp_path, monkeypatch) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+
+    class FakeProcess:
+        pid = 999_999
+
+        def poll(self):
+            (raw / "growing.log").write_bytes(b"x" * 101)
+            return None
+
+    killed = []
+    monkeypatch.setattr(gdsmith_runner.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(gdsmith_runner, "_terminate_process_group", lambda process: killed.append(process.pid))
+
+    with (raw / "stdout").open("w") as stdout, (raw / "stderr").open("w") as stderr:
+        returncode, exceeded = _run_bounded_process(
+            ("java",),
+            cwd=raw,
+            env={},
+            stdout=stdout,
+            stderr=stderr,
+            timeout=1,
+            max_raw_artifact_bytes=100,
+        )
+
+    assert (returncode, exceeded) == (125, True)
+    assert killed == [999_999]
