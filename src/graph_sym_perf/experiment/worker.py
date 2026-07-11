@@ -1034,6 +1034,14 @@ class RuntimeFirstShardWorker:
             GenerationRequest(seed=task.seed, limit=generation_query_limit)
         )
         result = result_holder["result"]
+        if bool(getattr(result, "generation_stalled", False)) and len(corpus.queries) < task.accepted_query_pairs:
+            raise WorkerFailure(
+                ErrorKind.WORKER_HUNG,
+                (
+                    f"GDsmith stalled after {len(corpus.queries)} query records; "
+                    f"cannot cover {task.accepted_query_pairs} accepted pairs"
+                ),
+            )
         return GeneratedShard(
             graph_statements=result.parsed.graph_statements,
             query_texts=tuple(query.text for query in corpus.queries),

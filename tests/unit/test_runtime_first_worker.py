@@ -261,6 +261,41 @@ def test_formal_gdsmith_seam_keeps_partial_stalled_corpus_and_deduplicates_ast(t
     assert generated.generator_metadata["duplicate_ast_records"] == 1
 
 
+def test_formal_gdsmith_seam_retries_stalled_corpus_that_cannot_cover_target(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    record = SimpleNamespace(statement="MATCH (n) RETURN n")
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.worker.run_gdsmith",
+        lambda **_kwargs: SimpleNamespace(
+            returncode=124,
+            generation_stalled=True,
+            parsed=SimpleNamespace(
+                graph_statements=("CREATE (n:Node {id: 1})",),
+                accepted_queries=(record,),
+            ),
+        ),
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={
+            "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI": "postgresql://root:secret@localhost:5433/mydb",
+            "GRAPHSYMPERF_ARCADEDB_USER": "root",
+            "GRAPHSYMPERF_ARCADEDB_PASSWORD": "secret",
+        },
+    )
+
+    with pytest.raises(WorkerFailure) as exc_info:
+        worker._generate_with_gdsmith(
+            ShardTask(TargetSystem.ARCADEDB, 0, 7, 100, 1000, 60, "arcadedb"),
+            tmp_path,
+        )
+
+    assert exc_info.value.kind is ErrorKind.WORKER_HUNG
+    assert "1 query records; cannot cover 100 accepted pairs" in str(exc_info.value)
+
+
 def test_formal_gdsmith_seam_accepts_upstream_query_limit_sentinel(tmp_path, monkeypatch) -> None:
     record = SimpleNamespace(statement="MATCH (n) RETURN n")
     monkeypatch.setattr(
