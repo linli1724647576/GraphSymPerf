@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from graph_sym_perf.adapters.agensgraph import AgensGraphAdapter
+from graph_sym_perf.adapters.base import docker_container_epoch_identity
 from graph_sym_perf.adapters.apache_age import ApacheAgeAdapter
 from graph_sym_perf.adapters.arcadedb import ArcadeDBAdapter
 from graph_sym_perf.adapters.falkordb import FalkorDBAdapter
@@ -184,3 +185,21 @@ def test_health_epoch_fails_closed_when_probe_has_no_stable_identity() -> None:
 
     assert not epoch.available
     assert epoch.reason == "health_epoch_identity_unavailable"
+
+
+def test_docker_container_epoch_is_stable_and_restart_sensitive(monkeypatch) -> None:
+    observed = {}
+
+    def inspect(command, **_kwargs):
+        observed["command"] = command
+        return SimpleNamespace(returncode=0, stdout="container-id|2026-07-11T12:00:00Z|2\n")
+
+    monkeypatch.setattr("graph_sym_perf.adapters.base.subprocess.run", inspect)
+
+    epoch = docker_container_epoch_identity(
+        {"GRAPHSYMPERF_MEMGRAPH_CONTAINER": "graphsymperf-memgraph"},
+        TargetSystem.MEMGRAPH,
+    )
+
+    assert epoch == ("docker_container_epoch", "container-id|2026-07-11T12:00:00Z|2")
+    assert observed["command"][-1] == "graphsymperf-memgraph"

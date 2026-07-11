@@ -5,7 +5,7 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any, Mapping
 
-from graph_sym_perf.adapters.base import BaseAdapter
+from graph_sym_perf.adapters.base import BaseAdapter, docker_container_epoch_identity
 from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _has_bare_property_predicate, _has_boolean_property_operand, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, QueryTimeoutError, TargetSystem, to_typed_value as to_jsonable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
@@ -108,14 +108,7 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
         }
 
     def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
-        self._connect()
-        with self._driver.session() as session:
-            rows = session.run("CALL mg.get_info() YIELD name, value RETURN name, value")
-            info = {str(row["name"]).lower(): row["value"] for row in rows}
-        for key in ("instance_id", "startup_time", "start_time", "process_start_time"):
-            if info.get(key) not in (None, ""):
-                return (f"mg.get_info:{key}", info[key])
-        return None
+        return docker_container_epoch_identity(self.env, self.target)
 
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         upper = query.upper()

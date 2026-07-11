@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from dataclasses import dataclass
 from hashlib import sha256
 from importlib import metadata
@@ -213,6 +214,32 @@ def normalized_file_endpoint(path: str | None) -> Mapping[str, object]:
     if not path:
         return {}
     return {"database_path": str(Path(path).expanduser().resolve(strict=False))}
+
+
+def docker_container_epoch_identity(
+    environment: Mapping[str, str],
+    target: TargetSystem,
+) -> tuple[str, object] | None:
+    container = environment.get(f"GRAPHSYMPERF_{target.value.upper()}_CONTAINER", "")
+    if not container:
+        return None
+    try:
+        completed = subprocess.run(
+            (
+                "docker",
+                "inspect",
+                "--format={{.Id}}|{{.State.StartedAt}}|{{.RestartCount}}",
+                container,
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    identity = completed.stdout.strip() if completed.returncode == 0 else ""
+    return ("docker_container_epoch", identity) if identity else None
 
 
 def _package_version(package: str | None) -> str | None:
