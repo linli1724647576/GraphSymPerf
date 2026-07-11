@@ -415,7 +415,10 @@ class _GenerationProgress:
             self._partials[path] = lines.pop()
         for raw_line in lines:
             line = raw_line.strip()
-            if line and not line.startswith(b"--") and line.endswith(b";"):
+            if not line:
+                continue
+            parsed = parse_gdsmith_log(line.decode("utf-8", errors="replace"))
+            if parsed.graph_statements or parsed.accepted_queries:
                 self._statement_records += 1
 
 

@@ -581,7 +581,7 @@ def test_background_dbms_log_growth_does_not_mask_query_generation_stall(
 
         def poll(self):
             self.polls += 1
-            background_log.write_bytes(b"background\n" * self.polls)
+            background_log.write_bytes(b"INFO background heartbeat SELECT 1;\n" * self.polls)
             return 0 if self.polls >= 3 else None
 
     ticks = iter((0.0, 0.0, 0.5, 1.5, 2.5))
