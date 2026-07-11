@@ -20,6 +20,8 @@ Apache AGE 的 proxy URI 使用 `GRAPHSYMPERF_GDSMITH_PROXY_APACHE_AGE_URI`，Ar
 
 AgensGraph 的 GDsmith JDBC 连接在兼容 JAR 中对每个 statement 设置 60 秒查询超时；单条不可终止查询不应占满整个 shard 时间预算。ArcadeDB 原生 GDsmith backend 在 1×1000 门禁的四个 attempt 中仅产生 210/30/90/397 条可回放查询后 stall，因此不再作为正式生成边界。外层 120 秒无进展 watchdog 仍作为驱动/服务端未按时取消时的第二道守卫。
 
+AgensGraph 对未加引号的 label/type 标识符沿用 PostgreSQL 小写折叠。独立 validation 的 graph snapshot 回读仅对 label/type 应用这一 adapter 声明的规范化；节点/边 ID、拓扑、属性键和值仍逐项比较。这样可避免把 `L4/T3` 与数据库回读的 `l4/t3` 误判为图漂移，同时不放宽真实图内容校验。
+
 Apache AGE/AgensGraph 的 SQL wrapper 只属于 adapter rendering，不进入 query equivalence 或 runtime oracle。
 
 LadybugDB 的 label/property schema 不能在原文件上改变已有属性类型。每个 shard 加载新 GDsmith 图前，adapter 必须关闭连接并删除 `GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH` 指定的专用普通文件，然后从当前 graph snapshot 重建 schema。相对路径、符号链接和目录一律拒绝，避免扩大破坏边界。

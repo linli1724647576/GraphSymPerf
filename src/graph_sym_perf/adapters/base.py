@@ -72,6 +72,9 @@ class GraphAdapter(Protocol):
     def dbms_health_epoch(self) -> "DBMSHealthEpoch":
         ...
 
+    def graph_identifier_normalizer(self, value: str) -> str:
+        ...
+
 
 @dataclass(frozen=True)
 class DBMSFingerprint:
@@ -129,6 +132,11 @@ class BaseAdapter:
         """Target-neutral graph loading seam; legacy method stays internal."""
 
         return self.load_gdsmith_graph(corpus.statements)  # type: ignore[attr-defined]
+
+    def graph_identifier_normalizer(self, value: str) -> str:
+        """Return the target's canonical spelling for graph labels and types."""
+
+        return value
 
     def env_value(self, name: str, default: str | None = None) -> str | None:
         value = self.env.get(name)

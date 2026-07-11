@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from graph_sym_perf.equivalence.canonical import canonical_value
 from graph_sym_perf.gdsmith.replay import parse_gdsmith_replay_graph
@@ -29,6 +29,10 @@ class GraphSnapshotVerification:
     reason_codes: tuple[str, ...]
 
 
+def _identity_identifier(value: str) -> str:
+    return value
+
+
 def verify_graph_snapshot(
     adapter: Any,
     snapshot: GraphSnapshot,
@@ -38,7 +42,10 @@ def verify_graph_snapshot(
 ) -> GraphSnapshotVerification:
     """Read back graph-shape counts; a loader receipt is not verification."""
 
-    expected = _expected_graph_shape(snapshot)
+    identifier_normalizer = getattr(adapter, "graph_identifier_normalizer", None)
+    if not callable(identifier_normalizer):
+        identifier_normalizer = _identity_identifier
+    expected = _expected_graph_shape(snapshot, identifier_normalizer=identifier_normalizer)
     queries = (
         (
             "validation_graph_nodes",
@@ -62,7 +69,7 @@ def verify_graph_snapshot(
             if bool(result.summary.get("truncated")) or len(result.rows) > max_rows:
                 return GraphSnapshotVerification(False, None, ("graph_fingerprint_truncated",))
             actual[query_kind] = result.rows
-        normalized = _actual_graph_shape(actual)
+        normalized = _actual_graph_shape(actual, identifier_normalizer=identifier_normalizer)
     except Exception as exc:
         return GraphSnapshotVerification(False, None, (f"graph_fingerprint_read_error:{type(exc).__name__}",))
     if normalized != expected:
@@ -70,14 +77,18 @@ def verify_graph_snapshot(
     return GraphSnapshotVerification(True, snapshot.content_hash, ())
 
 
-def _expected_graph_shape(snapshot: GraphSnapshot) -> tuple[object, ...]:
+def _expected_graph_shape(
+    snapshot: GraphSnapshot,
+    *,
+    identifier_normalizer: Callable[[str], str] = _identity_identifier,
+) -> tuple[object, ...]:
     graph = parse_gdsmith_replay_graph(snapshot.statements)
     return (
         tuple(
             sorted(
                 ((
                     canonical_value(node.node_id),
-                    tuple(sorted(node.labels)),
+                    tuple(sorted(identifier_normalizer(label) for label in node.labels)),
                     canonical_value(node.properties),
                 )
                 for node in graph.nodes
@@ -90,7 +101,7 @@ def _expected_graph_shape(snapshot: GraphSnapshot) -> tuple[object, ...]:
                 ((
                     canonical_value(relationship.start_id),
                     canonical_value(relationship.end_id),
-                    relationship.relationship_type,
+                    identifier_normalizer(relationship.relationship_type),
                     canonical_value(relationship.properties),
                 )
                 for relationship in graph.relationships
@@ -101,13 +112,17 @@ def _expected_graph_shape(snapshot: GraphSnapshot) -> tuple[object, ...]:
     )
 
 
-def _actual_graph_shape(actual: dict[str, object]) -> tuple[object, ...]:
+def _actual_graph_shape(
+    actual: dict[str, object],
+    *,
+    identifier_normalizer: Callable[[str], str] = _identity_identifier,
+) -> tuple[object, ...]:
     return (
         tuple(
             sorted(
                 ((
                     canonical_value(row["node_id"]),
-                    tuple(sorted(str(label) for label in row["labels"])),
+                    tuple(sorted(identifier_normalizer(str(label)) for label in row["labels"])),
                     canonical_value(row["properties"]),
                 )
                 for row in tuple(actual["validation_graph_nodes"])
@@ -120,7 +135,7 @@ def _actual_graph_shape(actual: dict[str, object]) -> tuple[object, ...]:
                 ((
                     canonical_value(row["start_id"]),
                     canonical_value(row["end_id"]),
-                    str(row["relationship_type"]),
+                    identifier_normalizer(str(row["relationship_type"])),
                     canonical_value(row["properties"]),
                 )
                 for row in tuple(actual["validation_graph_relationships"])

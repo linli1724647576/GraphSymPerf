@@ -5,7 +5,7 @@ from dataclasses import asdict, replace
 
 import pytest
 
-from graph_sym_perf.artifacts.chain import ArtifactChainWriter
+from graph_sym_perf.artifacts.chain import ArtifactChainWriter, _session_payload
 from graph_sym_perf.artifacts.policy import ArtifactLevel
 from graph_sym_perf.artifacts.schema import ArtifactRecord
 from graph_sym_perf.artifacts.store import ContentAddressedStore, load_artifact_record
@@ -101,6 +101,24 @@ def _lifecycle(index: int) -> SessionLifecycle:
 def _control() -> RuntimeEvidence:
     samples = tuple(PairedSample("AB" if index % 2 == 0 else "BA", 10.0, 10.0) for index in range(20))
     return RuntimeEvidence(RuntimeVerdict.PASS, "a", "a", samples, 1.0, 0.0, 1.0, 1.0, 0.5, 0.0, ())
+
+
+def test_validation_session_artifact_preserves_terminal_runtime_reason() -> None:
+    session = ValidationSession(
+        "session-failed",
+        123,
+        "",
+        "",
+        replace(_evidence(verdict=RuntimeVerdict.INVALID), reason_codes=("graph_fingerprint_mismatch",)),
+        (),
+        lifecycle=SessionLifecycle(True, True, True, True, True, False, True, True, "connection-1"),
+    )
+
+    payload = _session_payload(session, 0)
+
+    assert payload["runtime_verdict"] == "invalid"
+    assert payload["runtime_reason_codes"] == ("graph_fingerprint_mismatch",)
+    assert payload["lifecycle"]["graph_verified"] is False
 
 
 def _report(

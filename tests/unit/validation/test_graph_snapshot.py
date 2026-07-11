@@ -19,6 +19,28 @@ class GraphStateAdapter:
         return ExecutionResult(TargetSystem.NEO4J, query_kind, rows, 1.0, {"truncated": False})
 
 
+class CaseFoldingGraphStateAdapter(GraphStateAdapter):
+    def execute(self, query, parameters, query_kind, *, max_rows=None, timeout_seconds=None):
+        result = super().execute(
+            query,
+            parameters,
+            query_kind,
+            max_rows=max_rows,
+            timeout_seconds=timeout_seconds,
+        )
+        if query_kind == "validation_graph_nodes":
+            rows = tuple({**row, "labels": [label.lower() for label in row["labels"]]} for row in result.rows)
+        else:
+            rows = tuple(
+                {**row, "relationship_type": row["relationship_type"].lower()}
+                for row in result.rows
+            )
+        return ExecutionResult(result.system, result.query_kind, rows, result.elapsed_ms, result.summary)
+
+    def graph_identifier_normalizer(self, value: str) -> str:
+        return value.lower()
+
+
 def _snapshot() -> GraphSnapshot:
     return GraphSnapshot.from_statements(
         (
@@ -43,3 +65,10 @@ def test_graph_snapshot_verifier_rejects_wrong_content_even_when_shape_and_input
     assert not verification.verified
     assert verification.fingerprint is None
     assert verification.reason_codes == ("graph_fingerprint_mismatch",)
+
+
+def test_graph_snapshot_verifier_honors_target_identifier_folding() -> None:
+    verification = verify_graph_snapshot(CaseFoldingGraphStateAdapter(), _snapshot())
+
+    assert verification.verified
+    assert verification.fingerprint == _snapshot().content_hash

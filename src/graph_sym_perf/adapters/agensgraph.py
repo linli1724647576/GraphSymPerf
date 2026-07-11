@@ -212,6 +212,11 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         return AgensGraphDialect().check(PortableQuery(query)).kind is not DecisionKind.REJECT
 
+    def graph_identifier_normalizer(self, value: str) -> str:
+        """AgensGraph folds unquoted PostgreSQL identifiers to lowercase."""
+
+        return value.lower()
+
     def _merge_gdsmith_node(self, node: GdsmithReplayNode) -> None:
         label = self._single_node_label(node)
         query = f"""

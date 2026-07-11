@@ -4,6 +4,8 @@
 
 从大量候选中挑最大 runtime ratio 会产生 winner's curse。validation 不复算 discovery 样本，而是在两个全新 OS 进程中分别创建连接、清空并重载同一 graph snapshot；session ID、PID 与 connection identity 必须互不相同。
 
+每个 session 都必须从目标 DBMS 回读节点、边、标签/类型和完整属性，不能把 loader 返回值当作图已正确装载的证据。标签与关系类型按 adapter 声明的目标标识符语义规范化后比较；默认严格区分大小写，AgensGraph 因 PostgreSQL 未加引号标识符规则规范化为小写。该规范化不适用于属性值、节点/边数量或拓扑，任一实际内容差异仍以 `graph_fingerprint_mismatch` 失败关闭。
+
 ## 每个 Session
 
 1. 校验 candidate hash、query/parameter/graph/config/policy/certificate hash、DBMS 与 driver 版本、镜像摘要和 CPU 架构。
@@ -21,3 +23,5 @@
 validation ratio 是开发者侧可报告的数值。discovery ratio 只保留为历史筛选字段；缩小但仍过独立门槛时标为 `shrunk_but_real`，不得继续引用更大的 discovery 数值。
 
 reducer 输出的新 pair 必须从零执行同一协议。原始 validation 不能替代 reduced validation。
+
+`VALIDATION_PASSED`、`REJECTED`、`INCONCLUSIVE` 和 `INVALID` 都写入同一种带哈希绑定的 validation artifact。artifact 保留两个 session 的 lifecycle、runtime verdict/reason、A/A 与 B/B 控制、fingerprint 和 health event；顶层终态不能用只有 `session_lifecycle_incomplete` 的摘要替代底层会话证据。

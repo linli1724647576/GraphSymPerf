@@ -165,30 +165,17 @@ class ProductionCandidatePipeline:
             yield_store=ValidatedYieldStore(self.run_dir / "validated_yield" / f"{task.target.value}.jsonl")
         )
         validation = validator.validate(candidate, SubprocessSessionRunner(adapter_factory))
-        if validation.stage is PipelineStage.VALIDATION_PASSED:
-            validation_record = ArtifactChainWriter(store).persist_validation(
-                validation,
-                candidate_ref=candidate_ref,
-                environment=_validation_environment(
-                    candidate,
-                    task,
-                    self.environment,
-                    driver_version=driver_version,
-                ),
-            )
-            validation_ref = asdict(validation_record.reference)
-        else:
-            validation_ref = asdict(
-                store.put_json(
-                    f"validation-outcome-{candidate.candidate_hash}.json",
-                    {
-                        "candidate_hash": candidate.candidate_hash,
-                        "reason_codes": list(validation.reason_codes),
-                        "stage": validation.stage.value,
-                        "validation_protocol": validation.validation_protocol,
-                    },
-                )
-            )
+        validation_record = ArtifactChainWriter(store).persist_validation(
+            validation,
+            candidate_ref=candidate_ref,
+            environment=_validation_environment(
+                candidate,
+                task,
+                self.environment,
+                driver_version=driver_version,
+            ),
+        )
+        validation_ref = asdict(validation_record.reference)
         validation_outcome = {
             "candidate_hash": candidate.candidate_hash,
             "reason_codes": list(validation.reason_codes),

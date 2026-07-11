@@ -155,6 +155,8 @@ def _session_payload(session: object, index: int) -> dict[str, object]:
         "slow_query": evidence.slow_query,
         "measurement_source": evidence.measurement_source,
         "measurement_protocol": evidence.measurement_protocol,
+        "runtime_verdict": evidence.verdict.value,
+        "runtime_reason_codes": evidence.reason_codes,
         "paired_timing": tuple(asdict(sample) for sample in evidence.paired_samples),
         "negative_controls": controls,
         "lifecycle": lifecycle_payload,

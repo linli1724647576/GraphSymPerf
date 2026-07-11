@@ -6,7 +6,7 @@
 | --- | --- |
 | minimal | query/pair hash、rule/site、等价性摘要、screen runtime 与错误分类 |
 | candidate | query pair、parameters、discovery paired timing、SafetyCertificate、graph snapshot ref 与全部 validation-input hashes |
-| validation | 两个 session 的 raw paired timing、A/A 与 B/B、lifecycle、环境、fingerprint、typed equivalence 与 stage |
+| validation | 两个 session 的 raw paired timing、runtime verdict/reason、A/A 与 B/B、lifecycle、环境、fingerprint、typed equivalence 与 stage；通过与失败终态使用同一 typed schema |
 | issue | reduced pair、reproducer、original/final validation refs、reduction ref，以及可选 ExplanationEvidence ref |
 
 对象按 SHA-256 内容寻址，JSONL 只保存小记录和 ref。candidate hash 绑定 query、parameter、graph、DBMS fingerprint/version、resolved config、slow direction、discovery ratio、policy 与 certificate。`verify_issue_hash_chain` 从 issue 递归解析 original/reduced candidate 与两次 validation，验证 reduced query hashes、reduction 与 reproducer。issue record 还封存 `REDUCED_VALID`、CORE certificate、duplicate clearance、validated ratio 与 DBMS version。

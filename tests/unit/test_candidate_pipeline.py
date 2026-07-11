@@ -53,6 +53,9 @@ def _candidate() -> CandidateBundle:
 
 
 def test_failed_validation_is_terminal_and_never_enters_reducer(monkeypatch, tmp_path) -> None:
+    reference = ArtifactReference("0" * 64, "objects/00/" + "0" * 64, 0, "application/json")
+    persisted = []
+
     class _Validator:
         def __init__(self, **_kwargs) -> None:
             pass
@@ -65,14 +68,20 @@ def test_failed_validation_is_terminal_and_never_enters_reducer(monkeypatch, tmp
             )
 
     monkeypatch.setattr("graph_sym_perf.experiment.candidate_pipeline.IssueValidator", _Validator)
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline.ArtifactChainWriter.persist_validation",
+        lambda _writer, report, **_kwargs: persisted.append(report) or SimpleNamespace(reference=reference),
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline._validation_environment",
+        lambda *_args, **_kwargs: {"execution_mode": "test"},
+    )
     pipeline = ProductionCandidatePipeline(
         load_experiment_spec("config/experiment.yaml"),
         environment={"GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "f" * 64},
         run_dir=tmp_path,
     )
     store = ContentAddressedStore(tmp_path / "artifacts", budget_bytes=1024 * 1024)
-    reference = ArtifactReference("0" * 64, "objects/00/" + "0" * 64, 0, "application/json")
-
     outcome = pipeline.process(
         _candidate(),
         task=ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60),
@@ -84,6 +93,14 @@ def test_failed_validation_is_terminal_and_never_enters_reducer(monkeypatch, tmp
     )
 
     assert outcome["validation"]["stage"] == "rejected"
+    assert persisted and persisted[0].reason_codes == ("ratio_below_threshold",)
+    assert outcome["validation"]["validation_ref"] == {
+        "content_hash": reference.content_hash,
+        "relative_path": reference.relative_path,
+        "size_bytes": reference.size_bytes,
+        "media_type": reference.media_type,
+        "schema_version": reference.schema_version,
+    }
     assert outcome["reduction"] == {
         "candidate_hash": outcome["candidate_hash"],
         "reason": "validation_not_passed",
