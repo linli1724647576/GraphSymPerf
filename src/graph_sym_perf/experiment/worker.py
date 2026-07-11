@@ -995,11 +995,15 @@ class RuntimeFirstShardWorker:
                 seed=request.seed,
             )
             result_holder["result"] = result
-            if result.returncode not in {0, 124}:
-                reason = "raw artifact budget exceeded" if result.artifact_budget_exceeded else "process failure"
+            artifact_budget_reached = bool(getattr(result, "artifact_budget_exceeded", False))
+            partial_corpus = result.returncode == 124 or (
+                result.returncode == 125 and artifact_budget_reached
+            )
+            if result.returncode != 0 and not partial_corpus:
+                reason = "raw artifact budget exceeded" if artifact_budget_reached else "process failure"
                 raise RuntimeError(f"GDsmith failed with code {result.returncode}: {reason}")
-            if result.returncode == 124 and not result.parsed.accepted_queries:
-                raise RuntimeError("GDsmith exhausted its time budget without a replayable query")
+            if partial_corpus and not result.parsed.accepted_queries:
+                raise RuntimeError("GDsmith stopped without a replayable query")
             return tuple(record.statement for record in result.parsed.accepted_queries)
 
         corpus = GdsmithGenerator(invoke).generate(
@@ -1018,7 +1022,9 @@ class RuntimeFirstShardWorker:
                 "gdsmith_returncode": result.returncode,
                 "duplicate_ast_records": len(corpus.duplicate_ast_hashes),
                 "generation_stop_reason": (
-                    "NO_PROGRESS_TIMEOUT"
+                    "RAW_ARTIFACT_BUDGET_REACHED"
+                    if bool(getattr(result, "artifact_budget_exceeded", False))
+                    else "NO_PROGRESS_TIMEOUT"
                     if result.returncode == 124 and result.generation_stalled
                     else "TIME_BUDGET_EXHAUSTED"
                     if result.returncode == 124

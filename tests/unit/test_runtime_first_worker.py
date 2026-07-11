@@ -259,6 +259,65 @@ def test_formal_gdsmith_seam_keeps_partial_stalled_corpus_and_deduplicates_ast(t
     assert generated.generator_metadata["duplicate_ast_records"] == 1
 
 
+def test_formal_gdsmith_seam_keeps_replayable_corpus_at_raw_artifact_budget(tmp_path, monkeypatch) -> None:
+    record = SimpleNamespace(statement="MATCH (n) RETURN n")
+
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.worker.run_gdsmith",
+        lambda **_kwargs: SimpleNamespace(
+            returncode=125,
+            artifact_budget_exceeded=True,
+            generation_stalled=False,
+            parsed=SimpleNamespace(
+                graph_statements=("CREATE (n:Node {id: 1})",),
+                accepted_queries=(record,),
+            ),
+        ),
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={
+            "GRAPHSYMPERF_NEO4J_URI": "bolt://localhost:7687",
+            "GRAPHSYMPERF_NEO4J_USER": "neo4j",
+            "GRAPHSYMPERF_NEO4J_PASSWORD": "secret",
+        },
+    )
+
+    generated = worker._generate_with_gdsmith(
+        ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1000, 60, "neo4j"),
+        tmp_path,
+    )
+
+    assert generated.query_texts == (record.statement,)
+    assert generated.generator_metadata["generation_stop_reason"] == "RAW_ARTIFACT_BUDGET_REACHED"
+
+
+def test_formal_gdsmith_seam_rejects_empty_corpus_at_raw_artifact_budget(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.worker.run_gdsmith",
+        lambda **_kwargs: SimpleNamespace(
+            returncode=125,
+            artifact_budget_exceeded=True,
+            generation_stalled=False,
+            parsed=SimpleNamespace(graph_statements=(), accepted_queries=()),
+        ),
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={
+            "GRAPHSYMPERF_NEO4J_URI": "bolt://localhost:7687",
+            "GRAPHSYMPERF_NEO4J_USER": "neo4j",
+            "GRAPHSYMPERF_NEO4J_PASSWORD": "secret",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="without a replayable query"):
+        worker._generate_with_gdsmith(
+            ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1000, 60, "neo4j"),
+            tmp_path,
+        )
+
+
 @pytest.mark.parametrize(
     ("target", "environment", "backend", "planned_backend"),
     [
