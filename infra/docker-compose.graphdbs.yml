@@ -37,6 +37,25 @@ services:
       timeout: 10s
       retries: 20
 
+  neo4j-arcadedb-proxy:
+    image: neo4j:2026.05.0
+    container_name: graphsymperf-neo4j-arcadedb-proxy
+    restart: unless-stopped
+    ports:
+      - "7476:7474"
+      - "7698:7687"
+    environment:
+      NEO4J_AUTH: neo4j/graphsymperf_arcadedb_proxy
+      NEO4J_dbms_memory_transaction_total_max: 512M
+      NEO4J_server_memory_heap_initial__size: 512M
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_memory_pagecache_size: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -a bolt://localhost:7687 -u neo4j -p graphsymperf_arcadedb_proxy 'RETURN 1;' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
   memgraph:
     image: memgraph/memgraph
     container_name: graphsymperf-memgraph

@@ -127,12 +127,13 @@ def test_schema_v2_rejects_unknown_system_definition_field(tmp_path: Path) -> No
         load_experiment_spec(path)
 
 
-def test_arcadedb_generation_requires_the_postgres_wire_uri() -> None:
+def test_arcadedb_generation_requires_an_isolated_proxy_uri() -> None:
     spec = load_experiment_spec("config/experiment.yaml")
 
     assert spec.systems[TargetSystem.ARCADEDB].generation_required_env == (
-        "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI",
+        "GRAPHSYMPERF_GDSMITH_PROXY_ARCADEDB_URI",
     )
+    assert spec.systems[TargetSystem.ARCADEDB].generation_backend == "neo4j_proxy"
 
 
 def test_rules_yaml_is_loaded_and_strictly_validated(tmp_path: Path) -> None:

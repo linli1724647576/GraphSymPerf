@@ -201,28 +201,23 @@ def test_age_generation_provenance_never_claims_native_provider_coverage() -> No
         _generation_backend_provenance(TargetSystem.APACHE_AGE, "neo4j")
 
 
-def test_arcadedb_gdsmith_uses_the_postgres_wire_endpoint() -> None:
+def test_arcadedb_gdsmith_uses_an_isolated_neo4j_proxy() -> None:
     connection = _gdsmith_connection(
         TargetSystem.ARCADEDB,
         {
-            "GRAPHSYMPERF_ARCADEDB_HTTP_URL": "http://http.example:2480",
-            "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI": "postgresql://pg.example:5433/mydb",
-            "GRAPHSYMPERF_ARCADEDB_USER": "root",
-            "GRAPHSYMPERF_ARCADEDB_PASSWORD": "secret",
+            "GRAPHSYMPERF_GDSMITH_PROXY_ARCADEDB_URI": "bolt://proxy.example:7698",
+            "GRAPHSYMPERF_GDSMITH_PROXY_ARCADEDB_USER": "proxy-user",
+            "GRAPHSYMPERF_GDSMITH_PROXY_ARCADEDB_PASSWORD": "proxy-secret",
         },
     )
 
-    assert connection == ("arcadedb", "pg.example", 5433, "root", "secret")
+    assert connection == ("neo4j", "proxy.example", 7698, "proxy-user", "proxy-secret")
 
 
-def test_arcadedb_gdsmith_rejects_a_database_the_upstream_provider_cannot_select() -> None:
-    with pytest.raises(ValueError, match="must select /mydb"):
-        _gdsmith_connection(
-            TargetSystem.ARCADEDB,
-            {
-                "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI": "postgresql://pg.example:5433/other",
-            },
-        )
+def test_arcadedb_generation_provenance_never_claims_native_provider_coverage() -> None:
+    assert _generation_backend_provenance(TargetSystem.ARCADEDB, "neo4j") == "neo4j_proxy"
+    with pytest.raises(ValueError, match="Neo4j proxy"):
+        _generation_backend_provenance(TargetSystem.ARCADEDB, "arcadedb")
 
 
 def test_formal_gdsmith_seam_keeps_partial_stalled_corpus_and_deduplicates_ast(tmp_path, monkeypatch) -> None:
@@ -280,15 +275,13 @@ def test_formal_gdsmith_seam_retries_stalled_corpus_that_cannot_cover_target(
     worker = RuntimeFirstShardWorker(
         load_experiment_spec("config/experiment.yaml"),
         environment={
-            "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI": "postgresql://root:secret@localhost:5433/mydb",
-            "GRAPHSYMPERF_ARCADEDB_USER": "root",
-            "GRAPHSYMPERF_ARCADEDB_PASSWORD": "secret",
+            "GRAPHSYMPERF_GDSMITH_PROXY_ARCADEDB_URI": "bolt://localhost:7698",
         },
     )
 
     with pytest.raises(WorkerFailure) as exc_info:
         worker._generate_with_gdsmith(
-            ShardTask(TargetSystem.ARCADEDB, 0, 7, 100, 1000, 60, "arcadedb"),
+            ShardTask(TargetSystem.ARCADEDB, 0, 7, 100, 1000, 60, "neo4j_proxy"),
             tmp_path,
         )
 
@@ -569,12 +562,10 @@ def test_formal_gdsmith_seam_rejects_empty_corpus_at_raw_artifact_budget(tmp_pat
         (
             TargetSystem.ARCADEDB,
             {
-                "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI": "postgresql://127.0.0.1:5433/mydb",
-                "GRAPHSYMPERF_ARCADEDB_USER": "root",
-                "GRAPHSYMPERF_ARCADEDB_PASSWORD": "secret",
+                "GRAPHSYMPERF_GDSMITH_PROXY_ARCADEDB_URI": "bolt://127.0.0.1:7698",
             },
-            "arcadedb",
-            "arcadedb",
+            "neo4j",
+            "neo4j_proxy",
         ),
         (
             TargetSystem.LADYBUGDB,
@@ -585,7 +576,7 @@ def test_formal_gdsmith_seam_rejects_empty_corpus_at_raw_artifact_budget(tmp_pat
             "neo4j_proxy",
         ),
     ],
-    ids=["agensgraph", "apache-age-proxy", "arcadedb", "ladybugdb-proxy"],
+    ids=["agensgraph", "apache-age-proxy", "arcadedb-proxy", "ladybugdb-proxy"],
 )
 def test_single_label_generation_backends_are_constrained_at_the_source(
     tmp_path,
