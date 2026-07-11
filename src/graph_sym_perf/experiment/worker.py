@@ -1006,10 +1006,17 @@ class RuntimeFirstShardWorker:
             )
             result_holder["result"] = result
             artifact_budget_reached = bool(getattr(result, "artifact_budget_exceeded", False))
+            fatal_markers = set(getattr(result, "fatal_stderr_markers", ()))
+            unrecoverable_markers = fatal_markers - {"DatabaseConnectionLost"}
+            process_returncode = getattr(result, "process_returncode", None)
             query_record_limit_reached = (
                 result.returncode == 1
-                and getattr(result, "process_returncode", None) == 1
                 and bool(getattr(result, "query_record_limit_reached", False))
+                and not unrecoverable_markers
+                and (
+                    process_returncode == 1
+                    or (process_returncode == 0 and fatal_markers == {"DatabaseConnectionLost"})
+                )
             )
             result_holder["query_record_limit_reached"] = query_record_limit_reached
             partial_corpus = result.returncode == 124 or (
