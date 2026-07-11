@@ -69,6 +69,7 @@ services:
     image: bitnine/agensgraph:latest
     container_name: graphsymperf-agensgraph
     restart: unless-stopped
+    shm_size: 512mb
     ports:
       - "5456:5432"
     environment:
@@ -90,6 +91,7 @@ services:
     image: bitnine/agensgraph:latest
     container_name: graphsymperf-agensgraph-age-proxy
     restart: unless-stopped
+    shm_size: 512mb
     ports:
       - "5457:5432"
     environment:
@@ -128,6 +130,7 @@ services:
     image: apache/age:latest
     container_name: graphsymperf-apache-age
     restart: unless-stopped
+    shm_size: 512mb
     ports:
       - "5455:5432"
     environment:
