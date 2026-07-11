@@ -36,6 +36,9 @@ def test_apache_age_rejects_same_variable_with_different_labels() -> None:
     assert _has_variable_label_conflict("MATCH (n:L0)-->(m:L1) MATCH (n:L2) RETURN n")
     assert _has_variable_label_conflict("MATCH (n)-->(m:L1) OPTIONAL MATCH (n:L2) RETURN n")
     assert not _has_variable_label_conflict("MATCH (n:L0)-->(m:L1) MATCH (n:L0) RETURN n")
+    assert not _has_variable_label_conflict(
+        "MATCH (a:L0 {id: 1}), (b:L1 {id: 2}) CREATE (a)-[:T]->(b) RETURN 1 AS ok"
+    )
 
 
 def test_apache_age_rejects_distinct_order_by_expression_not_projected() -> None:

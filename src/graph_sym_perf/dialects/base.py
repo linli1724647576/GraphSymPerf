@@ -296,16 +296,19 @@ def has_variable_label_conflict(query: str) -> bool:
         value = value.strip()
         return value[1:-1].replace("``", "`") if value.startswith("`") else value
 
-    labels_by_variable: dict[str, set[str | None]] = {}
+    labels_by_variable: dict[str, set[str]] = {}
     code = _code_only(query, preserve_backticks=True)
     for match in re.finditer(
         rf"\(\s*({identifier})\s*((?::\s*{identifier})*)\s*(?=[{{)])",
         code,
     ):
         variable = canonical(match.group(1))
-        labels = {canonical(value) for value in re.findall(rf":\s*({identifier})", match.group(2))} or {None}
-        labels_by_variable.setdefault(variable, set()).update(labels)
-        if len(labels_by_variable[variable]) > 1:
+        labels = {canonical(value) for value in re.findall(rf":\s*({identifier})", match.group(2))}
+        if variable not in labels_by_variable:
+            labels_by_variable[variable] = labels
+            continue
+        previous = labels_by_variable[variable]
+        if labels and (not previous or labels != previous):
             return True
     return False
 
