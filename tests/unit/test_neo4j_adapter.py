@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from graph_sym_perf.adapters.neo4j import _collect_rows, _is_gdsmith_index_name, _neo4j_summary
+from graph_sym_perf.adapters.neo4j import Neo4jAdapter, _collect_rows, _is_gdsmith_index_name, _neo4j_summary
 
 
 class FakeRecord:
@@ -58,3 +58,21 @@ def test_schema_reset_only_recognizes_gdsmith_generated_index_names() -> None:
     assert _is_gdsmith_index_name("i123")
     assert not _is_gdsmith_index_name("gbp_person_dataset")
     assert not _is_gdsmith_index_name("i0_injected")
+
+
+def test_neo4j_reset_graph_uses_bounded_transaction_batches() -> None:
+    calls: list[tuple[str, str, float | None]] = []
+    adapter = object.__new__(Neo4jAdapter)
+
+    def execute(query, _parameters, query_kind, *, timeout_seconds=None, **_kwargs):
+        calls.append((query, query_kind, timeout_seconds))
+
+    adapter.execute = execute
+
+    assert adapter.reset_graph(timeout_seconds=45) is True
+    assert len(calls) == 1
+    query, kind, timeout = calls[0]
+    assert "CALL (n)" in query
+    assert "IN TRANSACTIONS OF 1000 ROWS" in query
+    assert kind == "neo4j_database_reset"
+    assert timeout == 45

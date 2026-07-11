@@ -68,7 +68,7 @@ class _DatabaseResetAdapter(_Adapter):
         super().__init__()
         self.database_resets = 0
 
-    def reset_graph(self) -> bool:
+    def reset_graph(self, *, timeout_seconds=None) -> bool:
         self.database_resets += 1
         return True
 

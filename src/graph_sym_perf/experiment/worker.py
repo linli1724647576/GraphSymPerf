@@ -158,15 +158,16 @@ class AdapterQueryProxy:
             operation=operation,
         )
 
-    def reset_graph(self) -> bool:
+    def reset_graph(self, *, timeout_seconds: float | None = None) -> bool:
         operation = getattr(self._adapter, "reset_graph", None)
         if not callable(operation):
             return False
+        effective_timeout = timeout_seconds or self.default_timeout_seconds
         self._call_with_inflight(
             query_identity="adapter.reset_graph",
             query_kind="graph_reset",
-            timeout_seconds=self.default_timeout_seconds,
-            operation=operation,
+            timeout_seconds=effective_timeout,
+            operation=lambda: operation(timeout_seconds=effective_timeout),
         )
         return True
 

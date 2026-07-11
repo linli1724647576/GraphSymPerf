@@ -60,12 +60,12 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
         if response.status_code not in (200, 201, 409):
             raise AdapterError(f"cannot create ArcadeDB database {database!r}: {response.text}")
 
-    def reset_graph(self) -> bool:
+    def reset_graph(self, *, timeout_seconds: float | None = None) -> bool:
         """Give each shard a fresh database without scanning the old graph."""
 
         self._connect()
         database = _database_name(self._database)
-        exists = self._request("GET", f"/api/v1/exists/{database}")
+        exists = self._request("GET", f"/api/v1/exists/{database}", timeout=timeout_seconds)
         try:
             present = exists.status_code == 200 and bool(exists.json().get("result"))
         except Exception as exc:
@@ -75,6 +75,7 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
                 "POST",
                 "/api/v1/server",
                 json={"command": f"drop database {database}"},
+                timeout=timeout_seconds,
             )
             if response.status_code not in (200, 201):
                 raise AdapterError(f"cannot drop ArcadeDB database {database!r}: {response.text}")

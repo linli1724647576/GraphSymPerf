@@ -101,6 +101,15 @@ class Neo4jAdapter(CypherLoaderMixin, BaseAdapter):
             "CREATE INDEX gbp_tag_dataset IF NOT EXISTS FOR (n:Tag) ON (n.gbp_dataset)",
         )
 
+    def reset_graph(self, *, timeout_seconds: float | None = None) -> bool:
+        self.execute(
+            "MATCH (n) CALL (n) { DETACH DELETE n } IN TRANSACTIONS OF 1000 ROWS",
+            {},
+            "neo4j_database_reset",
+            timeout_seconds=timeout_seconds,
+        )
+        return True
+
     def reset_schema(self) -> None:
         indexes = self.execute(
             "SHOW INDEXES YIELD name RETURN name",

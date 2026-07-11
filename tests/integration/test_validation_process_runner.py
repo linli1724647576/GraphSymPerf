@@ -48,7 +48,7 @@ class LifecycleAdapter:
         self._event("load")
         self._graph_fingerprint = GraphSnapshot.from_statements(statements).content_hash
 
-    def reset_graph(self) -> bool:
+    def reset_graph(self, *, timeout_seconds=None) -> bool:
         if self.candidate.resolved_config.get("mode") != "database_reset":
             return False
         self._event("database_reset")

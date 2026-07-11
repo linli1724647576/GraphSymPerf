@@ -14,7 +14,7 @@ def reset_graph_state(
     """Reset through an adapter-native database operation or a Cypher fallback."""
 
     reset_graph = getattr(adapter, "reset_graph", None)
-    if callable(reset_graph) and reset_graph() is True:
+    if callable(reset_graph) and reset_graph(timeout_seconds=timeout_seconds) is True:
         return "adapter"
     kwargs = {"timeout_seconds": timeout_seconds} if timeout_seconds is not None else {}
     adapter.execute("MATCH (n) DETACH DELETE n", {}, query_kind, **kwargs)
