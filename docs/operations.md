@@ -22,6 +22,8 @@ doctor 要求仓库与 GDsmith provenance 可核查、固定 commit 匹配、JAR
 
 GDsmith raw 达到分配预算时会终止进程并标记 `RAW_ARTIFACT_BUDGET_REACHED`。只有 parser 已经从预算内文件提取到图快照与至少一个可回放查询时，该 partial corpus 才能继续 acceptance；空语料或普通非零退出仍失败关闭。这避免在固定 seed 上重复生成同一批超额日志。
 
+兼容 JAR 对 AgensGraph 和 ArcadeDB 的每个 JDBC `Statement` 同时设置 60 秒 query timeout 与 1,000 行 result cap。row cap 只约束 GDsmith 内部 oracle 的结果物化，不改变 GraphSymPerf 后续的 ordinary-execute runtime 协议；它防止高基数生成查询在 PostgreSQL JDBC `processResults` 中耗尽生成器 JVM heap。JAR manifest 必须同时声明 `jdbc_query_timeout_60s` 与 `jdbc_result_row_cap_1000`，否则 doctor 拒绝运行。
+
 ArcadeDB 的 shard、独立 validation session 和 reducer 使用服务器级 `drop database`/`create database` 重建 `mydb`；这一边界避免对旧图执行 `MATCH (n) DETACH DELETE n` 时的全图扫描与 Java heap 放大。数据库名只接受受限标识符，重建任一步失败都不会继续加载或测量。其他 adapter 未声明 database-level reset 时仍使用 Cypher 清图，再执行各自的 schema reset。
 
 Neo4j Community Edition 不能用 Enterprise-only database recreate 流程，因此其 adapter 使用 `CALL (n) { ... } IN TRANSACTIONS OF 1000 ROWS` 分批 `DETACH DELETE`，避免单一全图写事务占满 transaction memory/heap。该查询必须在 driver 的 implicit transaction 中运行，并继承同一 graph-reset hard deadline；超时仍失败关闭，不会在未知部分删除状态上开始测量。

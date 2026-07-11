@@ -73,6 +73,7 @@ def main() -> int:
                     "render_safe_double_quoted_literals",
                     "reject_unsafe_double_quoted_tokens",
                     "jdbc_query_timeout_60s",
+                    "jdbc_result_row_cap_1000",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ),
@@ -271,6 +272,7 @@ def _patch_agens_connection_source(source: str) -> str:
         "stmt.execute(agensCompatible(arg))",
         "stmt.executeQuery(agensCompatible(arg))",
         "stmt.setQueryTimeout(60);",
+        "stmt.setMaxRows(1000);",
     )
     missing = tuple(anchor for anchor in required if anchor not in source)
     if missing:
@@ -289,7 +291,10 @@ def _add_statement_timeouts(source: str) -> str:
     anchor = "        Statement stmt = connection.createStatement();\n"
     if source.count(anchor) != 2:
         raise RuntimeError("required compatibility guard patch expected exactly two JDBC statement anchors")
-    return source.replace(anchor, anchor + "        stmt.setQueryTimeout(60);\n")
+    return source.replace(
+        anchor,
+        anchor + "        stmt.setQueryTimeout(60);\n        stmt.setMaxRows(1000);\n",
+    )
 
 
 def _build_with_maven(work_dir: Path) -> Path:

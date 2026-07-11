@@ -125,6 +125,7 @@ def _verify_gdsmith_artifact(
         "render_safe_double_quoted_literals",
         "reject_unsafe_double_quoted_tokens",
         "jdbc_query_timeout_60s",
+        "jdbc_result_row_cap_1000",
         "exclude_unbuildable_tugraph_provider",
         "shade_runnable_jar",
     }

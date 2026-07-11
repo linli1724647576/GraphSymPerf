@@ -55,6 +55,7 @@ public class AgensGraphConnection extends CypherConnection {
     assert "GRAPHSYMPERF_REJECT_UNSAFE_DOUBLE_QUOTED_TOKEN" in patched
     assert ".replaceAll(\"'$1'\")" in patched
     assert patched.count("stmt.setQueryTimeout(60);") == 2
+    assert patched.count("stmt.setMaxRows(1000);") == 2
     assert "appendReplacement" not in patched
     assert "return rendered;" in patched
 
@@ -91,6 +92,7 @@ public class ArcadeDBConnection extends CypherConnection {
     patched = module._patch_arcadedb_connection_source(original)
 
     assert patched.count("stmt.setQueryTimeout(60);") == 2
+    assert patched.count("stmt.setMaxRows(1000);") == 2
 
 
 def test_compat_patch_fails_if_connection_execution_anchor_is_missing() -> None:
