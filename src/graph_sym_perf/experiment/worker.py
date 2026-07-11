@@ -980,8 +980,8 @@ class RuntimeFirstShardWorker:
                     ),
                     timeout_seconds=timeout_seconds,
                     max_raw_artifact_bytes=min(
-                        100 * 1024 * 1024,
-                        int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024 // 4,
+                        350 * 1024 * 1024,
+                        int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024 * 7 // 10,
                     ),
                 ),
                 env=self.environment,

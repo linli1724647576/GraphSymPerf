@@ -230,6 +230,7 @@ def test_formal_gdsmith_seam_keeps_partial_stalled_corpus_and_deduplicates_ast(t
     def fake_run_gdsmith(**kwargs):
         assert kwargs["num_queries"] == 2
         assert kwargs["seed"] == 7
+        assert kwargs["config"].max_raw_artifact_bytes == 350 * 1024 * 1024
         return SimpleNamespace(
             returncode=124,
             generation_stalled=True,

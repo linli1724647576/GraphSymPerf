@@ -20,7 +20,7 @@ doctor 要求仓库与 GDsmith provenance 可核查、固定 commit 匹配、JAR
 
 每次 adapter 操作前原子写 `inflight.json`，包含 query/graph/DBMS hash、query kind、开始时间与 deadline。worker 在独立进程组中运行；heartbeat 过期或 hard deadline 后终止整个进程组。GDsmith 进程即使仍存活，若 raw/log 连续 120 秒无任何字节进展，也会终止其独立进程组；已有可回放语料标记为 `NO_PROGRESS_TIMEOUT` 并进入后续筛选，无可回放查询则失败关闭。当前 shard 对瞬态失败最多重试 3 次，其他 shard 继续；参数、证明或 artifact 不一致引发的确定性 `EVIDENCE_INTEGRITY_ERROR` 立即失败关闭，不做无效重试。query timeout、driver timeout、worker hung、worker crashed、DBMS crashed、evidence integrity error 与 infrastructure error 分开记录。
 
-GDsmith raw 达到分配预算时会终止进程并标记 `RAW_ARTIFACT_BUDGET_REACHED`。只有 parser 已经从预算内文件提取到图快照与至少一个可回放查询时，该 partial corpus 才能继续 acceptance；空语料或普通非零退出仍失败关闭。这避免在固定 seed 上重复生成同一批超额日志。
+GDsmith raw 临时上限为 shard 预算的 70%，且最多 350 MiB；对正式 500 MiB shard 保留至少 150 MiB 给 checkpoint、accepted corpus 与候选证据。raw 达到分配预算时会终止进程并标记 `RAW_ARTIFACT_BUDGET_REACHED`。只有 parser 已经从预算内文件提取到图快照与至少一个可回放查询时，该 partial corpus 才能继续 acceptance；空语料或普通非零退出仍失败关闭。runner 返回前会压缩 stdout/stderr 并只保留最新 DBMS log，supervisor 仍对最终 shard 强制 500 MiB 硬上限。
 
 兼容 JAR 对 AgensGraph 和 ArcadeDB 的每个 JDBC `Statement` 同时设置 60 秒 query timeout 与 1,000 行 result cap。row cap 只约束 GDsmith 内部 oracle 的结果物化，不改变 GraphSymPerf 后续的 ordinary-execute runtime 协议；它防止高基数生成查询在 PostgreSQL JDBC `processResults` 中耗尽生成器 JVM heap。JAR manifest 必须同时声明 `jdbc_query_timeout_60s` 与 `jdbc_result_row_cap_1000`，否则 doctor 拒绝运行。
 
