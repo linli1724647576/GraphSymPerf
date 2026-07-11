@@ -973,7 +973,7 @@ class RuntimeFirstShardWorker:
                 f"planned generation backend {task.generation_backend!r} does not match runtime {provenance!r}"
             )
         requires_single_label = "single_node_label" in self.spec.systems[task.target].capabilities
-        generation_query_limit = min(task.max_generated_seeds, task.accepted_query_pairs * 4)
+        generation_query_limit = min(task.max_generated_seeds, task.accepted_query_pairs * 5)
         result_holder: dict[str, object] = {}
 
         def invoke(request: GenerationRequest) -> tuple[str, ...]:
