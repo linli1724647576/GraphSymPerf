@@ -1076,7 +1076,12 @@ class FormalRuntimeFirstShardWorker(RuntimeFirstShardWorker):
 
 def _generation_query_limit(task: ShardTask, spec: ExperimentSpec) -> int:
     capabilities = spec.systems[task.target].capabilities
-    multiplier = 5 if "low_yield_generation" in capabilities else 2
+    if "very_low_yield_generation" in capabilities:
+        multiplier = 10
+    elif "low_yield_generation" in capabilities:
+        multiplier = 5
+    else:
+        multiplier = 2
     return min(task.max_generated_seeds, task.accepted_query_pairs * multiplier)
 
 

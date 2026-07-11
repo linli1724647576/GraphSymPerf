@@ -440,6 +440,10 @@ def test_generation_query_limit_is_capability_driven() -> None:
         ShardTask(TargetSystem.AGENSGRAPH, 0, 7, 1000, 10000, 60, "agensgraph"),
         spec,
     ) == 5000
+    assert _generation_query_limit(
+        ShardTask(TargetSystem.ARCADEDB, 0, 7, 1000, 10000, 60, "arcadedb"),
+        spec,
+    ) == 10000
 
 
 def test_formal_gdsmith_seam_keeps_replayable_corpus_at_raw_artifact_budget(tmp_path, monkeypatch) -> None:
