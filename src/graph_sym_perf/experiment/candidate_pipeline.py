@@ -125,6 +125,10 @@ class _FinalValidator:
         return IssueValidator().validate(candidate, SubprocessSessionRunner(self.adapter_factory))
 
 
+class _ReducerNotApplicable(ValueError):
+    """The validated pair cannot be represented by the safe reducer model."""
+
+
 class ProductionCandidatePipeline:
     """Fail-closed candidate processor used only by the formal experiment entry."""
 
@@ -201,12 +205,34 @@ class ProductionCandidatePipeline:
                     "status": "not_applicable",
                 },
             }
+        try:
+            rule_witness = _rule_witness(candidate)
+        except _ReducerNotApplicable as exc:
+            reduction_payload = {
+                "candidate_hash": candidate.candidate_hash,
+                "promotion": "blocked_reducer_not_applicable",
+                "reason": str(exc),
+                "status": "not_applicable",
+            }
+            reduction_ref = store.put_json(
+                f"reduction-report-{candidate.candidate_hash}.json",
+                reduction_payload,
+            )
+            return {
+                "candidate_hash": candidate.candidate_hash,
+                "validation": validation_outcome,
+                "reduction": {
+                    **reduction_payload,
+                    "reduction_ref": asdict(reduction_ref),
+                },
+            }
         reduction = self._reduce(
             candidate,
             validation,
             task=task,
             adapter_factory=adapter_factory,
             checkpoint_path=attempt_dir / f"reducer-{candidate.candidate_hash}.json",
+            rule_witness=rule_witness,
         )
         reduction_ref = store.put_json(
             f"reduction-report-{candidate.candidate_hash}.json",
@@ -347,6 +373,7 @@ class ProductionCandidatePipeline:
         task: ShardTask,
         adapter_factory: _ValidationAdapterFactory,
         checkpoint_path: Path,
+        rule_witness: RuleWitness,
     ):
         raw_adapter = adapter_factory(candidate)
         from graph_sym_perf.experiment.worker import AdapterQueryProxy
@@ -368,11 +395,10 @@ class ProductionCandidatePipeline:
                 timeout_seconds=candidate.validation_policy.query_timeout_seconds,
             )
             adapter.load_gdsmith_graph(candidate.graph_snapshot.statements)
-            witness = _rule_witness(candidate)
             bundle = ReductionBundle.create(
                 original_candidate=candidate,
                 original_validation=validation,
-                rule_witness=witness,
+                rule_witness=rule_witness,
                 equivalence_gate=_CompleteEquivalenceGate(adapter, candidate),
                 runtime_screen=_RuntimeScreen(adapter, candidate),
                 final_validator=_FinalValidator(adapter_factory),
@@ -391,12 +417,15 @@ def _rule_witness(candidate: CandidateBundle) -> RuleWitness:
     graph_a = analyze_query(candidate.pair.query_a)
     graph_b = analyze_query(candidate.pair.query_b)
     if not graph_a.valid or not graph_b.valid or graph_a.output_schema != graph_b.output_schema:
-        raise ValueError("candidate has no reducer-safe dependency graph")
+        raise _ReducerNotApplicable("dependency_graph_unavailable")
     source_certificate = candidate.pair.safety_certificate
     ast_path = str(getattr(source_certificate, "ast_path", ""))
-    clause_index = _clause_index(ast_path)
+    try:
+        clause_index = _clause_index(ast_path)
+    except (TypeError, ValueError) as exc:
+        raise _ReducerNotApplicable("certificate_clause_unavailable") from exc
     if clause_index >= len(graph_a.clauses) or clause_index >= len(graph_b.clauses):
-        raise ValueError("safety certificate clause is outside reducer dependency graph")
+        raise _ReducerNotApplicable("certificate_clause_outside_dependency_graph")
     rule = RuleRegistry.default().get(candidate.certificate.rule_id)
     return RuleWitness.create(
         rule_id=rule.rule_id,

@@ -3,7 +3,11 @@ from types import SimpleNamespace
 from graph_sym_perf.artifacts.schema import ArtifactReference
 from graph_sym_perf.artifacts.store import ContentAddressedStore
 from graph_sym_perf.core import TargetSystem
-from graph_sym_perf.experiment.candidate_pipeline import ProductionCandidatePipeline, _RuntimeScreen
+from graph_sym_perf.experiment.candidate_pipeline import (
+    ProductionCandidatePipeline,
+    _ReducerNotApplicable,
+    _RuntimeScreen,
+)
 from graph_sym_perf.experiment.plan_models import ShardTask
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.runtime.models import EquivalentQueryPair
@@ -104,3 +108,55 @@ def test_reducer_screen_rejects_a_runtime_direction_reversal() -> None:
 
     assert evidence.slow_query == "b"
     assert "direction_mismatch" in evidence.reason_codes
+
+
+def test_validated_candidate_without_safe_dependency_graph_does_not_fail_shard(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class _Validator:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def validate(self, candidate, _runner):
+            return SimpleNamespace(
+                stage=PipelineStage.VALIDATION_PASSED,
+                reason_codes=(),
+                validation_protocol="independent-two-session-v1",
+            )
+
+    reference = ArtifactReference("0" * 64, "objects/00/" + "0" * 64, 0, "application/json")
+    monkeypatch.setattr("graph_sym_perf.experiment.candidate_pipeline.IssueValidator", _Validator)
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline.ArtifactChainWriter.persist_validation",
+        lambda *_args, **_kwargs: SimpleNamespace(reference=reference),
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline._validation_environment",
+        lambda *_args, **_kwargs: {"execution_mode": "test"},
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline._rule_witness",
+        lambda _candidate: (_ for _ in ()).throw(_ReducerNotApplicable("dependency_graph_unavailable")),
+    )
+    pipeline = ProductionCandidatePipeline(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={"GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "f" * 64},
+        run_dir=tmp_path,
+    )
+    store = ContentAddressedStore(tmp_path / "artifacts", budget_bytes=1024 * 1024)
+
+    outcome = pipeline.process(
+        _candidate(),
+        task=ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60),
+        artifact_store=store,
+        candidate_ref=reference,
+        driver_version="driver/1",
+        graph_snapshot_ref={},
+        attempt_dir=tmp_path,
+    )
+
+    assert outcome["validation"]["stage"] == "validation_passed"
+    assert outcome["reduction"]["status"] == "not_applicable"
+    assert outcome["reduction"]["reason"] == "dependency_graph_unavailable"
+    assert outcome["reduction"]["promotion"] == "blocked_reducer_not_applicable"

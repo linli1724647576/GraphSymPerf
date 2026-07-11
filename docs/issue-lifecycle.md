@@ -2,7 +2,7 @@
 
 ## Pipeline Stage
 
-`SCREENED` runtime candidate 先进入原始 pair validation。只有 `VALIDATION_PASSED` 才运行 reducer；只有 `REDUCED_VALID`、完整 CORE SafetyCertificate、方向保持且运行内无 exact/possible duplicate，`promote()` 才能构造 `SubmitReadyIssue`。raw dict、candidate、profile evidence 或单个 validation report 均不能调用 exporter。
+`SCREENED` runtime candidate 先进入原始 pair validation。只有 `VALIDATION_PASSED` 才运行 reducer；若 dependency analyzer 无法为该 pair 构造安全 RuleWitness，候选会持久化为 `reduction_not_applicable` 并阻止 promotion，但不会使整个 shard 失败。只有 `REDUCED_VALID`、完整 CORE SafetyCertificate、方向保持且运行内无 exact/possible duplicate，`promote()` 才能构造 `SubmitReadyIssue`。raw dict、candidate、profile evidence 或单个 validation report 均不能调用 exporter。
 
 possible duplicate 写入待人工去重队列；没有可核查的 distinct evidence 不自动提交。若后到案例使先前的 unique clearance 失效，运行级 revocation 会阻止旧索引继续 export。正式提交并记录上游 URL 后，stage 才从 SubmitReadyIssue 进入 `SUBMITTED`，并计为 Reported Issue Report。
 
