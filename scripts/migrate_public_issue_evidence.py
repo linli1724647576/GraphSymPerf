@@ -19,7 +19,12 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-from graph_sym_perf.issues.evidence import REQUIRED_EVIDENCE_FILES, IssueEvidence, write_evidence_package
+from graph_sym_perf.issues.evidence import (
+    REQUIRED_EVIDENCE_FILES,
+    IssueEvidence,
+    build_evidence_inventory,
+    write_evidence_package,
+)
 
 
 ISSUES = {
@@ -268,19 +273,8 @@ def _write_package_inventory(package: Path) -> None:
 
 
 def _write_global_inventory(root: Path) -> None:
-    packages = []
-    for package in sorted(path for path in root.iterdir() if path.is_dir()):
-        metadata = package / "metadata.yaml"
-        inventory = package / "evidence_inventory.json"
-        packages.append(
-            {
-                "id": package.name,
-                "metadata_sha256": hashlib.sha256(metadata.read_bytes()).hexdigest(),
-                "inventory_sha256": hashlib.sha256(inventory.read_bytes()).hexdigest(),
-            }
-        )
     (root.parent / "evidence_inventory.json").write_text(
-        json.dumps({"schema_version": 2, "packages": packages}, indent=2, sort_keys=True) + "\n",
+        json.dumps(build_evidence_inventory(root), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 

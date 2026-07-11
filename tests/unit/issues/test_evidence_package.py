@@ -3,7 +3,13 @@ from pathlib import Path
 
 import yaml
 
-from graph_sym_perf.issues.evidence import IssueEvidence, REQUIRED_EVIDENCE_FILES, audit_evidence_package, write_evidence_package
+from graph_sym_perf.issues.evidence import (
+    IssueEvidence,
+    REQUIRED_EVIDENCE_FILES,
+    audit_evidence_inventory,
+    audit_evidence_package,
+    write_evidence_package,
+)
 
 
 def _evidence() -> IssueEvidence:
@@ -58,5 +64,17 @@ def test_all_historical_issue_directories_are_complete_but_not_claimed_v3_valid(
         assert set(path.name for path in package.iterdir()) == REQUIRED_EVIDENCE_FILES | {"evidence_inventory.json"}
 
     global_inventory = json.loads(Path("issues/evidence_inventory.json").read_text(encoding="utf-8"))
-    assert global_inventory["schema_version"] == 2
+    assert global_inventory["schema_version"] == 3
     assert {record["id"] for record in global_inventory["packages"]} == {package.name for package in packages}
+    assert audit_evidence_inventory("issues/evidence") == ()
+
+
+def test_evidence_inventory_requires_the_exact_public_package_set(tmp_path) -> None:
+    evidence_root = tmp_path / "issues" / "evidence"
+    evidence_root.mkdir(parents=True)
+    (evidence_root.parent / "evidence_inventory.json").write_text(
+        json.dumps({"schema_version": 3, "packages": []}),
+        encoding="utf-8",
+    )
+
+    assert "evidence_package_set_invalid" in audit_evidence_inventory(evidence_root)

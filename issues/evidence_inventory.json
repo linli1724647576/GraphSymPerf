@@ -1,60 +1,159 @@
 {
   "packages": [
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "apache-age-2428",
       "inventory_sha256": "7d7093d8791d77d51ee52c4faa3d275dc9e7b9cfdb9acfed33b35eb1297ef4f8",
-      "metadata_sha256": "3b3e307cec32fdc58a18504c2892eb394f0794259c895ba4f96ee4a69d659917"
+      "issue_url": "https://github.com/apache/age/issues/2428",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "3b3e307cec32fdc58a18504c2892eb394f0794259c895ba4f96ee4a69d659917",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "arcadedb-4405",
       "inventory_sha256": "01ceeced1dce1fd310badf19770817b650722e7e2c6fced4d604a168f086e552",
-      "metadata_sha256": "f3edd5cc872639f7ff4c38b432bebabd1947b44c84aaedd13e94681ec3da88ee"
+      "issue_url": "https://github.com/ArcadeData/arcadedb/issues/4405",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "f3edd5cc872639f7ff4c38b432bebabd1947b44c84aaedd13e94681ec3da88ee",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "arcadedb-5116",
       "inventory_sha256": "46c3d0a5a0c39d6dc6598d7f4c1b7c9cacafdb32c6becc7f08a12eea544e8572",
-      "metadata_sha256": "5240514e2b9d6e1217b9e9193a40fa8bbf6a9b83a5c65307c078f1584b67217e"
+      "issue_url": "https://github.com/ArcadeData/arcadedb/issues/5116",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "5240514e2b9d6e1217b9e9193a40fa8bbf6a9b83a5c65307c078f1584b67217e",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "arcadedb-5117",
       "inventory_sha256": "9abdaf08a7efcc02fd1873f49da2faf87c896d55bf6fcf9a86f4f2cf2867e6c8",
-      "metadata_sha256": "3d2ba2ece9e799c76c3d2c65387577815fefb3e4efaa1eb5b2569df75208c716"
+      "issue_url": "https://github.com/ArcadeData/arcadedb/issues/5117",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "3d2ba2ece9e799c76c3d2c65387577815fefb3e4efaa1eb5b2569df75208c716",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "falkordb-2081",
       "inventory_sha256": "586a44063fc066d1503357a09a70248299175b806e2a6d06d521e11fc44b3f5a",
-      "metadata_sha256": "8dea4de0bf15e7e3058c8a75c8d82020bb7ba670e7141f4957669b2646598865"
+      "issue_url": "https://github.com/FalkorDB/FalkorDB/issues/2081",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "8dea4de0bf15e7e3058c8a75c8d82020bb7ba670e7141f4957669b2646598865",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "ladybugdb-668",
       "inventory_sha256": "d458bb7ad1479cafdb56aae0fe3c4bb6f4f94c665194c78c6550370588f17b86",
-      "metadata_sha256": "f8262c116ae46a3a7ac7773e9f1cbd2ff51834f9ed7121effd89b1e37d1e268a"
+      "issue_url": "https://github.com/LadybugDB/ladybug/issues/668",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "f8262c116ae46a3a7ac7773e9f1cbd2ff51834f9ed7121effd89b1e37d1e268a",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "ladybugdb-669",
       "inventory_sha256": "e5d3e7e467af18ff66ed951d48f9a3dd74fdadbfee82bc5a943948f47f07bb3e",
-      "metadata_sha256": "e5a016c1aa209fd113b9c18edfc2be30bdfa46e26f655f409419290c7ac0bdbc"
+      "issue_url": "https://github.com/LadybugDB/ladybug/issues/669",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "e5a016c1aa209fd113b9c18edfc2be30bdfa46e26f655f409419290c7ac0bdbc",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "memgraph-4208",
       "inventory_sha256": "464ad2cd49653a9ec363cc9ff0dd5069f7c019f466ff6ef2c864be32d57cfc4a",
-      "metadata_sha256": "1bd6653cd4542f568bb18c00c87c4984ef213d4597369fabcf161c63f17a4e75"
+      "issue_url": "https://github.com/memgraph/memgraph/issues/4208",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "1bd6653cd4542f568bb18c00c87c4984ef213d4597369fabcf161c63f17a4e75",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "neo4j-13783",
       "inventory_sha256": "234bebaee88dbd93c154e835f7c3be87d4dac086827d84a715d189b85947e725",
-      "metadata_sha256": "c5527ec1b8f49c8ff8fcf7029c85ca0c471f873bfe8e3ef370a99e4ce091b10a"
+      "issue_url": "https://github.com/neo4j/neo4j/issues/13783",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "c5527ec1b8f49c8ff8fcf7029c85ca0c471f873bfe8e3ef370a99e4ce091b10a",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "neo4j-13813",
       "inventory_sha256": "25031436a5979afe2aaefcf939c2f500aff476282a9ecb6ac2345db4a33dd18d",
-      "metadata_sha256": "000404b3e82a83107cd8ead9259b38df2c4dcbcf24e064eec66709dec69e4f87"
+      "issue_url": "https://github.com/neo4j/neo4j/issues/13813",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "000404b3e82a83107cd8ead9259b38df2c4dcbcf24e064eec66709dec69e4f87",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     },
     {
+      "audit_reasons": [],
+      "audit_status": "VERIFIED",
+      "github_url_valid": true,
+      "hashes_valid": true,
       "id": "neo4j-13814",
       "inventory_sha256": "1ecc22c4cb42134050df578cc664829d24d426d4e8565fbe050d7029cf51b16c",
-      "metadata_sha256": "dc5b6de0ff40d1b2bca952d1d5acdf888f9c3a740d6d4c1e065863a1a49940b2"
+      "issue_url": "https://github.com/neo4j/neo4j/issues/13814",
+      "metadata_schema_valid": true,
+      "metadata_sha256": "dc5b6de0ff40d1b2bca952d1d5acdf888f9c3a740d6d4c1e065863a1a49940b2",
+      "regression_eligible": false,
+      "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+      "reproducer_status": "AVAILABLE_HISTORICAL"
     }
   ],
-  "schema_version": 2
+  "schema_version": 3
 }

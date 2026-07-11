@@ -10,6 +10,8 @@ from typing import Mapping
 
 import yaml
 
+from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
+
 
 REQUIRED_EVIDENCE_FILES = frozenset(
     {
@@ -33,6 +35,21 @@ _REQUIRED_METADATA = frozenset(
 )
 _DEVELOPER_STATUSES = frozenset(
     {"waiting_reply", "confirmed", "fixed", "duplicate", "intended_behavior", "uninterested", "unknown"}
+)
+PUBLIC_EVIDENCE_PACKAGE_IDS = frozenset(
+    {
+        "apache-age-2428",
+        "arcadedb-4405",
+        "arcadedb-5116",
+        "arcadedb-5117",
+        "falkordb-2081",
+        "ladybugdb-668",
+        "ladybugdb-669",
+        "memgraph-4208",
+        "neo4j-13783",
+        "neo4j-13813",
+        "neo4j-13814",
+    }
 )
 
 
@@ -134,8 +151,93 @@ def audit_evidence_package(package: str | Path) -> tuple[str, ...]:
     return tuple(sorted(set(reasons)))
 
 
+def build_evidence_inventory(root: str | Path) -> dict[str, object]:
+    """Build the global, independently checkable historical-evidence inventory."""
+
+    evidence_root = Path(root)
+    packages: list[dict[str, object]] = []
+    for package in sorted(path for path in evidence_root.iterdir() if path.is_dir()):
+        metadata_path = package / "metadata.yaml"
+        package_inventory_path = package / "evidence_inventory.json"
+        metadata = yaml.safe_load(metadata_path.read_text(encoding="utf-8"))
+        reasons = audit_evidence_package(package)
+        metadata_valid = isinstance(metadata, dict) and "metadata_invalid" not in reasons
+        issue_url = str(metadata.get("issue_url", "")) if isinstance(metadata, dict) else ""
+        github_url_valid = re.fullmatch(r"https://github\.com/[^/]+/[^/]+/issues/\d+", issue_url) is not None
+        hashes_valid = not any(
+            reason == "inventory_invalid"
+            or reason == "inventory_file_set_invalid"
+            or reason.startswith("hash_mismatch:")
+            for reason in reasons
+        )
+        reproducer_available = _historical_reproducer_available(package)
+        verified = not reasons and metadata_valid and github_url_valid and hashes_valid and reproducer_available
+        packages.append(
+            {
+                "id": package.name,
+                "issue_url": issue_url,
+                "inventory_sha256": _sha256(package_inventory_path.read_bytes()),
+                "metadata_sha256": _sha256(metadata_path.read_bytes()),
+                "hashes_valid": hashes_valid,
+                "metadata_schema_valid": metadata_valid,
+                "github_url_valid": github_url_valid,
+                "reproducer_status": "AVAILABLE_HISTORICAL" if reproducer_available else "UNAVAILABLE",
+                "regression_eligible": False,
+                "regression_exclusion_reason": "historical_evidence_not_v3_executable",
+                "audit_status": "VERIFIED" if verified else "FAILED",
+                "audit_reasons": list(reasons),
+            }
+        )
+    return {"schema_version": 3, "packages": packages}
+
+
+def audit_evidence_inventory(root: str | Path) -> tuple[str, ...]:
+    """Verify the tracked global inventory against all evidence package bytes."""
+
+    evidence_root = Path(root)
+    try:
+        actual = json.loads((evidence_root.parent / "evidence_inventory.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return ("evidence_inventory_invalid",)
+    expected = build_evidence_inventory(evidence_root)
+    reasons: list[str] = []
+    package_ids = {record.get("id") for record in expected["packages"]}
+    if package_ids != PUBLIC_EVIDENCE_PACKAGE_IDS:
+        reasons.append("evidence_package_set_invalid")
+    if actual.get("schema_version") != 3 or not isinstance(actual.get("packages"), list):
+        reasons.append("evidence_inventory_invalid")
+    if actual != expected:
+        reasons.append("evidence_inventory_mismatch")
+    if any(record.get("audit_status") != "VERIFIED" for record in expected["packages"]):
+        reasons.append("evidence_package_audit_failed")
+    return tuple(sorted(set(reasons)))
+
+
+def _historical_reproducer_available(package: Path) -> bool:
+    try:
+        setup = (package / "setup.cypher").read_text(encoding="utf-8")
+        original = (package / "original.cypher").read_text(encoding="utf-8")
+        transformed = (package / "transformed.cypher").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    return bool(
+        setup.strip()
+        and not setup.lstrip().startswith("// unknown")
+        and gdsmith_read_query_is_replayable(original)
+        and gdsmith_read_query_is_replayable(transformed)
+    )
+
+
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-__all__ = ["IssueEvidence", "REQUIRED_EVIDENCE_FILES", "audit_evidence_package", "write_evidence_package"]
+__all__ = [
+    "IssueEvidence",
+    "PUBLIC_EVIDENCE_PACKAGE_IDS",
+    "REQUIRED_EVIDENCE_FILES",
+    "audit_evidence_inventory",
+    "audit_evidence_package",
+    "build_evidence_inventory",
+    "write_evidence_package",
+]
