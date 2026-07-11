@@ -97,6 +97,9 @@ def test_supervisor_uses_task_specific_accepted_pair_target(tmp_path) -> None:
 class _Adapter:
     target = TargetSystem.NEO4J
 
+    def connectivity_check(self):
+        return True, "connected"
+
     def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
         return ExecutionResult(
             system=self.target,

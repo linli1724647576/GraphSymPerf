@@ -549,6 +549,9 @@ def test_complete_one_thousand_accepted_pair_worker_shard_stays_below_500_mb(tmp
     class Adapter:
         target = TargetSystem.NEO4J
 
+        def connectivity_check(self):
+            return True, "connected"
+
         def ensure_schema(self):
             return None
 

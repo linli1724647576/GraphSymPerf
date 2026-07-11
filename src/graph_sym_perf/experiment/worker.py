@@ -156,6 +156,17 @@ class AdapterQueryProxy:
             operation=operation,
         )
 
+    def connectivity_check(self) -> Any:
+        operation = getattr(self._adapter, "connectivity_check", None)
+        if not callable(operation):
+            return False, "adapter connectivity contract missing"
+        return self._call_with_inflight(
+            query_identity="adapter.connectivity_check",
+            query_kind="connectivity",
+            timeout_seconds=self.default_timeout_seconds,
+            operation=operation,
+        )
+
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> Any:
         operation = getattr(self._adapter, "load_gdsmith_graph")
         identity = "\n".join(statement.strip() for statement in statements)
@@ -369,6 +380,12 @@ class RuntimeFirstShardWorker:
                 on_error=lambda kind, inflight: self._record_query_failure(kind, inflight, attempt_dir),
             )
             try:
+                connected = measurement_proxy.connectivity_check()
+                if not isinstance(connected, tuple) or not connected or connected[0] is not True:
+                    raise WorkerFailure(
+                        ErrorKind.INFRASTRUCTURE_ERROR,
+                        "measurement adapter connectivity check failed",
+                    )
                 measurement_fingerprint = _adapter_dbms_fingerprint(measurement_proxy)
                 measurement_epoch = _adapter_dbms_health_epoch(measurement_proxy)
                 self._require_same_health_identity(

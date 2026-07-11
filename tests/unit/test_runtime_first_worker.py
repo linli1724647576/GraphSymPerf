@@ -33,6 +33,9 @@ class _Adapter:
     def ensure_schema(self) -> None:
         return None
 
+    def connectivity_check(self):
+        return True, "connected"
+
     def load_gdsmith_graph(self, statements):
         self.loaded = tuple(statements)
 
@@ -127,6 +130,21 @@ class _FingerprintAdapter(_RuntimeGapAdapter):
 
     def dbms_health_epoch(self) -> DBMSHealthEpoch:
         return DBMSHealthEpoch(self.health_epoch, "test")
+
+
+class _ConnectionPrimedFingerprintAdapter(_FingerprintAdapter):
+    def __init__(self, fingerprint: str, health_epoch: str = "e" * 64) -> None:
+        super().__init__(fingerprint, health_epoch)
+        self.connected = False
+
+    def connectivity_check(self):
+        self.connected = True
+        return True, "connected"
+
+    def dbms_fingerprint(self) -> DBMSFingerprint:
+        if not self.connected:
+            return DBMSFingerprint(None, "server_version_unavailable")
+        return super().dbms_fingerprint()
 
 
 class _LeaseContext:
@@ -549,6 +567,28 @@ def test_dbms_fingerprint_change_at_measurement_reconnect_invalidates_runtime_ca
     )
     assert invalidation["before"] == "a" * 64
     assert invalidation["after"] == "b" * 64
+
+
+def test_measurement_adapter_connects_before_reading_its_dbms_fingerprint(tmp_path) -> None:
+    load = _FingerprintAdapter("a" * 64)
+    measurement = _ConnectionPrimedFingerprintAdapter("a" * 64)
+    adapters = iter((load, measurement))
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+        query_texts=("MATCH (n) WHERE n.value = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: next(adapters),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+
+    assert measurement.connected
+    assert result["acceptance_status"] == "complete"
 
 
 def test_same_version_restart_changes_health_epoch_and_invalidates_runtime_candidates(tmp_path) -> None:
