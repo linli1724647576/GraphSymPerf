@@ -182,6 +182,56 @@ def test_neo4j_result_set_patch_rejects_drifted_constructor() -> None:
         module._patch_neo4j_result_set_source("public class GDSmithResultSet {}\n")
 
 
+def test_memgraph_compat_patch_sets_a_per_transaction_timeout() -> None:
+    module = _load_builder_module()
+    original = """package org.example.gdsmith.memGraph;
+
+import org.neo4j.driver.Session;
+import org.neo4j.driver.Transaction;
+import org.neo4j.driver.TransactionWork;
+
+import java.util.Arrays;
+
+public class MemGraphConnection extends CypherConnection {
+    public void executeStatement(String arg) throws Exception{
+        try ( Session session = driver.session() )
+        {
+            session.writeTransaction( new TransactionWork<String>()
+            {
+                public String execute( Transaction tx )
+                {
+                    tx.run(arg);
+                    return "";
+                }
+            } );
+        }
+    }
+
+    public List<GDSmithResultSet> executeStatementAndGet(String arg) throws Exception{
+        try ( Session session = driver.session() )
+        {
+            return Arrays.asList(new GDSmithResultSet(session.run(arg)));
+        }
+    }
+}
+"""
+
+    patched = module._patch_memgraph_connection_source(original)
+
+    assert "import org.neo4j.driver.TransactionConfig;" in patched
+    assert "import java.time.Duration;" in patched
+    assert "withTimeout(Duration.ofSeconds(30))" in patched
+    assert "}, QUERY_TIMEOUT );" in patched
+    assert "session.run(arg, QUERY_TIMEOUT)" in patched
+
+
+def test_memgraph_compat_patch_rejects_drifted_execution_anchors() -> None:
+    module = _load_builder_module()
+
+    with pytest.raises(RuntimeError, match="Memgraph connection patch anchors"):
+        module._patch_memgraph_connection_source("public class MemGraphConnection {}\n")
+
+
 def test_compat_patch_fails_if_connection_execution_anchor_is_missing() -> None:
     module = _load_builder_module()
     source = "import java.sql.Statement;\npublic class ChangedConnection {}\n"

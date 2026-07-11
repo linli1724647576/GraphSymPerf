@@ -33,6 +33,7 @@ def _gdsmith_artifact_environment(root: Path, source_commit: str) -> dict[str, s
                     "jdbc_result_row_cap_1000",
                     "neo4j_transaction_timeout_30s",
                     "neo4j_result_row_cap_1000",
+                    "memgraph_transaction_timeout_30s",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ],

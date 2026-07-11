@@ -38,6 +38,7 @@ def _gdsmith_artifact_env(jar: Path) -> dict[str, str]:
                     "jdbc_result_row_cap_1000",
                     "neo4j_transaction_timeout_30s",
                     "neo4j_result_row_cap_1000",
+                    "memgraph_transaction_timeout_30s",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ],
@@ -191,6 +192,25 @@ def test_gdsmith_tooling_requires_the_neo4j_result_row_cap_guard(tmp_path: Path,
     manifest_path = jar.with_suffix(jar.suffix + ".manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["compatibility_guards"].remove("neo4j_result_row_cap_1000")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(gdsmith_runner.shutil, "which", lambda name: "/usr/bin/java")
+
+    status = check_gdsmith_tooling(
+        GdsmithConfig(expected_source_commit="a" * 40),
+        {**environment, "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE": "1"},
+    )
+
+    assert not status.ready
+    assert not status.build_manifest_ok
+
+
+def test_gdsmith_tooling_requires_the_memgraph_transaction_timeout_guard(tmp_path: Path, monkeypatch) -> None:
+    jar = tmp_path / "GDsmith.jar"
+    jar.write_text("verified-jar", encoding="utf-8")
+    environment = _gdsmith_artifact_env(jar)
+    manifest_path = jar.with_suffix(jar.suffix + ".manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["compatibility_guards"].remove("memgraph_transaction_timeout_30s")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     monkeypatch.setattr(gdsmith_runner.shutil, "which", lambda name: "/usr/bin/java")
 

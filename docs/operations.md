@@ -28,6 +28,8 @@ GDsmith 的 compared 系列算法达到 `--num-queries` 后会在内部抛出 `R
 
 兼容 JAR 对 AgensGraph 和 ArcadeDB 的每个 JDBC `Statement` 同时设置 60 秒 query timeout 与 1,000 行 result cap；对 Neo4j driver 的 write transaction 和 auto-commit `run` 设置 30 秒服务端 transaction timeout，为 60 秒生成停滞 watchdog 留出恢复余量。Neo4j `Result` 也不再调用无界 `list()`，而是流式物化最多 1,000 行，避免 `resolveFloat` 二次复制高基数结果时耗尽生成器 JVM heap。这些 row cap 只约束 GDsmith 内部 oracle，不改变 GraphSymPerf 后续的 ordinary-execute runtime 协议。JAR manifest 必须同时声明 `jdbc_query_timeout_60s`、`jdbc_result_row_cap_1000`、`neo4j_transaction_timeout_30s` 与 `neo4j_result_row_cap_1000`，否则 doctor 拒绝运行。
 
+Memgraph provider 复用 Neo4j Java Driver，但上游连接层没有传 transaction timeout；兼容 JAR 因此也对其 write transaction 与 auto-commit `run` 设置 30 秒 timeout，并复用同一个 1,000 行流式结果上限。manifest 缺少 `memgraph_transaction_timeout_30s` 时 doctor 同样失败关闭。
+
 ArcadeDB 的 shard、独立 validation session 和 reducer 使用服务器级 `drop database`/`create database` 重建 `mydb`；这一边界避免对旧图执行 `MATCH (n) DETACH DELETE n` 时的全图扫描与 Java heap 放大。数据库名只接受受限标识符，重建任一步失败都不会继续加载或测量。其他 adapter 未声明 database-level reset 时仍使用 Cypher 清图，再执行各自的 schema reset。
 
 Neo4j Community Edition 不能用 Enterprise-only database recreate 流程，因此其 adapter 使用 `CALL (n) { ... } IN TRANSACTIONS OF 1000 ROWS` 分批 `DETACH DELETE`，避免单一全图写事务占满 transaction memory/heap。该查询必须在 driver 的 implicit transaction 中运行，并继承同一 graph-reset hard deadline；超时仍失败关闭，不会在未知部分删除状态上开始测量。
