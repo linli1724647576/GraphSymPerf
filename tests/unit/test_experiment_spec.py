@@ -353,6 +353,9 @@ def test_legacy_config_migration_rolls_back_partial_bundle_on_publish_failure(tm
         "targets:\n  - neo4j\n  - neo4j\n",
         "generation:\n  backend: alternate\n",
         "generation:\n  backend: gdsmith\n  source: alternate_templates\n",
+        "coverage:\n  enabled: true\n",
+        "feedback:\n  enabled: true\n",
+        "include_" + "plan_" + "only: true\n",
         "unknown_field: true\n",
     ),
 )
