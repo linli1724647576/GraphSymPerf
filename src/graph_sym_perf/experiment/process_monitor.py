@@ -230,6 +230,13 @@ def _isolated_worker_entry(
         kind = getattr(exc, "kind", None)
         if isinstance(kind, ErrorKind):
             control_queue.put(("typed_error", {"kind": kind.value, "message": str(exc)[:4096]}))
+        elif isinstance(exc, ValueError):
+            control_queue.put(
+                (
+                    "typed_error",
+                    {"kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value, "message": str(exc)[:4096]},
+                )
+            )
         else:
             control_queue.put(("error", _bounded_error(exc)))
 

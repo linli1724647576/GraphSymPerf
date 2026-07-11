@@ -14,6 +14,10 @@ def _blocks_forever(_task):
     return {"accepted_pairs": 1}
 
 
+def _raises_deterministic_evidence_error(_task):
+    raise ValueError("reduction minimality proof does not verify")
+
+
 def test_isolated_worker_timeout_does_not_block_the_supervisor(tmp_path) -> None:
     plan = RunPlan("timeout", 2, (_ShortDeadlineTask(),), 1, SourceRevision(None, None, None))  # type: ignore[arg-type]
     summary = ShardSupervisor(
@@ -26,3 +30,18 @@ def test_isolated_worker_timeout_does_not_block_the_supervisor(tmp_path) -> None
     assert summary.failed
     assert not summary.completed
     assert "WORKER_HUNG" in (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+
+
+def test_isolated_deterministic_evidence_error_is_not_retried(tmp_path) -> None:
+    plan = RunPlan("evidence", 2, (_ShortDeadlineTask(),), 1, SourceRevision(None, None, None))  # type: ignore[arg-type]
+
+    summary = ShardSupervisor(
+        tmp_path,
+        retry_limit=3,
+        process_isolation=True,
+    ).run(plan, _raises_deterministic_evidence_error)
+
+    assert summary.failed
+    assert len(tuple((tmp_path / "shards").glob("*/attempt-*"))) == 1
+    events = (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+    assert "EVIDENCE_INTEGRITY_ERROR" in events

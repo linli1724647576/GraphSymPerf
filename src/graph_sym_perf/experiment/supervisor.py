@@ -289,34 +289,36 @@ class ShardSupervisor:
                 result = self._run_worker(worker, task, context)
             except WorkerProcessError as exc:
                 journal = ShardJournal(shard_dir, manifest_hash=manifest_hash, task_identity=task_identity)
+                final = attempt >= self.retry_limit or not _is_retryable_error(exc.kind)
                 self._record_failure(
                     task,
                     journal,
                     attempt,
                     exc.kind,
                     str(exc),
-                    final=attempt >= self.retry_limit,
+                    final=final,
                     attempt_dir=attempt_dir,
                     inflight=exc.inflight,
                 )
                 self._enforce_shard_artifact_budget(shard_dir)
-                if attempt >= self.retry_limit:
+                if final:
                     return "failed"
                 continue
             except BaseException as exc:
                 journal = ShardJournal(shard_dir, manifest_hash=manifest_hash, task_identity=task_identity)
                 kind = _classify_exception(exc)
+                final = attempt >= self.retry_limit or not _is_retryable_error(kind)
                 self._record_failure(
                     task,
                     journal,
                     attempt,
                     kind,
                     str(exc),
-                    final=attempt >= self.retry_limit,
+                    final=final,
                     attempt_dir=attempt_dir,
                 )
                 self._enforce_shard_artifact_budget(shard_dir)
-                if attempt >= self.retry_limit:
+                if final:
                     return "failed"
                 continue
 
@@ -584,7 +586,13 @@ def _classify_exception(exc: BaseException) -> ErrorKind:
         return ErrorKind.DRIVER_TIMEOUT
     if isinstance(exc, OSError):
         return ErrorKind.INFRASTRUCTURE_ERROR
+    if isinstance(exc, ValueError):
+        return ErrorKind.EVIDENCE_INTEGRITY_ERROR
     return ErrorKind.WORKER_CRASHED
+
+
+def _is_retryable_error(kind: ErrorKind) -> bool:
+    return kind is not ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
 __all__ = ["AttemptContext", "ManifestMismatchError", "RunSummary", "ShardSupervisor", "WorkerProcessError"]
