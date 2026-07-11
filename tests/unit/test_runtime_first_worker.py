@@ -108,6 +108,9 @@ class _InflightCheckingAdapter(_Adapter):
     def ensure_schema(self) -> None:
         self._capture_inflight()
 
+    def reset_schema(self) -> None:
+        self._capture_inflight()
+
     def load_gdsmith_graph(self, statements) -> None:
         self._capture_inflight()
         return super().load_gdsmith_graph(statements)
@@ -506,6 +509,7 @@ def test_worker_wraps_acceptance_and_runtime_execute_calls_with_atomic_inflight_
     records = load_adapter.inflight_records + measurement_adapter.inflight_records
     assert {record["query_kind"] for record in records} >= {
         "shard_reset",
+        "schema_reset",
         "schema_setup",
         "graph_load",
         "acceptance_base",

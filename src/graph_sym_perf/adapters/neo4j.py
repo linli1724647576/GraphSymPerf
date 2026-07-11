@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from time import perf_counter
 from typing import Any, Mapping
 
@@ -100,6 +101,22 @@ class Neo4jAdapter(CypherLoaderMixin, BaseAdapter):
             "CREATE INDEX gbp_tag_dataset IF NOT EXISTS FOR (n:Tag) ON (n.gbp_dataset)",
         )
 
+    def reset_schema(self) -> None:
+        indexes = self.execute(
+            "SHOW INDEXES YIELD name RETURN name",
+            {},
+            "gdsmith_schema_inspect",
+            max_rows=1_000,
+        )
+        for row in indexes.rows:
+            name = row.get("name") if isinstance(row, Mapping) else None
+            if isinstance(name, str) and _is_gdsmith_index_name(name):
+                self.execute(
+                    f"DROP INDEX `{name}` IF EXISTS",
+                    {},
+                    "gdsmith_schema_reset",
+                )
+
     def close(self) -> None:
         if self._driver is not None:
             self._driver.close()
@@ -151,6 +168,10 @@ def _query_with_timeout(query: str, timeout_seconds: float | None) -> Any:
     from neo4j import Query
 
     return Query(query, timeout=timeout_seconds)
+
+
+def _is_gdsmith_index_name(name: str) -> bool:
+    return re.fullmatch(r"i\d+", name) is not None
 
 
 def _collect_rows(result: Any, max_rows: int | None) -> tuple[tuple[Mapping[str, Any], ...], Any, bool]:

@@ -56,6 +56,29 @@ WITH 1 AS x RETURN x;
     assert query_cases_from_gdsmith(parsed.query_records)[0].case_id == "gdsmith_case_0001"
 
 
+def test_parse_gdsmith_log_never_puts_schema_ddl_in_the_graph_snapshot() -> None:
+    parsed = parse_gdsmith_log(
+        """
+CREATE INDEX i0 IF NOT EXISTS FOR (n:L0) ON (n.k0);
+CREATE VLABEL L0;
+CREATE ELABEL T0;
+CREATE (n0:L0 {id: 1});
+MATCH (n0 {id: 1}), (n1 {id: 2}) MERGE (n0)-[r:T0 {id: 3}]->(n1);
+MATCH (n0:L0) RETURN n0.id;
+"""
+    )
+
+    assert parsed.graph_statements == (
+        "CREATE (n0:L0 {id: 1})",
+        "MATCH (n0 {id: 1}), (n1 {id: 2}) MERGE (n0)-[r:T0 {id: 3}]->(n1)",
+    )
+    assert [record.skip_reason for record in parsed.query_records[:3]] == [
+        "SCHEMA_SETUP_NOT_REPLAYED",
+        "SCHEMA_SETUP_NOT_REPLAYED",
+        "SCHEMA_SETUP_NOT_REPLAYED",
+    ]
+
+
 def test_neo4j_uri_to_host_port() -> None:
     assert neo4j_uri_to_host_port("bolt://127.0.0.1:7687") == ("127.0.0.1", 7687)
     assert neo4j_uri_to_host_port("neo4j://localhost") == ("localhost", 7687)

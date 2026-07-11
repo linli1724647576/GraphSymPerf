@@ -11,6 +11,12 @@ _WRITE_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 _READ_START = re.compile(r"^(MATCH|OPTIONAL\s+MATCH|WITH|UNWIND)\b", re.IGNORECASE)
+_SCHEMA_START = re.compile(
+    r"^CREATE\s+(?:INDEX|PROPERTY\s+INDEX|VLABEL|ELABEL)\b",
+    re.IGNORECASE,
+)
+_GRAPH_NODE_CREATE = re.compile(r"^CREATE\s*\(", re.IGNORECASE)
+_GRAPH_RELATIONSHIP_MERGE = re.compile(r"^MATCH\b.*\bMERGE\s*\(", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -80,7 +86,9 @@ def _classify_statement(statement: str) -> tuple[str, bool, str | None]:
         return "skipped", False, "EMPTY_STATEMENT"
 
     has_write = bool(_WRITE_KEYWORDS.search(normalized))
-    if normalized.upper().startswith("CREATE ") or re.search(r"\bMERGE\b", normalized, flags=re.IGNORECASE):
+    if _SCHEMA_START.match(normalized):
+        return "skipped", False, "SCHEMA_SETUP_NOT_REPLAYED"
+    if _GRAPH_NODE_CREATE.match(normalized) or _GRAPH_RELATIONSHIP_MERGE.match(normalized):
         return "graph", False, "GRAPH_SETUP"
     if has_write:
         return "skipped", False, "WRITE_STATEMENT"

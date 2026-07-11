@@ -145,6 +145,17 @@ class AdapterQueryProxy:
             operation=operation,
         )
 
+    def reset_schema(self) -> Any:
+        operation = getattr(self._adapter, "reset_schema", None)
+        if not callable(operation):
+            return None
+        return self._call_with_inflight(
+            query_identity="adapter.reset_schema",
+            query_kind="schema_reset",
+            timeout_seconds=self.default_timeout_seconds,
+            operation=operation,
+        )
+
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> Any:
         operation = getattr(self._adapter, "load_gdsmith_graph")
         identity = "\n".join(statement.strip() for statement in statements)
@@ -570,6 +581,9 @@ class RuntimeFirstShardWorker:
         # A shard can only start from a known empty graph.  Failure to reset is
         # fatal: continuing would combine this shard with stale graph state.
         adapter.execute("MATCH (n) DETACH DELETE n", {}, "shard_reset")
+        reset_schema = getattr(adapter, "reset_schema", None)
+        if callable(reset_schema):
+            reset_schema()
         ensure_schema = getattr(adapter, "ensure_schema", None)
         if callable(ensure_schema):
             ensure_schema()

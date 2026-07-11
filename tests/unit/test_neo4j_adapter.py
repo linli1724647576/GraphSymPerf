@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from graph_sym_perf.adapters.neo4j import _collect_rows, _neo4j_summary
+from graph_sym_perf.adapters.neo4j import _collect_rows, _is_gdsmith_index_name, _neo4j_summary
 
 
 class FakeRecord:
@@ -51,3 +51,10 @@ def test_neo4j_summary_records_truncation() -> None:
 
     assert summary["truncated"] is True
     assert summary["row_cap"] == 2
+
+
+def test_schema_reset_only_recognizes_gdsmith_generated_index_names() -> None:
+    assert _is_gdsmith_index_name("i0")
+    assert _is_gdsmith_index_name("i123")
+    assert not _is_gdsmith_index_name("gbp_person_dataset")
+    assert not _is_gdsmith_index_name("i0_injected")
