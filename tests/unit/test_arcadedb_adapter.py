@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from graph_sym_perf.adapters import arcadedb as arcadedb_module
 from graph_sym_perf.adapters.arcadedb import (
     ArcadeDBAdapter,
@@ -10,6 +12,7 @@ from graph_sym_perf.adapters.arcadedb import (
     _arcadedb_server_version,
 )
 from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.core import AdapterError
 from graph_sym_perf.plan import normalize_plan
 
 
@@ -74,6 +77,49 @@ def test_arcadedb_ensure_schema_creates_database_when_exists_result_false() -> N
         ("GET", "/api/v1/exists/graphsymperf"),
         ("POST", "/api/v1/server"),
     ]
+
+
+def test_arcadedb_reset_graph_drops_and_recreates_the_database() -> None:
+    commands: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+
+        def __init__(self, payload: dict[str, object]):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    adapter = object.__new__(ArcadeDBAdapter)
+    adapter._database = "mydb"
+    adapter._session = SimpleNamespace()
+    adapter._connect = lambda: None
+
+    def fake_request(method: str, path: str, **kwargs):
+        if path == "/api/v1/exists/mydb":
+            return FakeResponse({"result": bool(commands) is False})
+        if path == "/api/v1/server":
+            commands.append(kwargs["json"]["command"])
+            return FakeResponse({"result": "ok"})
+        raise AssertionError((method, path))
+
+    adapter._request = fake_request
+
+    adapter.reset_graph()
+
+    assert commands == ["drop database mydb", "create database mydb"]
+
+
+def test_arcadedb_reset_graph_rejects_an_unsafe_database_name() -> None:
+    adapter = object.__new__(ArcadeDBAdapter)
+    adapter._database = "mydb; drop database other"
+    adapter._session = SimpleNamespace()
+    adapter._connect = lambda: None
+
+    with pytest.raises(AdapterError, match="database name"):
+        adapter.reset_graph()
 
 
 def test_arcadedb_execute_passes_timeout_to_http_request() -> None:

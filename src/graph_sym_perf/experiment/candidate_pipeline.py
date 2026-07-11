@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters import create_adapter
+from graph_sym_perf.adapters.lifecycle import reset_graph_state
 from graph_sym_perf.artifacts.chain import ArtifactChainWriter
 from graph_sym_perf.artifacts.schema import ArtifactRecord, ArtifactReference
 from graph_sym_perf.artifacts.store import ContentAddressedStore
@@ -361,10 +362,9 @@ class ProductionCandidatePipeline:
             connected = adapter.connectivity_check()
             if not isinstance(connected, tuple) or not connected or connected[0] is not True:
                 raise RuntimeError("reducer_connection_check_failed")
-            adapter.execute(
-                "MATCH (n) DETACH DELETE n",
-                {},
-                "reducer_reset",
+            reset_graph_state(
+                adapter,
+                query_kind="reducer_reset",
                 timeout_seconds=candidate.validation_policy.query_timeout_seconds,
             )
             adapter.load_gdsmith_graph(candidate.graph_snapshot.statements)

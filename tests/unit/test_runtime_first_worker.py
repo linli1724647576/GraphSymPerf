@@ -63,6 +63,24 @@ class _Adapter:
         return DBMSHealthEpoch("e" * 64, "test")
 
 
+class _DatabaseResetAdapter(_Adapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.database_resets = 0
+
+    def reset_graph(self) -> bool:
+        self.database_resets += 1
+        return True
+
+    def load_graph(self, corpus: GraphCorpus) -> None:
+        self.loaded = corpus.statements
+
+    def execute(self, query, parameters, query_kind, **kwargs) -> ExecutionResult:
+        if query_kind == "shard_reset":
+            raise AssertionError("database-level reset must replace graph-wide Cypher deletion")
+        return super().execute(query, parameters, query_kind, **kwargs)
+
+
 class _RuntimeGapAdapter(_Adapter):
     def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
         result = super().execute(query, parameters, query_kind, **_kwargs)
@@ -640,6 +658,20 @@ def test_worker_wraps_acceptance_and_runtime_execute_calls_with_atomic_inflight_
     assert all(record["query_hash"] and record["deadline"] > record["started_at"] for record in records)
     assert not (attempt_dir / "inflight.json").exists()
     assert load_adapter.closed and measurement_adapter.closed
+
+
+def test_worker_prefers_database_level_reset_over_graph_wide_delete() -> None:
+    adapter = _DatabaseResetAdapter()
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda *_args: None,
+        adapter_factory=lambda _task: adapter,
+    )
+
+    worker._reset_and_load(adapter, ("CREATE (n:Node {id: 1})",))
+
+    assert adapter.database_resets == 1
+    assert adapter.loaded == ("CREATE (n:Node {id: 1})",)
 
 
 def test_dbms_fingerprint_change_at_measurement_reconnect_invalidates_runtime_candidates(tmp_path) -> None:

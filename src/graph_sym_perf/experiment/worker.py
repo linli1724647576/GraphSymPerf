@@ -22,6 +22,7 @@ from urllib.parse import unquote, urlparse
 
 from graph_sym_perf.adapters import create_adapter
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
+from graph_sym_perf.adapters.lifecycle import reset_graph_state
 from graph_sym_perf.artifacts.policy import ArtifactLevel
 from graph_sym_perf.artifacts.schema import ArtifactRecord
 from graph_sym_perf.artifacts.store import (
@@ -156,6 +157,18 @@ class AdapterQueryProxy:
             timeout_seconds=self.default_timeout_seconds,
             operation=operation,
         )
+
+    def reset_graph(self) -> bool:
+        operation = getattr(self._adapter, "reset_graph", None)
+        if not callable(operation):
+            return False
+        self._call_with_inflight(
+            query_identity="adapter.reset_graph",
+            query_kind="graph_reset",
+            timeout_seconds=self.default_timeout_seconds,
+            operation=operation,
+        )
+        return True
 
     def connectivity_check(self) -> Any:
         operation = getattr(self._adapter, "connectivity_check", None)
@@ -614,7 +627,7 @@ class RuntimeFirstShardWorker:
     def _reset_and_load(self, adapter: Any, graph_statements: tuple[str, ...]) -> None:
         # A shard can only start from a known empty graph.  Failure to reset is
         # fatal: continuing would combine this shard with stale graph state.
-        adapter.execute("MATCH (n) DETACH DELETE n", {}, "shard_reset")
+        reset_graph_state(adapter, query_kind="shard_reset")
         reset_schema = getattr(adapter, "reset_schema", None)
         if callable(reset_schema):
             reset_schema()

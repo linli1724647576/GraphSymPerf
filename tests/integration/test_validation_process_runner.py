@@ -48,6 +48,12 @@ class LifecycleAdapter:
         self._event("load")
         self._graph_fingerprint = GraphSnapshot.from_statements(statements).content_hash
 
+    def reset_graph(self) -> bool:
+        if self.candidate.resolved_config.get("mode") != "database_reset":
+            return False
+        self._event("database_reset")
+        return True
+
     def dbms_fingerprint(self):
         return DBMSFingerprint(self.candidate.pair.dbms_fingerprint)
 
@@ -121,6 +127,24 @@ def test_subprocess_runner_performs_real_fresh_process_session_lifecycle(tmp_pat
     events = (tmp_path / "events.log").read_text(encoding="utf-8")
     for event in ("connect", "validation_reset", "load", "validation_graph_nodes", "validation_graph_relationships", "close"):
         assert f":{event}\n" in events
+
+
+def test_subprocess_runner_prefers_database_level_reset_when_supported(tmp_path: Path) -> None:
+    event_log = tmp_path / "events.log"
+    candidate = _bundle(event_log, mode="database_reset")
+
+    equivalence, session = SubprocessSessionRunner(_adapter_factory).run_session(
+        candidate,
+        1,
+        expected_slow_query="b",
+        noise_floor_ms=0.0,
+        timer_resolution_ms=0.001,
+    )
+
+    events = event_log.read_text(encoding="utf-8")
+    assert equivalence.equivalent and session.lifecycle is not None and session.lifecycle.complete
+    assert ":database_reset\n" in events
+    assert ":validation_reset\n" not in events
 
 
 def test_subprocess_runner_fail_closes_when_loaded_graph_state_does_not_match(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ import uuid
 from dataclasses import replace
 from typing import Any, Callable
 
+from graph_sym_perf.adapters.lifecycle import reset_graph_state
 from graph_sym_perf.equivalence.checker import compare_execution_results
 from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import RuntimeEvidence, RuntimePolicy, RuntimeVerdict
@@ -125,7 +126,11 @@ def _run_validation_session(
             raise RuntimeError("connection_check_failed")
         lifecycle["connection_opened"] = True
         lifecycle["connection_id"] = _connection_identity(adapter)
-        adapter.execute("MATCH (n) DETACH DELETE n", {}, "validation_reset", timeout_seconds=query_timeout_seconds)
+        reset_graph_state(
+            adapter,
+            query_kind="validation_reset",
+            timeout_seconds=query_timeout_seconds,
+        )
         lifecycle["graph_reset"] = True
         adapter.load_gdsmith_graph(candidate.graph_snapshot.statements)
         lifecycle["graph_loaded"] = True

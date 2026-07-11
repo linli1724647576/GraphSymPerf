@@ -43,7 +43,8 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
 
     def ensure_schema(self) -> None:
         self._connect()
-        exists = self._request("GET", f"/api/v1/exists/{self._database}")
+        database = _database_name(self._database)
+        exists = self._request("GET", f"/api/v1/exists/{database}")
         if exists.status_code == 200:
             try:
                 payload = exists.json()
@@ -54,10 +55,31 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
         response = self._request(
             "POST",
             "/api/v1/server",
-            json={"command": f"create database {self._database}"},
+            json={"command": f"create database {database}"},
         )
         if response.status_code not in (200, 201, 409):
-            raise AdapterError(f"cannot create ArcadeDB database {self._database!r}: {response.text}")
+            raise AdapterError(f"cannot create ArcadeDB database {database!r}: {response.text}")
+
+    def reset_graph(self) -> bool:
+        """Give each shard a fresh database without scanning the old graph."""
+
+        self._connect()
+        database = _database_name(self._database)
+        exists = self._request("GET", f"/api/v1/exists/{database}")
+        try:
+            present = exists.status_code == 200 and bool(exists.json().get("result"))
+        except Exception as exc:
+            raise AdapterError(f"cannot inspect ArcadeDB database {database!r}: {exists.text}") from exc
+        if present:
+            response = self._request(
+                "POST",
+                "/api/v1/server",
+                json={"command": f"drop database {database}"},
+            )
+            if response.status_code not in (200, 201):
+                raise AdapterError(f"cannot drop ArcadeDB database {database!r}: {response.text}")
+        self.ensure_schema()
+        return True
 
     def execute(
         self,
@@ -273,6 +295,13 @@ def _arcade_rows(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
                 rows.append({"value": to_jsonable(item)})
         return tuple(rows)
     return ({"value": to_jsonable(result)},)
+
+
+def _database_name(value: object) -> str:
+    name = str(value or "")
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name) is None:
+        raise AdapterError(f"unsafe ArcadeDB database name: {name!r}")
+    return name
 
 
 def _arcadedb_server_version(response: Any) -> str | None:
