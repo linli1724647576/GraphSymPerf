@@ -341,4 +341,20 @@ def _requires_command_endpoint(query: str) -> bool:
     stripped = query.lstrip().upper()
     if stripped.startswith(("MERGE ", "CREATE ", "DELETE ", "DETACH ", "SET ", "REMOVE ", "DROP ")):
         return True
-    return any(token in stripped for token in (" MERGE ", "\nMERGE ", " SET ", "\nSET ", " CREATE ", "\nCREATE "))
+    return any(
+        token in stripped
+        for token in (
+            " MERGE ",
+            "\nMERGE ",
+            " SET ",
+            "\nSET ",
+            " CREATE ",
+            "\nCREATE ",
+            " DELETE ",
+            "\nDELETE ",
+            " DETACH ",
+            "\nDETACH ",
+            " REMOVE ",
+            "\nREMOVE ",
+        )
+    )

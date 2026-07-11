@@ -98,6 +98,33 @@ def test_arcadedb_execute_passes_timeout_to_http_request() -> None:
     assert calls[0]["timeout"] == 7
 
 
+def test_arcadedb_mutating_match_uses_the_command_endpoint() -> None:
+    calls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"result": []}
+
+    adapter = object.__new__(ArcadeDBAdapter)
+    adapter._database = "graphsymperf"
+    adapter._base_url = "http://127.0.0.1:2481"
+    adapter._connect = lambda: None
+
+    class FakeSession:
+        def request(self, method: str, url: str, **kwargs):
+            calls.append(url)
+            return FakeResponse()
+
+    adapter._session = FakeSession()
+
+    adapter.execute("MATCH (n) DETACH DELETE n", {}, "reset")
+
+    assert calls == ["http://127.0.0.1:2481/api/v1/command/graphsymperf"]
+
+
 def test_arcadedb_version_ignores_generic_server_header_and_uses_payload() -> None:
     response = SimpleNamespace(headers={"Server": "nginx"}, json=lambda: {"serverVersion": "24.6.1"})
 
