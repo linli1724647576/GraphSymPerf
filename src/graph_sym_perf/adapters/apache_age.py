@@ -11,6 +11,16 @@ from urllib.parse import urlparse, urlunparse
 from graph_sym_perf.adapters.base import BaseAdapter, normalized_uri_endpoint
 from graph_sym_perf.adapters.common_cypher import _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_typed_value as to_jsonable
+from graph_sym_perf.dialects.apache_age import ApacheAgeDialect
+from graph_sym_perf.dialects.base import (
+    DecisionKind,
+    has_distinct_order_by_projection_mismatch as _dialect_distinct_order_mismatch,
+    has_multi_label_node as _dialect_has_multi_label_node,
+    has_variable_label_conflict as _dialect_variable_label_conflict,
+    parse_projection,
+    render_cypher_literal,
+)
+from graph_sym_perf.generation.corpus import PortableQuery
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
@@ -48,10 +58,12 @@ class ApacheAgeAdapter(BaseAdapter):
 
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
         graph = parse_gdsmith_replay_graph(statements)
+        for node in graph.nodes:
+            _single_node_label(node.labels)
         self.ensure_schema()
         node_labels: dict[int, tuple[str, ...]] = {}
         for node in graph.nodes:
-            labels = node.labels or ("GdsmithNode",)
+            labels = (_single_node_label(node.labels),)
             node_labels[node.node_id] = labels
             self._run_wrapped(_create_node_cypher(labels, node.properties), "gdsmith_load_node")
         for relationship in graph.relationships:
@@ -77,8 +89,9 @@ class ApacheAgeAdapter(BaseAdapter):
         self._connect()
         start = perf_counter()
         truncated = False
-        cypher = _inline_parameters(query, parameters)
-        sql, aliases = self._wrap_select(cypher)
+        compiled = self._compile(query, parameters)
+        sql = compiled.execution_envelope.statement
+        aliases = tuple(column.name for column in compiled.result_schema)
         try:
             with self._conn.cursor() as cursor:
                 self._prepare_session(cursor)
@@ -113,8 +126,8 @@ class ApacheAgeAdapter(BaseAdapter):
 
     def explain(self, query: str, parameters: Mapping[str, Any], query_kind: str) -> PlanRecord:
         try:
-            cypher = _inline_parameters(query, parameters)
-            sql, _aliases = self._wrap_select(cypher)
+            compiled = self._compile(query, parameters)
+            sql = compiled.execution_envelope.statement
             rows = self._explain_rows(f"EXPLAIN {sql}")
             return make_plan_record(TargetSystem.APACHE_AGE, query_kind, rows)
         except Exception as exc:
@@ -134,8 +147,8 @@ class ApacheAgeAdapter(BaseAdapter):
         self._connect()
         start = perf_counter()
         try:
-            cypher = _inline_parameters(query, parameters)
-            sql, _aliases = self._wrap_select(cypher)
+            compiled = self._compile(query, parameters)
+            sql = compiled.execution_envelope.statement
             with self._conn.cursor() as cursor:
                 self._prepare_session(cursor)
                 if timeout_seconds is not None:
@@ -205,13 +218,8 @@ class ApacheAgeAdapter(BaseAdapter):
         return self.execute(query, {}, query_kind)
 
     def gdsmith_query_is_replayable(self, query: str) -> bool:
-        if _has_multi_label_node(query):
-            return False
-        if _has_variable_label_conflict(query):
-            return False
-        if _has_distinct_order_by_projection_mismatch(query):
-            return False
-        return True
+        graph_name = getattr(self, "_graph_name", None) or "graph_sym_perf"
+        return ApacheAgeDialect(graph_name=graph_name).check(PortableQuery(query)).kind is not DecisionKind.REJECT
 
     def _explain_rows(self, sql: str) -> tuple[str, ...]:
         self._connect()
@@ -223,17 +231,16 @@ class ApacheAgeAdapter(BaseAdapter):
         return rows
 
     def _wrap_select(self, cypher: str) -> tuple[str, tuple[str, ...]]:
-        aliases = _return_aliases(cypher)
-        if not aliases:
-            aliases = ("result",)
-        # Use a unique sentinel that is extremely unlikely to appear in any
-        # Cypher query, avoiding the risk of the older "$ graph_sym_perf_dollar $"
-        # placeholder colliding with legitimate query text.
-        _DOLLAR_SENTINEL = "$__GSYM_PERF_DOLLAR_PLHDR_v2__$"
-        escaped = cypher.replace("$$", _DOLLAR_SENTINEL)
-        columns = ", ".join(f"{_sql_identifier(alias)} agtype" for alias in aliases)
-        sql = f"SELECT * FROM ag_catalog.cypher({_sql_literal(self._graph_name)}, $${escaped}$$) AS ({columns})"
-        return sql, aliases
+        compiled = self._compile(cypher, {})
+        aliases = tuple(column.name for column in compiled.result_schema)
+        return compiled.execution_envelope.statement, aliases
+
+    def _compile(self, query: str, parameters: Mapping[str, Any]):
+        dialect = ApacheAgeDialect(graph_name=self._graph_name or "graph_sym_perf")
+        decision = dialect.check(PortableQuery(query, parameters=parameters))
+        if decision.kind is DecisionKind.REJECT or decision.compiled_query is None:
+            raise AdapterError(f"Apache AGE dialect rejected query: {decision.reason_code.value}")
+        return decision.compiled_query
 
     def _connect(self) -> None:
         if self._conn is not None:
@@ -279,172 +286,43 @@ def _age_value(value: Any) -> Any:
 
 
 def _return_aliases(query: str) -> tuple[str, ...]:
-    return_body = _return_body(query)
-    if not return_body:
-        return ()
-    aliases: list[str] = []
-    for index, item in enumerate(_split_top_level_commas(return_body), start=1):
-        explicit = re.search(r"\bAS\s+([A-Za-z]\w*)\s*$", item, flags=re.IGNORECASE)
-        aliases.append(explicit.group(1) if explicit else f"col{index}")
-    return tuple(aliases)
-
-
-def _return_body(query: str) -> str:
-    match = None
-    for candidate in re.finditer(r"\bRETURN\b", query, flags=re.IGNORECASE):
-        match = candidate
-    if match is None:
-        return ""
-    tail = query[match.end() :]
-    stop = _first_top_level_keyword(tail, ("ORDER BY", "SKIP", "LIMIT", "UNION"))
-    return tail[:stop].strip() if stop is not None else tail.strip()
-
-
-def _first_top_level_keyword(text: str, keywords: tuple[str, ...]) -> int | None:
-    depth = 0
-    quote: str | None = None
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if quote:
-            if char == "\\":
-                index += 2
-                continue
-            if char == quote:
-                quote = None
-        elif char in {"'", '"'}:
-            quote = char
-        elif char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth = max(depth - 1, 0)
-        elif depth == 0:
-            upper = text[index:].upper()
-            for keyword in keywords:
-                if upper.startswith(keyword):
-                    return index
-        index += 1
-    return None
-
-
-def _split_top_level_commas(text: str) -> tuple[str, ...]:
-    parts: list[str] = []
-    start = 0
-    depth = 0
-    quote: str | None = None
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if quote:
-            if char == "\\":
-                index += 2
-                continue
-            if char == quote:
-                quote = None
-        elif char in {"'", '"'}:
-            quote = char
-        elif char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth = max(depth - 1, 0)
-        elif char == "," and depth == 0:
-            parts.append(text[start:index].strip())
-            start = index + 1
-        index += 1
-    parts.append(text[start:].strip())
-    return tuple(part for part in parts if part)
+    projection = parse_projection(query, allow_star_scope=True)
+    return tuple(column.name for column in projection.columns)
 
 
 def _create_node_cypher(labels: tuple[str, ...], properties: Mapping[str, Any]) -> str:
-    label_text = f":{labels[0]}" if labels else ":GdsmithNode"
+    label_text = f":{_single_node_label(labels)}"
     return f"CREATE (n{label_text} {_map_literal(properties)})"
 
 
 def _has_multi_label_node(query: str) -> bool:
-    return bool(re.search(r"\([^)]*:\s*[A-Za-z]\w*\s*:\s*[A-Za-z]\w*", query))
+    return _dialect_has_multi_label_node(query)
 
 
 def _has_variable_label_conflict(query: str) -> bool:
-    labels_by_variable: dict[str, set[str | None]] = {}
-    for match in re.finditer(r"\(\s*([A-Za-z]\w*)\s*((?::\s*[A-Za-z]\w*)*)", query):
-        variable = match.group(1)
-        if variable.upper() in {"WHERE", "RETURN", "MATCH", "OPTIONAL", "WITH"}:
-            continue
-        labels = set(re.findall(r":\s*([A-Za-z]\w*)", match.group(2))) or {None}
-        labels_by_variable.setdefault(variable, set()).update(labels)
-        if len(labels_by_variable[variable]) > 1:
-            return True
-    return False
+    return _dialect_variable_label_conflict(query)
 
 
 def _has_distinct_order_by_projection_mismatch(query: str) -> bool:
-    return_body = _return_body(query)
-    if not return_body:
-        return False
-    if not return_body.upper().lstrip().startswith("DISTINCT "):
-        return False
-    order_body = _order_by_body(query)
-    if not order_body:
-        return False
-    projected = {
-        _canonical_expression(item.removeprefix("DISTINCT").strip())
-        for item in _split_top_level_commas(return_body)
-    }
-    order_expressions = {
-        _canonical_expression(re.sub(r"\s+(ASC|DESC)\s*$", "", item, flags=re.IGNORECASE))
-        for item in _split_top_level_commas(order_body)
-    }
-    return bool(order_expressions - projected)
-
-
-def _order_by_body(query: str) -> str:
-    match = None
-    for candidate in re.finditer(r"\bORDER\s+BY\b", query, flags=re.IGNORECASE):
-        match = candidate
-    if match is None:
-        return ""
-    tail = query[match.end() :]
-    stop = _first_top_level_keyword(tail, ("SKIP", "LIMIT", "UNION"))
-    return tail[:stop].strip() if stop is not None else tail.strip()
-
-
-def _canonical_expression(text: str) -> str:
-    expr = re.sub(r"\bAS\s+[A-Za-z]\w*\s*$", "", text.strip(), flags=re.IGNORECASE)
-    return re.sub(r"\s+", " ", expr).strip().lower()
+    return _dialect_distinct_order_mismatch(query)
 
 
 def _map_literal(values: Mapping[str, Any]) -> str:
-    return "{" + ", ".join(f"{key}: {_literal(value)}" for key, value in values.items()) + "}"
-
-
-def _inline_parameters(query: str, parameters: Mapping[str, Any]) -> str:
-    rendered = query
-    for name, value in sorted(parameters.items(), key=lambda item: len(item[0]), reverse=True):
-        rendered = re.sub(rf"\${re.escape(str(name))}\b", _literal(value), rendered)
-    return rendered
+    return render_cypher_literal(values)
 
 
 def _literal(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int | float):
-        return repr(value)
-    text = str(value).replace("\\", "\\\\").replace("'", "\\'")
-    return f"'{text}'"
+    return render_cypher_literal(value)
 
 
-def _sql_literal(value: str | None) -> str:
-    if value is None or not re.match(r"^[A-Za-z][A-Za-z0-9_]*$", value):
-        raise AdapterError(f"unsafe Apache AGE graph name: {value!r}")
-    return "'" + value.replace("'", "''") + "'"
-
-
-def _sql_identifier(value: str) -> str:
-    if not re.match(r"^[A-Za-z][A-Za-z0-9_]*$", value):
-        value = "col"
-    return '"' + value.replace('"', '""') + '"'
+def _single_node_label(labels: tuple[str, ...]) -> str:
+    effective = labels or ("GdsmithNode",)
+    if len(effective) != 1:
+        raise AdapterError("MULTI_LABEL_UNSUPPORTED: Apache AGE uses the single-label AgensGraph proxy subset")
+    label = effective[0]
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", label) is None:
+        raise AdapterError(f"unsafe Apache AGE label: {label!r}")
+    return label
 
 
 def _uri_with_db(uri: str | None, database: str) -> str:

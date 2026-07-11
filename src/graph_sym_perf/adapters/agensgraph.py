@@ -9,6 +9,9 @@ from typing import Any, Mapping
 from graph_sym_perf.adapters.base import BaseAdapter, normalized_uri_endpoint
 from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_typed_value as to_jsonable
+from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
+from graph_sym_perf.dialects.base import DecisionKind
+from graph_sym_perf.generation.corpus import PortableQuery
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph, GdsmithReplayNode, parse_gdsmith_replay_graph
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
@@ -53,9 +56,11 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
 
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
         graph = parse_gdsmith_replay_graph(statements)
+        for node in graph.nodes:
+            self._single_node_label(node)
         self.ensure_schema()
         self._ensure_labels(
-            vertex_labels=tuple(sorted({self._primary_node_label(node) for node in graph.nodes})),
+            vertex_labels=tuple(sorted({self._single_node_label(node) for node in graph.nodes})),
             edge_labels=tuple(sorted({relationship.relationship_type for relationship in graph.relationships})),
         )
         for node in graph.nodes:
@@ -75,7 +80,7 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
     ) -> ExecutionResult:
         self._connect()
         start = perf_counter()
-        cypher = _inline_parameters(query, parameters)
+        cypher = self._compile(query, parameters)
         truncated = False
         try:
             with self._conn.cursor() as cursor:
@@ -114,7 +119,7 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
 
     def explain(self, query: str, parameters: Mapping[str, Any], query_kind: str) -> PlanRecord:
         try:
-            cypher = _inline_parameters(query, parameters)
+            cypher = self._compile(query, parameters)
             sql = f"EXPLAIN {cypher}"
             self._connect()
             with self._conn.cursor() as cursor:
@@ -139,7 +144,7 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
     ) -> ExecutionResult:
         self._connect()
         start = perf_counter()
-        cypher = _inline_parameters(query, parameters)
+        cypher = self._compile(query, parameters)
         try:
             with self._conn.cursor() as cursor:
                 if timeout_seconds is not None:
@@ -205,16 +210,10 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
         return ("pg_postmaster_start_time", row[0]) if row and row[0] not in (None, "") else None
 
     def gdsmith_query_is_replayable(self, query: str) -> bool:
-        if _has_multi_label_node(query):
-            return False
-        if _has_variable_label_conflict(query):
-            return False
-        if _has_distinct_order_by_projection_mismatch(query):
-            return False
-        return True
+        return AgensGraphDialect().check(PortableQuery(query)).kind is not DecisionKind.REJECT
 
     def _merge_gdsmith_node(self, node: GdsmithReplayNode) -> None:
-        label = self._primary_node_label(node)
+        label = self._single_node_label(node)
         query = f"""
 MERGE (n:{label} {{id: $id}})
 SET n += $properties
@@ -241,8 +240,17 @@ SET n += $properties
             self._conn.rollback()
             raise AdapterError(f"cannot prepare AgensGraph labels: {exc}") from exc
 
-    def _primary_node_label(self, node: GdsmithReplayNode) -> str:
-        return _identifier((node.labels or ("GdsmithNode",))[0])
+    def _single_node_label(self, node: GdsmithReplayNode) -> str:
+        labels = node.labels or ("GdsmithNode",)
+        if len(labels) != 1:
+            raise AdapterError("MULTI_LABEL_UNSUPPORTED: AgensGraph vertices require exactly one label")
+        return _identifier(labels[0])
+
+    def _compile(self, query: str, parameters: Mapping[str, Any]) -> str:
+        decision = AgensGraphDialect().check(PortableQuery(query, parameters=parameters))
+        if decision.kind is DecisionKind.REJECT or decision.compiled_query is None:
+            raise AdapterError(f"AgensGraph dialect rejected query: {decision.reason_code.value}")
+        return decision.compiled_query.cypher_core
 
     def _connect(self) -> None:
         if self._conn is not None:
@@ -267,42 +275,10 @@ SET n += $properties
         cursor.execute(f"SET graph_path = {_identifier(self._graph_name)}")
 
 
-def _inline_parameters(query: str, parameters: Mapping[str, Any]) -> str:
-    rendered = query
-    for name, value in sorted(parameters.items(), key=lambda item: len(item[0]), reverse=True):
-        rendered = re.sub(rf"\${re.escape(str(name))}\b", _literal(value), rendered)
-    return rendered
-
-
-def _literal(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int | float):
-        return repr(value)
-    if isinstance(value, Mapping):
-        return _map_literal(value)
-    if isinstance(value, tuple | list):
-        return "[" + ", ".join(_literal(item) for item in value) + "]"
-    text = str(value).replace("\\", "\\\\").replace("'", "\\'")
-    return f"'{text}'"
-
-
-def _map_literal(values: Mapping[str, Any]) -> str:
-    return "{" + ", ".join(f"{_property_key(key)}: {_literal(value)}" for key, value in values.items()) + "}"
-
-
 def _identifier(value: str | None) -> str:
     if not value or not re.match(r"^[A-Za-z][A-Za-z0-9_]*$", value):
         raise AdapterError(f"unsafe AgensGraph graph name: {value!r}")
     return value
-
-
-def _property_key(value: str) -> str:
-    if not re.match(r"^[A-Za-z][A-Za-z0-9_]*$", str(value)):
-        raise AdapterError(f"unsafe AgensGraph property key: {value!r}")
-    return str(value)
 
 
 def _compact(query: str) -> str:
@@ -313,122 +289,3 @@ def _uri_with_db(uri: str | None, database: str) -> str:
     if uri is None or "/" in uri.rsplit("@", 1)[-1]:
         return uri or ""
     return uri.rstrip("/") + "/" + database
-
-
-def _has_multi_label_node(query: str) -> bool:
-    return bool(re.search(r"\([^)]*:\s*[A-Za-z]\w*\s*:\s*[A-Za-z]\w*", query))
-
-
-def _has_variable_label_conflict(query: str) -> bool:
-    labels_by_variable: dict[str, set[str | None]] = {}
-    for match in re.finditer(r"\(\s*([A-Za-z]\w*)\s*((?::\s*[A-Za-z]\w*)*)", query):
-        variable = match.group(1)
-        if variable.upper() in {"WHERE", "RETURN", "MATCH", "OPTIONAL", "WITH"}:
-            continue
-        labels = set(re.findall(r":\s*([A-Za-z]\w*)", match.group(2))) or {None}
-        labels_by_variable.setdefault(variable, set()).update(labels)
-        if len(labels_by_variable[variable]) > 1:
-            return True
-    return False
-
-
-def _has_distinct_order_by_projection_mismatch(query: str) -> bool:
-    return_body = _return_body(query)
-    if not return_body:
-        return False
-    if not return_body.upper().lstrip().startswith("DISTINCT "):
-        return False
-    order_body = _order_by_body(query)
-    if not order_body:
-        return False
-    projected = {
-        _canonical_expression(item.removeprefix("DISTINCT").strip())
-        for item in _split_top_level_commas(return_body)
-    }
-    order_expressions = {
-        _canonical_expression(re.sub(r"\s+(ASC|DESC)\s*$", "", item, flags=re.IGNORECASE))
-        for item in _split_top_level_commas(order_body)
-    }
-    return bool(order_expressions - projected)
-
-
-def _return_body(query: str) -> str:
-    match = None
-    for candidate in re.finditer(r"\bRETURN\b", query, flags=re.IGNORECASE):
-        match = candidate
-    if match is None:
-        return ""
-    tail = query[match.end() :]
-    stop = _first_top_level_keyword(tail, ("ORDER BY", "SKIP", "LIMIT", "UNION"))
-    return tail[:stop].strip() if stop is not None else tail.strip()
-
-
-def _order_by_body(query: str) -> str:
-    match = None
-    for candidate in re.finditer(r"\bORDER\s+BY\b", query, flags=re.IGNORECASE):
-        match = candidate
-    if match is None:
-        return ""
-    tail = query[match.end() :]
-    stop = _first_top_level_keyword(tail, ("SKIP", "LIMIT", "UNION"))
-    return tail[:stop].strip() if stop is not None else tail.strip()
-
-
-def _first_top_level_keyword(text: str, keywords: tuple[str, ...]) -> int | None:
-    depth = 0
-    quote: str | None = None
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if quote:
-            if char == "\\":
-                index += 2
-                continue
-            if char == quote:
-                quote = None
-        elif char in {"'", '"'}:
-            quote = char
-        elif char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth = max(depth - 1, 0)
-        elif depth == 0:
-            upper = text[index:].upper()
-            for keyword in keywords:
-                if upper.startswith(keyword):
-                    return index
-        index += 1
-    return None
-
-
-def _split_top_level_commas(text: str) -> tuple[str, ...]:
-    parts: list[str] = []
-    start = 0
-    depth = 0
-    quote: str | None = None
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if quote:
-            if char == "\\":
-                index += 2
-                continue
-            if char == quote:
-                quote = None
-        elif char in {"'", '"'}:
-            quote = char
-        elif char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth = max(depth - 1, 0)
-        elif char == "," and depth == 0:
-            parts.append(text[start:index].strip())
-            start = index + 1
-        index += 1
-    parts.append(text[start:].strip())
-    return tuple(part for part in parts if part)
-
-
-def _canonical_expression(text: str) -> str:
-    expr = re.sub(r"\bAS\s+[A-Za-z]\w*\s*$", "", text.strip(), flags=re.IGNORECASE)
-    return re.sub(r"\s+", " ", expr).strip().lower()

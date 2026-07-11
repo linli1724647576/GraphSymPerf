@@ -51,6 +51,7 @@ def test_resolved_manifest_preserves_task_identity_and_resource_limits(tmp_path:
     assert len(payload["tasks"]) == 112
     expected_task_fields = {
         "accepted_query_pairs",
+        "generation_backend",
         "max_generated_seeds",
         "max_runtime_seconds",
         "seed",

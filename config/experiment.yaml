@@ -16,6 +16,7 @@ generation:
   backend: gdsmith
   source: gdsmith
   commit_source: vendored_checkout
+  expected_commit: b2166f1b70cfa9b5816fe707327dd6aed2a22a45
   checkout: ../../GDsmith-src
   required_env: [GRAPHSYMPERF_GDSMITH_JAR]
 scheduling:

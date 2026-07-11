@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from graph_sym_perf.adapters.apache_age import (
     ApacheAgeAdapter,
     _has_distinct_order_by_projection_mismatch,
     _has_variable_label_conflict,
     _return_aliases,
 )
-from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.core import AdapterError, TargetSystem
 from graph_sym_perf.plan import normalize_plan
 
 
@@ -46,3 +48,21 @@ def test_apache_age_replay_filter_uses_backend_specific_rejections() -> None:
 
     assert not adapter.gdsmith_query_is_replayable("MATCH (n:L0)-->(m:L1) MATCH (n:L2) RETURN n")
     assert not adapter.gdsmith_query_is_replayable("MATCH (n) RETURN DISTINCT n.k1 ORDER BY n.k2")
+
+
+def test_apache_age_wrapper_preserves_literal_dollars_and_has_explicit_schema() -> None:
+    adapter = object.__new__(ApacheAgeAdapter)
+    adapter._graph_name = "g"
+
+    sql, aliases = adapter._wrap_select("RETURN '$$' AS marker, 1 AS value")
+
+    assert aliases == ("marker", "value")
+    assert "RETURN '$$' AS marker, 1 AS value" in sql
+    assert "marker\" agtype" in sql and "value\" agtype" in sql
+    assert "SENTINEL" not in sql and "PLHDR" not in sql
+
+
+def test_apache_age_rejects_multilabel_graph_instead_of_dropping_labels() -> None:
+    adapter = object.__new__(ApacheAgeAdapter)
+    with pytest.raises(AdapterError, match="MULTI_LABEL_UNSUPPORTED"):
+        adapter.load_gdsmith_graph(("CREATE (n:A:B {id: 1})",))

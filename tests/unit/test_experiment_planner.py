@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from graph_sym_perf.core import ConfigError
+from graph_sym_perf.core import ConfigError, TargetSystem
 from graph_sym_perf.experiment.plan_models import SourceRevision
 from graph_sym_perf.experiment.planner import build_run_plan, write_resolved_manifest
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -49,7 +49,10 @@ def test_planner_records_exact_gdsmith_commit_and_clean_or_dirty_state(tmp_path:
         text=True,
     ).stdout.strip()
     spec = load_experiment_spec("config/experiment.yaml")
-    spec = replace(spec, generation=replace(spec.generation, checkout=checkout))
+    spec = replace(
+        spec,
+        generation=replace(spec.generation, checkout=checkout, expected_commit=expected_commit),
+    )
 
     clean = build_run_plan(spec, repository_root=checkout)
     (checkout / "README.md").write_text("dirty\n", encoding="utf-8")
@@ -58,6 +61,10 @@ def test_planner_records_exact_gdsmith_commit_and_clean_or_dirty_state(tmp_path:
     assert clean.source_revision.repository_dirty is False
     assert clean.source_revision.gdsmith_commit == expected_commit
     assert clean.source_revision.gdsmith_dirty is False
+    assert clean.resolved_spec is not None
+    assert clean.resolved_spec.systems[TargetSystem.APACHE_AGE].generation_backend == "agensgraph_proxy"
+    age_task = next(task for task in clean.tasks if task.target is TargetSystem.APACHE_AGE)
+    assert age_task.generation_backend == "agensgraph_proxy"
     assert dirty.source_revision.repository_dirty is True
     assert dirty.source_revision.gdsmith_commit == expected_commit
     assert dirty.source_revision.gdsmith_dirty is True
@@ -101,6 +108,7 @@ def test_resolved_manifest_is_a_secret_free_auditable_plan(tmp_path) -> None:
     assert payload["environment"]["GRAPHSYMPERF_GDSMITH_JAR"] == "missing"
     assert payload["resolved_spec"]["generation"]["backend"] == "gdsmith"
     assert payload["resolved_spec"]["systems"]["neo4j"]["dialect"] == "cypher"
+    assert payload["resolved_spec"]["systems"]["apache_age"]["generation_backend"] == "agensgraph_proxy"
     assert payload["resolved_spec"]["rules_catalog"]["schema_version"] == 1
     assert payload["validator_protocol_version"] == "runtime-first-v3"
     assert payload["reducer_protocol_version"] == "paired-ast-ddmin-v1"

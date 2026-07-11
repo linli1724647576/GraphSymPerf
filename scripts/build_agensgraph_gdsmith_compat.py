@@ -11,6 +11,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import yaml
+
 
 CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/agensGraph/AgensGraphConnection.java")
 
@@ -24,6 +26,11 @@ def main() -> int:
         default="/tmp/graphsymperf-gdsmith-agensgraph-compat-src",
         help="temporary patched source directory",
     )
+    parser.add_argument(
+        "--config",
+        default=str(Path(__file__).resolve().parents[1] / "config" / "experiment.yaml"),
+        help="formal experiment config containing generation.expected_commit",
+    )
     args = parser.parse_args()
 
     src = Path(args.src).expanduser().resolve()
@@ -31,6 +38,8 @@ def main() -> int:
     work_dir = Path(args.work_dir).expanduser().resolve()
     if not (src / "pom.xml").is_file():
         raise SystemExit(f"GDsmith source does not contain pom.xml: {src}")
+    expected_commit = _expected_commit(Path(args.config))
+    source_commit = _verify_source_revision(src, expected_commit)
 
     _copy_source(src, work_dir)
     patch_path = _patch_agens_connection(work_dir)
@@ -43,6 +52,8 @@ def main() -> int:
         json.dumps(
             {
                 "source": str(src),
+                "source_commit": source_commit,
+                "expected_commit": expected_commit,
                 "work_dir": str(work_dir),
                 "patched_file": str(work_dir / CONNECTION_RELATIVE_PATH),
                 "patch": str(patch_path),
@@ -50,8 +61,8 @@ def main() -> int:
                 "output": str(out),
                 "sha256": sha256,
                 "compatibility_guards": (
-                    "collapse_multi_label_node_patterns",
-                    "convert_double_quoted_string_literals_to_single_quoted_literals",
+                    "reject_multi_label_node_patterns",
+                    "reject_double_quoted_tokens",
                 ),
             },
             indent=2,
@@ -67,6 +78,37 @@ def _copy_source(src: Path, work_dir: Path) -> None:
     if work_dir.exists():
         shutil.rmtree(work_dir)
     shutil.copytree(src, work_dir, ignore=shutil.ignore_patterns(".git", "target", "out", "logs", "*.log"))
+
+
+def _expected_commit(config_path: Path) -> str:
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    try:
+        value = payload["generation"]["expected_commit"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError("formal config has no generation.expected_commit") from exc
+    if not isinstance(value, str) or len(value) != 40 or any(char not in "0123456789abcdef" for char in value):
+        raise RuntimeError("generation.expected_commit must be full lowercase 40-hex")
+    return value
+
+
+def _verify_source_revision(src: Path, expected_commit: str) -> str:
+    commit = subprocess.run(
+        ("git", "-C", str(src), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if commit != expected_commit:
+        raise RuntimeError(f"GDsmith commit mismatch: expected {expected_commit}, got {commit}")
+    dirty = subprocess.run(
+        ("git", "-C", str(src), "status", "--porcelain"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if dirty:
+        raise RuntimeError("GDsmith checkout is dirty; compatibility build requires the pinned clean source")
+    return commit
 
 
 def _patch_agens_connection(work_dir: Path) -> Path:
@@ -92,7 +134,7 @@ def _patch_agens_connection(work_dir: Path) -> Path:
 def _patch_agens_connection_source(source: str) -> str:
     source = source.replace(
         "import java.sql.Statement;\n",
-        "import java.sql.Statement;\nimport java.util.regex.Matcher;\nimport java.util.regex.Pattern;\n",
+        "import java.sql.Statement;\nimport java.util.regex.Pattern;\n",
     )
     source = source.replace(
         "public class AgensGraphConnection extends CypherConnection {\n\n    private Connection connection;",
@@ -126,24 +168,24 @@ def _patch_agens_connection_source(source: str) -> str:
     }
 
     private static String agensCompatible(String query) {
-        return singleQuotedStrings(singleLabelNodes(query));
-    }
-
-    private static String singleLabelNodes(String query) {
-        return MULTI_LABEL_NODE.matcher(query).replaceAll("$1");
-    }
-
-    private static String singleQuotedStrings(String query) {
-        Matcher matcher = DOUBLE_QUOTED_STRING.matcher(query);
-        StringBuffer buffer = new StringBuffer();
-        while (matcher.find()) {
-            String content = matcher.group(1).replace("'", "\\\\'");
-            matcher.appendReplacement(buffer, Matcher.quoteReplacement("'" + content + "'"));
+        if (MULTI_LABEL_NODE.matcher(query).find()) {
+            throw new IllegalArgumentException("GRAPHSYMPERF_REJECT_MULTI_LABEL");
         }
-        matcher.appendTail(buffer);
-        return buffer.toString();
+        if (DOUBLE_QUOTED_STRING.matcher(query).find()) {
+            throw new IllegalArgumentException("GRAPHSYMPERF_REJECT_DOUBLE_QUOTED_STRING");
+        }
+        return query;
     }""",
     )
+    required = (
+        "GRAPHSYMPERF_REJECT_MULTI_LABEL",
+        "GRAPHSYMPERF_REJECT_DOUBLE_QUOTED_STRING",
+        "stmt.execute(agensCompatible(arg))",
+        "stmt.executeQuery(agensCompatible(arg))",
+    )
+    missing = tuple(anchor for anchor in required if anchor not in source)
+    if missing:
+        raise RuntimeError(f"required compatibility guard patch anchors are missing: {', '.join(missing)}")
     return source
 
 

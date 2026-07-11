@@ -12,6 +12,7 @@ from typing import Any, Mapping, Protocol
 from urllib.parse import urlparse
 
 from graph_sym_perf.core import ExecutionResult, PlanRecord, RunConfig, SystemConfig, TargetSystem
+from graph_sym_perf.generation.corpus import GraphCorpus
 from graph_sym_perf.gdsmith.replay import GdsmithReplayGraph
 
 
@@ -31,6 +32,9 @@ class GraphAdapter(Protocol):
         ...
 
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph | None:
+        ...
+
+    def load_graph(self, corpus: GraphCorpus) -> GdsmithReplayGraph | None:
         ...
 
     def execute(
@@ -117,6 +121,11 @@ class BaseAdapter:
     def check_environment(self) -> tuple[bool, tuple[str, ...]]:
         missing = tuple(name for name in self.system_config.required_env if not self.env.get(name))
         return not missing, missing
+
+    def load_graph(self, corpus: GraphCorpus) -> GdsmithReplayGraph | None:
+        """Target-neutral graph loading seam; legacy method stays internal."""
+
+        return self.load_gdsmith_graph(corpus.statements)  # type: ignore[attr-defined]
 
     def env_value(self, name: str, default: str | None = None) -> str | None:
         value = self.env.get(name)

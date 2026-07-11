@@ -67,6 +67,8 @@ def parse_gdsmith_replay_graph(statements: tuple[str, ...] | list[str]) -> Gdsmi
     relationships: list[GdsmithReplayRelationship] = []
     for statement in statements:
         stripped = statement.strip().rstrip(";")
+        if not stripped:
+            continue
         node_match = _NODE_RE.match(stripped)
         if node_match:
             props = _parse_cypher_map(node_match.group("props") or "{}")
@@ -86,6 +88,8 @@ def parse_gdsmith_replay_graph(statements: tuple[str, ...] | list[str]) -> Gdsmi
                     properties=props,
                 )
             )
+            continue
+        raise ValueError(f"UNSUPPORTED_GDSMITH_GRAPH_STATEMENT: {stripped[:160]}")
     return GdsmithReplayGraph(nodes=tuple(nodes), relationships=tuple(relationships))
 
 

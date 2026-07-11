@@ -26,18 +26,30 @@ from graph_sym_perf.config import migrate_experiment_spec_to_run_config
 from graph_sym_perf.core import GdsmithConfig, QueryTimeoutError, TargetSystem
 from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
 from graph_sym_perf.dialects.apache_age import ApacheAgeDialect
-from graph_sym_perf.dialects.base import DecisionKind, PortableQuery
+from graph_sym_perf.dialects.base import DecisionKind
 from graph_sym_perf.dialects.native import NativeCypherDialect
 from graph_sym_perf.equivalence.checker import compare_typed_results
 from graph_sym_perf.equivalence.purity import assess_query_purity
 from graph_sym_perf.experiment.plan_models import ExperimentSpec, ShardTask
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import ErrorKind, ShardState, _append_jsonl_fsync, _atomic_write_json, _fsync_directory
+from graph_sym_perf.generation.corpus import GraphCorpus, PortableQuery, portable_ast_hash
+from graph_sym_perf.generation.gdsmith import GdsmithGenerator, GenerationRequest
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
 from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, RuntimeVerdict
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
+from graph_sym_perf.transforms.safety_points import SafetyCertificate
+from graph_sym_perf.workload.acceptance import AcceptedPairBuilder
+from graph_sym_perf.workload.models import (
+    AcceptanceStatus,
+    AcceptedPairCorpus,
+    AcceptedPairRequest,
+    PairProposal,
+    PairValidation,
+)
+from graph_sym_perf.workload.registry import AcceptedCorpusRegistry
 
 
 @dataclass(frozen=True)
@@ -123,6 +135,20 @@ class AdapterQueryProxy:
             query_kind="graph_load",
             timeout_seconds=self.default_timeout_seconds,
             operation=lambda: operation(statements),
+        )
+
+    def load_graph(self, corpus: GraphCorpus) -> Any:
+        operation = getattr(self._adapter, "load_graph", None)
+        if callable(operation):
+            loader = lambda: operation(corpus)
+        else:
+            legacy = getattr(self._adapter, "load_gdsmith_graph")
+            loader = lambda: legacy(corpus.statements)
+        return self._call_with_inflight(
+            query_identity="\n".join(corpus.statements),
+            query_kind="graph_load",
+            timeout_seconds=self.default_timeout_seconds,
+            operation=loader,
         )
 
     def dbms_health_epoch(self) -> DBMSHealthEpoch:
@@ -224,6 +250,7 @@ class RuntimeFirstShardWorker:
             attempt_dir = shard_dir / "attempt-000"
             attempt_dir.mkdir(parents=True, exist_ok=False)
             self._attempt_dir = attempt_dir
+        shard_deadline = time.monotonic() + task.max_runtime_seconds
         generation_lease = self._attempt_context.generation_lease() if self._attempt_context else nullcontext()
         with generation_lease:
             generated = self._generation_runner(task, attempt_dir / "gdsmith_raw")
@@ -232,7 +259,7 @@ class RuntimeFirstShardWorker:
         timeout = float(self.spec.systems[task.target].default_timeout_seconds)
         measurement_lease = self._attempt_context.measurement_lease() if self._attempt_context else nullcontext()
         with measurement_lease:
-            return self._measure_generated(task, shard_dir, attempt_dir, generated, graph_hash, timeout)
+            return self._measure_generated(task, shard_dir, attempt_dir, generated, graph_hash, timeout, shard_deadline)
 
     def _measure_generated(
         self,
@@ -242,6 +269,7 @@ class RuntimeFirstShardWorker:
         generated: GeneratedShard,
         graph_hash: str,
         timeout: float,
+        shard_deadline: float,
     ) -> dict[str, object]:
         load_adapter = self._adapter_factory(task)
         load_proxy = AdapterQueryProxy(
@@ -260,26 +288,31 @@ class RuntimeFirstShardWorker:
                 assert fingerprint.value is not None
                 load_proxy.update_dbms_fingerprint(fingerprint.value)
                 self._transition_attempt(ShardState.BUILDING_ACCEPTED_PAIRS)
-                accepted, rejects, accepted_hashes = self._build_accepted_pairs(
+                accepted, acceptance, accepted_hashes = self._build_accepted_pairs(
                     load_proxy,
                     task,
                     generated.query_texts,
                     shard_dir,
                     graph_snapshot_hash=graph_hash,
                     dbms_fingerprint=fingerprint.value,
+                    max_seconds=max(0.0, shard_deadline - time.monotonic()),
                 )
+                rejects = Counter(acceptance.reject_counts)
             else:
                 accepted = []
                 accepted_hashes = set()
                 reason = "DBMS_FINGERPRINT_UNAVAILABLE" if not fingerprint.available else "DBMS_HEALTH_EPOCH_UNAVAILABLE"
                 rejects = Counter({reason: 1})
+                acceptance = AcceptedPairCorpus(
+                    (), 0, rejects, AcceptanceStatus.INCOMPLETE, reason
+                )
                 _ensure_jsonl(shard_dir / "accepted_pairs.jsonl")
         finally:
             load_adapter.close()
 
         candidate_hashes: set[str] = set()
         candidates = 0
-        if fingerprint.available and health_epoch.available:
+        if fingerprint.available and health_epoch.available and acceptance.status is AcceptanceStatus.COMPLETE:
             self._transition_attempt(ShardState.SCREENING)
             measurement_adapter = self._adapter_factory(task)
             measurement_proxy = AdapterQueryProxy(
@@ -330,6 +363,9 @@ class RuntimeFirstShardWorker:
             "generation": dict(generated.generator_metadata),
             "generated_query_records": len(generated.query_texts),
             "accepted_pairs": len(accepted_hashes),
+            "acceptance_status": acceptance.status.value,
+            "acceptance_stop_reason": acceptance.stop_reason,
+            "acceptance_generated_seeds": acceptance.generated_seeds,
             "accepted_pair_hashes": sorted(accepted_hashes),
             "screened_candidates": candidates,
             "candidate_hashes": sorted(candidate_hashes),
@@ -428,7 +464,7 @@ class RuntimeFirstShardWorker:
         ensure_schema = getattr(adapter, "ensure_schema", None)
         if callable(ensure_schema):
             ensure_schema()
-        adapter.load_gdsmith_graph(graph_statements)
+        adapter.load_graph(GraphCorpus(tuple(graph_statements)))
 
     def _build_accepted_pairs(
         self,
@@ -439,11 +475,12 @@ class RuntimeFirstShardWorker:
         *,
         graph_snapshot_hash: str,
         dbms_fingerprint: str,
-    ) -> tuple[list[EquivalentQueryPair], Counter[str], set[str]]:
+        max_seconds: float,
+    ) -> tuple[list[EquivalentQueryPair], AcceptedPairCorpus, set[str]]:
         accepted: list[EquivalentQueryPair] = []
-        rejects: Counter[str] = Counter()
         max_rows = int(self.spec.validation["max_result_rows"])
-        timeout = self.spec.systems[task.target].default_timeout_seconds
+        default_timeout = self.spec.systems[task.target].default_timeout_seconds
+        acceptance_deadline = time.monotonic() + max_seconds
         records_path = shard_dir / "accepted_pairs.jsonl"
         _ensure_jsonl(records_path)
         seen = _accepted_pair_hashes(
@@ -451,23 +488,53 @@ class RuntimeFirstShardWorker:
             graph_snapshot_hash=graph_snapshot_hash,
             dbms_fingerprint=dbms_fingerprint,
         )
+        seen_source_asts = _accepted_source_ast_hashes(records_path)
         materialized: set[str] = set()
-        for query in queries[: task.max_generated_seeds]:
+
+        dialect = _dialect_for(task.target)
+        capability_hash = _dialect_capability_hash(dialect.capabilities)
+
+        def provider(context):
+            if context.ordinal > len(queries):
+                return None
+            query = queries[context.ordinal - 1]
             pair = _certified_boolean_pair(query)
             if pair is None:
-                rejects["RULE_NOT_APPLICABLE"] += 1
-                continue
+                return None
             base, transformed = pair
-            decision = _dialect_for(task.target).check(PortableQuery(base))
-            transformed_decision = _dialect_for(task.target).check(PortableQuery(transformed))
-            if decision.kind is DecisionKind.REJECT or transformed_decision.kind is DecisionKind.REJECT:
-                rejects["DIALECT_REJECT"] += 1
-                continue
+            certificate = SafetyCertificate(
+                rule_id="null_complete_excluded_middle",
+                ast_path="where[0]",
+                variables_in_scope=(),
+                expression_type="boolean",
+                nullability="three_valued",
+                clause_context="where",
+                preconditions=("pure_read_query", "three_valued_boolean_identity"),
+                proof_id="three_valued_excluded_middle_v1",
+                capability_hash=capability_hash,
+            )
+            return PairProposal(
+                PortableQuery(base),
+                PortableQuery(transformed),
+                certificate.rule_id,
+                certificate,
+                context.seed,
+            )
+
+        def validator(proposal: PairProposal) -> PairValidation:
+            base = proposal.query_a.text
+            transformed = proposal.query_b.text
+            decision = dialect.check(proposal.query_a)
+            transformed_decision = dialect.check(proposal.query_b)
+            if decision.kind is DecisionKind.REJECT:
+                return PairValidation(False, f"DIALECT_{decision.reason_code.value}")
+            if transformed_decision.kind is DecisionKind.REJECT:
+                return PairValidation(False, f"DIALECT_{transformed_decision.reason_code.value}")
             replayable = getattr(adapter, "gdsmith_query_is_replayable", gdsmith_read_query_is_replayable)
             if not replayable(base) or not replayable(transformed):
-                rejects["DIALECT_REPLAY_REJECT"] += 1
-                continue
-            pair_hash = _pair_hash(base, transformed)
+                return PairValidation(False, "DIALECT_REPLAY_REJECT")
+            pair_hash = proposal.pair_hash
+            source_ast_hash = proposal.query_a.ast_hash
             if pair_hash in seen:
                 if pair_hash not in materialized:
                     accepted.append(
@@ -480,25 +547,51 @@ class RuntimeFirstShardWorker:
                         )
                     )
                     materialized.add(pair_hash)
-                else:
-                    rejects["DUPLICATE_AST"] += 1
-                continue
+                return PairValidation(True, "RESUME_EXISTING", {"pair_hash": pair_hash})
+            if source_ast_hash in seen_source_asts:
+                return PairValidation(False, "DUPLICATE_AST")
             if len(seen) >= task.accepted_query_pairs:
-                continue
+                return PairValidation(False, "ACCEPTED_TARGET_ALREADY_REACHED")
+            remaining = acceptance_deadline - time.monotonic()
+            if remaining <= 1.0:
+                return PairValidation(False, "TIME_BUDGET_EXHAUSTED")
             try:
-                left = adapter.execute(base, {}, "acceptance_base", max_rows=max_rows, timeout_seconds=timeout)
-                right = adapter.execute(transformed, {}, "acceptance_transformed", max_rows=max_rows, timeout_seconds=timeout)
+                left = adapter.execute(
+                    base,
+                    {},
+                    "acceptance_base",
+                    max_rows=max_rows,
+                    timeout_seconds=min(default_timeout, max(0.1, remaining / 2.0)),
+                )
+                remaining = acceptance_deadline - time.monotonic()
+                if remaining <= 0.1:
+                    return PairValidation(False, "TIME_BUDGET_EXHAUSTED")
+                right = adapter.execute(
+                    transformed,
+                    {},
+                    "acceptance_transformed",
+                    max_rows=max_rows,
+                    timeout_seconds=min(default_timeout, remaining),
+                )
             except Exception:
-                rejects["QUERY_EXECUTION_ERROR"] += 1
-                continue
+                return PairValidation(False, "QUERY_EXECUTION_ERROR")
             if _is_truncated(left, max_rows) or _is_truncated(right, max_rows):
-                rejects["RESULT_TRUNCATED"] += 1
-                continue
+                return PairValidation(False, "RESULT_TRUNCATED")
             equivalence = compare_typed_results(left.rows, right.rows, ordered=_has_order_by(base))
             if not equivalence.equivalent:
-                rejects["TYPED_EQUIVALENCE_FAILED"] += 1
-                continue
+                return PairValidation(False, "TYPED_EQUIVALENCE_FAILED")
+            if self._run_dir is None:
+                raise RuntimeError("accepted corpus registry requires a bound run directory")
+            duplicate_reason = AcceptedCorpusRegistry(self._run_dir / "accepted_corpus_registry.jsonl").reserve(
+                source_ast_hash=source_ast_hash,
+                pair_hash=pair_hash,
+                target=task.target.value,
+                shard_index=task.shard_index,
+            )
+            if duplicate_reason is not None:
+                return PairValidation(False, duplicate_reason)
             seen.add(pair_hash)
+            seen_source_asts.add(source_ast_hash)
             accepted_pair = EquivalentQueryPair(
                 base,
                 transformed,
@@ -512,6 +605,9 @@ class RuntimeFirstShardWorker:
                 records_path,
                 {
                     "pair_hash": pair_hash,
+                    "source_ast_hash": source_ast_hash,
+                    "query_a_ast_hash": portable_ast_hash(base),
+                    "query_b_ast_hash": portable_ast_hash(transformed),
                     "query_a_hash": _query_hash(base),
                     "query_b_hash": _query_hash(transformed),
                     "graph_snapshot_hash": graph_snapshot_hash,
@@ -520,7 +616,26 @@ class RuntimeFirstShardWorker:
                     "equivalence": "complete_typed_equivalent",
                 },
             )
-        return accepted, rejects, seen
+            return PairValidation(
+                True,
+                "COMPLETE_TYPED_EQUIVALENT",
+                {"pair_hash": pair_hash, "safety_proof_id": proposal.safety_certificate.proof_id},
+            )
+
+        if max_seconds <= 0:
+            corpus = AcceptedPairCorpus((), 0, {}, AcceptanceStatus.INCOMPLETE, "TIME_BUDGET_EXHAUSTED")
+        else:
+            corpus = AcceptedPairBuilder(provider, validator).build(
+                AcceptedPairRequest(
+                    accepted_pairs=task.accepted_query_pairs,
+                    max_generated_seeds=task.max_generated_seeds,
+                    max_seconds=min(max_seconds, 6 * 3600),
+                    experiment_seed=task.seed,
+                    target=task.target.value,
+                    shard_index=task.shard_index,
+                )
+            )
+        return accepted, corpus, seen
 
     def _screen_pairs(
         self,
@@ -570,30 +685,66 @@ class RuntimeFirstShardWorker:
 
     def _generate_with_gdsmith(self, task: ShardTask, raw_dir: Path) -> GeneratedShard:
         backend, host, port, username, password = _gdsmith_connection(task.target, self.environment)
-        result = run_gdsmith(
-            config=GdsmithConfig(timeout_seconds=min(float(task.max_runtime_seconds), 3600.0)),
-            env=self.environment,
-            raw_dir=raw_dir,
-            backend=backend,
-            host=host,
-            port=port,
-            username=username,
-            password=password,
-            num_queries=task.max_generated_seeds,
-            seed=task.seed,
+        provenance = _generation_backend_provenance(task.target, backend)
+        if task.generation_backend not in {"unspecified", provenance}:
+            raise RuntimeError(
+                f"planned generation backend {task.generation_backend!r} does not match runtime {provenance!r}"
+            )
+        result_holder: dict[str, object] = {}
+
+        def invoke(request: GenerationRequest) -> tuple[str, ...]:
+            # Leave a 30-second supervisor margin so timeout is emitted as an
+            # auditable partial corpus instead of a killed worker process.
+            timeout_seconds = max(1.0, min(float(task.max_runtime_seconds) - 300.0, 6 * 3600.0))
+            result = run_gdsmith(
+                config=GdsmithConfig(timeout_seconds=timeout_seconds),
+                env=self.environment,
+                raw_dir=raw_dir,
+                backend=backend,
+                host=host,
+                port=port,
+                username=username,
+                password=password,
+                num_queries=request.limit,
+                seed=request.seed,
+            )
+            result_holder["result"] = result
+            if result.returncode not in {0, 124}:
+                raise RuntimeError(f"GDsmith failed with code {result.returncode}")
+            if result.returncode == 124 and not result.parsed.accepted_queries:
+                raise RuntimeError("GDsmith exhausted its time budget without a replayable query")
+            return tuple(record.statement for record in result.parsed.accepted_queries)
+
+        corpus = GdsmithGenerator(invoke).generate(
+            GenerationRequest(seed=task.seed, limit=task.max_generated_seeds)
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"GDsmith failed with code {result.returncode}")
+        result = result_holder["result"]
         return GeneratedShard(
             graph_statements=result.parsed.graph_statements,
-            query_texts=tuple(record.statement for record in result.parsed.accepted_queries),
+            query_texts=tuple(query.text for query in corpus.queries),
             generator_metadata={
                 "backend": backend,
+                "generation_backend": provenance,
+                "generation_source": "gdsmith",
                 "generation_seed": task.seed,
                 "generated_query_record_limit": task.max_generated_seeds,
                 "gdsmith_returncode": result.returncode,
+                "duplicate_ast_records": len(corpus.duplicate_ast_hashes),
+                "generation_stop_reason": (
+                    "TIME_BUDGET_EXHAUSTED" if result.returncode == 124 else "PROCESS_COMPLETED"
+                ),
             },
         )
+
+
+def _generation_backend_provenance(target: TargetSystem, backend: str) -> str:
+    if target is TargetSystem.APACHE_AGE:
+        if backend != "agensgraph":
+            raise ValueError("Apache AGE generation must use the isolated AgensGraph proxy")
+        return "agensgraph_proxy"
+    if target is TargetSystem.LADYBUGDB:
+        return "neo4j_proxy"
+    return backend
 
 
 def _certified_boolean_pair(query: str) -> tuple[str, str] | None:
@@ -619,6 +770,12 @@ def _dialect_for(target: TargetSystem):
     return NativeCypherDialect()
 
 
+def _dialect_capability_hash(capabilities: object) -> str:
+    values = vars(capabilities)
+    payload = json.dumps(values, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _is_truncated(result: Any, max_rows: int) -> bool:
     return bool(getattr(result, "summary", {}).get("truncated")) or len(result.rows) > max_rows
 
@@ -632,7 +789,8 @@ def _query_hash(query: str) -> str:
 
 
 def _pair_hash(query_a: str, query_b: str) -> str:
-    return hashlib.sha256(f"{_query_hash(query_a)}:{_query_hash(query_b)}".encode("ascii")).hexdigest()
+    ordered = sorted((portable_ast_hash(query_a), portable_ast_hash(query_b)))
+    return hashlib.sha256(":".join(ordered).encode("ascii")).hexdigest()
 
 
 def _graph_snapshot_hash(statements: tuple[str, ...]) -> str:
@@ -698,6 +856,15 @@ def _accepted_pair_hashes(
         if record.get("dbms_fingerprint") != dbms_fingerprint:
             raise WorkerFailure(ErrorKind.DBMS_CRASHED, "accepted-pair DBMS fingerprint changed across resume")
         hashes.add(pair_hash)
+    return hashes
+
+
+def _accepted_source_ast_hashes(path: Path) -> set[str]:
+    hashes: set[str] = set()
+    for record in _read_jsonl(path):
+        value = record.get("source_ast_hash")
+        if isinstance(value, str):
+            hashes.add(value)
     return hashes
 
 

@@ -26,7 +26,7 @@ def test_transform_registry_prefers_symmetry_for_gdsmith_cases() -> None:
     assert family.variants
 
 
-def test_transform_registry_prefers_bool_redundancy_for_ldbc_cases() -> None:
+def test_transform_registry_prefers_bool_redundancy_for_neutral_fixture_cases() -> None:
     case = QueryCase(
         case_id="case_0001",
         template_name="person_age_filter",
@@ -34,7 +34,7 @@ def test_transform_registry_prefers_bool_redundancy_for_ldbc_cases() -> None:
         parameters={"min_age": 20},
         base_predicate="p.age >= $min_age",
         safe_expression="p.gbp_id IS NOT NULL",
-        source="ldbc_mini",
+        source="neutral_fixture",
     )
 
     config = TransformConfig(

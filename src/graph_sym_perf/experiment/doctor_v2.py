@@ -33,6 +33,7 @@ class DoctorReport:
     ready: bool
     gdsmith_ready: bool
     gdsmith_dirty: bool | None
+    gdsmith_commit_matches: bool
     disk_free_bytes: int
     disk_required_bytes: int
     disk_ready: bool
@@ -68,11 +69,21 @@ def run_doctor(
         plan.source_revision.provenance_complete
         and plan.source_revision.repository_dirty is False
         and plan.source_revision.gdsmith_dirty is False
+        and plan.source_revision.gdsmith_commit == spec.generation.expected_commit
     )
     ready = gdsmith.ready and source_ready and disk_ready and all(
         result.required_env_present and result.generation_env_present and result.driver_available and result.connectivity == "ready" and result.graph_isolation for result in results
     )
-    report = DoctorReport(ready, gdsmith.ready, plan.source_revision.gdsmith_dirty, disk_free, disk_required, disk_ready, results)
+    report = DoctorReport(
+        ready,
+        gdsmith.ready,
+        plan.source_revision.gdsmith_dirty,
+        plan.source_revision.gdsmith_commit == spec.generation.expected_commit,
+        disk_free,
+        disk_required,
+        disk_ready,
+        results,
+    )
     destination = Path(output_root) / "doctor.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")

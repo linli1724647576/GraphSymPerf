@@ -121,21 +121,33 @@ def load_experiment_spec(path: str | Path) -> ExperimentSpec:
     )
     if workload.max_generated_seeds_per_shard < workload.accepted_query_pairs_per_shard:
         raise ConfigError("workload.max_generated_seeds_per_shard must be at least accepted_query_pairs_per_shard")
+    if workload.max_generated_seeds_per_shard > 10_000:
+        raise ConfigError("workload.max_generated_seeds_per_shard must not exceed the formal 10000-seed bound")
+    if workload.max_shard_runtime_hours > 6:
+        raise ConfigError("workload.max_shard_runtime_hours must not exceed the formal 6-hour bound")
 
     generation_raw = _mapping(raw.get("generation"), "generation")
-    _exact_keys(generation_raw, {"backend", "commit_source", "checkout", "source", "required_env"}, "generation")
+    _exact_keys(
+        generation_raw,
+        {"backend", "commit_source", "expected_commit", "checkout", "source", "required_env"},
+        "generation",
+    )
     backend = _nonempty_string(generation_raw.get("backend"), "generation.backend")
     if backend != "gdsmith" or generation_raw.get("source", "gdsmith") != "gdsmith":
-        raise ConfigError("generation.backend/source must be gdsmith; LDBC and alternate generators are unsupported")
+        raise ConfigError("generation.backend/source must be gdsmith; alternate generators are unsupported")
     commit_source = _nonempty_string(generation_raw.get("commit_source"), "generation.commit_source")
     if commit_source != "vendored_checkout":
         raise ConfigError("generation.commit_source must be vendored_checkout")
+    expected_commit = _nonempty_string(generation_raw.get("expected_commit"), "generation.expected_commit")
+    if len(expected_commit) != 40 or any(char not in "0123456789abcdef" for char in expected_commit):
+        raise ConfigError("generation.expected_commit must be a full lowercase 40-hex Git commit")
     checkout = Path(_nonempty_string(generation_raw.get("checkout"), "generation.checkout"))
     if not checkout.is_absolute():
         checkout = (source_path.parent / checkout).resolve()
     generation = GenerationSpec(
         backend=backend,
         commit_source=commit_source,
+        expected_commit=expected_commit,
         checkout=checkout,
         required_env=_environment_names(generation_raw.get("required_env"), "generation.required_env"),
     )
@@ -186,13 +198,14 @@ def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[Targ
         except ValueError as exc:
             raise ConfigError(f"unknown system definition: {name}") from exc
         item = _mapping(raw_item, f"systems.{target.value}")
-        _exact_keys(item, {"required_env", "generation_required_env", "dialect", "graph_isolation", "default_timeout_seconds"}, f"systems.{target.value}")
+        _exact_keys(item, {"required_env", "generation_required_env", "generation_backend", "dialect", "graph_isolation", "default_timeout_seconds"}, f"systems.{target.value}")
         env = _environment_names(item.get("required_env"), f"systems.{target.value}.required_env")
         generation_env = _environment_names(item.get("generation_required_env"), f"systems.{target.value}.generation_required_env")
         available[target] = SystemDefinition(
             target=target,
             required_env=tuple(env),
             generation_required_env=tuple(generation_env),
+            generation_backend=_nonempty_string(item.get("generation_backend"), f"systems.{target.value}.generation_backend"),
             dialect=_nonempty_string(item.get("dialect"), f"systems.{target.value}.dialect"),
             graph_isolation=_nonempty_string(item.get("graph_isolation"), f"systems.{target.value}.graph_isolation"),
             default_timeout_seconds=_positive_int(item.get("default_timeout_seconds"), f"systems.{target.value}.default_timeout_seconds"),

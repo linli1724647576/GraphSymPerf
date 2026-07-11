@@ -43,6 +43,7 @@ def build_run_plan(
             accepted_query_pairs=spec.workload.accepted_query_pairs_per_shard,
             max_generated_seeds=spec.workload.max_generated_seeds_per_shard,
             max_runtime_seconds=spec.workload.max_shard_runtime_hours * 3600,
+            generation_backend=spec.systems[target].generation_backend,
         )
         for target in spec.targets
         for shard_index in range(spec.matrix.shards_per_system)

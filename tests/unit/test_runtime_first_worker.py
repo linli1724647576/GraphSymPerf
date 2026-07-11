@@ -1,5 +1,6 @@
 import json
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,8 +13,10 @@ from graph_sym_perf.experiment.worker import (
     GeneratedShard,
     RuntimeFirstShardWorker,
     WorkerFailure,
+    _generation_backend_provenance,
     _graph_snapshot_hash,
 )
+from graph_sym_perf.generation.corpus import GraphCorpus
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 
 
@@ -132,6 +135,47 @@ def test_worker_graph_identity_matches_validation_snapshot_contract() -> None:
     statements = (" CREATE (a) ", "", "CREATE (b)")
 
     assert _graph_snapshot_hash(statements) == GraphSnapshot.from_statements(statements).content_hash
+    assert GraphCorpus((" CREATE (a) ", "CREATE (b)")).content_hash == _graph_snapshot_hash(statements)
+
+
+def test_age_generation_provenance_never_claims_native_provider_coverage() -> None:
+    assert _generation_backend_provenance(TargetSystem.APACHE_AGE, "agensgraph") == "agensgraph_proxy"
+    with pytest.raises(ValueError, match="AgensGraph proxy"):
+        _generation_backend_provenance(TargetSystem.APACHE_AGE, "neo4j")
+
+
+def test_formal_gdsmith_seam_keeps_partial_timeout_corpus_and_deduplicates_ast(tmp_path, monkeypatch) -> None:
+    record = SimpleNamespace(statement="MATCH (n) WHERE n.value = 1 RETURN n")
+
+    def fake_run_gdsmith(**kwargs):
+        assert kwargs["num_queries"] == 2
+        assert kwargs["seed"] == 7
+        return SimpleNamespace(
+            returncode=124,
+            parsed=SimpleNamespace(
+                graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+                accepted_queries=(record, record),
+            ),
+        )
+
+    monkeypatch.setattr("graph_sym_perf.experiment.worker.run_gdsmith", fake_run_gdsmith)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={
+            "GRAPHSYMPERF_NEO4J_URI": "bolt://localhost:7687",
+            "GRAPHSYMPERF_NEO4J_USER": "neo4j",
+            "GRAPHSYMPERF_NEO4J_PASSWORD": "secret",
+        },
+    )
+
+    generated = worker._generate_with_gdsmith(
+        ShardTask(TargetSystem.NEO4J, 0, 7, 1, 2, 60, "neo4j"),
+        tmp_path,
+    )
+
+    assert generated.query_texts == (record.statement,)
+    assert generated.generator_metadata["generation_stop_reason"] == "TIME_BUDGET_EXHAUSTED"
+    assert generated.generator_metadata["duplicate_ast_records"] == 1
 
 
 def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minimal_records(tmp_path) -> None:
@@ -155,6 +199,9 @@ def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minima
     result = worker(task)
 
     assert result["accepted_pairs"] == 2
+    assert result["acceptance_status"] == "complete"
+    assert result["acceptance_stop_reason"] == "ACCEPTED_TARGET_REACHED"
+    assert result["acceptance_generated_seeds"] == 2
     assert result["generated_query_records"] == 2
     assert adapter.loaded == shard.graph_statements
     assert adapter.closed
@@ -162,6 +209,55 @@ def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minima
     records = [json.loads(line) for line in (tmp_path / "shards" / "neo4j-000" / "accepted_pairs.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(records) == 2
     assert all(record["equivalence"] == "complete_typed_equivalent" for record in records)
+
+
+def test_worker_records_incomplete_when_seed_bound_cannot_fill_budget(tmp_path) -> None:
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 2, 60))
+
+    assert result["accepted_pairs"] == 0
+    assert result["acceptance_status"] == "incomplete"
+    assert result["acceptance_stop_reason"] == "MAX_GENERATED_SEEDS_EXHAUSTED"
+    assert result["acceptance_generated_seeds"] == 2
+
+
+def test_worker_rejects_same_gdsmith_ast_across_shards_in_one_run(tmp_path) -> None:
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+        query_texts=("MATCH (n) WHERE n.value = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    spec = load_experiment_spec("config/experiment.yaml")
+    first = RuntimeFirstShardWorker(
+        spec,
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    second = RuntimeFirstShardWorker(
+        spec,
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _Adapter(),
+    )
+    second.bind_run_dir(tmp_path)
+
+    accepted = first(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+    duplicate = second(ShardTask(TargetSystem.NEO4J, 1, 8, 1, 1, 60))
+
+    assert accepted["accepted_pairs"] == 1
+    assert duplicate["accepted_pairs"] == 0
+    assert duplicate["reject_reasons"] == {"CROSS_SHARD_DUPLICATE_AST": 1}
 
 
 def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) -> None:

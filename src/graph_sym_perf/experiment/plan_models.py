@@ -63,6 +63,7 @@ class WorkloadSpec:
 class GenerationSpec:
     backend: str
     commit_source: str
+    expected_commit: str
     checkout: Path
     required_env: tuple[str, ...]
 
@@ -72,6 +73,7 @@ class SystemDefinition:
     target: TargetSystem
     required_env: tuple[str, ...]
     generation_required_env: tuple[str, ...]
+    generation_backend: str
     dialect: str
     graph_isolation: str
     default_timeout_seconds: int
@@ -112,6 +114,7 @@ class ShardTask:
     accepted_query_pairs: int
     max_generated_seeds: int
     max_runtime_seconds: int
+    generation_backend: str = "unspecified"
 
 
 @dataclass(frozen=True)

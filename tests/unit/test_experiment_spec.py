@@ -78,6 +78,7 @@ def test_runtime_first_experiment_spec_is_the_exact_seven_by_sixteen_matrix() ->
     assert spec.workload.accepted_query_pairs_per_shard == 1000
     assert spec.workload.max_generated_seeds_per_shard == 10000
     assert spec.generation.backend == "gdsmith"
+    assert spec.generation.expected_commit == "b2166f1b70cfa9b5816fe707327dd6aed2a22a45"
     assert spec.total_accepted_pair_budget == 112_000
 
 
@@ -350,8 +351,8 @@ def test_legacy_config_migration_rolls_back_partial_bundle_on_publish_failure(tm
         "matrix:\n  shards_per_system: 0\n",
         "workload:\n  accepted_query_pairs_per_shard: 0\n",
         "targets:\n  - neo4j\n  - neo4j\n",
-        "generation:\n  backend: ldbc\n",
-        "generation:\n  backend: gdsmith\n  source: ldbc_templates\n",
+        "generation:\n  backend: alternate\n",
+        "generation:\n  backend: gdsmith\n  source: alternate_templates\n",
         "unknown_field: true\n",
     ),
 )
