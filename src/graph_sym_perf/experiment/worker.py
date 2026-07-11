@@ -949,6 +949,7 @@ class RuntimeFirstShardWorker:
             raise RuntimeError(
                 f"planned generation backend {task.generation_backend!r} does not match runtime {provenance!r}"
             )
+        requires_single_label = "single_node_label" in self.spec.systems[task.target].capabilities
         result_holder: dict[str, object] = {}
 
         def invoke(request: GenerationRequest) -> tuple[str, ...]:
@@ -959,8 +960,8 @@ class RuntimeFirstShardWorker:
                 config=GdsmithConfig(
                     expected_source_commit=self.spec.generation.expected_commit,
                     backend_extra_args=(
-                        {"agensgraph": ("--label-num", "1")}
-                        if backend == "agensgraph"
+                        {backend: ("--label-num", "1")}
+                        if requires_single_label
                         else {}
                     ),
                     timeout_seconds=timeout_seconds,

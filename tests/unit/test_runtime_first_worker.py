@@ -241,13 +241,15 @@ def test_formal_gdsmith_seam_keeps_partial_timeout_corpus_and_deduplicates_ast(t
 
 
 @pytest.mark.parametrize(
-    ("target", "environment"),
+    ("target", "environment", "backend", "planned_backend"),
     [
         (
             TargetSystem.AGENSGRAPH,
             {
                 "GRAPHSYMPERF_AGENSGRAPH_URI": "postgresql://postgres:secret@127.0.0.1:5432/postgres",
             },
+            "agensgraph",
+            "agensgraph",
         ),
         (
             TargetSystem.APACHE_AGE,
@@ -256,21 +258,43 @@ def test_formal_gdsmith_seam_keeps_partial_timeout_corpus_and_deduplicates_ast(t
                     "postgresql://postgres:secret@127.0.0.1:5433/postgres"
                 ),
             },
+            "agensgraph",
+            "agensgraph_proxy",
+        ),
+        (
+            TargetSystem.ARCADEDB,
+            {
+                "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI": "postgresql://127.0.0.1:5433/mydb",
+                "GRAPHSYMPERF_ARCADEDB_USER": "root",
+                "GRAPHSYMPERF_ARCADEDB_PASSWORD": "secret",
+            },
+            "arcadedb",
+            "arcadedb",
+        ),
+        (
+            TargetSystem.LADYBUGDB,
+            {
+                "GRAPHSYMPERF_GDSMITH_PROXY_LADYBUGDB_URI": "bolt://127.0.0.1:7697",
+            },
+            "neo4j",
+            "neo4j_proxy",
         ),
     ],
-    ids=["agensgraph", "apache-age-proxy"],
+    ids=["agensgraph", "apache-age-proxy", "arcadedb", "ladybugdb-proxy"],
 )
-def test_agensgraph_generation_backend_is_constrained_to_single_label(
+def test_single_label_generation_backends_are_constrained_at_the_source(
     tmp_path,
     monkeypatch,
     target,
     environment,
+    backend,
+    planned_backend,
 ) -> None:
     record = SimpleNamespace(statement="MATCH (n:L0) RETURN n.id")
 
     def fake_run_gdsmith(**kwargs):
-        assert kwargs["backend"] == "agensgraph"
-        assert kwargs["config"].backend_extra_args == {"agensgraph": ("--label-num", "1")}
+        assert kwargs["backend"] == backend
+        assert kwargs["config"].backend_extra_args == {backend: ("--label-num", "1")}
         return SimpleNamespace(
             returncode=0,
             parsed=SimpleNamespace(
@@ -286,7 +310,7 @@ def test_agensgraph_generation_backend_is_constrained_to_single_label(
     )
 
     generated = worker._generate_with_gdsmith(
-        ShardTask(target, 0, 7, 1, 2, 60, "agensgraph_proxy" if target is TargetSystem.APACHE_AGE else "agensgraph"),
+        ShardTask(target, 0, 7, 1, 2, 60, planned_backend),
         tmp_path,
     )
 
