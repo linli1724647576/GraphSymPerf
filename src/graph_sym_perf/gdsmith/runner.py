@@ -7,6 +7,7 @@ import os
 import signal
 import shutil
 import subprocess
+import threading
 import time
 import hashlib
 from dataclasses import dataclass
@@ -313,15 +314,37 @@ def _run_bounded_process(
         raise ValueError("GDsmith raw artifact budget must be positive")
     if stall_timeout <= 0:
         raise ValueError("GDsmith stall timeout must be positive")
+    capture_limit = min(_MAX_CAPTURE_ARTIFACT_BYTES, max(1, max_raw_artifact_bytes // 16))
+    stdout_capture = _BoundedStreamCapture(capture_limit)
+    stderr_capture = _BoundedStreamCapture(capture_limit)
     process = subprocess.Popen(
         command,
         cwd=cwd,
         env=dict(env),
-        stdout=stdout,
-        stderr=stderr,
-        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         start_new_session=True,
     )
+    if process.stdout is None or process.stderr is None:
+        raise RuntimeError("GDsmith process pipes are unavailable")
+    readers = (
+        threading.Thread(target=_drain_stream, args=(process.stdout, stdout_capture), daemon=True),
+        threading.Thread(target=_drain_stream, args=(process.stderr, stderr_capture), daemon=True),
+    )
+    for reader in readers:
+        reader.start()
+
+    def finish(returncode: int, exceeded: bool, stalled: bool) -> tuple[int, bool, bool]:
+        for reader in readers:
+            reader.join(timeout=5.0)
+            if reader.is_alive():
+                raise RuntimeError("GDsmith output capture did not terminate")
+        stdout.write(stdout_capture.render())
+        stderr.write(stderr_capture.render())
+        stdout.flush()
+        stderr.flush()
+        return returncode, exceeded, stalled
+
     deadline = time.monotonic() + timeout
     last_activity = time.monotonic()
     last_size = _raw_directory_size(cwd)
@@ -329,21 +352,58 @@ def _run_bounded_process(
         now = time.monotonic()
         returncode = process.poll()
         if returncode is not None:
-            return int(returncode), False, False
+            return finish(int(returncode), False, False)
         current_size = _raw_directory_size(cwd)
         if current_size != last_size:
             last_size = current_size
             last_activity = now
         if current_size > max_raw_artifact_bytes:
             _terminate_process_group(process)
-            return 125, True, False
+            return finish(125, True, False)
         if now >= deadline:
             _terminate_process_group(process)
-            return 124, False, False
+            return finish(124, False, False)
         if now - last_activity >= stall_timeout:
             _terminate_process_group(process)
-            return 124, False, True
+            return finish(124, False, True)
         time.sleep(0.1)
+
+
+class _BoundedStreamCapture:
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.head_limit = limit // 2
+        self.tail_limit = limit - self.head_limit
+        self.head = bytearray()
+        self.tail = bytearray()
+        self.total = 0
+
+    def add(self, chunk: bytes) -> None:
+        self.total += len(chunk)
+        head_space = self.head_limit - len(self.head)
+        if head_space > 0:
+            self.head.extend(chunk[:head_space])
+            chunk = chunk[head_space:]
+        if chunk and self.tail_limit > 0:
+            self.tail.extend(chunk)
+            if len(self.tail) > self.tail_limit:
+                del self.tail[: len(self.tail) - self.tail_limit]
+
+    def render(self) -> str:
+        if self.total <= self.limit:
+            payload = bytes(self.head + self.tail)
+        else:
+            marker = f"\n... truncated {self.total - self.limit} GDsmith stream bytes ...\n".encode()
+            payload = bytes(self.head) + marker + bytes(self.tail)
+        return payload.decode("utf-8", errors="replace")
+
+
+def _drain_stream(stream, capture: _BoundedStreamCapture) -> None:
+    try:
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            capture.add(chunk)
+    finally:
+        stream.close()
 
 
 def _terminate_process_group(process: subprocess.Popen) -> None:

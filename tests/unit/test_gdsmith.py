@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 import hashlib
+import io
 import json
+import sys
 from types import SimpleNamespace
 
 from graph_sym_perf.core import GdsmithConfig
@@ -334,6 +336,8 @@ def test_bounded_gdsmith_process_is_killed_before_raw_artifacts_fill_the_shard(t
 
     class FakeProcess:
         pid = 999_999
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
 
         def poll(self):
             (raw / "growing.log").write_bytes(b"x" * 101)
@@ -359,6 +363,28 @@ def test_bounded_gdsmith_process_is_killed_before_raw_artifacts_fill_the_shard(t
     assert killed == [999_999]
 
 
+def test_bounded_gdsmith_stream_capture_does_not_fill_the_raw_budget(tmp_path) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    stdout_path = raw / "stdout"
+    stderr_path = raw / "stderr"
+
+    with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+        returncode, exceeded, stalled = _run_bounded_process(
+            (sys.executable, "-c", "import sys; sys.stderr.write('x' * (2 * 1024 * 1024))"),
+            cwd=raw,
+            env={},
+            stdout=stdout,
+            stderr=stderr,
+            timeout=10,
+            stall_timeout=5,
+            max_raw_artifact_bytes=64 * 1024,
+        )
+
+    assert (returncode, exceeded, stalled) == (0, False, False)
+    assert 0 < stderr_path.stat().st_size < 16 * 1024
+
+
 def test_bounded_gdsmith_process_returns_partial_timeout_after_no_artifact_progress(
     tmp_path,
     monkeypatch,
@@ -368,6 +394,8 @@ def test_bounded_gdsmith_process_returns_partial_timeout_after_no_artifact_progr
 
     class FakeProcess:
         pid = 999_998
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
 
         def poll(self):
             return None

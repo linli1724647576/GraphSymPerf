@@ -20,7 +20,9 @@ doctor 要求仓库与 GDsmith provenance 可核查、固定 commit 匹配、JAR
 
 每次 adapter 操作前原子写 `inflight.json`，包含 query/graph/DBMS hash、query kind、开始时间与 deadline。worker 在独立进程组中运行；heartbeat 过期或 hard deadline 后终止整个进程组。GDsmith 进程即使仍存活，若 raw/log 连续 120 秒无任何字节进展，也会终止其独立进程组；已有可回放语料标记为 `NO_PROGRESS_TIMEOUT` 并进入后续筛选，无可回放查询则失败关闭。当前 shard 对瞬态失败最多重试 3 次，其他 shard 继续；参数、证明或 artifact 不一致引发的确定性 `EVIDENCE_INTEGRITY_ERROR` 立即失败关闭，不做无效重试。query timeout、driver timeout、worker hung、worker crashed、DBMS crashed、evidence integrity error 与 infrastructure error 分开记录。
 
-GDsmith raw 临时上限为 shard 预算的 70%，且最多 350 MiB；对正式 500 MiB shard 保留至少 150 MiB 给 checkpoint、accepted corpus 与候选证据。raw 达到分配预算时会终止进程并标记 `RAW_ARTIFACT_BUDGET_REACHED`。只有 parser 已经从预算内文件提取到图快照与至少一个可回放查询时，该 partial corpus 才能继续 acceptance；空语料或普通非零退出仍失败关闭。runner 返回前会压缩 stdout/stderr 并只保留最新 DBMS log，supervisor 仍对最终 shard 强制 500 MiB 硬上限。
+GDsmith raw 临时上限为 shard 预算的 70%，且最多 350 MiB；对正式 500 MiB shard 保留至少 150 MiB 给 checkpoint、accepted corpus 与候选证据。直接 stdout/stderr 不落入无界文件，runner 从 pipe 持续排空并只保留有界 head/tail；重复 JDBC 异常既不会阻塞子进程，也不占用 DBMS log 的 raw 预算。raw 达到分配预算时会终止进程并标记 `RAW_ARTIFACT_BUDGET_REACHED`。只有 parser 已经从预算内文件提取到图快照与至少一个可回放查询时，该 partial corpus 才能继续 acceptance；空语料或普通非零退出仍失败关闭。runner 返回前还会只保留最新 DBMS log，supervisor 仍对最终 shard 强制 500 MiB 硬上限。
+
+GDsmith 的实际 query-record 请求量为 `min(max_generated_seeds, accepted_target × 4)`；正式 shard 因此请求 4,000 条，而不是先生成 10,000 条再丢弃大部分。`max_generated_seeds=10,000` 仍是后续 rule provider/acceptance 的硬停止边界；若 4,000 条语料在该边界内不足以得到 1,000 对，shard 只能为 `INCOMPLETE`，不会降低 accepted target。
 
 兼容 JAR 对 AgensGraph 和 ArcadeDB 的每个 JDBC `Statement` 同时设置 60 秒 query timeout 与 1,000 行 result cap。row cap 只约束 GDsmith 内部 oracle 的结果物化，不改变 GraphSymPerf 后续的 ordinary-execute runtime 协议；它防止高基数生成查询在 PostgreSQL JDBC `processResults` 中耗尽生成器 JVM heap。JAR manifest 必须同时声明 `jdbc_query_timeout_60s` 与 `jdbc_result_row_cap_1000`，否则 doctor 拒绝运行。
 

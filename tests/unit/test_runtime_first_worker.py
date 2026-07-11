@@ -291,6 +291,7 @@ def test_formal_gdsmith_seam_keeps_replayable_corpus_at_raw_artifact_budget(tmp_
 
     assert generated.query_texts == (record.statement,)
     assert generated.generator_metadata["generation_stop_reason"] == "RAW_ARTIFACT_BUDGET_REACHED"
+    assert generated.generator_metadata["generated_query_record_limit"] == 4
 
 
 def test_formal_gdsmith_seam_rejects_empty_corpus_at_raw_artifact_budget(tmp_path, monkeypatch) -> None:
