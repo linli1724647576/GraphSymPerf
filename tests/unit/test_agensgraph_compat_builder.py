@@ -54,8 +54,43 @@ public class AgensGraphConnection extends CypherConnection {
     assert "GRAPHSYMPERF_REJECT_MULTI_LABEL" in patched
     assert "GRAPHSYMPERF_REJECT_UNSAFE_DOUBLE_QUOTED_TOKEN" in patched
     assert ".replaceAll(\"'$1'\")" in patched
+    assert patched.count("stmt.setQueryTimeout(60);") == 2
     assert "appendReplacement" not in patched
     assert "return rendered;" in patched
+
+
+def test_arcadedb_compat_patch_sets_a_per_statement_jdbc_timeout() -> None:
+    module = _load_builder_module()
+    original = """package org.example.gdsmith.arcadeDB;
+
+import org.example.gdsmith.common.query.GDSmithResultSet;
+import org.example.gdsmith.cypher.CypherConnection;
+
+import java.sql.Connection;
+import java.sql.Statement;
+import java.util.Arrays;
+import java.util.List;
+
+public class ArcadeDBConnection extends CypherConnection {
+    public Connection connection;
+
+    @Override
+    public void executeStatement(String arg) throws Exception{
+        Statement stmt = connection.createStatement();
+        stmt.execute("{cypher}" + arg);
+    }
+
+    @Override
+    public List<GDSmithResultSet> executeStatementAndGet(String arg) throws Exception{
+        Statement stmt = connection.createStatement();
+        return Arrays.asList(new GDSmithResultSet(stmt.executeQuery("{cypher}" + arg)));
+    }
+}
+"""
+
+    patched = module._patch_arcadedb_connection_source(original)
+
+    assert patched.count("stmt.setQueryTimeout(60);") == 2
 
 
 def test_compat_patch_fails_if_connection_execution_anchor_is_missing() -> None:

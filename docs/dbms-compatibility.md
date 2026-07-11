@@ -18,4 +18,6 @@ Apache AGE 的 proxy URI 使用 `GRAPHSYMPERF_GDSMITH_PROXY_APACHE_AGE_URI`，La
 
 `systems.yaml` 中声明 `single_node_label` 能力的 AgensGraph、Apache AGE、ArcadeDB 和 LadybugDB 均会在各自 GDsmith 生成边界加入 `--label-num 1`，从生成空间源头约束为单标签；AgensGraph 兼容 JAR 仍保留多标签拒绝守卫，不能退化为“只取第一个 label”。GDsmith 默认字符串策略生成的双引号英数/下划线字面量仅在兼容 JAR 执行边界转换为 AgensGraph 单引号字面量；遇到其他双引号 token 必须失败关闭，不尝试处理转义或任意文本。
 
+AgensGraph 与 ArcadeDB 的 GDsmith JDBC 连接在兼容 JAR 中对每个 statement 设置 60 秒查询超时；单条不可终止查询不应占满整个 shard 时间预算。外层 120 秒无进展 watchdog 仍作为 JDBC 驱动/服务端未按时取消时的第二道守卫。
+
 Apache AGE/AgensGraph 的 SQL wrapper 只属于 adapter rendering，不进入 query equivalence 或 runtime oracle。

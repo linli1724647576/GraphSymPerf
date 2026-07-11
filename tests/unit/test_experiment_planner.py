@@ -29,6 +29,7 @@ def _gdsmith_artifact_environment(root: Path, source_commit: str) -> dict[str, s
                     "reject_multi_label_node_patterns",
                     "render_safe_double_quoted_literals",
                     "reject_unsafe_double_quoted_tokens",
+                    "jdbc_query_timeout_60s",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ],

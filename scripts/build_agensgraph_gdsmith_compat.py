@@ -15,6 +15,7 @@ import yaml
 
 
 CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/agensGraph/AgensGraphConnection.java")
+ARCADE_CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/arcadeDB/ArcadeDBConnection.java")
 MAIN_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/Main.java")
 POM_RELATIVE_PATH = Path("pom.xml")
 
@@ -46,6 +47,7 @@ def main() -> int:
     _copy_source(src, work_dir)
     patch_paths = (
         _patch_agens_connection(work_dir),
+        _patch_arcadedb_connection(work_dir),
         _patch_main_provider_registry(work_dir),
         _patch_maven_build(work_dir),
     )
@@ -70,6 +72,7 @@ def main() -> int:
                     "reject_multi_label_node_patterns",
                     "render_safe_double_quoted_literals",
                     "reject_unsafe_double_quoted_tokens",
+                    "jdbc_query_timeout_60s",
                     "exclude_unbuildable_tugraph_provider",
                     "shade_runnable_jar",
                 ),
@@ -149,6 +152,14 @@ def _patch_main_provider_registry(work_dir: Path) -> Path:
         raise RuntimeError("failed to isolate the unbuildable TuGraph provider")
     path.write_text(patched, encoding="utf-8")
     return _write_patch(work_dir, MAIN_RELATIVE_PATH, original, patched, "provider-registry")
+
+
+def _patch_arcadedb_connection(work_dir: Path) -> Path:
+    path = work_dir / ARCADE_CONNECTION_RELATIVE_PATH
+    original = path.read_text(encoding="utf-8")
+    patched = _patch_arcadedb_connection_source(original)
+    path.write_text(patched, encoding="utf-8")
+    return _write_patch(work_dir, ARCADE_CONNECTION_RELATIVE_PATH, original, patched, "arcadedb-timeout")
 
 
 def _patch_maven_build(work_dir: Path) -> Path:
@@ -252,17 +263,33 @@ def _patch_agens_connection_source(source: str) -> str:
         return rendered;
     }""",
     )
+    source = _add_statement_timeouts(source)
     required = (
         "GRAPHSYMPERF_REJECT_MULTI_LABEL",
         "GRAPHSYMPERF_REJECT_UNSAFE_DOUBLE_QUOTED_TOKEN",
         "SAFE_DOUBLE_QUOTED_LITERAL.matcher(query).replaceAll(\"'$1'\")",
         "stmt.execute(agensCompatible(arg))",
         "stmt.executeQuery(agensCompatible(arg))",
+        "stmt.setQueryTimeout(60);",
     )
     missing = tuple(anchor for anchor in required if anchor not in source)
     if missing:
         raise RuntimeError(f"required compatibility guard patch anchors are missing: {', '.join(missing)}")
     return source
+
+
+def _patch_arcadedb_connection_source(source: str) -> str:
+    patched = _add_statement_timeouts(source)
+    if 'stmt.execute("{cypher}" + arg)' not in patched or 'stmt.executeQuery("{cypher}" + arg)' not in patched:
+        raise RuntimeError("required ArcadeDB connection patch anchors are missing")
+    return patched
+
+
+def _add_statement_timeouts(source: str) -> str:
+    anchor = "        Statement stmt = connection.createStatement();\n"
+    if source.count(anchor) != 2:
+        raise RuntimeError("required compatibility guard patch expected exactly two JDBC statement anchors")
+    return source.replace(anchor, anchor + "        stmt.setQueryTimeout(60);\n")
 
 
 def _build_with_maven(work_dir: Path) -> Path:
