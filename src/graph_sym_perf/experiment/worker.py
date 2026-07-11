@@ -1402,10 +1402,18 @@ def _gdsmith_connection(target: TargetSystem, env: Mapping[str, str]) -> tuple[s
         host, port, user, password = _postgres_connection(_required(env, "GRAPHSYMPERF_AGENSGRAPH_URI"))
         return "agensgraph", host, port, env.get("GRAPHSYMPERF_AGENSGRAPH_USER", user), env.get("GRAPHSYMPERF_AGENSGRAPH_PASSWORD", password)
     if target is TargetSystem.ARCADEDB:
-        parsed = urlparse(_required(env, "GRAPHSYMPERF_ARCADEDB_HTTP_URL"))
-        if not parsed.hostname:
-            raise ValueError("GRAPHSYMPERF_ARCADEDB_HTTP_URL must contain a hostname")
-        return "arcadedb", parsed.hostname, parsed.port or 2480, env.get("GRAPHSYMPERF_ARCADEDB_USER", "root"), env.get("GRAPHSYMPERF_ARCADEDB_PASSWORD", "")
+        parsed = urlparse(_required(env, "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI"))
+        if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname:
+            raise ValueError("GRAPHSYMPERF_ARCADEDB_POSTGRES_URI must be a PostgreSQL URI")
+        if parsed.path != "/mydb":
+            raise ValueError("GRAPHSYMPERF_ARCADEDB_POSTGRES_URI must select /mydb for the pinned GDsmith provider")
+        return (
+            "arcadedb",
+            parsed.hostname,
+            parsed.port or 5432,
+            env.get("GRAPHSYMPERF_ARCADEDB_USER", parsed.username or "root"),
+            env.get("GRAPHSYMPERF_ARCADEDB_PASSWORD", parsed.password or ""),
+        )
     if target is TargetSystem.APACHE_AGE:
         host, port, user, password = _proxy_connection(env, target)
         return "agensgraph", host, port, user, password

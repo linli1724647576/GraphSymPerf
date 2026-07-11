@@ -127,6 +127,14 @@ def test_schema_v2_rejects_unknown_system_definition_field(tmp_path: Path) -> No
         load_experiment_spec(path)
 
 
+def test_arcadedb_generation_requires_the_postgres_wire_uri() -> None:
+    spec = load_experiment_spec("config/experiment.yaml")
+
+    assert spec.systems[TargetSystem.ARCADEDB].generation_required_env == (
+        "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI",
+    )
+
+
 def test_rules_yaml_is_loaded_and_strictly_validated(tmp_path: Path) -> None:
     rules = yaml.safe_load(Path("config/rules.yaml").read_text(encoding="utf-8"))
     rules["tiers"]["core"]["unexpected"] = True

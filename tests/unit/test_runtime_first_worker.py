@@ -15,6 +15,7 @@ from graph_sym_perf.experiment.worker import (
     GeneratedShard,
     RuntimeFirstShardWorker,
     WorkerFailure,
+    _gdsmith_connection,
     _generation_backend_provenance,
     _graph_snapshot_hash,
 )
@@ -179,6 +180,30 @@ def test_age_generation_provenance_never_claims_native_provider_coverage() -> No
     assert _generation_backend_provenance(TargetSystem.APACHE_AGE, "agensgraph") == "agensgraph_proxy"
     with pytest.raises(ValueError, match="AgensGraph proxy"):
         _generation_backend_provenance(TargetSystem.APACHE_AGE, "neo4j")
+
+
+def test_arcadedb_gdsmith_uses_the_postgres_wire_endpoint() -> None:
+    connection = _gdsmith_connection(
+        TargetSystem.ARCADEDB,
+        {
+            "GRAPHSYMPERF_ARCADEDB_HTTP_URL": "http://http.example:2480",
+            "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI": "postgresql://pg.example:5433/mydb",
+            "GRAPHSYMPERF_ARCADEDB_USER": "root",
+            "GRAPHSYMPERF_ARCADEDB_PASSWORD": "secret",
+        },
+    )
+
+    assert connection == ("arcadedb", "pg.example", 5433, "root", "secret")
+
+
+def test_arcadedb_gdsmith_rejects_a_database_the_upstream_provider_cannot_select() -> None:
+    with pytest.raises(ValueError, match="must select /mydb"):
+        _gdsmith_connection(
+            TargetSystem.ARCADEDB,
+            {
+                "GRAPHSYMPERF_ARCADEDB_POSTGRES_URI": "postgresql://pg.example:5433/other",
+            },
+        )
 
 
 def test_formal_gdsmith_seam_keeps_partial_timeout_corpus_and_deduplicates_ast(tmp_path, monkeypatch) -> None:
