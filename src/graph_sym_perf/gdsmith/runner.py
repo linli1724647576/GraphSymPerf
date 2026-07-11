@@ -354,7 +354,8 @@ def _run_bounded_process(
 
     deadline = time.monotonic() + timeout
     last_activity = time.monotonic()
-    last_size = _raw_directory_size(cwd)
+    progress = _GenerationProgress(cwd)
+    last_progress = progress.snapshot()
     while True:
         now = time.monotonic()
         returncode = process.poll()
@@ -362,8 +363,9 @@ def _run_bounded_process(
             return finish(int(returncode), False, False)
         _prune_rotated_logs_during_run(cwd)
         current_size = _raw_directory_size(cwd)
-        if current_size != last_size:
-            last_size = current_size
+        current_progress = progress.snapshot()
+        if current_progress != last_progress:
+            last_progress = current_progress
             last_activity = now
         if current_size > max_raw_artifact_bytes:
             _terminate_process_group(process)
@@ -375,6 +377,53 @@ def _run_bounded_process(
             _terminate_process_group(process)
             return finish(124, False, True)
         time.sleep(0.1)
+
+
+class _GenerationProgress:
+    """Track semantic GDsmith progress while ignoring background log noise."""
+
+    def __init__(self, raw_dir: Path) -> None:
+        self.raw_dir = raw_dir
+        self._offsets: dict[Path, int] = {}
+        self._partials: dict[Path, bytes] = {}
+        self._statement_records = 0
+
+    def snapshot(self) -> tuple[int, int]:
+        coverage_size = sum(_existing_size(self.raw_dir / name) for name in ("coverage_log", "coverage_info"))
+        for path in sorted(self.raw_dir.glob("logs/*/*-cur.log")):
+            self._scan_appended_statements(path)
+        return coverage_size, self._statement_records
+
+    def _scan_appended_statements(self, path: Path) -> None:
+        size = _existing_size(path)
+        offset = self._offsets.get(path, 0)
+        if size < offset:
+            offset = 0
+            self._partials.pop(path, None)
+        if size == offset:
+            return
+        try:
+            with path.open("rb") as stream:
+                stream.seek(offset)
+                appended = stream.read()
+        except FileNotFoundError:
+            return
+        self._offsets[path] = offset + len(appended)
+        payload = self._partials.pop(path, b"") + appended
+        lines = payload.splitlines(keepends=True)
+        if lines and not lines[-1].endswith((b"\n", b"\r")):
+            self._partials[path] = lines.pop()
+        for raw_line in lines:
+            line = raw_line.strip()
+            if line and not line.startswith(b"--") and line.endswith(b";"):
+                self._statement_records += 1
+
+
+def _existing_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
 
 
 class _BoundedStreamCapture:

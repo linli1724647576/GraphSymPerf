@@ -562,3 +562,89 @@ def test_bounded_gdsmith_process_returns_partial_timeout_after_no_artifact_progr
 
     assert (returncode, exceeded, stalled) == (124, False, True)
     assert killed == [999_998]
+
+
+def test_background_dbms_log_growth_does_not_mask_query_generation_stall(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    raw = tmp_path / "raw"
+    log_dir = raw / "logs" / "arcadedb"
+    log_dir.mkdir(parents=True)
+    background_log = log_dir / "database0-cur.log"
+
+    class FakeProcess:
+        pid = 999_997
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
+        polls = 0
+
+        def poll(self):
+            self.polls += 1
+            background_log.write_bytes(b"background\n" * self.polls)
+            return 0 if self.polls >= 3 else None
+
+    ticks = iter((0.0, 0.0, 0.5, 1.5, 2.5))
+    killed = []
+    monkeypatch.setattr(gdsmith_runner.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(gdsmith_runner.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(gdsmith_runner.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gdsmith_runner, "_terminate_process_group", lambda process: killed.append(process.pid))
+
+    with (raw / "stdout").open("w") as stdout, (raw / "stderr").open("w") as stderr:
+        returncode, exceeded, stalled = _run_bounded_process(
+            ("java",),
+            cwd=raw,
+            env={},
+            stdout=stdout,
+            stderr=stderr,
+            timeout=10,
+            stall_timeout=1,
+            max_raw_artifact_bytes=10_000,
+        )
+
+    assert (returncode, exceeded, stalled) == (124, False, True)
+    assert killed == [999_997]
+
+
+def test_new_query_records_keep_bounded_generation_alive(tmp_path, monkeypatch) -> None:
+    raw = tmp_path / "raw"
+    log_dir = raw / "logs" / "arcadedb"
+    log_dir.mkdir(parents=True)
+    query_log = log_dir / "database0-cur.log"
+
+    class FakeProcess:
+        pid = 999_996
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
+        polls = 0
+
+        def poll(self):
+            self.polls += 1
+            if self.polls <= 2:
+                with query_log.open("a", encoding="utf-8") as stream:
+                    stream.write(f"MATCH (n) RETURN {self.polls};\n")
+                return None
+            return 0
+
+    ticks = iter((0.0, 0.0, 0.5, 1.4, 1.6))
+    killed = []
+    monkeypatch.setattr(gdsmith_runner.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(gdsmith_runner.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(gdsmith_runner.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(gdsmith_runner, "_terminate_process_group", lambda process: killed.append(process.pid))
+
+    with (raw / "stdout").open("w") as stdout, (raw / "stderr").open("w") as stderr:
+        result = _run_bounded_process(
+            ("java",),
+            cwd=raw,
+            env={},
+            stdout=stdout,
+            stderr=stderr,
+            timeout=10,
+            stall_timeout=1,
+            max_raw_artifact_bytes=10_000,
+        )
+
+    assert result == (0, False, False)
+    assert killed == []
