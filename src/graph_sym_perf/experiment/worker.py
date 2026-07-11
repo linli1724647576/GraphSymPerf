@@ -68,6 +68,9 @@ from graph_sym_perf.workload.models import (
 from graph_sym_perf.workload.registry import AcceptedCorpusRegistry
 
 
+_MAX_QUERY_CANCELLATION_GRACE_SECONDS = 5.0
+
+
 @dataclass(frozen=True)
 class GeneratedShard:
     """Neutral graph and read-query corpus emitted by one GDsmith invocation."""
@@ -226,10 +229,16 @@ class AdapterQueryProxy:
         operation: Callable[[], Any],
     ) -> Any:
         started_at = time.time()
+        cancellation_grace = min(
+            _MAX_QUERY_CANCELLATION_GRACE_SECONDS,
+            max(0.1, timeout_seconds * 0.1),
+        )
         inflight = {
+            "cancellation_grace_seconds": cancellation_grace,
             "dbms_fingerprint": self._dbms_fingerprint,
-            "deadline": started_at + timeout_seconds,
+            "deadline": started_at + timeout_seconds + cancellation_grace,
             "graph_hash": self.graph_hash,
+            "operation_timeout_seconds": timeout_seconds,
             "query_hash": _query_hash(query_identity),
             "query_kind": query_kind,
             "started_at": started_at,

@@ -717,6 +717,11 @@ def test_worker_wraps_acceptance_and_runtime_execute_calls_with_atomic_inflight_
         "runtime",
     }
     assert all(record["query_hash"] and record["deadline"] > record["started_at"] for record in records)
+    assert all(
+        record["deadline"] - record["started_at"]
+        == pytest.approx(record["operation_timeout_seconds"] + record["cancellation_grace_seconds"])
+        for record in records
+    )
     assert not (attempt_dir / "inflight.json").exists()
     assert load_adapter.closed and measurement_adapter.closed
 
