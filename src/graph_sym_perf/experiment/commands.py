@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -82,10 +83,12 @@ class ExperimentCommands:
     ) -> LifecycleResult:
         environment = _formal_environment(config)
         spec = _gate_spec(load_experiment_spec(config), target, accepted_pairs)
+        gate_plan = build_run_plan(spec, environment=environment)
         if accepted_pairs > 10 and not _previous_gate_complete(
             output_root,
             target=spec.targets[0],
             accepted_pairs={100: 10, 1000: 100}[accepted_pairs],
+            expected_source_revision=to_jsonable(gate_plan.source_revision),
         ):
             raise GatePrerequisiteError(
                 f"{target} {accepted_pairs}-pair gate requires a verified predecessor"
@@ -151,6 +154,7 @@ def _previous_gate_complete(
     *,
     target: TargetSystem,
     accepted_pairs: int,
+    expected_source_revision: Mapping[str, object],
 ) -> bool:
     root = Path(output_root)
     lifecycle = ExperimentLifecycle(root)
@@ -162,6 +166,7 @@ def _previous_gate_complete(
                 len(tasks) != 1
                 or tasks[0]["target"] != target.value
                 or tasks[0]["accepted_query_pairs"] != accepted_pairs
+                or manifest.get("source_revision") != dict(expected_source_revision)
             ):
                 continue
             status = lifecycle.status(manifest_path.parent.name)

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from graph_sym_perf.core import TargetSystem
@@ -35,4 +38,32 @@ def test_larger_gate_has_no_implicit_predecessor(tmp_path) -> None:
         tmp_path,
         target=TargetSystem.NEO4J,
         accepted_pairs=10,
+        expected_source_revision={"repository_commit": "current"},
+    )
+
+
+def test_gate_predecessor_must_come_from_the_exact_current_source_revision(tmp_path, monkeypatch) -> None:
+    run = tmp_path / "old-gate"
+    run.mkdir()
+    manifest = {
+        "tasks": [{"target": "neo4j", "accepted_query_pairs": 10}],
+        "source_revision": {"repository_commit": "old"},
+    }
+    (run / "resolved_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.commands.ExperimentLifecycle.status",
+        lambda _self, _run_id: SimpleNamespace(completed=1, incomplete=0, failed=0, active=0, invalid=0),
+    )
+
+    assert not _previous_gate_complete(
+        tmp_path,
+        target=TargetSystem.NEO4J,
+        accepted_pairs=10,
+        expected_source_revision={"repository_commit": "current"},
+    )
+    assert _previous_gate_complete(
+        tmp_path,
+        target=TargetSystem.NEO4J,
+        accepted_pairs=10,
+        expected_source_revision={"repository_commit": "old"},
     )

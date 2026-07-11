@@ -26,6 +26,7 @@ _FATAL_STDERR_PATTERNS: tuple[tuple[str, str], ...] = (
     ("NoClassDefFoundError", "NoClassDefFoundError"),
     ("UnsupportedClassVersionError", "UnsupportedClassVersionError"),
     ("Exception in thread", "Exception in thread"),
+    ("DatabaseConnectionLost", "ServiceUnavailableException"),
 )
 
 

@@ -622,6 +622,52 @@ def test_same_version_restart_changes_health_epoch_and_invalidates_runtime_candi
     assert invalidation["health_epoch_after"] == "2" * 64
 
 
+def test_retry_reuses_the_sealed_generation_corpus_instead_of_regenerating_a_new_graph(tmp_path) -> None:
+    calls = 0
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+        query_texts=("MATCH (a:Node), (b:Node) RETURN a, b",),
+        generator_metadata={"backend": "gdsmith", "generation_seed": 7},
+    )
+
+    def generate(_task, _raw_dir):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("retry must not invoke GDsmith again")
+        return generated
+
+    task = ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60)
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=generate,
+        adapter_factory=lambda _task: (_ for _ in ()).throw(RuntimeError("injected load crash")),
+    )
+    first.bind_run_dir(tmp_path)
+    with pytest.raises(RuntimeError, match="injected load crash"):
+        first(task)
+
+    shard_dir = tmp_path / "shards" / "neo4j-000"
+    assert (shard_dir / "generation_corpus.json").is_file()
+
+    attempt = shard_dir / "attempt-001"
+    attempt.mkdir()
+    second = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=generate,
+        adapter_factory=lambda _task: _Adapter(),
+    )
+    second.bind_run_dir(tmp_path)
+    second.bind_attempt_dir(attempt)
+
+    result = second(task)
+
+    assert calls == 1
+    assert result["graph_snapshot_ref"]["content_hash"] == _graph_snapshot_hash(generated.graph_statements)
+    reuse = json.loads((attempt / "generation_reuse.json").read_text(encoding="utf-8"))
+    assert reuse["reused"] is True
+
+
 def test_formal_worker_acquires_generation_and_measurement_phase_leases(tmp_path) -> None:
     context = _LeaseContext()
     shard = GeneratedShard(

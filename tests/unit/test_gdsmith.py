@@ -11,6 +11,7 @@ from graph_sym_perf.gdsmith import check_gdsmith_tooling, neo4j_uri_to_host_port
 from graph_sym_perf.gdsmith import runner as gdsmith_runner
 from graph_sym_perf.gdsmith.runner import (
     _compact_large_text_artifact,
+    _detect_fatal_stderr_markers,
     _prune_rotated_dbms_logs,
     _redact_sensitive_command_parts,
     _run_bounded_process,
@@ -261,6 +262,16 @@ def test_run_gdsmith_marks_fatal_stderr_as_failure(tmp_path: Path, monkeypatch) 
     assert result.process_returncode == 0
     assert result.returncode == 1
     assert result.fatal_stderr_markers == ("OutOfMemoryError",)
+
+
+def test_gdsmith_database_connection_loss_is_fatal_even_when_upstream_exits_zero(tmp_path: Path) -> None:
+    stderr = tmp_path / "gdsmith_stderr.txt"
+    stderr.write_text(
+        "org.neo4j.driver.exceptions.ServiceUnavailableException: Connection to the database terminated\n",
+        encoding="utf-8",
+    )
+
+    assert _detect_fatal_stderr_markers(stderr) == ("DatabaseConnectionLost",)
 
 
 def test_compact_large_text_artifact_keeps_head_and_tail(tmp_path: Path) -> None:

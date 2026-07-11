@@ -31,13 +31,14 @@ from graph_sym_perf.artifacts.store import (
     verify_candidate_record_reference,
 )
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
-from graph_sym_perf.core import GdsmithConfig, QueryTimeoutError, TargetSystem
+from graph_sym_perf.core import GdsmithConfig, QueryTimeoutError, TargetSystem, to_jsonable
 from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
 from graph_sym_perf.dialects.apache_age import ApacheAgeDialect
 from graph_sym_perf.dialects.base import DecisionKind
 from graph_sym_perf.dialects.native import NativeCypherDialect
 from graph_sym_perf.equivalence.checker import compare_typed_results
 from graph_sym_perf.experiment.plan_models import ExperimentSpec, ShardTask
+from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import ErrorKind, ShardState, _append_jsonl_fsync, _atomic_write_json, _fsync_directory
 from graph_sym_perf.generation.corpus import GraphCorpus, portable_ast_hash
@@ -295,7 +296,23 @@ class RuntimeFirstShardWorker:
         shard_deadline = time.monotonic() + task.max_runtime_seconds
         generation_lease = self._attempt_context.generation_lease() if self._attempt_context else nullcontext()
         with generation_lease:
-            generated = self._generation_runner(task, attempt_dir / "gdsmith_raw")
+            context_task_identity = getattr(self._attempt_context, "task_identity", None)
+            task_identity = context_task_identity or canonical_hash(to_jsonable(task))
+            generation_path = shard_dir / "generation_corpus.json"
+            generated = _load_generation_corpus(generation_path, task_identity=task_identity)
+            reused = generated is not None
+            if generated is None:
+                generated = self._generation_runner(task, attempt_dir / "gdsmith_raw")
+                _seal_generation_corpus(generation_path, task_identity=task_identity, generated=generated)
+            _atomic_write_json(
+                attempt_dir / "generation_reuse.json",
+                {
+                    "content_hash": canonical_hash(to_jsonable(generated)),
+                    "generation_corpus": "../generation_corpus.json",
+                    "reused": reused,
+                    "task_identity": task_identity,
+                },
+            )
         self._transition_attempt(ShardState.LOADING)
         graph_hash = _graph_snapshot_hash(generated.graph_statements)
         timeout = float(self.spec.systems[task.target].default_timeout_seconds)
@@ -1123,6 +1140,56 @@ def _graph_snapshot_hash(statements: tuple[str, ...]) -> str:
 def _canonical_graph_payload(statements: tuple[str, ...] | list[str]) -> bytes:
     normalized = tuple(statement.strip() for statement in statements if statement.strip())
     return "\n".join(normalized).encode("utf-8")
+
+
+def _seal_generation_corpus(
+    path: Path,
+    *,
+    task_identity: str,
+    generated: GeneratedShard,
+) -> None:
+    body = {
+        "schema_version": 1,
+        "task_identity": task_identity,
+        "graph_statements": list(generated.graph_statements),
+        "query_texts": list(generated.query_texts),
+        "generator_metadata": to_jsonable(generated.generator_metadata),
+    }
+    if path.exists():
+        existing = _load_generation_corpus(path, task_identity=task_identity)
+        if existing != generated:
+            raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "sealed generation corpus changed")
+        return
+    _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
+
+
+def _load_generation_corpus(path: Path, *, task_identity: str) -> GeneratedShard | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "generation corpus is unreadable") from exc
+    if not isinstance(payload, dict):
+        raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "generation corpus is not an object")
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    graph = body.get("graph_statements")
+    queries = body.get("query_texts")
+    metadata = body.get("generator_metadata")
+    if (
+        body.get("schema_version") != 1
+        or body.get("task_identity") != task_identity
+        or payload.get("content_hash") != canonical_hash(body)
+        or not isinstance(graph, list)
+        or not graph
+        or not all(isinstance(statement, str) and statement.strip() for statement in graph)
+        or not isinstance(queries, list)
+        or not queries
+        or not all(isinstance(query, str) and query.strip() for query in queries)
+        or not isinstance(metadata, dict)
+    ):
+        raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "generation corpus identity or hash is invalid")
+    return GeneratedShard(tuple(graph), tuple(queries), metadata)
 
 
 def _adapter_dbms_fingerprint(adapter: Any) -> DBMSFingerprint:
