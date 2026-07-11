@@ -353,6 +353,7 @@ def _run_bounded_process(
         returncode = process.poll()
         if returncode is not None:
             return finish(int(returncode), False, False)
+        _prune_rotated_logs_during_run(cwd)
         current_size = _raw_directory_size(cwd)
         if current_size != last_size:
             last_size = current_size
@@ -419,7 +420,27 @@ def _terminate_process_group(process: subprocess.Popen) -> None:
 
 
 def _raw_directory_size(root: Path) -> int:
-    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+    total = 0
+    for path in root.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except FileNotFoundError:
+            continue
+    return total
+
+
+def _prune_rotated_logs_during_run(root: Path) -> None:
+    log_root = root / "logs"
+    if not log_root.is_dir():
+        return
+    for path in log_root.glob("*/*.log"):
+        if path.name.endswith("-cur.log"):
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def _redact_sensitive_command_parts(command: tuple[str, ...]) -> tuple[str, ...]:

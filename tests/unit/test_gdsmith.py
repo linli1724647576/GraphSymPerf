@@ -15,6 +15,7 @@ from graph_sym_perf.gdsmith.runner import (
     _compact_large_text_artifact,
     _detect_fatal_stderr_markers,
     _prune_rotated_dbms_logs,
+    _prune_rotated_logs_during_run,
     _redact_sensitive_command_parts,
     _run_bounded_process,
 )
@@ -383,6 +384,23 @@ def test_bounded_gdsmith_stream_capture_does_not_fill_the_raw_budget(tmp_path) -
 
     assert (returncode, exceeded, stalled) == (0, False, False)
     assert 0 < stderr_path.stat().st_size < 16 * 1024
+
+
+def test_running_gdsmith_prunes_only_rotated_dbms_logs(tmp_path) -> None:
+    log_dir = tmp_path / "logs" / "agensgraph"
+    log_dir.mkdir(parents=True)
+    current = log_dir / "database0-cur.log"
+    rotated = log_dir / "database0-1.log"
+    unrelated = log_dir / "notes.txt"
+    current.write_text("current", encoding="utf-8")
+    rotated.write_text("rotated", encoding="utf-8")
+    unrelated.write_text("keep", encoding="utf-8")
+
+    _prune_rotated_logs_during_run(tmp_path)
+
+    assert current.is_file()
+    assert unrelated.is_file()
+    assert not rotated.exists()
 
 
 def test_bounded_gdsmith_process_returns_partial_timeout_after_no_artifact_progress(
