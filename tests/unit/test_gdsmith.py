@@ -430,6 +430,17 @@ def test_gdsmith_query_record_limit_sentinel_is_detected_exactly(tmp_path: Path)
     assert _detect_query_record_limit_sentinel(stderr) is False
 
 
+def test_gdsmith_query_record_limit_sentinel_is_found_in_large_file_middle(tmp_path: Path) -> None:
+    stderr = tmp_path / "gdsmith_stderr.txt"
+    stderr.write_bytes(
+        b"x" * (3 * 1024 * 1024)
+        + b"java.lang.RuntimeException: total number reached\n"
+        + b"y" * (3 * 1024 * 1024)
+    )
+
+    assert _detect_query_record_limit_sentinel(stderr) is True
+
+
 def test_compact_large_text_artifact_keeps_head_and_tail(tmp_path: Path) -> None:
     path = tmp_path / "gdsmith_stderr.txt"
     path.write_bytes(b"a" * 20 + b"middle" * 20 + b"z" * 20)

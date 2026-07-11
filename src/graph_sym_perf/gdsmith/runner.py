@@ -500,7 +500,15 @@ def _detect_fatal_stderr_markers(path: Path) -> tuple[str, ...]:
 
 def _detect_query_record_limit_sentinel(path: Path) -> bool:
     try:
-        return _QUERY_RECORD_LIMIT_SENTINEL in _read_text_excerpt(path)
+        marker = _QUERY_RECORD_LIMIT_SENTINEL.encode("utf-8")
+        overlap = b""
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(64 * 1024), b""):
+                window = overlap + chunk
+                if marker in window:
+                    return True
+                overlap = window[-(len(marker) - 1) :]
+        return False
     except FileNotFoundError:
         return False
 
