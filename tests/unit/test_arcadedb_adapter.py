@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from graph_sym_perf.adapters.arcadedb import ArcadeDBAdapter, _arcade_plan_payload, _arcade_rows, _arcadedb_server_version
+from graph_sym_perf.adapters import arcadedb as arcadedb_module
+from graph_sym_perf.adapters.arcadedb import (
+    ArcadeDBAdapter,
+    _arcade_plan_payload,
+    _arcade_rows,
+    _arcadedb_server_version,
+)
 from graph_sym_perf.core import TargetSystem
 from graph_sym_perf.plan import normalize_plan
 
@@ -135,6 +141,31 @@ def test_arcadedb_version_is_unavailable_with_only_generic_server_header() -> No
     response = SimpleNamespace(headers={"Server": "Jetty"}, json=lambda: {"result": "ok"})
 
     assert _arcadedb_server_version(response) is None
+
+
+def test_arcadedb_uses_observed_container_image_when_ready_has_no_version(monkeypatch) -> None:
+    response = SimpleNamespace(headers={}, json=lambda: (_ for _ in ()).throw(ValueError()))
+    monkeypatch.setattr(
+        "graph_sym_perf.adapters.arcadedb.docker_container_image_identity",
+        lambda _env, _target: "sha256:" + "a" * 64,
+    )
+
+    assert getattr(arcadedb_module, "_arcadedb_server_identity")(response, {}) == "sha256:" + "a" * 64
+
+
+def test_arcadedb_health_epoch_uses_the_container_restart_identity(monkeypatch) -> None:
+    adapter = object.__new__(ArcadeDBAdapter)
+    adapter.env = {"GRAPHSYMPERF_ARCADEDB_CONTAINER": "graphsymperf-arcadedb"}
+    adapter.target = TargetSystem.ARCADEDB
+    monkeypatch.setattr(
+        "graph_sym_perf.adapters.arcadedb.docker_container_epoch_identity",
+        lambda _env, _target: ("docker_container_epoch", "container|started|0"),
+    )
+
+    assert adapter._probe_health_epoch_identity() == (
+        "docker_container_epoch",
+        "container|started|0",
+    )
 
 
 def test_arcadedb_specific_version_header_has_stable_priority() -> None:

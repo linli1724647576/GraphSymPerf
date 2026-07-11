@@ -7,7 +7,12 @@ import re
 from time import perf_counter
 from typing import Any, Mapping
 
-from graph_sym_perf.adapters.base import BaseAdapter, normalized_uri_endpoint
+from graph_sym_perf.adapters.base import (
+    BaseAdapter,
+    docker_container_epoch_identity,
+    docker_container_image_identity,
+    normalized_uri_endpoint,
+)
 from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, TargetSystem, to_typed_value as to_jsonable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
@@ -159,14 +164,7 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
         )
 
     def _probe_health_epoch_identity(self) -> tuple[str, object] | None:
-        self._connect()
-        payload = self._request("GET", "/api/v1/ready").json()
-        if not isinstance(payload, Mapping):
-            return None
-        for key in ("instanceId", "instance_id", "startTime", "start_time", "startedAt"):
-            if payload.get(key) not in (None, ""):
-                return (f"ready:{key}", payload[key])
-        return None
+        return docker_container_epoch_identity(self.env, self.target)
 
     def gdsmith_query_is_replayable(self, query: str) -> bool:
         upper = query.upper()
@@ -235,7 +233,7 @@ class ArcadeDBAdapter(CypherLoaderMixin, BaseAdapter):
             self._session.auth = (username, password)
             self._session.headers.update({"Content-Type": "application/json", "Accept": "application/json"})
             ready = self._session.request("GET", f"{self._base_url}/api/v1/ready", timeout=30)
-            self._cache_server_version(_arcadedb_server_version(ready))
+            self._cache_server_version(_arcadedb_server_identity(ready, self.env))
         except Exception as exc:
             raise AdapterError(f"cannot configure ArcadeDB HTTP client: {exc}") from exc
 
@@ -290,6 +288,13 @@ def _arcadedb_server_version(response: Any) -> str | None:
         version = payload.get("version") or payload.get("serverVersion")
         return str(version) if version else None
     return None
+
+
+def _arcadedb_server_identity(response: Any, environment: Mapping[str, str]) -> str | None:
+    return _arcadedb_server_version(response) or docker_container_image_identity(
+        environment,
+        TargetSystem.ARCADEDB,
+    )
 
 
 def _arcade_statistics(payload: Mapping[str, Any]) -> Any:

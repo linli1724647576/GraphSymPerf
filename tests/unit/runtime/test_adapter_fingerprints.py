@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from graph_sym_perf.adapters import base as adapter_base
 from graph_sym_perf.adapters.agensgraph import AgensGraphAdapter
 from graph_sym_perf.adapters.base import docker_container_epoch_identity
 from graph_sym_perf.adapters.apache_age import ApacheAgeAdapter
@@ -203,3 +204,17 @@ def test_docker_container_epoch_is_stable_and_restart_sensitive(monkeypatch) -> 
 
     assert epoch == ("docker_container_epoch", "container-id|2026-07-11T12:00:00Z|2")
     assert observed["command"][-1] == "graphsymperf-memgraph"
+
+
+def test_docker_container_image_identity_is_observed_from_the_runtime(monkeypatch) -> None:
+    def inspect(_command, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout="sha256:" + "a" * 64 + "\n")
+
+    monkeypatch.setattr("graph_sym_perf.adapters.base.subprocess.run", inspect)
+
+    identity = getattr(adapter_base, "docker_container_image_identity")(
+        {"GRAPHSYMPERF_ARCADEDB_CONTAINER": "graphsymperf-arcadedb"},
+        TargetSystem.ARCADEDB,
+    )
+
+    assert identity == "sha256:" + "a" * 64

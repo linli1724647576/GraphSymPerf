@@ -242,6 +242,27 @@ def docker_container_epoch_identity(
     return ("docker_container_epoch", identity) if identity else None
 
 
+def docker_container_image_identity(
+    environment: Mapping[str, str],
+    target: TargetSystem,
+) -> str | None:
+    container = environment.get(f"GRAPHSYMPERF_{target.value.upper()}_CONTAINER", "")
+    if not container:
+        return None
+    try:
+        completed = subprocess.run(
+            ("docker", "inspect", "--format={{.Image}}", container),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    identity = completed.stdout.strip() if completed.returncode == 0 else ""
+    return identity or None
+
+
 def _package_version(package: str | None) -> str | None:
     if not package:
         return None
