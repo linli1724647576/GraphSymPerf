@@ -95,13 +95,13 @@ def test_memgraph_profile_timeout_does_not_fallback_to_execute() -> None:
     assert calls == ["PROFILE RETURN 1 AS ok"]
 
 
-def test_memgraph_filter_rejects_string_prefix_suffix_operators() -> None:
+def test_current_memgraph_accepts_supported_string_and_boolean_property_operators() -> None:
     adapter = object.__new__(MemgraphAdapter)
 
-    assert not adapter.gdsmith_query_is_replayable("MATCH (n) WHERE n.k1 STARTS WITH n.k1 RETURN n")
-    assert not adapter.gdsmith_query_is_replayable("MATCH (n) WHERE n.k1 ENDS WITH n.k1 RETURN n")
-    assert not adapter.gdsmith_query_is_replayable("MATCH (n) WHERE (n.k1) RETURN n")
-    assert not adapter.gdsmith_query_is_replayable("MATCH (n) WHERE ((n.k1) AND true) RETURN n")
+    assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE n.k1 STARTS WITH n.k1 RETURN n")
+    assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE n.k1 ENDS WITH n.k1 RETURN n")
+    assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE (n.k1) RETURN n")
+    assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE ((n.k1) AND true) RETURN n")
     assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE n.k1 = n.k1 RETURN n")
 
 

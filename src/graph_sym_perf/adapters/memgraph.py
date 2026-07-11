@@ -6,8 +6,9 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter, docker_container_epoch_identity
-from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _has_bare_property_predicate, _has_boolean_property_operand, _query_execution_error
+from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryExecutionError, QueryTimeoutError, TargetSystem, to_typed_value as to_jsonable
+from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
 
@@ -111,12 +112,7 @@ class MemgraphAdapter(CypherLoaderMixin, BaseAdapter):
         return docker_container_epoch_identity(self.env, self.target)
 
     def gdsmith_query_is_replayable(self, query: str) -> bool:
-        upper = query.upper()
-        if " STARTS WITH " in upper or " ENDS WITH " in upper:
-            return False
-        if _has_bare_property_predicate(query) or _has_boolean_property_operand(query):
-            return False
-        return True
+        return gdsmith_read_query_is_replayable(query)
 
     def _connect(self) -> None:
         if self._driver is not None:
