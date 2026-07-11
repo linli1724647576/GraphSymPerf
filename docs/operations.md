@@ -7,13 +7,14 @@
 ```bash
 graphsymperf experiment doctor --config config/experiment.yaml
 graphsymperf experiment plan --config config/experiment.yaml
+graphsymperf experiment gate --target <dbms> --accepted-pairs <10|100|1000>
 graphsymperf experiment status --run-id <run-id>
 graphsymperf issue validate --candidate <candidate-outcome.json>
 graphsymperf issue reduce --candidate <candidate-outcome.json>
 graphsymperf issue export --issue <submit-ready-index.json> --output <destination.json>
 ```
 
-doctor 要求仓库与 GDsmith provenance 可核查、固定 commit 匹配、7 个目标连接/driver/graph isolation 可用，并预留 112 × 500 MiB 的最大 artifact 空间。每目标同时提供 `GRAPHSYMPERF_<DBMS>_CONTAINER` 与期望 `IMAGE_DIGEST`；doctor 使用 `docker inspect` 读取实际 `.Image` 并逐字匹配，而非信任格式正确的环境变量。任一失败时 `experiment run` 返回非零且不启动部分矩阵。
+doctor 要求仓库与 GDsmith provenance 可核查、固定 commit 匹配、JAR 与 build manifest 的内容摘要匹配、7 个目标连接/driver/graph isolation 可用，并预留 112 × 500 MiB 的最大 artifact 空间。6 个容器型目标同时提供 `GRAPHSYMPERF_<DBMS>_CONTAINER` 与期望 `IMAGE_DIGEST`；doctor 使用 `docker inspect` 读取实际 `.Image` 并逐字匹配。LadybugDB 校验实际安装分发包的逐文件摘要。任一失败时 `experiment run` 返回非零且不启动部分矩阵。
 
 ## 卡死与自动退出
 

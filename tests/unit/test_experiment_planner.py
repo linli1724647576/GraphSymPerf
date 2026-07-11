@@ -16,6 +16,31 @@ from graph_sym_perf.experiment.planner import build_run_plan, write_resolved_man
 from graph_sym_perf.experiment.spec import load_experiment_spec
 
 
+def _gdsmith_artifact_environment(root: Path, source_commit: str) -> dict[str, str]:
+    jar = root / "GDsmith.jar"
+    jar.write_bytes(b"planner-fixture")
+    digest = hashlib.sha256(jar.read_bytes()).hexdigest()
+    jar.with_suffix(jar.suffix + ".manifest.json").write_text(
+        json.dumps(
+            {
+                "sha256": digest,
+                "source_commit": source_commit,
+                "compatibility_guards": [
+                    "reject_multi_label_node_patterns",
+                    "reject_double_quoted_tokens",
+                    "exclude_unbuildable_tugraph_provider",
+                    "shade_runnable_jar",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "GRAPHSYMPERF_GDSMITH_JAR": str(jar),
+        "GRAPHSYMPERF_GDSMITH_JAR_SHA256": "sha256:" + digest,
+    }
+
+
 def test_planner_resolves_repository_commit_from_config_parent_by_default() -> None:
     spec = load_experiment_spec("config/experiment.yaml")
     expected = subprocess.run(
@@ -55,9 +80,10 @@ def test_planner_records_exact_gdsmith_commit_and_clean_or_dirty_state(tmp_path:
         generation=replace(spec.generation, checkout=checkout, expected_commit=expected_commit),
     )
 
-    clean = build_run_plan(spec, repository_root=checkout)
+    environment = _gdsmith_artifact_environment(tmp_path, expected_commit)
+    clean = build_run_plan(spec, repository_root=checkout, environment=environment)
     (checkout / "README.md").write_text("dirty\n", encoding="utf-8")
-    dirty = build_run_plan(spec, repository_root=checkout)
+    dirty = build_run_plan(spec, repository_root=checkout, environment=environment)
 
     assert clean.source_revision.repository_dirty is False
     assert clean.source_revision.gdsmith_commit == expected_commit
@@ -118,6 +144,10 @@ def test_resolved_manifest_is_a_secret_free_auditable_plan(tmp_path) -> None:
     assert payload["environment"]["GRAPHSYMPERF_NEO4J_URI"] == "present"
     assert payload["environment"]["GRAPHSYMPERF_NEO4J_PASSWORD"] == "missing"
     assert payload["environment"]["GRAPHSYMPERF_GDSMITH_JAR"] == "missing"
+    assert payload["environment"]["GRAPHSYMPERF_GDSMITH_JAR_SHA256"] == "missing"
+    assert payload["environment"]["GRAPHSYMPERF_NEO4J_CONTAINER"] == "missing"
+    assert payload["environment"]["GRAPHSYMPERF_NEO4J_IMAGE_DIGEST"] == "missing"
+    assert payload["environment"]["GRAPHSYMPERF_LADYBUGDB_PACKAGE_DIGEST"] == "missing"
     assert payload["resolved_spec"]["generation"]["backend"] == "gdsmith"
     assert payload["resolved_spec"]["systems"]["neo4j"]["dialect"] == "cypher"
     assert payload["resolved_spec"]["systems"]["apache_age"]["generation_backend"] == "agensgraph_proxy"

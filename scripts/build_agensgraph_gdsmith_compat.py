@@ -15,6 +15,8 @@ import yaml
 
 
 CONNECTION_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/agensGraph/AgensGraphConnection.java")
+MAIN_RELATIVE_PATH = Path("src/main/java/org/example/gdsmith/Main.java")
+POM_RELATIVE_PATH = Path("pom.xml")
 
 
 def main() -> int:
@@ -42,7 +44,11 @@ def main() -> int:
     source_commit = _verify_source_revision(src, expected_commit)
 
     _copy_source(src, work_dir)
-    patch_path = _patch_agens_connection(work_dir)
+    patch_paths = (
+        _patch_agens_connection(work_dir),
+        _patch_main_provider_registry(work_dir),
+        _patch_maven_build(work_dir),
+    )
     jar_path = _build_with_maven(work_dir)
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(jar_path, out)
@@ -56,13 +62,15 @@ def main() -> int:
                 "expected_commit": expected_commit,
                 "work_dir": str(work_dir),
                 "patched_file": str(work_dir / CONNECTION_RELATIVE_PATH),
-                "patch": str(patch_path),
+                "patches": [str(path) for path in patch_paths],
                 "source_jar": str(jar_path),
                 "output": str(out),
                 "sha256": sha256,
                 "compatibility_guards": (
                     "reject_multi_label_node_patterns",
                     "reject_double_quoted_tokens",
+                    "exclude_unbuildable_tugraph_provider",
+                    "shade_runnable_jar",
                 ),
             },
             indent=2,
@@ -70,7 +78,7 @@ def main() -> int:
         + "\n",
         encoding="utf-8",
     )
-    print(json.dumps({"jar": str(out), "sha256": sha256, "patch": str(patch_path)}, indent=2))
+    print(json.dumps({"jar": str(out), "sha256": sha256, "patches": [str(path) for path in patch_paths]}, indent=2))
     return 0
 
 
@@ -127,6 +135,71 @@ def _patch_agens_connection(work_dir: Path) -> Path:
         )
     )
     patch_path = work_dir / "GraphSymPerf-agensgraph-compat.patch"
+    patch_path.write_text(patch, encoding="utf-8")
+    return patch_path
+
+
+def _patch_main_provider_registry(work_dir: Path) -> Path:
+    path = work_dir / MAIN_RELATIVE_PATH
+    original = path.read_text(encoding="utf-8")
+    patched = original.replace("import org.example.gdsmith.tugraph.TuGraphProvider;\n", "")
+    patched = patched.replace("            providers.add(new TuGraphProvider());\n", "")
+    if patched == original or "TuGraphProvider" in patched:
+        raise RuntimeError("failed to isolate the unbuildable TuGraph provider")
+    path.write_text(patched, encoding="utf-8")
+    return _write_patch(work_dir, MAIN_RELATIVE_PATH, original, patched, "provider-registry")
+
+
+def _patch_maven_build(work_dir: Path) -> Path:
+    path = work_dir / POM_RELATIVE_PATH
+    original = path.read_text(encoding="utf-8")
+    build = """
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.15.0</version>
+        <configuration>
+          <excludes><exclude>org/example/gdsmith/tugraph/**</exclude></excludes>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.1</version>
+        <executions><execution><phase>package</phase><goals><goal>shade</goal></goals>
+          <configuration><transformers><transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+            <mainClass>org.example.gdsmith.Main</mainClass>
+          </transformer></transformers></configuration>
+        </execution></executions>
+      </plugin>
+    </plugins>
+  </build>
+"""
+    if "<artifactId>maven-shade-plugin</artifactId>" in original or "</project>" not in original:
+        raise RuntimeError("GDsmith pom is not the expected clean upstream build file")
+    patched = original.replace("</project>", build + "\n</project>")
+    path.write_text(patched, encoding="utf-8")
+    return _write_patch(work_dir, POM_RELATIVE_PATH, original, patched, "maven-build")
+
+
+def _write_patch(
+    work_dir: Path,
+    relative: Path,
+    original: str,
+    patched: str,
+    label: str,
+) -> Path:
+    patch = "".join(
+        difflib.unified_diff(
+            original.splitlines(keepends=True),
+            patched.splitlines(keepends=True),
+            fromfile=str(relative),
+            tofile=str(relative) + ".compat",
+        )
+    )
+    patch_path = work_dir / f"GraphSymPerf-{label}.patch"
     patch_path.write_text(patch, encoding="utf-8")
     return patch_path
 

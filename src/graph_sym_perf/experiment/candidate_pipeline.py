@@ -19,7 +19,7 @@ from graph_sym_perf.config import migrate_experiment_spec_to_run_config
 from graph_sym_perf.core import TargetSystem
 from graph_sym_perf.equivalence.checker import compare_execution_results
 from graph_sym_perf.experiment.plan_models import ExperimentSpec, ShardTask
-from graph_sym_perf.experiment.provenance import verified_container_image_digest
+from graph_sym_perf.experiment.provenance import verified_execution_provenance
 from graph_sym_perf.reducer import CandidateReducer, ReductionBundle, ReductionStatus, RuleWitness
 from graph_sym_perf.reducer.dependencies import analyze_query
 from graph_sym_perf.runtime.measurement import RuntimeHarness
@@ -422,13 +422,14 @@ def _validation_environment(
     *,
     driver_version: str,
 ) -> dict[str, object]:
-    image_digest = verified_container_image_digest(environment, task.target)
-    if image_digest is None:
-        raise ValueError("validation cannot verify the actual DBMS container image digest")
+    provenance = verified_execution_provenance(environment, task.target)
+    if provenance is None:
+        raise ValueError("validation cannot verify the actual DBMS execution artifact")
     return {
         "dbms_version": candidate.dbms_version,
         "driver_version": driver_version,
-        "container_image_digest": image_digest,
+        "execution_mode": provenance.mode,
+        "execution_artifact_digest": provenance.digest,
         "cpu_architecture": platform.machine(),
         "config_hash": candidate.content_hashes["resolved_config"],
     }

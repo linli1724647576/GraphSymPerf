@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -46,15 +47,17 @@ class ExperimentLifecycle:
         *,
         process_isolation: bool = True,
         hard_timeout_seconds: float | None = None,
+        environment: Mapping[str, str] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.process_isolation = process_isolation
         self.hard_timeout_seconds = hard_timeout_seconds
+        self.environment = None if environment is None else dict(environment)
 
     def run(self, spec: ExperimentSpec, worker: Callable[[object], dict], *, run_id: str | None = None) -> LifecycleResult:
         identifier = run_id or f"{spec.name}-{uuid4().hex[:12]}"
         run_dir = self._run_dir(identifier)
-        plan = build_run_plan(spec)
+        plan = build_run_plan(spec, environment=self.environment)
         if run_dir.exists():
             raise FileExistsError(f"run id already exists: {identifier}")
         run_dir.mkdir(parents=True)
@@ -79,7 +82,7 @@ class ExperimentLifecycle:
         run_dir = self._run_dir(run_id)
         if not (run_dir / "resolved_manifest.json").is_file():
             raise FileNotFoundError(f"run has no immutable manifest: {run_id}")
-        plan = build_run_plan(spec)
+        plan = build_run_plan(spec, environment=self.environment)
         stored_manifest = json.loads((run_dir / "resolved_manifest.json").read_text(encoding="utf-8"))
         if stored_manifest != resolved_manifest_payload(plan):
             raise ManifestMismatchError("run resume refused: immutable manifest does not match current plan")

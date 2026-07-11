@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+import hashlib
+import json
 from types import SimpleNamespace
 
 from graph_sym_perf.core import GdsmithConfig
@@ -14,6 +16,29 @@ from graph_sym_perf.gdsmith.runner import (
     _run_bounded_process,
 )
 from graph_sym_perf.gdsmith.source import query_cases_from_gdsmith
+
+
+def _gdsmith_artifact_env(jar: Path) -> dict[str, str]:
+    digest = hashlib.sha256(jar.read_bytes()).hexdigest()
+    jar.with_suffix(jar.suffix + ".manifest.json").write_text(
+        json.dumps(
+            {
+                "sha256": digest,
+                "source_commit": "a" * 40,
+                "compatibility_guards": [
+                    "reject_multi_label_node_patterns",
+                    "reject_double_quoted_tokens",
+                    "exclude_unbuildable_tugraph_provider",
+                    "shade_runnable_jar",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "GRAPHSYMPERF_GDSMITH_JAR": str(jar),
+        "GRAPHSYMPERF_GDSMITH_JAR_SHA256": "sha256:" + digest,
+    }
 
 
 def test_parse_gdsmith_log_splits_graph_and_queries() -> None:
@@ -43,6 +68,30 @@ def test_gdsmith_tooling_requires_destructive_guard(tmp_path: Path) -> None:
 
     assert not status.ready
     assert "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE=1" in status.reason
+
+
+def test_gdsmith_tooling_binds_jar_hash_manifest_and_source_commit(tmp_path: Path, monkeypatch) -> None:
+    jar = tmp_path / "GDsmith.jar"
+    jar.write_text("verified-jar", encoding="utf-8")
+    environment = {
+        **_gdsmith_artifact_env(jar),
+        "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE": "1",
+    }
+    monkeypatch.setattr(gdsmith_runner.shutil, "which", lambda name: "/usr/bin/java")
+
+    ready = check_gdsmith_tooling(
+        GdsmithConfig(expected_source_commit="a" * 40),
+        environment,
+    )
+    wrong_commit = check_gdsmith_tooling(
+        GdsmithConfig(expected_source_commit="b" * 40),
+        environment,
+    )
+
+    assert ready.ready
+    assert ready.jar_sha256 == environment["GRAPHSYMPERF_GDSMITH_JAR_SHA256"]
+    assert ready.build_manifest_ok
+    assert not wrong_commit.ready
 
 
 def test_gdsmith_command_redaction_hides_password() -> None:
@@ -84,7 +133,7 @@ def test_run_gdsmith_streams_process_output_to_files(tmp_path: Path, monkeypatch
     result = gdsmith_runner.run_gdsmith(
         config=GdsmithConfig(timeout_seconds=1),
         env={
-            "GRAPHSYMPERF_GDSMITH_JAR": str(jar),
+            **_gdsmith_artifact_env(jar),
             "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE": "1",
         },
         raw_dir=tmp_path / "raw",
@@ -135,7 +184,7 @@ def test_run_gdsmith_parses_partial_logs_after_timeout(tmp_path: Path, monkeypat
     result = gdsmith_runner.run_gdsmith(
         config=GdsmithConfig(timeout_seconds=1),
         env={
-            "GRAPHSYMPERF_GDSMITH_JAR": str(jar),
+            **_gdsmith_artifact_env(jar),
             "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE": "1",
         },
         raw_dir=tmp_path / "raw",
@@ -173,7 +222,7 @@ def test_run_gdsmith_marks_fatal_stderr_as_failure(tmp_path: Path, monkeypatch) 
     result = gdsmith_runner.run_gdsmith(
         config=GdsmithConfig(timeout_seconds=1),
         env={
-            "GRAPHSYMPERF_GDSMITH_JAR": str(jar),
+            **_gdsmith_artifact_env(jar),
             "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE": "1",
         },
         raw_dir=tmp_path / "raw",

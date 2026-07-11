@@ -1,7 +1,12 @@
 """Runtime-first experiment public interfaces."""
 
 from graph_sym_perf.config import migrate_legacy_config_to_v2
-from graph_sym_perf.experiment.commands import ExperimentCommands, ExperimentNotReady
+from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.experiment.commands import (
+    ExperimentCommands,
+    ExperimentNotReady,
+    GatePrerequisiteError,
+)
 from graph_sym_perf.experiment.plan_models import ExperimentSpec, RunPlan, ShardTask
 from graph_sym_perf.experiment.doctor_v2 import run_doctor
 from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle, LifecycleResult, RunStatus
@@ -13,6 +18,7 @@ from graph_sym_perf.experiment.worker import FormalRuntimeFirstShardWorker, Runt
 __all__ = [
     "ExperimentCommands",
     "ExperimentNotReady",
+    "GatePrerequisiteError",
     "ExperimentLifecycle",
     "ExperimentSpec",
     "FormalRuntimeFirstShardWorker",
@@ -23,6 +29,7 @@ __all__ = [
     "RuntimeFirstShardWorker",
     "ShardSupervisor",
     "ShardTask",
+    "TargetSystem",
     "build_run_plan",
     "load_experiment_spec",
     "migrate_legacy_config_to_v2",

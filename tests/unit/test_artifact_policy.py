@@ -108,7 +108,8 @@ def _validation_payload() -> dict[str, object]:
         "environment": {
             "dbms_version": "dbms/1",
             "driver_version": "driver/1",
-            "container_image_digest": "sha256:" + "f" * 64,
+            "execution_mode": "container_image",
+            "execution_artifact_digest": "sha256:" + "f" * 64,
             "cpu_architecture": "arm64",
             "config_hash": "d" * 64,
         },

@@ -64,3 +64,27 @@ def test_compat_patch_fails_if_connection_execution_anchor_is_missing() -> None:
 
     with pytest.raises(RuntimeError, match="required compatibility guard"):
         module._patch_agens_connection_source(source)
+
+
+def test_build_patches_remove_unbuildable_provider_and_add_runnable_shade_config(tmp_path) -> None:
+    module = _load_builder_module()
+    main = tmp_path / module.MAIN_RELATIVE_PATH
+    main.parent.mkdir(parents=True)
+    main.write_text(
+        "import org.example.gdsmith.tugraph.TuGraphProvider;\n"
+        "            providers.add(new TuGraphProvider());\n",
+        encoding="utf-8",
+    )
+    pom = tmp_path / "pom.xml"
+    pom.write_text("<project>\n</project>\n", encoding="utf-8")
+
+    main_patch = module._patch_main_provider_registry(tmp_path)
+    pom_patch = module._patch_maven_build(tmp_path)
+
+    assert "TuGraphProvider" not in main.read_text(encoding="utf-8")
+    patched_pom = pom.read_text(encoding="utf-8")
+    assert "org/example/gdsmith/tugraph/**" in patched_pom
+    assert "maven-shade-plugin" in patched_pom
+    assert "org.example.gdsmith.Main" in patched_pom
+    assert main_patch.is_file()
+    assert pom_patch.is_file()

@@ -130,6 +130,8 @@ class SourceRevision:
     gdsmith_dirty: bool | None
     rules_schema_sha256: str | None = None
     repository_dirty: bool | None = None
+    gdsmith_jar_sha256: str | None = None
+    gdsmith_build_manifest_sha256: str | None = None
 
     @property
     def provenance_complete(self) -> bool:
@@ -139,6 +141,8 @@ class SourceRevision:
             and bool(self.gdsmith_commit)
             and self.gdsmith_dirty is not None
             and bool(self.rules_schema_sha256)
+            and bool(self.gdsmith_jar_sha256)
+            and bool(self.gdsmith_build_manifest_sha256)
         )
 
 

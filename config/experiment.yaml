@@ -17,8 +17,8 @@ generation:
   source: gdsmith
   commit_source: vendored_checkout
   expected_commit: b2166f1b70cfa9b5816fe707327dd6aed2a22a45
-  checkout: ../../GDsmith-src
-  required_env: [GRAPHSYMPERF_GDSMITH_JAR]
+  checkout: ../../GDsmith-src-runtime-first
+  required_env: [GRAPHSYMPERF_GDSMITH_JAR, GRAPHSYMPERF_GDSMITH_JAR_SHA256, GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE]
 scheduling:
   max_parallel_generation_systems: 3
   max_parallel_measurement_systems: 1

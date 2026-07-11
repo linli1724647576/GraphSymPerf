@@ -266,16 +266,18 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
         raise ValueError("passed validation requires complete typed equivalence")
     environment = payload["environment"]
     required_environment = {
-        "dbms_version", "driver_version", "container_image_digest",
-        "cpu_architecture", "config_hash",
+        "dbms_version", "driver_version", "execution_mode",
+        "execution_artifact_digest", "cpu_architecture", "config_hash",
     }
     if not isinstance(environment, Mapping) or not required_environment <= set(environment):
         raise ValueError("validation environment evidence is incomplete")
     if any(not isinstance(environment[key], str) or not environment[key].strip() or environment[key] == "unknown" for key in required_environment):
         raise ValueError("validation environment evidence cannot be unknown")
     _validate_hash(environment["config_hash"], "environment.config_hash")
-    if re.fullmatch(r"sha256:[0-9a-f]{64}", str(environment["container_image_digest"])) is None:
-        raise ValueError("validation environment requires a pinned container image digest")
+    if environment["execution_mode"] not in {"container_image", "embedded_package"}:
+        raise ValueError("validation environment has an invalid execution provenance mode")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", str(environment["execution_artifact_digest"])) is None:
+        raise ValueError("validation environment requires a pinned execution artifact digest")
     sessions = payload["sessions"]
     session_ids: set[str] = set()
     process_ids: set[int] = set()

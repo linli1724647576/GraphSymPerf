@@ -318,7 +318,8 @@ def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(tmp_
     environment = {
         "dbms_version": "dbms-version",
         "driver_version": "driver-version",
-        "container_image_digest": "sha256:" + "f" * 64,
+        "execution_mode": "container_image",
+        "execution_artifact_digest": "sha256:" + "f" * 64,
         "cpu_architecture": "arm64",
         "config_hash": report.manifest.content_hashes["resolved_config"],
     }

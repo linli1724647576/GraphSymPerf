@@ -10,7 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
-from graph_sym_perf.core import ConfigError, to_jsonable
+from graph_sym_perf.core import ConfigError, GdsmithConfig, TargetSystem, to_jsonable
+from graph_sym_perf.gdsmith.runner import check_gdsmith_tooling
 from graph_sym_perf.experiment.plan_models import (
     EnvironmentVariableState,
     ExperimentSpec,
@@ -66,13 +67,21 @@ def build_run_plan(
     if len({task.seed for task in tasks}) != len(tasks):
         raise ConfigError("deterministic shard seed collision")
     env = os.environ if environment is None else environment
-    environment_names = sorted(
-        {
-            *spec.generation.required_env,
-            *(name for definition in spec.systems.values() for name in definition.required_env),
-            *(name for definition in spec.systems.values() for name in definition.generation_required_env),
-        }
+    gdsmith_tooling = check_gdsmith_tooling(
+        GdsmithConfig(expected_source_commit=spec.generation.expected_commit),
+        env,
     )
+    environment_names = {
+        *spec.generation.required_env,
+        *(name for definition in spec.systems.values() for name in definition.required_env),
+        *(name for definition in spec.systems.values() for name in definition.generation_required_env),
+    }
+    for target in spec.targets:
+        prefix = f"GRAPHSYMPERF_{target.value.upper()}"
+        if target is TargetSystem.LADYBUGDB:
+            environment_names.add(f"{prefix}_PACKAGE_DIGEST")
+        else:
+            environment_names.update({f"{prefix}_CONTAINER", f"{prefix}_IMAGE_DIGEST"})
     return RunPlan(
         spec_name=spec.name,
         schema_version=spec.schema_version,
@@ -84,11 +93,13 @@ def build_run_plan(
             gdsmith_dirty=_git_dirty(spec.generation.checkout),
             rules_schema_sha256=spec.rules_schema_sha256,
             repository_dirty=_git_dirty(root),
+            gdsmith_jar_sha256=gdsmith_tooling.jar_sha256,
+            gdsmith_build_manifest_sha256=gdsmith_tooling.build_manifest_sha256,
         ),
         resolved_spec=spec,
         environment=tuple(
             EnvironmentVariableState(name, "present" if env.get(name) else "missing")
-            for name in environment_names
+            for name in sorted(environment_names)
         ),
         rule_yield_snapshot=freeze_value(
             {

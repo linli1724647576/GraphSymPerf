@@ -119,6 +119,8 @@ class DatasetConfig:
 @dataclass(frozen=True)
 class GdsmithConfig:
     jar_env: str = "GRAPHSYMPERF_GDSMITH_JAR"
+    jar_sha256_env: str = "GRAPHSYMPERF_GDSMITH_JAR_SHA256"
+    expected_source_commit: str | None = None
     algorithm: str = "compared3"
     num_tries: int = 1
     num_queries: int = 20

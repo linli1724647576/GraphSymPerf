@@ -909,6 +909,7 @@ class RuntimeFirstShardWorker:
             timeout_seconds = max(1.0, min(float(task.max_runtime_seconds) - 300.0, 6 * 3600.0))
             result = run_gdsmith(
                 config=GdsmithConfig(
+                    expected_source_commit=self.spec.generation.expected_commit,
                     timeout_seconds=timeout_seconds,
                     max_raw_artifact_bytes=min(
                         100 * 1024 * 1024,

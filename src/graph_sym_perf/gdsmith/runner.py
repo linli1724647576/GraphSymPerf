@@ -8,6 +8,7 @@ import signal
 import shutil
 import subprocess
 import time
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -38,6 +39,9 @@ class GdsmithToolStatus:
     java_path: str | None
     jar_env: str
     jar_path: str | None
+    jar_sha256: str | None
+    build_manifest_sha256: str | None
+    build_manifest_ok: bool
     allow_destructive_env: str
 
     @property
@@ -65,6 +69,11 @@ def check_gdsmith_tooling(config: GdsmithConfig, env: Mapping[str, str]) -> Gdsm
     jar_path = Path(jar_value).expanduser() if jar_value else None
     java_ok = java_path is not None
     jar_ok = jar_path is not None and jar_path.is_file()
+    jar_sha256, manifest_sha256, manifest_ok = _verify_gdsmith_artifact(
+        jar_path,
+        env.get(config.jar_sha256_env),
+        expected_source_commit=config.expected_source_commit,
+    )
     destructive_ok = env.get(config.allow_destructive_env) == "1"
 
     missing: list[str] = []
@@ -72,6 +81,8 @@ def check_gdsmith_tooling(config: GdsmithConfig, env: Mapping[str, str]) -> Gdsm
         missing.append("java executable")
     if not jar_ok:
         missing.append(config.jar_env)
+    elif not manifest_ok:
+        missing.append(f"verified {config.jar_sha256_env} and build manifest")
     if not destructive_ok:
         missing.append(f"{config.allow_destructive_env}=1")
     return GdsmithToolStatus(
@@ -83,8 +94,54 @@ def check_gdsmith_tooling(config: GdsmithConfig, env: Mapping[str, str]) -> Gdsm
         java_path=java_path,
         jar_env=config.jar_env,
         jar_path=str(jar_path) if jar_path is not None else None,
+        jar_sha256=jar_sha256,
+        build_manifest_sha256=manifest_sha256,
+        build_manifest_ok=manifest_ok,
         allow_destructive_env=config.allow_destructive_env,
     )
+
+
+def _verify_gdsmith_artifact(
+    jar_path: Path | None,
+    expected_digest: str | None,
+    *,
+    expected_source_commit: str | None,
+) -> tuple[str | None, str | None, bool]:
+    if jar_path is None or not jar_path.is_file():
+        return None, None, False
+    actual = "sha256:" + _file_sha256(jar_path)
+    if expected_digest != actual:
+        return actual, None, False
+    manifest_path = jar_path.with_suffix(jar_path.suffix + ".manifest.json")
+    try:
+        raw = manifest_path.read_bytes()
+        manifest = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return actual, None, False
+    required_guards = {
+        "reject_multi_label_node_patterns",
+        "reject_double_quoted_tokens",
+        "exclude_unbuildable_tugraph_provider",
+        "shade_runnable_jar",
+    }
+    valid = bool(
+        isinstance(manifest, dict)
+        and manifest.get("sha256") == actual.removeprefix("sha256:")
+        and (
+            expected_source_commit is None
+            or manifest.get("source_commit") == expected_source_commit
+        )
+        and required_guards <= set(manifest.get("compatibility_guards", ()))
+    )
+    return actual, "sha256:" + hashlib.sha256(raw).hexdigest(), valid
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def neo4j_uri_to_host_port(uri: str) -> tuple[str, int]:

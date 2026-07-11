@@ -223,7 +223,8 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 "environment": {
                     "dbms_version": "dbms/1",
                     "driver_version": "driver/1",
-                    "container_image_digest": "sha256:" + "f" * 64,
+                    "execution_mode": "container_image",
+                    "execution_artifact_digest": "sha256:" + "f" * 64,
                     "cpu_architecture": "arm64",
                     "config_hash": "e" * 64,
                 },

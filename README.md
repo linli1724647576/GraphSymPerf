@@ -12,6 +12,8 @@ graphsymperf experiment run --config config/experiment.yaml
 
 该配置展开为 7 个 GDBMS × 16 shards × 每 shard 1,000 个 accepted query pairs，共 112,000 对。命令先执行 doctor；任一数据库、GDsmith 固定提交、镜像摘要、驱动、隔离能力或磁盘预算不满足时，整轮实验不会部分启动。
 
+首次全量运行前，必须对每个 GDBMS 依次通过 `1×10 → 1×100 → 1×1,000` 实跑门禁；`experiment gate` 会拒绝跳级。完整命令和环境准备见[主实验运行手册](docs/runbook-main-experiment.md)。根目录 `.env` 会由正式命令自动加载，但不会写入 manifest 或版本库。
+
 中断后只恢复同一不可变 manifest：
 
 ```bash

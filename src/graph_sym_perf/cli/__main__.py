@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import argparse
 
-from graph_sym_perf.experiment import ExperimentCommands, ExperimentNotReady
+from graph_sym_perf.experiment import (
+    ExperimentCommands,
+    ExperimentNotReady,
+    GatePrerequisiteError,
+    TargetSystem,
+)
 from graph_sym_perf.issues import IssueCommands, IssueGateError
 
 
@@ -29,6 +34,14 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--config", default="config/experiment.yaml")
     experiment_commands.choices["doctor"].add_argument("--output-root")
     experiment_commands.choices["plan"].add_argument("--output")
+    gate = experiment_commands.add_parser(
+        "gate",
+        help="advanced: run one 10/100/1000 accepted-pair live gate",
+    )
+    gate.add_argument("--config", default="config/experiment.yaml")
+    gate.add_argument("--target", required=True, choices=[target.value for target in TargetSystem])
+    gate.add_argument("--accepted-pairs", required=True, type=int, choices=(10, 100, 1000))
+    gate.add_argument("--output-root", default="runs/gates")
     status = experiment_commands.add_parser("status", help="advanced: verify durable shard state")
     status.add_argument("--run-id", required=True)
     status.add_argument("--output-root", default="runs")
@@ -92,6 +105,20 @@ def main(argv: list[str] | None = None) -> int:
                 f"active={report.active} invalid={report.invalid}"
             )
             return 0 if report.invalid == 0 else 5
+        if args.command == "experiment" and args.experiment_command == "gate":
+            result = experiments.gate(
+                config=args.config,
+                target=args.target,
+                accepted_pairs=args.accepted_pairs,
+                output_root=args.output_root,
+            )
+            print(
+                "runtime-first gate: "
+                f"target={args.target} accepted_pairs={args.accepted_pairs} "
+                f"run_id={result.run_id} completed={len(result.summary.completed)} "
+                f"incomplete={len(result.summary.incomplete)} failed={len(result.summary.failed)}"
+            )
+            return 0 if result.summary.completed and not result.summary.incomplete and not result.summary.failed else 5
         if args.command == "experiment" and args.experiment_command == "migrate-config":
             destination = experiments.migrate_config(
                 source=args.input,
@@ -120,6 +147,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
     except ExperimentNotReady as exc:
         print(f"experiment run refused: {exc}")
+        return 4
+    except GatePrerequisiteError as exc:
+        print(f"gate refused: {exc}")
         return 4
     except IssueGateError as exc:
         print("missing gate: " + "; ".join(exc.missing_gates))
