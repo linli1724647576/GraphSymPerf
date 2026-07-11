@@ -22,7 +22,7 @@ doctor 要求仓库与 GDsmith provenance 可核查、固定 commit 匹配、JAR
 
 GDsmith raw 临时上限为 shard 预算的 70%，且最多 350 MiB；对正式 500 MiB shard 保留至少 150 MiB 给 checkpoint、accepted corpus 与候选证据。直接 stdout/stderr 不落入无界文件，runner 从 pipe 持续排空并只保留有界 head/tail；运行中也会删除非 `*-cur.log` 的 rotated DBMS logs，因为 parser 和最终 artifact 从始至终只使用 current log。raw 达到分配预算时会终止进程并标记 `RAW_ARTIFACT_BUDGET_REACHED`。只有 parser 已经从预算内文件提取到图快照与至少一个可回放查询时，该 partial corpus 才能继续 acceptance；空语料或普通非零退出仍失败关闭。supervisor 仍对最终 shard 强制 500 MiB 硬上限。
 
-GDsmith 的实际 query-record 请求量为 `min(max_generated_seeds, accepted_target × 5)`；正式 shard 因此请求 5,000 条，而不是先生成 10,000 条再丢弃大部分。该系数来自 AgensGraph 实跑中 4,000 条仅得到 968 对的最弱已观测 yield，不是改变规则权重或降低筛选门槛。`max_generated_seeds=10,000` 仍是后续 rule provider/acceptance 的硬停止边界；若 5,000 条语料在该边界内不足以得到 1,000 对，shard 只能为 `INCOMPLETE`，不会降低 accepted target。
+GDsmith query-record 请求量由 system capability 决定：声明 `low_yield_generation` 的 AgensGraph/Apache AGE 使用 `min(max_generated_seeds, accepted_target × 5)`，其他目标使用 `×2`。5倍系数来自 AgensGraph 实跑中 4,000 条仅得到 968 对的最弱已观测 yield；2倍路径避免在 Neo4j 等高 yield 目标上执行数小时的无效 oracle 生成。这一 capability 只调整生成容量，不改变规则权重或筛选门槛。`max_generated_seeds=10,000` 仍是 acceptance 硬停止边界；语料不足时 shard 只能为 `INCOMPLETE`，不会降低 accepted target。
 
 兼容 JAR 对 AgensGraph 和 ArcadeDB 的每个 JDBC `Statement` 同时设置 60 秒 query timeout 与 1,000 行 result cap。row cap 只约束 GDsmith 内部 oracle 的结果物化，不改变 GraphSymPerf 后续的 ordinary-execute runtime 协议；它防止高基数生成查询在 PostgreSQL JDBC `processResults` 中耗尽生成器 JVM heap。JAR manifest 必须同时声明 `jdbc_query_timeout_60s` 与 `jdbc_result_row_cap_1000`，否则 doctor 拒绝运行。
 

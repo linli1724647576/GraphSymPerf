@@ -973,7 +973,7 @@ class RuntimeFirstShardWorker:
                 f"planned generation backend {task.generation_backend!r} does not match runtime {provenance!r}"
             )
         requires_single_label = "single_node_label" in self.spec.systems[task.target].capabilities
-        generation_query_limit = min(task.max_generated_seeds, task.accepted_query_pairs * 5)
+        generation_query_limit = _generation_query_limit(task, self.spec)
         result_holder: dict[str, object] = {}
 
         def invoke(request: GenerationRequest) -> tuple[str, ...]:
@@ -1056,6 +1056,12 @@ class FormalRuntimeFirstShardWorker(RuntimeFirstShardWorker):
             environment=self.environment,
             run_dir=run_dir,
         )
+
+
+def _generation_query_limit(task: ShardTask, spec: ExperimentSpec) -> int:
+    capabilities = spec.systems[task.target].capabilities
+    multiplier = 5 if "low_yield_generation" in capabilities else 2
+    return min(task.max_generated_seeds, task.accepted_query_pairs * multiplier)
 
 
 def _generation_backend_provenance(target: TargetSystem, backend: str) -> str:

@@ -17,6 +17,7 @@ from graph_sym_perf.experiment.worker import (
     WorkerFailure,
     _gdsmith_connection,
     _generation_backend_provenance,
+    _generation_query_limit,
     _graph_snapshot_hash,
 )
 from graph_sym_perf.generation.corpus import GraphCorpus
@@ -260,6 +261,19 @@ def test_formal_gdsmith_seam_keeps_partial_stalled_corpus_and_deduplicates_ast(t
     assert generated.generator_metadata["duplicate_ast_records"] == 1
 
 
+def test_generation_query_limit_is_capability_driven() -> None:
+    spec = load_experiment_spec("config/experiment.yaml")
+
+    assert _generation_query_limit(
+        ShardTask(TargetSystem.NEO4J, 0, 7, 1000, 10000, 60, "neo4j"),
+        spec,
+    ) == 2000
+    assert _generation_query_limit(
+        ShardTask(TargetSystem.AGENSGRAPH, 0, 7, 1000, 10000, 60, "agensgraph"),
+        spec,
+    ) == 5000
+
+
 def test_formal_gdsmith_seam_keeps_replayable_corpus_at_raw_artifact_budget(tmp_path, monkeypatch) -> None:
     record = SimpleNamespace(statement="MATCH (n) RETURN n")
 
@@ -291,7 +305,7 @@ def test_formal_gdsmith_seam_keeps_replayable_corpus_at_raw_artifact_budget(tmp_
 
     assert generated.query_texts == (record.statement,)
     assert generated.generator_metadata["generation_stop_reason"] == "RAW_ARTIFACT_BUDGET_REACHED"
-    assert generated.generator_metadata["generated_query_record_limit"] == 5
+    assert generated.generator_metadata["generated_query_record_limit"] == 2
 
 
 def test_formal_gdsmith_seam_rejects_empty_corpus_at_raw_artifact_budget(tmp_path, monkeypatch) -> None:
