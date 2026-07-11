@@ -105,10 +105,10 @@ def test_current_memgraph_accepts_supported_string_and_boolean_property_operator
     assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE n.k1 = n.k1 RETURN n")
 
 
-def test_falkordb_filter_rejects_string_ops_and_bare_property_predicates() -> None:
+def test_current_falkordb_accepts_supported_string_and_boolean_property_operators() -> None:
     adapter = object.__new__(FalkorDBAdapter)
 
-    assert not adapter.gdsmith_query_is_replayable("MATCH (n) WHERE n.k1 STARTS WITH n.k1 RETURN n")
-    assert not adapter.gdsmith_query_is_replayable("MATCH (n) WHERE (r0.k55) RETURN n")
-    assert not adapter.gdsmith_query_is_replayable("MATCH (n) WHERE ((r0.k55) OR true) RETURN n")
+    assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE n.k1 STARTS WITH n.k1 RETURN n")
+    assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE (r0.k55) RETURN n")
+    assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE ((r0.k55) OR true) RETURN n")
     assert adapter.gdsmith_query_is_replayable("MATCH (n) WHERE r0.k55 = 1 RETURN n")

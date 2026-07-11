@@ -9,8 +9,9 @@ from time import perf_counter
 from typing import Any, Mapping
 
 from graph_sym_perf.adapters.base import BaseAdapter
-from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _has_bare_property_predicate, _has_boolean_property_operand, _query_execution_error
+from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, TargetSystem, to_typed_value as to_jsonable
+from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
 _logger = logging.getLogger(__name__)
@@ -159,12 +160,7 @@ class FalkorDBAdapter(CypherLoaderMixin, BaseAdapter):
         return ("redis_info_run_id", run_id) if run_id not in (None, "") else None
 
     def gdsmith_query_is_replayable(self, query: str) -> bool:
-        upper = query.upper()
-        if " STARTS WITH " in upper or " ENDS WITH " in upper:
-            return False
-        if _has_bare_property_predicate(query) or _has_boolean_property_operand(query):
-            return False
-        return True
+        return gdsmith_read_query_is_replayable(query)
 
     def _connect(self) -> None:
         if self._graph is not None:
