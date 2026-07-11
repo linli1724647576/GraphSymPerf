@@ -17,7 +17,9 @@ from graph_sym_perf.experiment.plan_models import (
     RunPlan,
     ShardTask,
     SourceRevision,
+    freeze_value,
 )
+from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 
 
 MAX_TOTAL_ACCEPTED_PAIR_BUDGET = 112_000
@@ -35,6 +37,19 @@ def build_run_plan(
             "total accepted-pair budget exceeds formal limit: "
             f"{spec.total_accepted_pair_budget} > {MAX_TOTAL_ACCEPTED_PAIR_BUDGET}"
         )
+    exploration_floor = int(spec.rules_catalog["tiers"]["core"]["minimum_accepted_pairs_per_rule"])
+    registry = RuleRegistry.default()
+    for target in spec.targets:
+        core_count = len(
+            registry.rules_for(target.value, SafetyTier.CORE, frozenset(spec.systems[target].capabilities))
+        )
+        required = core_count * exploration_floor
+        if required > spec.workload.accepted_query_pairs_per_shard:
+            raise ConfigError(
+                f"CORE exploration floor does not fit {target.value} shard budget: "
+                f"{core_count} rules * {exploration_floor} = {required} > "
+                f"{spec.workload.accepted_query_pairs_per_shard}"
+            )
     tasks = tuple(
         ShardTask(
             target=target,
@@ -74,6 +89,19 @@ def build_run_plan(
         environment=tuple(
             EnvironmentVariableState(name, "present" if env.get(name) else "missing")
             for name in environment_names
+        ),
+        rule_yield_snapshot=freeze_value(
+            {
+                target.value: {
+                    rule.rule_id: {"accepted": 0, "validation_passed": 0}
+                    for rule in registry.rules_for(
+                        target.value,
+                        SafetyTier.CORE,
+                        frozenset(spec.systems[target].capabilities),
+                    )
+                }
+                for target in spec.targets
+            }
         ),
     )
 

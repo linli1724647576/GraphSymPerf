@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from graph_sym_perf.runtime.models import PairedSample, RuntimeEvidence, RuntimeVerdict
+from graph_sym_perf.sampling.yield_store import ValidatedYieldStore
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.models import (
     CandidateBundle,
@@ -35,7 +36,7 @@ def _bundle(*, discovery_slow_query: str = "b", noise_floor_ms: float = 0.0) -> 
         discovery_slow_query=discovery_slow_query,
         discovery_ratio=5.0,
         validation_policy=ValidationPolicy(noise_floor_ms=noise_floor_ms),
-        certificate=SafetyCertificate("pattern_order_symmetry", "core", "v1", "match"),
+        certificate=SafetyCertificate("pattern_order_symmetry", "core", "graph_pattern_product_commutativity_v1", "match_pattern_component"),
     )
 
 
@@ -101,6 +102,18 @@ def test_two_fresh_sessions_are_required_for_validation_passed() -> None:
     assert report.policy_hash == bundle.content_hashes["validation_policy"]
     assert report.certificate_hash == bundle.content_hashes["certificate"]
     assert report.rule_id == bundle.certificate.rule_id
+
+
+def test_completed_validation_is_the_only_source_of_sampler_yield(tmp_path) -> None:
+    store = ValidatedYieldStore(tmp_path / "validated_yield.jsonl")
+    store.record_accepted_pair(rule_id="pattern_order_symmetry", accepted_pair_hash="a" * 64)
+
+    report = IssueValidator(yield_store=store).validate(_bundle(), FakeIndependentRunner())
+
+    assert report.stage.value == "validation_passed"
+    assert store.snapshot(("pattern_order_symmetry",)).counts == {
+        "pattern_order_symmetry": (1, 1)
+    }
 
 
 def test_validation_rejects_a_ratio_that_is_within_aa_noise_floor() -> None:

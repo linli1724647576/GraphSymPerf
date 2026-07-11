@@ -21,6 +21,8 @@ class EquivalentQueryPair:
     parameters: Mapping[str, object]
     graph_snapshot_hash: str
     dbms_fingerprint: str
+    rule_id: str | None = None
+    safety_certificate: object | None = None
 
 
 @dataclass(frozen=True)

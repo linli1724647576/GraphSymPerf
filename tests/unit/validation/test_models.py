@@ -29,7 +29,7 @@ def _bundle() -> CandidateBundle:
         resolved_config={"runtime": {"pairs": 20}, "system": "neo4j"},
         discovery_slow_query="b",
         discovery_ratio=8.0,
-        certificate=SafetyCertificate("pattern_order_symmetry", "core", "v1", "match"),
+        certificate=SafetyCertificate("pattern_order_symmetry", "core", "graph_pattern_product_commutativity_v1", "match_pattern_component"),
     )
 
 

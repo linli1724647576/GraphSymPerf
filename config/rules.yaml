@@ -7,3 +7,29 @@ tiers:
     auto_submit: false
   control:
     auto_submit: false
+rules:
+  constant_true_disjunction: {tier: core, version: "1", proof_id: kleene_or_true_v1, site_classes: [where_boolean], exploration_floor: 20}
+  constant_false_conjunction: {tier: core, version: "1", proof_id: kleene_and_false_v1, site_classes: [where_boolean], exploration_floor: 20}
+  null_partition_tautology: {tier: core, version: "1", proof_id: kleene_null_partition_v1, site_classes: [where_boolean], exploration_floor: 20}
+  null_contradiction: {tier: core, version: "1", proof_id: kleene_null_contradiction_v1, site_classes: [where_boolean], exploration_floor: 20}
+  null_complete_excluded_middle: {tier: core, version: "1", proof_id: three_valued_excluded_middle_v1, site_classes: [where_boolean], exploration_floor: 20}
+  pattern_order_symmetry: {tier: core, version: "1", proof_id: graph_pattern_product_commutativity_v1, site_classes: [match_pattern_component], exploration_floor: 20}
+  predicate_order_symmetry: {tier: core, version: "1", proof_id: kleene_conjunction_commutativity_v1, site_classes: [where_boolean], exploration_floor: 20}
+  node_order_symmetry: {tier: core, version: "1", proof_id: edge_endpoint_alpha_equivalence_v1, site_classes: [match_pattern_component], exploration_floor: 20}
+  label_order_symmetry: {tier: core, version: "1", proof_id: label_conjunction_commutativity_v1, site_classes: [match_pattern_component], exploration_floor: 20}
+  duplicate_predicate_control: {tier: control, version: "1", proof_id: idempotent_predicate_control_v1, site_classes: [where_boolean], exploration_floor: 0}
+  edge_notation_symmetry: {tier: control, version: "1", proof_id: edge_parser_normalization_v1, site_classes: [match_pattern_component], exploration_floor: 0}
+  alpha_renaming_symmetry: {tier: control, version: "1", proof_id: bound_variable_alpha_equivalence_v1, site_classes: [bound_variable], exploration_floor: 0}
+  double_negation_predicate: {tier: experimental, version: "1", proof_id: kleene_double_negation_v1, site_classes: [where_boolean], exploration_floor: 0}
+  de_morgan_predicate: {tier: experimental, version: "1", proof_id: kleene_de_morgan_v1, site_classes: [where_boolean], exploration_floor: 0}
+  case_true_experimental: {tier: experimental, version: "1", proof_id: case_boolean_identity_v1, site_classes: [where_boolean], exploration_floor: 0}
+  guarded_contradiction_experimental: {tier: experimental, version: "1", proof_id: guarded_contradiction_v1, site_classes: [where_boolean], exploration_floor: 0}
+  multilayer_redundancy_experimental: {tier: experimental, version: "1", proof_id: multilayer_boolean_identity_v1, site_classes: [where_boolean], exploration_floor: 0}
+  numeric_equality_range: {tier: experimental, version: "1", proof_id: finite_numeric_equality_range_v1, site_classes: [where_boolean], exploration_floor: 0}
+  path_endpoint_symmetry: {tier: experimental, version: "1", proof_id: path_endpoint_multiplicity_pending, site_classes: [match_pattern_component], exploration_floor: 0}
+  pattern_decomposition_symmetry: {tier: experimental, version: "1", proof_id: relationship_uniqueness_pending, site_classes: [match_pattern_component], exploration_floor: 0}
+  pattern_fusion_symmetry: {tier: experimental, version: "1", proof_id: relationship_uniqueness_pending, site_classes: [match_pattern_component], exploration_floor: 0}
+  property_map_where_symmetry: {tier: experimental, version: "1", proof_id: property_map_selection_pending, site_classes: [match_pattern_component], exploration_floor: 0}
+  label_where_symmetry: {tier: experimental, version: "1", proof_id: label_predicate_pending, site_classes: [match_pattern_component], exploration_floor: 0}
+  single_hop_varlength_symmetry: {tier: experimental, version: "1", proof_id: single_hop_varlength_pending, site_classes: [match_pattern_component], exploration_floor: 0}
+  independent_mandatory_match_reorder: {tier: experimental, version: "1", proof_id: mandatory_match_dependency_pending, site_classes: [mandatory_match_clause], exploration_floor: 0}

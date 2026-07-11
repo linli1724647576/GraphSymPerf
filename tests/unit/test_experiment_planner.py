@@ -88,6 +88,17 @@ def test_planner_is_deterministic_and_assigns_one_unique_seed_per_shard(tmp_path
     }
 
 
+def test_planner_rejects_when_core_exploration_floor_cannot_fit_shard_budget(tmp_path) -> None:
+    spec = load_experiment_spec("config/experiment.yaml")
+    spec = replace(
+        spec,
+        workload=replace(spec.workload, accepted_query_pairs_per_shard=100),
+    )
+
+    with pytest.raises(ConfigError, match="CORE exploration floor"):
+        build_run_plan(spec, repository_root=tmp_path)
+
+
 def test_resolved_manifest_is_a_secret_free_auditable_plan(tmp_path) -> None:
     spec = load_experiment_spec("config/experiment.yaml")
     marker = "do-not-serialize-this-secret"
@@ -109,6 +120,11 @@ def test_resolved_manifest_is_a_secret_free_auditable_plan(tmp_path) -> None:
     assert payload["resolved_spec"]["generation"]["backend"] == "gdsmith"
     assert payload["resolved_spec"]["systems"]["neo4j"]["dialect"] == "cypher"
     assert payload["resolved_spec"]["systems"]["apache_age"]["generation_backend"] == "agensgraph_proxy"
+    assert payload["rule_yield_snapshot"]["neo4j"]["pattern_order_symmetry"] == {
+        "accepted": 0,
+        "validation_passed": 0,
+    }
+    assert not ({"plan", "profile", "pmc", "developer_status"} & set(payload["rule_yield_snapshot"]["neo4j"]))
     assert payload["resolved_spec"]["rules_catalog"]["schema_version"] == 1
     assert payload["validator_protocol_version"] == "runtime-first-v3"
     assert payload["reducer_protocol_version"] == "paired-ast-ddmin-v1"

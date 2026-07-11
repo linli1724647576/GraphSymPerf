@@ -31,6 +31,20 @@ class PairProposal:
     safety_certificate: object | None
     seed: int
 
+    def __post_init__(self) -> None:
+        if not self.rule_id or not isinstance(self.seed, int) or isinstance(self.seed, bool) or self.seed < 0:
+            raise ValueError("pair proposal requires a rule id and non-negative seed")
+        certificate = self.safety_certificate
+        if certificate is not None:
+            required = (
+                "rule_id", "ast_path", "variables_in_scope", "expression_type", "nullability",
+                "clause_context", "preconditions", "proof_id", "capability_hash",
+            )
+            if any(not hasattr(certificate, field) for field in required):
+                raise TypeError("pair proposal requires a typed SafetyCertificate")
+            if certificate.rule_id != self.rule_id:
+                raise ValueError("pair proposal rule and SafetyCertificate rule differ")
+
     @property
     def ast_hashes(self) -> frozenset[str]:
         return frozenset((self.query_a.ast_hash, self.query_b.ast_hash))

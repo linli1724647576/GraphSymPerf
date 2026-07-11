@@ -14,6 +14,7 @@ from graph_sym_perf.validation.models import (
     _PROMOTION_TOKEN,
     safety_certificate_hash,
 )
+from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 
 
 def promote(
@@ -122,12 +123,17 @@ def _reduction_gate_complete(
 
 
 def _certificate_complete(certificate: SafetyCertificate | None) -> bool:
+    if certificate is None or certificate.tier.lower() != "core":
+        return False
+    try:
+        rule = RuleRegistry.default().get(certificate.rule_id)
+    except KeyError:
+        return False
     return bool(
-        certificate is not None
-        and certificate.tier.lower() == "core"
-        and certificate.rule_id.strip()
-        and certificate.proof_version.strip()
-        and certificate.site_class.strip()
+        rule.tier is SafetyTier.CORE
+        and rule.submit_eligible
+        and certificate.proof_version == rule.proof_id
+        and certificate.site_class in rule.site_classes
     )
 
 

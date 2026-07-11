@@ -15,7 +15,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
@@ -29,18 +29,17 @@ from graph_sym_perf.dialects.apache_age import ApacheAgeDialect
 from graph_sym_perf.dialects.base import DecisionKind
 from graph_sym_perf.dialects.native import NativeCypherDialect
 from graph_sym_perf.equivalence.checker import compare_typed_results
-from graph_sym_perf.equivalence.purity import assess_query_purity
 from graph_sym_perf.experiment.plan_models import ExperimentSpec, ShardTask
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import ErrorKind, ShardState, _append_jsonl_fsync, _atomic_write_json, _fsync_directory
-from graph_sym_perf.generation.corpus import GraphCorpus, PortableQuery, portable_ast_hash
+from graph_sym_perf.generation.corpus import GraphCorpus, portable_ast_hash
 from graph_sym_perf.generation.gdsmith import GdsmithGenerator, GenerationRequest
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
 from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, RuntimeVerdict
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
-from graph_sym_perf.transforms.safety_points import SafetyCertificate
+from graph_sym_perf.transforms.provider import CoreRulePairProvider
 from graph_sym_perf.workload.acceptance import AcceptedPairBuilder
 from graph_sym_perf.workload.models import (
     AcceptanceStatus,
@@ -288,7 +287,7 @@ class RuntimeFirstShardWorker:
                 assert fingerprint.value is not None
                 load_proxy.update_dbms_fingerprint(fingerprint.value)
                 self._transition_attempt(ShardState.BUILDING_ACCEPTED_PAIRS)
-                accepted, acceptance, accepted_hashes = self._build_accepted_pairs(
+                accepted, acceptance, accepted_hashes, rule_stats = self._build_accepted_pairs(
                     load_proxy,
                     task,
                     generated.query_texts,
@@ -306,6 +305,7 @@ class RuntimeFirstShardWorker:
                 acceptance = AcceptedPairCorpus(
                     (), 0, rejects, AcceptanceStatus.INCOMPLETE, reason
                 )
+                rule_stats = {"accepted": {}, "not_applicable": {}}
                 _ensure_jsonl(shard_dir / "accepted_pairs.jsonl")
         finally:
             load_adapter.close()
@@ -370,6 +370,7 @@ class RuntimeFirstShardWorker:
             "screened_candidates": candidates,
             "candidate_hashes": sorted(candidate_hashes),
             "reject_reasons": dict(sorted(rejects.items())),
+            "rule_stats": rule_stats,
             "dbms_fingerprint": {
                 "available": fingerprint.available,
                 "value": fingerprint.value,
@@ -476,7 +477,7 @@ class RuntimeFirstShardWorker:
         graph_snapshot_hash: str,
         dbms_fingerprint: str,
         max_seconds: float,
-    ) -> tuple[list[EquivalentQueryPair], AcceptedPairCorpus, set[str]]:
+    ) -> tuple[list[EquivalentQueryPair], AcceptedPairCorpus, set[str], dict[str, object]]:
         accepted: list[EquivalentQueryPair] = []
         max_rows = int(self.spec.validation["max_result_rows"])
         default_timeout = self.spec.systems[task.target].default_timeout_seconds
@@ -494,32 +495,21 @@ class RuntimeFirstShardWorker:
         dialect = _dialect_for(task.target)
         capability_hash = _dialect_capability_hash(dialect.capabilities)
 
-        def provider(context):
-            if context.ordinal > len(queries):
-                return None
-            query = queries[context.ordinal - 1]
-            pair = _certified_boolean_pair(query)
-            if pair is None:
-                return None
-            base, transformed = pair
-            certificate = SafetyCertificate(
-                rule_id="null_complete_excluded_middle",
-                ast_path="where[0]",
-                variables_in_scope=(),
-                expression_type="boolean",
-                nullability="three_valued",
-                clause_context="where",
-                preconditions=("pure_read_query", "three_valued_boolean_identity"),
-                proof_id="three_valued_excluded_middle_v1",
-                capability_hash=capability_hash,
-            )
-            return PairProposal(
-                PortableQuery(base),
-                PortableQuery(transformed),
-                certificate.rule_id,
-                certificate,
-                context.seed,
-            )
+        if self._run_dir is None:
+            raise RuntimeError("rule provider requires a bound run directory")
+        provider = CoreRulePairProvider(
+            queries,
+            dbms=task.target.value,
+            shard_index=task.shard_index,
+            capability_hash=capability_hash,
+            exploration_floor=int(
+                self.spec.rules_catalog["tiers"]["core"]["minimum_accepted_pairs_per_rule"]
+            ),
+            epoch_size=int(self.spec.rules["yield_update_epoch_accepted_pairs"]),
+            quarantine_path=shard_dir / "rule_quarantine.jsonl",
+            capabilities=frozenset(self.spec.systems[task.target].capabilities),
+            validated_yield_path=self._run_dir / "validated_yield" / f"{task.target.value}.jsonl",
+        )
 
         def validator(proposal: PairProposal) -> PairValidation:
             base = proposal.query_a.text
@@ -544,9 +534,12 @@ class RuntimeFirstShardWorker:
                             {},
                             graph_snapshot_hash,
                             dbms_fingerprint,
+                            proposal.rule_id,
+                            proposal.safety_certificate,
                         )
                     )
                     materialized.add(pair_hash)
+                    provider.record_accepted(proposal.rule_id, pair_hash)
                 return PairValidation(True, "RESUME_EXISTING", {"pair_hash": pair_hash})
             if source_ast_hash in seen_source_asts:
                 return PairValidation(False, "DUPLICATE_AST")
@@ -579,6 +572,7 @@ class RuntimeFirstShardWorker:
                 return PairValidation(False, "RESULT_TRUNCATED")
             equivalence = compare_typed_results(left.rows, right.rows, ordered=_has_order_by(base))
             if not equivalence.equivalent:
+                provider.quarantine_mismatch(proposal, reason="TYPED_EQUIVALENCE_FAILED")
                 return PairValidation(False, "TYPED_EQUIVALENCE_FAILED")
             if self._run_dir is None:
                 raise RuntimeError("accepted corpus registry requires a bound run directory")
@@ -598,8 +592,11 @@ class RuntimeFirstShardWorker:
                 {},
                 graph_snapshot_hash,
                 dbms_fingerprint,
+                proposal.rule_id,
+                proposal.safety_certificate,
             )
             accepted.append(accepted_pair)
+            provider.record_accepted(proposal.rule_id, pair_hash)
             materialized.add(pair_hash)
             _append_jsonl(
                 records_path,
@@ -612,7 +609,8 @@ class RuntimeFirstShardWorker:
                     "query_b_hash": _query_hash(transformed),
                     "graph_snapshot_hash": graph_snapshot_hash,
                     "dbms_fingerprint": dbms_fingerprint,
-                    "rule_id": "null_complete_excluded_middle",
+                    "rule_id": proposal.rule_id,
+                    "safety_certificate": _certificate_payload(proposal.safety_certificate),
                     "equivalence": "complete_typed_equivalent",
                 },
             )
@@ -635,7 +633,11 @@ class RuntimeFirstShardWorker:
                     shard_index=task.shard_index,
                 )
             )
-        return accepted, corpus, seen
+        return accepted, corpus, seen, {
+            "accepted": provider.accepted_counts,
+            "not_applicable": provider.not_applicable_counts,
+            "yield_snapshot_hash": provider.yield_snapshot_hash,
+        }
 
     def _screen_pairs(
         self,
@@ -668,6 +670,8 @@ class RuntimeFirstShardWorker:
                     "query_a": pair.query_a,
                     "query_b": pair.query_b,
                     "parameters": dict(pair.parameters),
+                    "rule_id": pair.rule_id,
+                    "safety_certificate": _certificate_payload(pair.safety_certificate),
                     "graph_snapshot_hash": pair.graph_snapshot_hash,
                     "dbms_fingerprint": pair.dbms_fingerprint,
                     "discovery_median_ratio": evidence.median_ratio,
@@ -747,33 +751,28 @@ def _generation_backend_provenance(target: TargetSystem, backend: str) -> str:
     return backend
 
 
-def _certified_boolean_pair(query: str) -> tuple[str, str] | None:
-    purity = assess_query_purity(query)
-    if not purity.safe or not gdsmith_read_query_is_replayable(query):
-        return None
-    match = re.search(r"\bWHERE\b(?P<predicate>.*?)(?=\bRETURN\b)", query, flags=re.IGNORECASE | re.DOTALL)
-    if match is None:
-        return None
-    predicate = match.group("predicate").strip()
-    if not predicate:
-        return None
-    certificate = f"(({predicate}) OR NOT ({predicate}) OR ({predicate}) IS NULL)"
-    transformed = query[: match.start("predicate")] + f" ({predicate}) AND {certificate} " + query[match.end("predicate") :]
-    return query, transformed
-
-
 def _dialect_for(target: TargetSystem):
     if target is TargetSystem.AGENSGRAPH:
         return AgensGraphDialect()
     if target is TargetSystem.APACHE_AGE:
         return ApacheAgeDialect()
-    return NativeCypherDialect()
+    return NativeCypherDialect(
+        multiple_node_labels=target in {TargetSystem.NEO4J, TargetSystem.MEMGRAPH, TargetSystem.FALKORDB}
+    )
 
 
 def _dialect_capability_hash(capabilities: object) -> str:
     values = vars(capabilities)
     payload = json.dumps(values, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _certificate_payload(certificate: object | None) -> dict[str, object] | None:
+    if certificate is None:
+        return None
+    if not is_dataclass(certificate):
+        raise TypeError("safety certificate must be a dataclass")
+    return asdict(certificate)
 
 
 def _is_truncated(result: Any, max_rows: int) -> bool:

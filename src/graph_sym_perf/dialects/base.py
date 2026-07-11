@@ -298,7 +298,10 @@ def has_variable_label_conflict(query: str) -> bool:
 
     labels_by_variable: dict[str, set[str | None]] = {}
     code = _code_only(query, preserve_backticks=True)
-    for match in re.finditer(rf"\(\s*({identifier})\s*((?::\s*{identifier})*)", code):
+    for match in re.finditer(
+        rf"\(\s*({identifier})\s*((?::\s*{identifier})*)\s*(?=[{{)])",
+        code,
+    ):
         variable = canonical(match.group(1))
         labels = {canonical(value) for value in re.findall(rf":\s*({identifier})", match.group(2))} or {None}
         labels_by_variable.setdefault(variable, set()).update(labels)

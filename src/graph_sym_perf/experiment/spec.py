@@ -19,6 +19,7 @@ from graph_sym_perf.experiment.plan_models import (
     WorkloadSpec,
     freeze_value,
 )
+from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 
 
 _POLICY_SCHEMAS: Mapping[str, Mapping[str, object | None]] = {
@@ -198,7 +199,7 @@ def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[Targ
         except ValueError as exc:
             raise ConfigError(f"unknown system definition: {name}") from exc
         item = _mapping(raw_item, f"systems.{target.value}")
-        _exact_keys(item, {"required_env", "generation_required_env", "generation_backend", "dialect", "graph_isolation", "default_timeout_seconds"}, f"systems.{target.value}")
+        _exact_keys(item, {"required_env", "generation_required_env", "generation_backend", "capabilities", "dialect", "graph_isolation", "default_timeout_seconds"}, f"systems.{target.value}")
         env = _environment_names(item.get("required_env"), f"systems.{target.value}.required_env")
         generation_env = _environment_names(item.get("generation_required_env"), f"systems.{target.value}.generation_required_env")
         available[target] = SystemDefinition(
@@ -206,6 +207,7 @@ def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[Targ
             required_env=tuple(env),
             generation_required_env=tuple(generation_env),
             generation_backend=_nonempty_string(item.get("generation_backend"), f"systems.{target.value}.generation_backend"),
+            capabilities=_string_names(item.get("capabilities"), f"systems.{target.value}.capabilities"),
             dialect=_nonempty_string(item.get("dialect"), f"systems.{target.value}.dialect"),
             graph_isolation=_nonempty_string(item.get("graph_isolation"), f"systems.{target.value}.graph_isolation"),
             default_timeout_seconds=_positive_int(item.get("default_timeout_seconds"), f"systems.{target.value}.default_timeout_seconds"),
@@ -219,7 +221,7 @@ def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[Targ
 def _load_rules(path: Path) -> tuple[Mapping[str, object], str]:
     raw_bytes = path.read_bytes() if path.exists() else b""
     raw = _load_yaml(path, "rules configuration")
-    _exact_keys(raw, {"schema_version", "tiers"}, "rules root")
+    _exact_keys(raw, {"schema_version", "tiers", "rules"}, "rules root")
     if raw.get("schema_version") != 1:
         raise ConfigError("rules.yaml must use schema_version: 1")
     tiers = _mapping(raw.get("tiers"), "rules.tiers")
@@ -239,12 +241,43 @@ def _load_rules(path: Path) -> tuple[Mapping[str, object], str]:
         item = _mapping(tiers[name], f"rules.tiers.{name}")
         _exact_keys(item, {"auto_submit"}, f"rules.tiers.{name}")
         _bool(item["auto_submit"], f"rules.tiers.{name}.auto_submit")
+    rules = _mapping(raw["rules"], "rules.rules")
+    registry = RuleRegistry.default()
+    active = {rule.rule_id: rule for rule in registry.rules if rule.tier is not SafetyTier.REMOVED}
+    _exact_keys(rules, set(active), "rules.rules")
+    minimum = int(core["minimum_accepted_pairs_per_rule"])
+    for rule_id, spec in active.items():
+        item = _mapping(rules[rule_id], f"rules.rules.{rule_id}")
+        _exact_keys(
+            item,
+            {"tier", "version", "proof_id", "site_classes", "exploration_floor"},
+            f"rules.rules.{rule_id}",
+        )
+        if item["tier"] != spec.tier.value or item["version"] != spec.version or item["proof_id"] != spec.proof_id:
+            raise ConfigError(f"rules.rules.{rule_id} does not match the audited code registry")
+        sites = item["site_classes"]
+        if not isinstance(sites, list) or tuple(sites) != spec.site_classes:
+            raise ConfigError(f"rules.rules.{rule_id}.site_classes does not match the audited code registry")
+        floor = _positive_int(item["exploration_floor"], f"rules.rules.{rule_id}.exploration_floor", allow_zero=True)
+        expected_floor = minimum if spec.tier is SafetyTier.CORE else 0
+        if floor != expected_floor:
+            raise ConfigError(
+                f"rules.rules.{rule_id}.exploration_floor must be {expected_floor} for {spec.tier.value}"
+            )
     return freeze_value(raw), hashlib.sha256(raw_bytes).hexdigest()
 
 
 def _environment_names(value: Any, label: str) -> tuple[str, ...]:
     if not isinstance(value, list | tuple) or not all(isinstance(name, str) and name for name in value):
         raise ConfigError(f"{label} must be a list of non-empty environment variable names")
+    return tuple(value)
+
+
+def _string_names(value: Any, label: str) -> tuple[str, ...]:
+    if not isinstance(value, list | tuple) or not value or not all(isinstance(name, str) and name for name in value):
+        raise ConfigError(f"{label} must be a non-empty list of names")
+    if len(set(value)) != len(value):
+        raise ConfigError(f"{label} must not contain duplicates")
     return tuple(value)
 
 
@@ -327,6 +360,11 @@ def _validate_policy_values(name: str, value: Mapping[str, Any]) -> None:
             isinstance(item, str) and item for item in feedback
         ):
             raise ConfigError("rules.forbidden_feedback must be a non-empty list of names")
+        required = {"plan", "profile", "pmc", "developer_status"}
+        if set(feedback) != required:
+            raise ConfigError(
+                "rules.forbidden_feedback must contain exactly plan, profile, pmc, and developer_status"
+            )
         return
     for key in ("default_level", "promote_candidate_level", "promote_issue_level"):
         _nonempty_string(value[key], f"artifacts.{key}")

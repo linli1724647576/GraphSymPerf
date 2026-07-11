@@ -4,21 +4,26 @@ from graph_sym_perf.dialects.base import (
     ExecutionEnvelope,
     ReasonCode,
     accept,
+    has_multi_label_node,
     parse_projection,
+    reject,
 )
 from graph_sym_perf.generation.corpus import PortableQuery
 
 
 class NativeCypherDialect:
-    capabilities = DialectCapabilities(
-        name="native_cypher",
-        multiple_node_labels=True,
-        native_parameters=True,
-        requires_explicit_result_schema=False,
-        requires_graph_path=False,
-    )
+    def __init__(self, *, multiple_node_labels: bool = True) -> None:
+        self.capabilities = DialectCapabilities(
+            name="native_cypher",
+            multiple_node_labels=multiple_node_labels,
+            native_parameters=True,
+            requires_explicit_result_schema=False,
+            requires_graph_path=False,
+        )
 
     def check(self, query: PortableQuery):
+        if not self.capabilities.multiple_node_labels and has_multi_label_node(query.text):
+            return reject(ReasonCode.MULTI_LABEL_UNSUPPORTED)
         try:
             projection = parse_projection(query.text, allow_star_scope=True)
             columns = projection.columns

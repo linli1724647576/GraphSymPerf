@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -74,6 +74,7 @@ class SystemDefinition:
     required_env: tuple[str, ...]
     generation_required_env: tuple[str, ...]
     generation_backend: str
+    capabilities: tuple[str, ...]
     dialect: str
     graph_isolation: str
     default_timeout_seconds: int
@@ -153,3 +154,4 @@ class RunPlan:
     reducer_protocol_version: str = "paired-ast-ddmin-v1"
     resolved_spec: ExperimentSpec | None = None
     environment: tuple[EnvironmentVariableState, ...] = ()
+    rule_yield_snapshot: Mapping[str, object] = field(default_factory=lambda: FrozenMapping({}))

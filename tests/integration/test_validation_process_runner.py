@@ -83,7 +83,7 @@ def _bundle(event_log: Path, *, mode: str | None = None) -> CandidateBundle:
         resolved_config={"event_log": str(event_log), "mode": mode},
         discovery_slow_query="b",
         discovery_ratio=4.0,
-        certificate=SafetyCertificate("pattern_order_symmetry", "core", "v1", "match"),
+        certificate=SafetyCertificate("pattern_order_symmetry", "core", "graph_pattern_product_commutativity_v1", "match_pattern_component"),
     )
 
 

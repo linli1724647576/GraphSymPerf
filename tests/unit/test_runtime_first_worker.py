@@ -66,7 +66,7 @@ class _RuntimeGapAdapter(_Adapter):
             system=result.system,
             query_kind=result.query_kind,
             rows=result.rows,
-            elapsed_ms=5.0 if "OR NOT" in query else 1.0,
+            elapsed_ms=5.0 if ("OR NOT" in query or "OR true" in query) else 1.0,
             summary=result.summary,
         )
 
@@ -74,6 +74,20 @@ class _RuntimeGapAdapter(_Adapter):
 class _FingerprintUnavailableAdapter(_Adapter):
     def dbms_fingerprint(self) -> DBMSFingerprint:
         return DBMSFingerprint(None, "server_version_unavailable")
+
+
+class _EquivalenceMismatchAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
+        result = super().execute(query, parameters, query_kind, **_kwargs)
+        if query_kind != "acceptance_transformed":
+            return result
+        return ExecutionResult(
+            system=result.system,
+            query_kind=result.query_kind,
+            rows=({"n": 999},),
+            elapsed_ms=result.elapsed_ms,
+            summary=result.summary,
+        )
 
 
 class _InflightCheckingAdapter(_Adapter):
@@ -232,6 +246,32 @@ def test_worker_records_incomplete_when_seed_bound_cannot_fill_budget(tmp_path) 
     assert result["acceptance_generated_seeds"] == 2
 
 
+def test_worker_quarantines_each_core_rule_after_dynamic_equivalence_mismatch(tmp_path) -> None:
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=(
+            "MATCH (n) WHERE n.id = 1 RETURN n",
+            "MATCH (n) WHERE n.id = 2 RETURN n",
+        ),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _EquivalenceMismatchAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 2, 60))
+
+    quarantine = (tmp_path / "shards" / "neo4j-000" / "rule_quarantine.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert result["accepted_pairs"] == 0
+    assert result["reject_reasons"] == {"TYPED_EQUIVALENCE_FAILED": 2}
+    assert len(quarantine) == 2
+
+
 def test_worker_rejects_same_gdsmith_ast_across_shards_in_one_run(tmp_path) -> None:
     shard = GeneratedShard(
         graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
@@ -284,6 +324,8 @@ def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) ->
     assert result["screened_candidates"] == 1
     assert records[0]["discovery_slow_query"] == "b"
     assert records[0]["parameters"] == {}
+    assert records[0]["rule_id"] == "constant_true_disjunction"
+    assert records[0]["safety_certificate"]["proof_id"] == "kleene_or_true_v1"
     assert records[0]["graph_snapshot_hash"]
     assert records[0]["dbms_fingerprint"] == "a" * 64
 

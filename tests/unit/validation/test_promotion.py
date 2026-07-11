@@ -32,7 +32,7 @@ from graph_sym_perf.validation.models import (
     _VALIDATION_REPORT_TOKEN,
 )
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
-from graph_sym_perf.validation.promotion import promote
+from graph_sym_perf.validation.promotion import _certificate_complete, promote
 from graph_sym_perf.validation.evidence import combined_runtime_evidence
 
 
@@ -188,9 +188,33 @@ def _tamper_manifest_hash(report: IssueValidationReport, name: str, value: str) 
 
 
 def _certificate(**changes) -> SafetyCertificate:
-    values = {"rule_id": "pattern_order_symmetry", "tier": "core", "proof_version": "v1", "site_class": "match"}
+    values = {
+        "rule_id": "pattern_order_symmetry",
+        "tier": "core",
+        "proof_version": "graph_pattern_product_commutativity_v1",
+        "site_class": "match_pattern_component",
+    }
     values.update(changes)
     return SafetyCertificate(**values)
+
+
+def test_control_and_experimental_rules_cannot_masquerade_as_submit_eligible_core() -> None:
+    assert not _certificate_complete(
+        SafetyCertificate(
+            "edge_notation_symmetry",
+            "core",
+            "edge_parser_normalization_v1",
+            "match_pattern_component",
+        )
+    )
+    assert not _certificate_complete(
+        SafetyCertificate(
+            "pattern_decomposition_symmetry",
+            "core",
+            "relationship_uniqueness_pending",
+            "match_pattern_component",
+        )
+    )
 
 
 def _expected_issue_id(

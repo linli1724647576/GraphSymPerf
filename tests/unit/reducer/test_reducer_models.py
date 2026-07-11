@@ -21,13 +21,13 @@ def _pair() -> EquivalentQueryPair:
 
 
 def _certificate() -> SafetyCertificate:
-    return SafetyCertificate("predicate_order_symmetry", "core", "v1", "where_boolean")
+    return SafetyCertificate("predicate_order_symmetry", "core", "kleene_conjunction_commutativity_v1", "where_boolean")
 
 
 def test_rule_witness_binds_relation_fragments_scope_and_output_schema() -> None:
     witness = RuleWitness.create(
         rule_id="predicate_order_symmetry",
-        proof_version="v1",
+        proof_version="kleene_conjunction_commutativity_v1",
         relation="conjunct_order",
         required_fragments_a=("n.id = 1 AND true",),
         required_fragments_b=("true AND n.id = 1",),
@@ -42,7 +42,7 @@ def test_rule_witness_binds_relation_fragments_scope_and_output_schema() -> None
 def test_rule_witness_fails_closed_when_relation_or_output_is_deleted() -> None:
     witness = RuleWitness.create(
         rule_id="predicate_order_symmetry",
-        proof_version="v1",
+        proof_version="kleene_conjunction_commutativity_v1",
         relation="conjunct_order",
         required_fragments_a=("AND true",),
         required_fragments_b=("true AND",),
@@ -66,7 +66,7 @@ def test_rule_witness_fails_closed_when_relation_or_output_is_deleted() -> None:
 
     assert not witness.verify(missing_relation, _certificate())
     assert not witness.verify(changed_output, _certificate())
-    assert not witness.verify(_pair(), SafetyCertificate("other", "core", "v1", "where_boolean"))
+    assert not witness.verify(_pair(), SafetyCertificate("other", "core", "unknown", "where_boolean"))
 
 
 def test_partial_manual_review_is_hash_bound_audit_only() -> None:

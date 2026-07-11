@@ -38,7 +38,7 @@ def _pair() -> EquivalentQueryPair:
 
 
 def _certificate() -> SafetyCertificate:
-    return SafetyCertificate("predicate_order_symmetry", "core", "v1", "where_boolean")
+    return SafetyCertificate("predicate_order_symmetry", "core", "kleene_conjunction_commutativity_v1", "where_boolean")
 
 
 def _candidate(pair: EquivalentQueryPair | None = None) -> CandidateBundle:
@@ -192,7 +192,7 @@ def _bundle(*, screen=None, final=None) -> ReductionBundle:
 def _witness() -> RuleWitness:
     return RuleWitness.create(
         rule_id="predicate_order_symmetry",
-        proof_version="v1",
+        proof_version="kleene_conjunction_commutativity_v1",
         relation="conjunct_order",
         required_fragments_a=("n.id = 1 AND true",),
         required_fragments_b=("true AND n.id = 1",),

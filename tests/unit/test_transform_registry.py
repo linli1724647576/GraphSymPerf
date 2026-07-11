@@ -39,7 +39,7 @@ def test_transform_registry_prefers_bool_redundancy_for_neutral_fixture_cases() 
 
     config = TransformConfig(
         enabled_families=("symmetry", "bool_redundancy"),
-        enabled_rules=("and_true_or",),
+        enabled_rules=("constant_true_disjunction",),
     )
 
     assert select_family_name(case, config) == "bool_redundancy"

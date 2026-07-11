@@ -8,6 +8,7 @@ from graph_sym_perf.workload.models import (
     PairProposal,
     PairValidation,
 )
+from graph_sym_perf.transforms.safety_points import SafetyCertificate
 
 
 def _proposal(context, suffix: str = "") -> PairProposal:
@@ -15,7 +16,10 @@ def _proposal(context, suffix: str = "") -> PairProposal:
         query_a=PortableQuery(f"MATCH (n:L{context.ordinal}{suffix}) RETURN n"),
         query_b=PortableQuery(f"MATCH (n:L{context.ordinal}{suffix}) WHERE true RETURN n"),
         rule_id="fake_core_rule",
-        safety_certificate={"proof_id": "fake-proof", "site": "match"},
+        safety_certificate=SafetyCertificate(
+            "fake_core_rule", "clauses[0].where", (), "boolean", "three_valued", "where",
+            ("pure",), "fake-proof", "cap",
+        ),
         seed=context.seed,
     )
 

@@ -142,21 +142,15 @@ class QueryGenerationConfig:
 class TransformConfig:
     enabled_families: tuple[str, ...] = ("symmetry", "bool_redundancy")
     enabled_rules: tuple[str, ...] = (
+        "constant_true_disjunction",
+        "constant_false_conjunction",
+        "null_partition_tautology",
+        "null_contradiction",
+        "null_complete_excluded_middle",
         "node_order_symmetry",
-        "edge_notation_symmetry",
         "predicate_order_symmetry",
         "pattern_order_symmetry",
-        "pattern_decomposition_symmetry",
-        "pattern_fusion_symmetry",
-        "path_endpoint_symmetry",
         "label_order_symmetry",
-        "property_map_order_symmetry",
-        "alpha_renaming_symmetry",
-        "exploratory_pattern_order_symmetry",
-        "exploratory_predicate_order_symmetry",
-        "exploratory_optional_match_order_symmetry",
-        "exploratory_with_filter_shift_symmetry",
-        "exploratory_projection_reorder_symmetry",
     )
     max_expr_complexity: str = "medium"
     gdsmith_safe_only: bool = True

@@ -61,7 +61,7 @@ def test_issue_tracking_uses_searcher_for_possible_duplicates(tmp_path: Path) ->
                 "representative_case_id": "case002",
                 "system": "memgraph",
                 "root_cause_labels": ("WorkInflation",),
-                "transform_rules": {"or_false_and": 1},
+                "transform_rules": {"constant_false_conjunction": 1},
             }
         ]
     }

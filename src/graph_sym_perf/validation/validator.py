@@ -7,10 +7,13 @@ candidate can advance.
 
 from __future__ import annotations
 
+import hashlib
 from statistics import median
 from typing import Protocol
 
 from graph_sym_perf.equivalence.purity import assess_query_purity
+from graph_sym_perf.core import stable_json_dumps
+from graph_sym_perf.sampling.yield_store import ValidatedYieldStore
 from graph_sym_perf.runtime.models import RuntimeVerdict
 from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci, percentile
 from graph_sym_perf.validation.models import (
@@ -37,7 +40,25 @@ class IndependentSessionRunner(Protocol):
 
 
 class IssueValidator:
+    def __init__(self, *, yield_store: ValidatedYieldStore | None = None) -> None:
+        self.yield_store = yield_store
+
     def validate(
+        self,
+        candidate: CandidateBundle,
+        runner: IndependentSessionRunner,
+    ) -> IssueValidationReport:
+        report = self._validate(candidate, runner)
+        if self.yield_store is not None:
+            report_hash = hashlib.sha256(stable_json_dumps(report).encode("utf-8")).hexdigest()
+            self.yield_store.record_completed_validation(
+                rule_id=candidate.certificate.rule_id,
+                passed=report.stage is PipelineStage.VALIDATION_PASSED,
+                validation_report_hash=report_hash,
+            )
+        return report
+
+    def _validate(
         self,
         candidate: CandidateBundle,
         runner: IndependentSessionRunner,
