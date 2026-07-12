@@ -648,3 +648,43 @@ def test_new_query_records_keep_bounded_generation_alive(tmp_path, monkeypatch) 
 
     assert result == (0, False, False)
     assert killed == []
+
+
+def test_terminate_process_group_falls_back_when_killpg_is_not_permitted(monkeypatch) -> None:
+    class FakeProcess:
+        pid = 999_995
+        returncode = None
+        waits = 0
+        killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout):
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired(("java",), timeout)
+            self.returncode = -9
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+
+    process = FakeProcess()
+    signals = []
+
+    def deny_group_kill(pid, sig):
+        signals.append((pid, sig))
+        if sig == gdsmith_runner.signal.SIGKILL:
+            raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(gdsmith_runner.os, "killpg", deny_group_kill)
+
+    gdsmith_runner._terminate_process_group(process)
+
+    assert signals == [
+        (999_995, gdsmith_runner.signal.SIGTERM),
+        (999_995, gdsmith_runner.signal.SIGKILL),
+    ]
+    assert process.killed is True
+    assert process.returncode == -9

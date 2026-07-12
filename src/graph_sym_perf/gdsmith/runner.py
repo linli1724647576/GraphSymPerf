@@ -467,14 +467,26 @@ def _drain_stream(stream, capture: _BoundedStreamCapture) -> None:
 
 
 def _terminate_process_group(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        if process.poll() is None:
+            process.terminate()
+    try:
         process.wait(timeout=2.0)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
+        return
+    except subprocess.TimeoutExpired:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            if process.poll() is None:
+                process.kill()
         process.wait(timeout=2.0)
 
 
