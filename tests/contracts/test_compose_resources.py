@@ -21,3 +21,11 @@ def test_gdsmith_neo4j_proxies_use_independent_containers_and_bolt_ports() -> No
     assert "7697:7687" in ladybug["ports"]
     assert "7698:7687" in arcadedb["ports"]
     assert arcadedb["environment"]["NEO4J_AUTH"] == "none"
+
+
+def test_memgraph_has_a_bounded_memory_and_query_runtime_envelope() -> None:
+    compose = yaml.safe_load(Path("infra/docker-compose.graphdbs.yml").read_text(encoding="utf-8"))
+
+    command = compose["services"]["memgraph"]["command"]
+    assert "--memory-limit=1024" in command
+    assert "--query-execution-timeout-sec=30" in command

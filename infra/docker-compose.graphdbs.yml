@@ -65,6 +65,8 @@ services:
       - "7444:7444"
     command:
       - "--log-level=TRACE"
+      - "--memory-limit=1024"
+      - "--query-execution-timeout-sec=30"
     healthcheck:
       test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole --host 127.0.0.1 --port 7687 || exit 1"]
       interval: 10s

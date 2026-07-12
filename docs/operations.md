@@ -36,6 +36,8 @@ GDsmith 的 compared 系列算法达到 `--num-queries` 后会在内部抛出 `R
 
 Memgraph provider 复用 Neo4j Java Driver，但上游连接层没有传 transaction timeout；兼容 JAR 因此也对其 write transaction 与 auto-commit `run` 设置 30 秒 timeout，并复用同一个 1,000 行流式结果上限。manifest 缺少 `memgraph_transaction_timeout_30s` 时 doctor 同样失败关闭。
 
+本地正式容器同时设置 `--memory-limit=1024` 与 `--query-execution-timeout-sec=30`。Docker Desktop VM 只有约 8 GiB 且还承载 Neo4j/代理等目标时，Memgraph 默认可使用 90% 物理内存会让高基数笛卡尔查询触发内核 OOM kill；1 GiB 引擎上限把资源错误留在 DBMS 内部，30 秒服务端上限先于 60 秒 adapter deadline 取消失控查询。修改 compose 后必须 recreate 容器，单纯 restart 不会应用新 command。
+
 ArcadeDB 的 shard、独立 validation session 和 reducer 使用服务器级 `drop database`/`create database` 重建 `mydb`；这一边界避免对旧图执行 `MATCH (n) DETACH DELETE n` 时的全图扫描与 Java heap 放大。数据库名只接受受限标识符，重建任一步失败都不会继续加载或测量。其他 adapter 未声明 database-level reset 时仍使用 Cypher 清图，再执行各自的 schema reset。
 
 Neo4j Community Edition 不能用 Enterprise-only database recreate 流程，因此其 adapter 使用 `CALL (n) { ... } IN TRANSACTIONS OF 1000 ROWS` 分批 `DETACH DELETE`，避免单一全图写事务占满 transaction memory/heap。该查询必须在 driver 的 implicit transaction 中运行，并继承同一 graph-reset hard deadline；超时仍失败关闭，不会在未知部分删除状态上开始测量。
