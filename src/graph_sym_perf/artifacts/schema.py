@@ -285,6 +285,7 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
     session_directions: list[str] = []
     combined_samples: list[tuple[float, float]] = []
     control_deltas: list[float] = []
+    incomplete_sessions = 0
     for index, session in enumerate(sessions):
         if not isinstance(session, Mapping):
             raise ValueError("validation session must be an object")
@@ -302,19 +303,44 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
             raise ValueError("validation session identity is invalid")
         session_ids.add(session_id)
         process_ids.add(process_id)
-        _validate_hash(session["graph_fingerprint"], f"sessions[{index}].graph_fingerprint")
-        _validate_hash(session["dbms_fingerprint"], f"sessions[{index}].dbms_fingerprint")
         _validate_hash(session["query_a_hash"], f"sessions[{index}].query_a_hash")
         _validate_hash(session["query_b_hash"], f"sessions[{index}].query_b_hash")
+        runtime_reasons = session["runtime_reason_codes"]
+        if (
+            session["slow_query"] not in {"a", "b"}
+            or session["runtime_verdict"] not in {"pass", "fail", "inconclusive", "invalid"}
+            or not isinstance(runtime_reasons, list | tuple)
+            or any(not isinstance(reason, str) for reason in runtime_reasons)
+        ):
+            raise ValueError("validation session runtime identity is invalid")
+        lifecycle = session["lifecycle"]
+        if not isinstance(lifecycle, Mapping):
+            raise ValueError("validation session lifecycle is incomplete")
+        if lifecycle.get("complete") is not True:
+            if (
+                payload["stage"] != "invalid"
+                or session["runtime_verdict"] != "invalid"
+                or not runtime_reasons
+                or not tuple(payload.get("reason_codes", ()))
+                or not tuple(equivalence.get("reason_codes", ()))
+            ):
+                raise ValueError("validation session lifecycle is incomplete")
+            for name in ("graph_fingerprint", "dbms_fingerprint"):
+                if session[name]:
+                    _validate_hash(session[name], f"sessions[{index}].{name}")
+            if not isinstance(session["paired_timing"], list | tuple) or not isinstance(
+                session["negative_controls"], list | tuple
+            ):
+                raise ValueError("invalid validation session evidence is malformed")
+            incomplete_sessions += 1
+            continue
+        _validate_hash(session["graph_fingerprint"], f"sessions[{index}].graph_fingerprint")
+        _validate_hash(session["dbms_fingerprint"], f"sessions[{index}].dbms_fingerprint")
         if session["dbms_fingerprint"] != payload["dbms_fingerprint"]:
             raise ValueError("validation session DBMS fingerprint mismatch")
         if (
-            session["slow_query"] not in {"a", "b"}
-            or session["measurement_source"] != "ordinary_execute"
+            session["measurement_source"] != "ordinary_execute"
             or session["measurement_protocol"] != "ordinary-execute-20-pair-v1"
-            or session["runtime_verdict"] not in {"pass", "fail", "inconclusive", "invalid"}
-            or not isinstance(session["runtime_reason_codes"], list | tuple)
-            or any(not isinstance(reason, str) for reason in session["runtime_reason_codes"])
         ):
             raise ValueError("validation session runtime identity is invalid")
         _validate_paired_timing(session["paired_timing"], f"sessions[{index}].paired_timing")
@@ -330,7 +356,6 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
             raise ValueError("validation session has no runtime direction")
         measured_direction = "b" if direction_delta > 0 else "a"
         if session["slow_query"] != measured_direction:
-            runtime_reasons = tuple(session.get("runtime_reason_codes", ()))
             if (
                 payload["stage"] == "validation_passed"
                 or session.get("runtime_verdict") == "pass"
@@ -358,14 +383,15 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
             control_deltas.extend(abs(sample["b_ms"] - sample["a_ms"]) for sample in control_samples)
         if {control.get("kind") for control in controls} != {"A/A", "B/B"}:
             raise ValueError("validation negative controls must be exactly A/A and B/B")
-        lifecycle = session["lifecycle"]
-        if not isinstance(lifecycle, Mapping) or lifecycle.get("complete") is not True:
-            raise ValueError("validation session lifecycle is incomplete")
         connection_id = lifecycle.get("connection_id")
         if not isinstance(connection_id, str) or not connection_id:
             raise ValueError("validation session connection identity is missing")
         connection_ids.add(connection_id)
-    if len(session_ids) != 2 or len(process_ids) != 2 or len(connection_ids) != 2:
+    if (
+        len(session_ids) != 2
+        or len(process_ids) != 2
+        or (incomplete_sessions == 0 and len(connection_ids) != 2)
+    ):
         raise ValueError("validation sessions are not independent")
     if payload["stage"] == "validation_passed":
         if len(set(session_directions)) != 1:

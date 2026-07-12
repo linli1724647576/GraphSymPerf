@@ -280,6 +280,38 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     with pytest.raises(ValueError, match="slow_query contradicts raw samples"):
         ArtifactRecord.seal_validation(unexplained_direction_body)
 
+    invalid_session_body = json.loads(json.dumps(dict(original.payload)))
+    invalid_session_body.pop("validation_hash")
+    invalid_session_body["stage"] = "invalid"
+    invalid_session_body["reason_codes"] = ["session_process_failed"]
+    invalid_session_body["equivalence"] = {
+        "equivalent": False,
+        "complete_result": False,
+        "reason_codes": ["session_process_failed"],
+    }
+    for session in invalid_session_body["sessions"]:
+        session["graph_fingerprint"] = ""
+        session["dbms_fingerprint"] = ""
+        session["measurement_source"] = None
+        session["measurement_protocol"] = None
+        session["runtime_verdict"] = "invalid"
+        session["runtime_reason_codes"] = ["session_process_failed"]
+        session["paired_timing"] = []
+        session["negative_controls"] = []
+        session["lifecycle"] = {"complete": False, "connection_id": ""}
+    invalid_session = ArtifactRecord.seal_validation(invalid_session_body)
+    assert invalid_session.payload["stage"] == "invalid"
+
+    unexplained_invalid_body = json.loads(json.dumps(invalid_session_body))
+    unexplained_invalid_body["sessions"][0]["runtime_reason_codes"] = []
+    with pytest.raises(ValueError, match="session lifecycle is incomplete"):
+        ArtifactRecord.seal_validation(unexplained_invalid_body)
+
+    rejected_incomplete_body = json.loads(json.dumps(invalid_session_body))
+    rejected_incomplete_body["stage"] = "rejected"
+    with pytest.raises(ValueError, match="session lifecycle is incomplete"):
+        ArtifactRecord.seal_validation(rejected_incomplete_body)
+
     reduced_hashes = {
         "query_a": hashlib.sha256(query_a.encode()).hexdigest(),
         "query_b": hashlib.sha256(query_b.encode()).hexdigest(),
