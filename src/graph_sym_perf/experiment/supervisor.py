@@ -436,6 +436,19 @@ class ShardSupervisor:
                     dbms_version=str(evidence["dbms_version"]) if evidence.get("dbms_version") is not None else None,
                     attempt_evidence=str(attempt_dir.relative_to(self.run_dir)),
                 )
+        if attempt_dir is not None and kind is ErrorKind.QUERY_TIMEOUT and inflight:
+            query_hash = inflight.get("query_hash")
+            if isinstance(query_hash, str) and CONTENT_HASH.fullmatch(query_hash) is not None:
+                _append_jsonl_fsync(
+                    attempt_dir.parent / "query_timeout_quarantine.jsonl",
+                    {
+                        "attempt": attempt,
+                        "dbms_fingerprint": str(inflight.get("dbms_fingerprint", "")),
+                        "error_kind": kind.value,
+                        "graph_hash": str(inflight.get("graph_hash", "")),
+                        "query_hash": query_hash,
+                    },
+                )
         state = ShardState.FAILED_FINAL if final else ShardState.FAILED_RETRYABLE
         self._transition(task, journal, state, attempt, error_kind=kind, reason=reason)
 

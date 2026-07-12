@@ -671,6 +671,11 @@ class RuntimeFirstShardWorker:
         _ensure_jsonl(records_path)
         seen = _accepted_pair_hashes(records_path)
         seen_source_asts = _accepted_source_ast_counts(records_path)
+        timeout_query_hashes = _bound_query_timeout_hashes(
+            shard_dir / "query_timeout_quarantine.jsonl",
+            graph_snapshot_hash=graph_snapshot_hash,
+            dbms_fingerprint=dbms_fingerprint,
+        )
         materialized: set[str] = set()
 
         dialect = _dialect_for(task.target)
@@ -726,6 +731,8 @@ class RuntimeFirstShardWorker:
                 return PairValidation(False, "MAX_VARIANTS_PER_SEED_REACHED")
             if len(seen) >= task.accepted_query_pairs:
                 return PairValidation(False, "ACCEPTED_TARGET_ALREADY_REACHED")
+            if _query_hash(base) in timeout_query_hashes or _query_hash(transformed) in timeout_query_hashes:
+                return PairValidation(False, "QUERY_TIMEOUT_QUARANTINED")
             remaining = acceptance_deadline - time.monotonic()
             if remaining <= 1.0:
                 return PairValidation(False, "TIME_BUDGET_EXHAUSTED")
@@ -1331,6 +1338,34 @@ def _accepted_source_ast_counts(path: Path) -> Counter[str]:
         value = record.get("query_hash")
         if isinstance(value, str):
             hashes[value] += 1
+    return hashes
+
+
+def _bound_query_timeout_hashes(
+    path: Path,
+    *,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+) -> set[str]:
+    hashes: set[str] = set()
+    required = {"attempt", "dbms_fingerprint", "error_kind", "graph_hash", "query_hash"}
+    for record in _read_jsonl(path):
+        if set(record) != required:
+            raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "query timeout quarantine record is invalid")
+        query_hash = record.get("query_hash")
+        if (
+            record.get("error_kind") != ErrorKind.QUERY_TIMEOUT.value
+            or not isinstance(record.get("attempt"), int)
+            or isinstance(record.get("attempt"), bool)
+            or not isinstance(query_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", query_hash) is None
+        ):
+            raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "query timeout quarantine values are invalid")
+        if (
+            record.get("graph_hash") == graph_snapshot_hash
+            and record.get("dbms_fingerprint") == dbms_fingerprint
+        ):
+            hashes.add(query_hash)
     return hashes
 
 

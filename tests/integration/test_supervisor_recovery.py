@@ -186,7 +186,7 @@ class _WritesInflightThenBlocks:
         (attempt_dir / "inflight.json").write_text(
             json.dumps(
                 {
-                    "query_hash": "blocked-query",
+                    "query_hash": "b" * 64,
                     "query_kind": "runtime",
                     "started_at": time.time(),
                     "deadline": time.time() + 0.05,
@@ -216,6 +216,11 @@ def test_inflight_query_deadline_kills_a_permanently_blocked_worker_before_shard
     assert elapsed < 0.3
     assert summary.failed == (task,)
     assert "QUERY_TIMEOUT" in (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+    timeout_quarantine = tmp_path / "shards" / "neo4j-000" / "query_timeout_quarantine.jsonl"
+    record = json.loads(timeout_quarantine.read_text(encoding="utf-8").splitlines()[0])
+    assert record["query_hash"] == "b" * 64
+    assert record["graph_hash"] == "graph"
+    assert record["error_kind"] == "QUERY_TIMEOUT"
 
 
 class _StopsEntireWorkerProcess:

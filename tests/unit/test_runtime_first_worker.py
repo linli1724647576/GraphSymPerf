@@ -19,6 +19,7 @@ from graph_sym_perf.experiment.worker import (
     _generation_backend_provenance,
     _generation_query_limit,
     _graph_snapshot_hash,
+    _query_hash,
 )
 from graph_sym_perf.generation.corpus import GraphCorpus
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
@@ -745,6 +746,44 @@ def test_worker_does_not_quarantine_rule_when_typed_comparison_is_incomplete(tmp
     assert result["accepted_pairs"] == 0
     assert result["reject_reasons"] == {"UNSUPPORTED_TYPED_RESULT_VALUE": 2}
     assert not (tmp_path / "shards" / "neo4j-000" / "rule_quarantine.jsonl").exists()
+
+
+def test_worker_skips_query_bound_to_a_prior_hard_timeout(tmp_path) -> None:
+    query = "MATCH (n) WHERE n.id = 1 RETURN n"
+    graph_statements = ("CREATE (n:Node {id: 1})",)
+    shard_dir = tmp_path / "shards" / "neo4j-000"
+    shard_dir.mkdir(parents=True)
+    (shard_dir / "query_timeout_quarantine.jsonl").write_text(
+        json.dumps(
+            {
+                "attempt": 0,
+                "dbms_fingerprint": "a" * 64,
+                "error_kind": "QUERY_TIMEOUT",
+                "graph_hash": _graph_snapshot_hash(graph_statements),
+                "query_hash": _query_hash(query),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    adapter = _Adapter()
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: GeneratedShard(
+            graph_statements=graph_statements,
+            query_texts=(query,),
+            generator_metadata={"backend": "gdsmith"},
+        ),
+        adapter_factory=lambda _task: adapter,
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+
+    assert result["accepted_pairs"] == 0
+    assert result["reject_reasons"] == {"QUERY_TIMEOUT_QUARANTINED": 2}
+    assert not any(kind.startswith("acceptance_") for _query, kind in adapter.executed)
 
 
 def test_worker_rejects_same_gdsmith_ast_across_shards_in_one_run(tmp_path) -> None:
