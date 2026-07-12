@@ -11,6 +11,7 @@ from typing import Any
 from graph_sym_perf.core import (
     MissingValue,
     TypedBytes,
+    TypedDecimal,
     TypedNode,
     TypedPath,
     TypedRelationship,
@@ -40,6 +41,7 @@ class CanonicalKind(str, Enum):
     TEMPORAL = "temporal"
     BYTES = "bytes"
     MISSING = "missing"
+    DECIMAL = "decimal"
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,8 @@ def canonical_value(value: Any) -> CanonicalValue:
         return CanonicalValue(CanonicalKind.STRING, (value,))
     if isinstance(value, TypedBytes):
         return CanonicalValue(CanonicalKind.BYTES, (value.value,))
+    if isinstance(value, TypedDecimal):
+        return CanonicalValue(CanonicalKind.DECIMAL, (value.sign, value.digits, value.exponent))
     if isinstance(value, TypedTemporal):
         return CanonicalValue(CanonicalKind.TEMPORAL, (value.kind.value, value.iso_value))
     if isinstance(value, TypedNode):

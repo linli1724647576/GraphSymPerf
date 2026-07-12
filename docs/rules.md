@@ -20,3 +20,5 @@ double negation、De Morgan、numeric equality range 等仍是 EXPERIMENTAL。du
 scheduler 只读取 accepted count 与 completed validation yield；设置每规则 exploration floor，不能读取解释证据、开发者状态或历史公开结果。增加规则的标准是更强的可证明语义空间与独立 runtime yield，而不是单纯增加规则数量。
 
 每个 GDsmith source query 最多输出两个来自不同 CORE rule 的 certified variants，用于在 10,000 seed 硬上限内覆盖低适用率语料。同一 source 的第三个变体、重复 transformed AST 和重复 pair hash 均拒绝；跨 shard 仍对 source AST 及 pair hash 去重。探索下限是“尽力获得”，规则对当前 query 无 safety point 时记录 `RULE_NOT_APPLICABLE`，不能强行改写。
+
+动态 quarantine 只能由完整 typed comparison 的真实 `typed_result_mismatch` 触发。结果截断、非有限数值、驱动类型尚未规范化等 `complete_result=false` 情形只拒绝当前 pair，不能将“证据不完整”误当成整条规则的反例。quarantine 仍按 `(DBMS, rule_id, rule_version)` 绑定，反例保留查询 hash、seed 和精确拒绝原因。

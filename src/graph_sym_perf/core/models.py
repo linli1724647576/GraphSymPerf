@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
@@ -20,6 +21,7 @@ class TypedValueKind(str, Enum):
     DATE = "date"
     DATETIME = "datetime"
     BYTES = "bytes"
+    DECIMAL = "decimal"
 
 
 class MissingValue(str, Enum):
@@ -65,6 +67,14 @@ class TypedTemporal:
 class TypedBytes:
     value: bytes
     kind: TypedValueKind = field(default=TypedValueKind.BYTES, init=False)
+
+
+@dataclass(frozen=True)
+class TypedDecimal:
+    sign: int
+    digits: tuple[int, ...]
+    exponent: int
+    kind: TypedValueKind = field(default=TypedValueKind.DECIMAL, init=False)
 
 class TargetSystem(str, Enum):
     """Supported graph database targets."""
@@ -586,7 +596,7 @@ class ClusteredSummary:
 def to_typed_value(value: Any) -> Any:
     """Preserve driver value types for in-memory equivalence checks."""
 
-    if isinstance(value, TypedNode | TypedRelationship | TypedPath | TypedTemporal | TypedBytes | MissingValue):
+    if isinstance(value, TypedNode | TypedRelationship | TypedPath | TypedTemporal | TypedBytes | TypedDecimal | MissingValue):
         return value
     if isinstance(value, datetime):
         return TypedTemporal(TypedValueKind.DATETIME, value.isoformat())
@@ -594,6 +604,10 @@ def to_typed_value(value: Any) -> Any:
         return TypedTemporal(TypedValueKind.DATE, value.isoformat())
     if isinstance(value, bytes):
         return TypedBytes(value)
+    if isinstance(value, Decimal) and value.is_finite():
+        normalized = Decimal(0) if value.is_zero() else value.normalize()
+        components = normalized.as_tuple()
+        return TypedDecimal(components.sign, tuple(components.digits), components.exponent)
     if hasattr(value, "type") and hasattr(value, "items") and (
         hasattr(value, "start_node") or hasattr(value, "start_node_element_id")
     ):
@@ -654,6 +668,13 @@ def to_artifact_jsonable(value: Any) -> Any:
         return {"__typed_value__": value.kind.value, "value": value.iso_value}
     if isinstance(value, TypedBytes):
         return {"__typed_value__": value.kind.value, "value": value.value.hex()}
+    if isinstance(value, TypedDecimal):
+        return {
+            "__typed_value__": value.kind.value,
+            "digits": list(value.digits),
+            "exponent": value.exponent,
+            "sign": value.sign,
+        }
     if isinstance(value, MissingValue):
         return {"__typed_value__": "missing"}
 
@@ -669,6 +690,11 @@ def to_artifact_jsonable(value: Any) -> Any:
         return to_artifact_jsonable(to_typed_value(value))
     if isinstance(value, bytes):
         return to_artifact_jsonable(to_typed_value(value))
+    if isinstance(value, Decimal):
+        typed = to_typed_value(value)
+        if isinstance(typed, Decimal):
+            return {"__typed_value__": "decimal_non_finite", "value": str(value)}
+        return to_artifact_jsonable(typed)
     if hasattr(value, "type") and hasattr(value, "items") and (
         hasattr(value, "start_node") or hasattr(value, "start_node_element_id")
     ):

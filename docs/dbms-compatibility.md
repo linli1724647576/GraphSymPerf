@@ -25,3 +25,5 @@ AgensGraph 对未加引号的 label/type 标识符沿用 PostgreSQL 小写折叠
 Apache AGE/AgensGraph 的 SQL wrapper 只属于 adapter rendering，不进入 query equivalence 或 runtime oracle。
 
 LadybugDB 的 label/property schema 不能在原文件上改变已有属性类型。每个 shard 加载新 GDsmith 图前，adapter 必须关闭连接并删除 `GRAPHSYMPERF_LADYBUGDB_DATABASE_PATH` 指定的专用普通文件，然后从当前 graph snapshot 重建 schema。相对路径、符号链接和目录一律拒绝，避免扩大破坏边界。
+
+LadybugDB 聚合/数值结果可通过 Python driver 返回 `decimal.Decimal`。adapter 会将有限 Decimal 按 sign/digits/exponent 精确规范化，相等数值的尺度差异（如 `1.0` 与 `1.00`）不造成假 mismatch，也不经过 float 转换丢失精度。NaN/无穷或未支持的驱动类型仍 fail closed，但不会 quarantine 整条 CORE rule。

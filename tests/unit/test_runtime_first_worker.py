@@ -115,6 +115,23 @@ class _EquivalenceMismatchAdapter(_Adapter):
         )
 
 
+class _UnsupportedEquivalenceAdapter(_Adapter):
+    class Unsupported:
+        pass
+
+    def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
+        result = super().execute(query, parameters, query_kind, **_kwargs)
+        if not query_kind.startswith("acceptance_"):
+            return result
+        return ExecutionResult(
+            system=result.system,
+            query_kind=result.query_kind,
+            rows=({"n": self.Unsupported()},),
+            elapsed_ms=result.elapsed_ms,
+            summary=result.summary,
+        )
+
+
 class _InflightCheckingAdapter(_Adapter):
     def __init__(self, attempt_dir) -> None:
         super().__init__()
@@ -708,6 +725,26 @@ def test_worker_quarantines_each_core_rule_after_dynamic_equivalence_mismatch(tm
     assert result["accepted_pairs"] == 0
     assert result["reject_reasons"] == {"TYPED_EQUIVALENCE_FAILED": 4}
     assert len(quarantine) == 4
+
+
+def test_worker_does_not_quarantine_rule_when_typed_comparison_is_incomplete(tmp_path) -> None:
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _UnsupportedEquivalenceAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+
+    assert result["accepted_pairs"] == 0
+    assert result["reject_reasons"] == {"UNSUPPORTED_TYPED_RESULT_VALUE": 2}
+    assert not (tmp_path / "shards" / "neo4j-000" / "rule_quarantine.jsonl").exists()
 
 
 def test_worker_rejects_same_gdsmith_ast_across_shards_in_one_run(tmp_path) -> None:

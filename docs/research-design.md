@@ -18,7 +18,7 @@
 
 ## 误报防线
 
-typed sequence/multiset 语义保留类型、NULL/missing 与重复数；无序 LIMIT/SKIP、volatile/current-time/internal-ID、结果截断、graph fingerprint 漂移和环境 provenance 缺失均 fail closed。discovery 与 validation 分样本，A/A 与 B/B 约束噪声，reducer 不能只保留“看起来更慢”而破坏规则 witness。
+typed sequence/multiset 语义保留类型、NULL/missing、重复数与 Decimal 精确数值；无序 LIMIT/SKIP、volatile/current-time/internal-ID、结果截断、graph fingerprint 漂移和环境 provenance 缺失均 fail closed。discovery 与 validation 分样本，A/A 与 B/B 约束噪声，reducer 不能只保留“看起来更慢”而破坏规则 witness。
 
 ## 明确不做
 

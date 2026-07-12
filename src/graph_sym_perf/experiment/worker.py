@@ -753,6 +753,9 @@ class RuntimeFirstShardWorker:
                 return PairValidation(False, "RESULT_TRUNCATED")
             equivalence = compare_typed_results(left.rows, right.rows, ordered=_has_order_by(base))
             if not equivalence.equivalent:
+                if not equivalence.complete_result:
+                    reason = equivalence.reason_codes[0] if equivalence.reason_codes else "typed_equivalence_incomplete"
+                    return PairValidation(False, reason.upper())
                 provider.quarantine_mismatch(proposal, reason="TYPED_EQUIVALENCE_FAILED")
                 return PairValidation(False, "TYPED_EQUIVALENCE_FAILED")
             if self._run_dir is None:
