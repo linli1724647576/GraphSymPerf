@@ -18,3 +18,5 @@ double negation、De Morgan、numeric equality range 等仍是 EXPERIMENTAL。du
 安全点枚举只覆盖解析器能证明的 MATCH/WHERE fragment。证书绑定 rule、AST path、scope variables、type/nullability、clause context、preconditions、proof ID 和 capability hash。任何动态 typed-equivalence mismatch 立即 quarantine 该 DBMS/rule/version，并保存 counterexample。
 
 scheduler 只读取 accepted count 与 completed validation yield；设置每规则 exploration floor，不能读取解释证据、开发者状态或历史公开结果。增加规则的标准是更强的可证明语义空间与独立 runtime yield，而不是单纯增加规则数量。
+
+每个 GDsmith source query 最多输出两个来自不同 CORE rule 的 certified variants，用于在 10,000 seed 硬上限内覆盖低适用率语料。同一 source 的第三个变体、重复 transformed AST 和重复 pair hash 均拒绝；跨 shard 仍对 source AST 及 pair hash 去重。探索下限是“尽力获得”，规则对当前 query 无 safety point 时记录 `RULE_NOT_APPLICABLE`，不能强行改写。

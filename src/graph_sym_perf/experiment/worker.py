@@ -670,7 +670,7 @@ class RuntimeFirstShardWorker:
         )
         _ensure_jsonl(records_path)
         seen = _accepted_pair_hashes(records_path)
-        seen_source_asts = _accepted_source_ast_hashes(records_path)
+        seen_source_asts = _accepted_source_ast_counts(records_path)
         materialized: set[str] = set()
 
         dialect = _dialect_for(task.target)
@@ -722,8 +722,8 @@ class RuntimeFirstShardWorker:
                     materialized.add(pair_hash)
                     provider.record_accepted(proposal.rule_id, pair_hash)
                 return PairValidation(True, "RESUME_EXISTING", {"pair_hash": pair_hash})
-            if source_ast_hash in seen_source_asts:
-                return PairValidation(False, "DUPLICATE_AST")
+            if seen_source_asts[source_ast_hash] >= self.spec.workload.max_variants_per_seed:
+                return PairValidation(False, "MAX_VARIANTS_PER_SEED_REACHED")
             if len(seen) >= task.accepted_query_pairs:
                 return PairValidation(False, "ACCEPTED_TARGET_ALREADY_REACHED")
             remaining = acceptance_deadline - time.monotonic()
@@ -766,7 +766,7 @@ class RuntimeFirstShardWorker:
             if duplicate_reason is not None:
                 return PairValidation(False, duplicate_reason)
             seen.add(pair_hash)
-            seen_source_asts.add(source_ast_hash)
+            seen_source_asts[source_ast_hash] += 1
             accepted_pair = EquivalentQueryPair(
                 base,
                 transformed,
@@ -805,6 +805,7 @@ class RuntimeFirstShardWorker:
                 AcceptedPairRequest(
                     accepted_pairs=task.accepted_query_pairs,
                     max_generated_seeds=task.max_generated_seeds,
+                    max_variants_per_seed=self.spec.workload.max_variants_per_seed,
                     max_seconds=min(max_seconds, 6 * 3600),
                     experiment_seed=task.seed,
                     target=task.target.value,
@@ -1084,6 +1085,8 @@ class FormalRuntimeFirstShardWorker(RuntimeFirstShardWorker):
 
 def _generation_query_limit(task: ShardTask, spec: ExperimentSpec) -> int:
     capabilities = spec.systems[task.target].capabilities
+    if "very_low_applicability_generation" in capabilities:
+        return min(task.max_generated_seeds, task.accepted_query_pairs * 10)
     if "very_low_yield_generation" in capabilities:
         return min(task.max_generated_seeds, max(100, task.accepted_query_pairs * 5))
     multiplier = 5 if "low_yield_generation" in capabilities else 2
@@ -1319,12 +1322,12 @@ def _accepted_pair_hashes(path: Path) -> set[str]:
     return hashes
 
 
-def _accepted_source_ast_hashes(path: Path) -> set[str]:
-    hashes: set[str] = set()
+def _accepted_source_ast_counts(path: Path) -> Counter[str]:
+    hashes: Counter[str] = Counter()
     for record in _read_jsonl(path):
         value = record.get("query_hash")
         if isinstance(value, str):
-            hashes.add(value)
+            hashes[value] += 1
     return hashes
 
 

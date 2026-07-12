@@ -475,7 +475,7 @@ def test_generation_query_limit_is_capability_driven() -> None:
     assert _generation_query_limit(
         ShardTask(TargetSystem.LADYBUGDB, 0, 7, 1000, 10000, 60, "neo4j_proxy"),
         spec,
-    ) == 5000
+    ) == 10000
     assert _generation_query_limit(
         ShardTask(TargetSystem.ARCADEDB, 0, 7, 10, 100, 60, "arcadedb"),
         spec,
@@ -640,7 +640,7 @@ def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minima
     assert result["accepted_pairs"] == 2
     assert result["acceptance_status"] == "complete"
     assert result["acceptance_stop_reason"] == "ACCEPTED_TARGET_REACHED"
-    assert result["acceptance_generated_seeds"] == 2
+    assert result["acceptance_generated_seeds"] == 1
     assert result["generated_query_records"] == 2
     assert adapter.loaded == shard.graph_statements
     assert adapter.closed
@@ -706,8 +706,8 @@ def test_worker_quarantines_each_core_rule_after_dynamic_equivalence_mismatch(tm
         encoding="utf-8"
     ).splitlines()
     assert result["accepted_pairs"] == 0
-    assert result["reject_reasons"] == {"TYPED_EQUIVALENCE_FAILED": 2}
-    assert len(quarantine) == 2
+    assert result["reject_reasons"] == {"TYPED_EQUIVALENCE_FAILED": 4}
+    assert len(quarantine) == 4
 
 
 def test_worker_rejects_same_gdsmith_ast_across_shards_in_one_run(tmp_path) -> None:
@@ -735,7 +735,7 @@ def test_worker_rejects_same_gdsmith_ast_across_shards_in_one_run(tmp_path) -> N
 
     assert accepted["accepted_pairs"] == 1
     assert duplicate["accepted_pairs"] == 0
-    assert duplicate["reject_reasons"] == {"CROSS_SHARD_DUPLICATE_AST": 1}
+    assert duplicate["reject_reasons"] == {"CROSS_SHARD_DUPLICATE_AST": 2}
 
 
 def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) -> None:

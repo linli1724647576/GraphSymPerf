@@ -128,3 +128,52 @@ def test_builder_does_not_revalidate_a_rejected_ast() -> None:
 
     assert calls == 1
     assert corpus.reject_counts == {"DUPLICATE_AST": 2, "TYPED_EQUIVALENCE_FAILED": 1}
+
+
+def test_builder_accepts_two_certified_variants_from_one_generated_seed() -> None:
+    source = PortableQuery("MATCH (n:L1) WHERE n.x = 1 AND n.y = 2 RETURN n")
+
+    class TwoVariantProvider:
+        def proposals(self, context, *, max_variants):
+            assert max_variants == 2
+            return (
+                PairProposal(
+                    source,
+                    PortableQuery("MATCH (n:L1) WHERE (n.x = 1 AND n.y = 2) OR true RETURN n"),
+                    "constant_true_disjunction",
+                    SafetyCertificate(
+                        "constant_true_disjunction", "clauses[0].where", (), "boolean",
+                        "three_valued", "where", ("pure",), "proof-1", "cap",
+                    ),
+                    context.seed,
+                ),
+                PairProposal(
+                    source,
+                    PortableQuery("MATCH (n:L1) WHERE n.y = 2 AND n.x = 1 RETURN n"),
+                    "predicate_order_symmetry",
+                    SafetyCertificate(
+                        "predicate_order_symmetry", "clauses[0].where", (), "boolean",
+                        "three_valued", "where", ("pure",), "proof-2", "cap",
+                    ),
+                    context.seed,
+                ),
+            )
+
+    corpus = AcceptedPairBuilder(
+        TwoVariantProvider(),
+        lambda proposal: PairValidation(True, "COMPLETE_TYPED_EQUIVALENT"),
+    ).build(
+        AcceptedPairRequest(
+            accepted_pairs=2,
+            max_generated_seeds=2,
+            max_variants_per_seed=2,
+            experiment_seed=1,
+            target="ladybugdb",
+            shard_index=0,
+        )
+    )
+
+    assert corpus.status is AcceptanceStatus.COMPLETE
+    assert corpus.accepted_count == 2
+    assert corpus.generated_seeds == 1
+    assert len({pair.proposal.pair_hash for pair in corpus.pairs}) == 2

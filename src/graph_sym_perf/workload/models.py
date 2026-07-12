@@ -77,6 +77,7 @@ class AcceptedPair:
 class AcceptedPairRequest:
     accepted_pairs: int
     max_generated_seeds: int = 10_000
+    max_variants_per_seed: int = 1
     max_seconds: float = 6 * 3600
     experiment_seed: int = 0
     target: str = "unspecified"
@@ -88,6 +89,7 @@ class AcceptedPairRequest:
         for name, value in (
             ("accepted_pairs", self.accepted_pairs),
             ("max_generated_seeds", self.max_generated_seeds),
+            ("max_variants_per_seed", self.max_variants_per_seed),
             ("experiment_seed", self.experiment_seed),
             ("shard_index", self.shard_index),
         ):
@@ -99,6 +101,8 @@ class AcceptedPairRequest:
             raise ValueError("max_generated_seeds must be in [1, 10000]")
         if self.max_generated_seeds < self.accepted_pairs:
             raise ValueError("max_generated_seeds must cover accepted_pairs")
+        if not 0 < self.max_variants_per_seed <= 2:
+            raise ValueError("max_variants_per_seed must be in [1, 2]")
         if not 0 < float(self.max_seconds) <= 6 * 3600:
             raise ValueError("max_seconds must be in (0, 21600]")
         if self.experiment_seed < 0 or self.shard_index < 0 or not self.target:

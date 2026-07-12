@@ -78,13 +78,19 @@ class CoreRulePairProvider:
         return self._yield_snapshot.content_hash
 
     def __call__(self, context: SeedContext) -> PairProposal | None:
+        proposals = self.proposals(context, max_variants=1)
+        return proposals[0] if proposals else None
+
+    def proposals(self, context: SeedContext, *, max_variants: int) -> tuple[PairProposal, ...]:
         if context.target != self.dbms or context.shard_index != self.shard_index:
             raise ValueError("seed context does not belong to this rule provider")
+        if not isinstance(max_variants, int) or isinstance(max_variants, bool) or max_variants <= 0:
+            raise ValueError("max_variants must be a positive integer")
         if context.ordinal > len(self.queries):
-            return None
+            return ()
         active = self.active_rule_ids
         if not active:
-            return None
+            return ()
         snapshot = self._selection_snapshot(active)
         selection = AdaptiveRuleSampler(
             active,
@@ -93,13 +99,17 @@ class CoreRulePairProvider:
         ).select(self.dbms, self.shard_index, context.ordinal - 1, snapshot)
         query = self.queries[context.ordinal - 1]
         rule_ids = (selection.rule_id, *(rule_id for rule_id in active if rule_id != selection.rule_id))
+        proposals: list[PairProposal] = []
         for rule_id in rule_ids:
             rule = self.registry.get(rule_id)
             proposal = self._proposal_for_rule(query, rule, context)
             if proposal is not None:
-                return proposal
-            self._not_applicable[rule.rule_id] += 1
-        return None
+                proposals.append(proposal)
+                if len(proposals) == max_variants:
+                    break
+            else:
+                self._not_applicable[rule.rule_id] += 1
+        return tuple(proposals)
 
     def _proposal_for_rule(
         self,

@@ -45,7 +45,8 @@ class AcceptedPairBuilder:
         rejects: Counter[str] = Counter()
         seen_ast = set(request.cross_shard_ast_hashes)
         seen_pairs = set(request.cross_shard_pair_hashes)
-        attempted_ast: set[str] = set()
+        attempted_sources: Counter[str] = Counter()
+        attempted_transformed: set[str] = set()
         attempted_pairs: set[str] = set()
         started = self.clock()
         generated = 0
@@ -56,36 +57,57 @@ class AcceptedPairBuilder:
                 stop_reason = "TIME_BUDGET_EXHAUSTED"
                 break
             generated = ordinal
-            proposal = self.provider(request.seed_context(ordinal))
-            if proposal is None:
+            context = request.seed_context(ordinal)
+            many = getattr(self.provider, "proposals", None)
+            if callable(many):
+                proposals = tuple(many(context, max_variants=request.max_variants_per_seed))
+            else:
+                proposal = self.provider(context)
+                proposals = () if proposal is None else (proposal,)
+            if not proposals:
                 rejects["RULE_NOT_APPLICABLE"] += 1
                 continue
-            if proposal.safety_certificate is None:
-                rejects["SAFETY_CERTIFICATE_MISSING"] += 1
-                continue
-            if proposal.ast_hashes & seen_ast:
-                rejects["CROSS_SHARD_DUPLICATE_AST"] += 1
-                continue
-            if proposal.pair_hash in seen_pairs:
-                rejects["CROSS_SHARD_DUPLICATE_PAIR"] += 1
-                continue
-            if proposal.ast_hashes & attempted_ast:
-                rejects["DUPLICATE_AST"] += 1
-                continue
-            if proposal.pair_hash in attempted_pairs:
-                rejects["DUPLICATE_PAIR"] += 1
-                continue
-            # Record the attempt before validation so deterministic rejected
-            # proposals cannot consume the seed/time budget repeatedly.
-            attempted_ast.update(proposal.ast_hashes)
-            attempted_pairs.add(proposal.pair_hash)
-            validation = self.validator(proposal)
-            if not validation.accepted:
-                rejects[validation.reason_code] += 1
-                continue
-            accepted.append(AcceptedPair(proposal, validation))
+            if len(proposals) > request.max_variants_per_seed:
+                raise ValueError("rule provider exceeded max_variants_per_seed")
+            for proposal in proposals:
+                source_hash = proposal.query_a.ast_hash
+                transformed_hash = proposal.query_b.ast_hash
+                if proposal.safety_certificate is None:
+                    rejects["SAFETY_CERTIFICATE_MISSING"] += 1
+                    continue
+                if proposal.ast_hashes & seen_ast:
+                    rejects["CROSS_SHARD_DUPLICATE_AST"] += 1
+                    continue
+                if proposal.pair_hash in seen_pairs:
+                    rejects["CROSS_SHARD_DUPLICATE_PAIR"] += 1
+                    continue
+                if (
+                    transformed_hash in attempted_transformed
+                    or transformed_hash in attempted_sources
+                    or source_hash in attempted_transformed
+                ):
+                    rejects["DUPLICATE_AST"] += 1
+                    continue
+                if attempted_sources[source_hash] >= request.max_variants_per_seed:
+                    rejects["MAX_VARIANTS_PER_SEED_REACHED"] += 1
+                    continue
+                if proposal.pair_hash in attempted_pairs:
+                    rejects["DUPLICATE_PAIR"] += 1
+                    continue
+                # Record the attempt before validation so deterministic rejected
+                # proposals cannot consume the seed/time budget repeatedly.
+                attempted_sources[source_hash] += 1
+                attempted_transformed.add(transformed_hash)
+                attempted_pairs.add(proposal.pair_hash)
+                validation = self.validator(proposal)
+                if not validation.accepted:
+                    rejects[validation.reason_code] += 1
+                    continue
+                accepted.append(AcceptedPair(proposal, validation))
+                if len(accepted) == request.accepted_pairs:
+                    stop_reason = "ACCEPTED_TARGET_REACHED"
+                    break
             if len(accepted) == request.accepted_pairs:
-                stop_reason = "ACCEPTED_TARGET_REACHED"
                 break
 
         status = AcceptanceStatus.COMPLETE if len(accepted) == request.accepted_pairs else AcceptanceStatus.INCOMPLETE

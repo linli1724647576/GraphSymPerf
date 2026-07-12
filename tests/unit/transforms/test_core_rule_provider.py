@@ -63,3 +63,26 @@ def test_core_provider_falls_back_to_an_applicable_certified_rule_for_the_same_q
     assert proposal.rule_id == "pattern_order_symmetry"
     assert proposal.safety_certificate.rule_id == "pattern_order_symmetry"
     assert provider.not_applicable_counts["constant_true_disjunction"] == 1
+
+
+def test_core_provider_can_emit_two_distinct_certified_variants_for_one_seed(tmp_path) -> None:
+    source = "MATCH (a:A), (b:B) WHERE a.x = 1 AND b.y = 2 RETURN a, b"
+    provider = CoreRulePairProvider(
+        (source,),
+        dbms="ladybugdb",
+        shard_index=0,
+        capability_hash="cap",
+        exploration_floor=1,
+        epoch_size=100,
+        quarantine_path=tmp_path / "quarantine.jsonl",
+    )
+
+    proposals = provider.proposals(
+        SeedContext(1, 1, "ladybugdb", 0),
+        max_variants=2,
+    )
+
+    assert len(proposals) == 2
+    assert {proposal.query_a.text for proposal in proposals} == {source}
+    assert len({proposal.rule_id for proposal in proposals}) == 2
+    assert len({proposal.pair_hash for proposal in proposals}) == 2
