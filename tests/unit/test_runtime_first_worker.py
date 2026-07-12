@@ -473,6 +473,10 @@ def test_generation_query_limit_is_capability_driven() -> None:
         spec,
     ) == 5000
     assert _generation_query_limit(
+        ShardTask(TargetSystem.LADYBUGDB, 0, 7, 1000, 10000, 60, "neo4j_proxy"),
+        spec,
+    ) == 5000
+    assert _generation_query_limit(
         ShardTask(TargetSystem.ARCADEDB, 0, 7, 10, 100, 60, "arcadedb"),
         spec,
     ) == 100
