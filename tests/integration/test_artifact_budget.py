@@ -206,6 +206,8 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
             "slow_query": "b",
             "measurement_source": "ordinary_execute",
             "measurement_protocol": "ordinary-execute-20-pair-v1",
+            "runtime_verdict": "pass",
+            "runtime_reason_codes": [],
             "paired_timing": paired_samples,
             "negative_controls": [
                 {"kind": "A/A", "paired_timing": control_samples},
@@ -256,6 +258,28 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     )
     original_ref = asdict(store.put_json("original-validation", original.to_dict()))
     final_ref = asdict(store.put_json("final-validation", final.to_dict()))
+
+    rejected_direction_body = json.loads(json.dumps(dict(original.payload)))
+    rejected_direction_body.pop("validation_hash")
+    rejected_direction_body["stage"] = "rejected"
+    rejected_direction_body["reason_codes"] = ["direction_mismatch"]
+    for session in rejected_direction_body["sessions"]:
+        session["slow_query"] = "b"
+        session["runtime_verdict"] = "fail"
+        session["runtime_reason_codes"] = ["direction_mismatch"]
+        session["paired_timing"] = [
+            {**sample, "a_ms": sample["b_ms"], "b_ms": sample["a_ms"]}
+            for sample in paired_samples
+        ]
+    rejected_direction = ArtifactRecord.seal_validation(rejected_direction_body)
+    assert rejected_direction.payload["stage"] == "rejected"
+
+    unexplained_direction_body = json.loads(json.dumps(rejected_direction_body))
+    for session in unexplained_direction_body["sessions"]:
+        session["runtime_reason_codes"] = []
+    with pytest.raises(ValueError, match="slow_query contradicts raw samples"):
+        ArtifactRecord.seal_validation(unexplained_direction_body)
+
     reduced_hashes = {
         "query_a": hashlib.sha256(query_a.encode()).hexdigest(),
         "query_b": hashlib.sha256(query_b.encode()).hexdigest(),

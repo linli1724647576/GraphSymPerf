@@ -88,6 +88,8 @@ def _session(session_id: str, process_id: int) -> dict[str, object]:
         "slow_query": "b",
         "measurement_source": "ordinary_execute",
         "measurement_protocol": "ordinary-execute-20-pair-v1",
+        "runtime_verdict": "pass",
+        "runtime_reason_codes": [],
         "paired_timing": paired,
         "negative_controls": [
             {"kind": "A/A", "paired_timing": control},
@@ -116,6 +118,14 @@ def _validation_payload() -> dict[str, object]:
         "dbms_fingerprint": "c" * 64,
         "validated_ratio": 4.0,
     }
+
+
+def test_validation_session_requires_runtime_verdict_and_reason_codes() -> None:
+    payload = _validation_payload()
+    del payload["sessions"][0]["runtime_verdict"]
+
+    with pytest.raises(ValueError, match="session evidence is incomplete"):
+        ArtifactRecord.seal_validation(payload)
 
 
 def _issue_payload() -> dict[str, object]:

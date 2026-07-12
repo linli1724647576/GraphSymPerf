@@ -25,3 +25,5 @@ validation ratio 是开发者侧可报告的数值。discovery ratio 只保留�
 reducer 输出的新 pair 必须从零执行同一协议。原始 validation 不能替代 reduced validation。
 
 `VALIDATION_PASSED`、`REJECTED`、`INCONCLUSIVE` 和 `INVALID` 都写入同一种带哈希绑定的 validation artifact。artifact 保留两个 session 的 lifecycle、runtime verdict/reason、A/A 与 B/B 控制、fingerprint 和 health event；顶层终态不能用只有 `session_lifecycle_incomplete` 的摘要替代底层会话证据。
+
+方向字段绑定 discovery 期望慢侧。若独立 session 的 raw 样本测得相反方向，该 session 必须以非 `pass` verdict 和显式 `direction_mismatch` 保存，并使顶层终态为非通过；schema 允许这种可审计的拒绝证据。`VALIDATION_PASSED`、缺少原因码或仍声称 session `pass` 的方向矛盾继续失败关闭。

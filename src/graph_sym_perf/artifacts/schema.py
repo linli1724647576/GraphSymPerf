@@ -291,7 +291,8 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
         required_session = {
             "session_id", "process_id", "graph_fingerprint", "dbms_fingerprint",
             "query_a_hash", "query_b_hash", "slow_query", "measurement_source",
-            "measurement_protocol", "paired_timing", "negative_controls", "lifecycle",
+            "measurement_protocol", "runtime_verdict", "runtime_reason_codes",
+            "paired_timing", "negative_controls", "lifecycle",
         }
         if not required_session <= set(session):
             raise ValueError("validation session evidence is incomplete")
@@ -311,6 +312,9 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
             session["slow_query"] not in {"a", "b"}
             or session["measurement_source"] != "ordinary_execute"
             or session["measurement_protocol"] != "ordinary-execute-20-pair-v1"
+            or session["runtime_verdict"] not in {"pass", "fail", "inconclusive", "invalid"}
+            or not isinstance(session["runtime_reason_codes"], list | tuple)
+            or any(not isinstance(reason, str) for reason in session["runtime_reason_codes"])
         ):
             raise ValueError("validation session runtime identity is invalid")
         _validate_paired_timing(session["paired_timing"], f"sessions[{index}].paired_timing")
@@ -326,7 +330,13 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
             raise ValueError("validation session has no runtime direction")
         measured_direction = "b" if direction_delta > 0 else "a"
         if session["slow_query"] != measured_direction:
-            raise ValueError("validation session slow_query contradicts raw samples")
+            runtime_reasons = tuple(session.get("runtime_reason_codes", ()))
+            if (
+                payload["stage"] == "validation_passed"
+                or session.get("runtime_verdict") == "pass"
+                or "direction_mismatch" not in runtime_reasons
+            ):
+                raise ValueError("validation session slow_query contradicts raw samples")
         session_directions.append(measured_direction)
         controls = session["negative_controls"]
         if not isinstance(controls, list | tuple) or len(controls) != 2:
