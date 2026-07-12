@@ -16,6 +16,8 @@ graphsymperf issue export --issue <submit-ready-index.json> --output <destinatio
 
 doctor 要求仓库与 GDsmith provenance 可核查、固定 commit 匹配、JAR 与 build manifest 的内容摘要匹配、7 个目标连接/driver/graph isolation 可用，并预留 112 × 500 MiB 的最大 artifact 空间。6 个容器型目标同时提供 `GRAPHSYMPERF_<DBMS>_CONTAINER` 与期望 `IMAGE_DIGEST`；doctor 使用 `docker inspect` 读取实际 `.Image` 并逐字匹配。LadybugDB 校验实际安装分发包的逐文件摘要。任一失败时 `experiment run` 返回非零且不启动部分矩阵。
 
+长时间运行不能只依赖启动时的 manifest。supervisor 在每个 attempt 启动前和 worker 返回后重新计算仓库 commit/dirty 状态、GDsmith checkout commit/dirty 状态、规则摘要、JAR 摘要和 build-manifest 摘要；任一来源漂移均以 `EVIDENCE_INTEGRITY_ERROR` 立即失败关闭，禁止把新磁盘源码产生的结果继续归到旧 manifest。
+
 ## 卡死与自动退出
 
 每次 adapter 操作前原子写 `inflight.json`，包含 query/graph/DBMS hash、query kind、开始时间、DBMS/driver operation timeout 与进程级 hard deadline。hard deadline 的取消传播宽限为 operation timeout 的 10%，最少 0.1 秒、最多 5 秒；它只用于等待 DBMS 取消和 driver 返回 typed timeout，不计入有效 runtime 样本。worker 在独立进程组中运行；heartbeat 过期或 hard deadline 后终止整个进程组。GDsmith 进程即使仍存活，若 coverage 文件且当前 DBMS log 中可解析的 graph/query statement 连续 120 秒均无进展，也会终止其独立进程组；纯后台日志增长不再重置 stall 计时器。进程组强制终止若遇到 macOS 的权限/退出竞态，会回退为直接终止已知子进程，避免把生成停滞误记为 worker crash。已有且数量至少覆盖 accepted 目标的可回放语料标记为 `NO_PROGRESS_TIMEOUT` 并进入后续筛选；数量不足时作为 `WORKER_HUNG` 瞬态失败，不封存该语料，由 supervisor 在上限内重新生成。无可回放查询则失败关闭。当前 shard 对瞬态失败最多重试 3 次，其他 shard 继续；参数、证明或 artifact 不一致引发的确定性 `EVIDENCE_INTEGRITY_ERROR` 立即失败关闭，不做无效重试。query timeout、driver timeout、worker hung、worker crashed、DBMS crashed、evidence integrity error 与 infrastructure error 分开记录。

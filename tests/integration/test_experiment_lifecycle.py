@@ -1,10 +1,12 @@
 import json
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 
 from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle
 from graph_sym_perf.experiment.spec import load_experiment_spec
+from graph_sym_perf.experiment.state import ManifestMismatchError
 from graph_sym_perf.experiment.supervisor import RunSummary
 
 
@@ -65,6 +67,56 @@ def test_formal_lifecycle_enables_process_isolation(monkeypatch, tmp_path) -> No
     assert captured["max_parallel_generation_systems"] == 3
     assert captured["max_parallel_measurement_systems"] == 1
     assert captured["max_parallel_shards_per_system"] == 1
+
+
+def test_formal_lifecycle_attempt_guard_rejects_source_revision_drift(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    class _Supervisor:
+        def __init__(self, _run_dir, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def run(self, plan, _worker) -> RunSummary:
+            captured["plan"] = plan
+            return RunSummary((), (), ())
+
+    monkeypatch.setattr("graph_sym_perf.experiment.lifecycle.ShardSupervisor", _Supervisor)
+    spec = load_experiment_spec("config/experiment.yaml")
+    ExperimentLifecycle(tmp_path).run(spec, lambda _task: {"accepted_pairs": 0})
+
+    guard = captured["attempt_guard"]
+    monkeypatch.setattr("graph_sym_perf.experiment.lifecycle._git_output", lambda *_args: "changed")
+
+    with pytest.raises(ManifestMismatchError, match="source provenance changed"):
+        guard()
+
+
+def test_formal_lifecycle_attempt_guard_rehashes_changed_gdsmith_artifact(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    class _Supervisor:
+        def __init__(self, _run_dir, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def run(self, _plan, _worker) -> RunSummary:
+            return RunSummary((), (), ())
+
+    monkeypatch.setattr("graph_sym_perf.experiment.lifecycle.ShardSupervisor", _Supervisor)
+    spec = load_experiment_spec("config/experiment.yaml")
+    ExperimentLifecycle(tmp_path).run(spec, lambda _task: {"accepted_pairs": 0})
+
+    guard = captured["attempt_guard"]
+    monkeypatch.setattr(guard, "_artifact_signature", lambda: ("changed",))
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.lifecycle.check_gdsmith_tooling",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            jar_sha256="sha256:changed",
+            build_manifest_sha256="sha256:changed",
+        ),
+    )
+
+    with pytest.raises(ManifestMismatchError, match="source provenance changed"):
+        guard()
 
 
 def test_lifecycle_binds_the_immutable_run_directory_to_a_shard_worker(tmp_path) -> None:

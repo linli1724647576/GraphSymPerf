@@ -85,6 +85,55 @@ def test_retryable_shard_failure_does_not_stop_other_tasks(tmp_path) -> None:
     assert summary.completed == ("bad", "good")
 
 
+def test_attempt_guard_fails_closed_when_provenance_drifts_before_retry(tmp_path) -> None:
+    plan = RunPlan("test", 2, ("task",), 1, SourceRevision(None, None, None))  # type: ignore[arg-type]
+    guard_calls = 0
+    worker_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls >= 2:
+            raise ValueError("source provenance changed during run")
+
+    def worker(_task):
+        nonlocal worker_calls
+        worker_calls += 1
+        raise RuntimeError("retry once")
+
+    summary = ShardSupervisor(tmp_path, retry_limit=1, attempt_guard=guard).run(plan, worker)
+
+    assert summary.failed == ("task",)
+    assert worker_calls == 1
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "shards" / "task-000" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert events[-1]["error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    assert "source provenance changed" in events[-1]["reason"]
+
+
+def test_attempt_guard_fails_closed_when_provenance_drifts_during_worker(tmp_path) -> None:
+    plan = RunPlan("test", 2, ("task",), 1, SourceRevision(None, None, None))  # type: ignore[arg-type]
+    guard_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls >= 2:
+            raise ValueError("source provenance changed during run")
+
+    summary = ShardSupervisor(tmp_path, retry_limit=0, attempt_guard=guard).run(plan, _CompleteWorker())
+
+    assert summary.failed == ("task",)
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "shards" / "task-000" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert events[-1]["error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    assert "source provenance changed" in events[-1]["reason"]
+
+
 def test_supervisor_uses_task_specific_accepted_pair_target(tmp_path) -> None:
     class Task:
         accepted_query_pairs = 3

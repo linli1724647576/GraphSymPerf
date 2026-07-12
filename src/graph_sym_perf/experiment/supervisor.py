@@ -59,6 +59,7 @@ class ShardSupervisor:
         max_parallel_measurement_systems: int = 1,
         max_parallel_shards_per_system: int = 1,
         shard_budget_bytes: int = 500 * 1024 * 1024,
+        attempt_guard: Callable[[], None] | None = None,
     ) -> None:
         if retry_limit < 0 or retry_limit > 3:
             raise ValueError("retry_limit must be between 0 and 3")
@@ -83,6 +84,7 @@ class ShardSupervisor:
         self.max_parallel_measurement_systems = max_parallel_measurement_systems
         self.max_parallel_shards_per_system = max_parallel_shards_per_system
         self.shard_budget_bytes = shard_budget_bytes
+        self.attempt_guard = attempt_guard
         self._event_lock = threading.Lock()
         self._reliability_lock = threading.Lock()
 
@@ -286,7 +288,11 @@ class ShardSupervisor:
                 task_identity=task_identity,
             )
             try:
+                if self.attempt_guard is not None:
+                    self.attempt_guard()
                 result = self._run_worker(worker, task, context)
+                if self.attempt_guard is not None:
+                    self.attempt_guard()
             except WorkerProcessError as exc:
                 journal = ShardJournal(shard_dir, manifest_hash=manifest_hash, task_identity=task_identity)
                 final = attempt >= self.retry_limit or not _is_retryable_error(exc.kind)

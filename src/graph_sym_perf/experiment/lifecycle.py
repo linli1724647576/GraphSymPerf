@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -10,16 +12,24 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from graph_sym_perf.core import GdsmithConfig
 from graph_sym_perf.experiment.evidence_validation import (
     canonical_hash,
     read_json_object,
     validate_failure_evidence,
     validate_shard_evidence,
 )
-from graph_sym_perf.experiment.plan_models import ExperimentSpec
-from graph_sym_perf.experiment.planner import build_run_plan, resolved_manifest_payload, write_resolved_manifest
+from graph_sym_perf.experiment.plan_models import ExperimentSpec, RunPlan
+from graph_sym_perf.experiment.planner import (
+    _git_dirty,
+    _git_output,
+    build_run_plan,
+    resolved_manifest_payload,
+    write_resolved_manifest,
+)
 from graph_sym_perf.experiment.state import ManifestMismatchError
 from graph_sym_perf.experiment.supervisor import RunSummary, ShardSupervisor
+from graph_sym_perf.gdsmith.runner import check_gdsmith_tooling
 
 
 @dataclass(frozen=True)
@@ -67,7 +77,7 @@ class ExperimentLifecycle:
             bind_run_dir(run_dir)
         summary = ShardSupervisor(
             run_dir,
-            **self._supervisor_options(spec),
+            **self._supervisor_options(spec, plan),
         ).run(plan, worker)
         self._write_summary(identifier, run_dir, summary)
         return LifecycleResult(identifier, run_dir, summary)
@@ -91,7 +101,7 @@ class ExperimentLifecycle:
             bind_run_dir(run_dir)
         summary = ShardSupervisor(
             run_dir,
-            **self._supervisor_options(spec),
+            **self._supervisor_options(spec, plan),
         ).resume(plan, worker)
         self._write_summary(run_id, run_dir, summary)
         return LifecycleResult(run_id, run_dir, summary)
@@ -183,7 +193,7 @@ class ExperimentLifecycle:
             invalid=counts["invalid"],
         )
 
-    def _supervisor_options(self, spec: ExperimentSpec) -> dict[str, object]:
+    def _supervisor_options(self, spec: ExperimentSpec, plan: RunPlan) -> dict[str, object]:
         return {
             "retry_limit": int(spec.scheduling["shard_retry_limit"]),
             "process_isolation": self.process_isolation,
@@ -194,7 +204,11 @@ class ExperimentLifecycle:
             "max_parallel_measurement_systems": int(spec.scheduling["max_parallel_measurement_systems"]),
             "max_parallel_shards_per_system": int(spec.scheduling["max_parallel_shards_per_system"]),
             "shard_budget_bytes": int(spec.artifacts["shard_budget_mb"]) * 1024 * 1024,
+            "attempt_guard": self._source_provenance_guard(spec, plan),
         }
+
+    def _source_provenance_guard(self, spec: ExperimentSpec, plan: RunPlan) -> Callable[[], None]:
+        return _SourceProvenanceGuard(spec, plan, environment=self.environment)
 
     def _run_dir(self, run_id: str) -> Path:
         if (
@@ -224,6 +238,77 @@ class ExperimentLifecycle:
             + "\n",
             encoding="utf-8",
         )
+
+
+class _SourceProvenanceGuard:
+    def __init__(
+        self,
+        spec: ExperimentSpec,
+        plan: RunPlan,
+        *,
+        environment: Mapping[str, str] | None,
+    ) -> None:
+        self.spec = spec
+        self.expected = plan.source_revision
+        self.repository_root = spec.source_path.parents[1]
+        self.environment = os.environ if environment is None else environment
+        self.artifact_signature = self._artifact_signature()
+
+    def __call__(self) -> None:
+        signature = self._artifact_signature()
+        if signature != self.artifact_signature:
+            tooling = check_gdsmith_tooling(
+                GdsmithConfig(expected_source_commit=self.spec.generation.expected_commit),
+                self.environment,
+            )
+            if (
+                tooling.jar_sha256 != self.expected.gdsmith_jar_sha256
+                or tooling.build_manifest_sha256 != self.expected.gdsmith_build_manifest_sha256
+            ):
+                raise ManifestMismatchError("source provenance changed during run")
+            self.artifact_signature = signature
+        try:
+            rules_sha256 = hashlib.sha256(self.spec.rules_source_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ManifestMismatchError("source provenance changed during run") from exc
+        current = (
+            _git_output(self.repository_root, "rev-parse", "HEAD"),
+            _git_dirty(self.repository_root),
+            _git_output(self.spec.generation.checkout, "rev-parse", "HEAD"),
+            _git_dirty(self.spec.generation.checkout),
+            rules_sha256,
+        )
+        expected = (
+            self.expected.repository_commit,
+            self.expected.repository_dirty,
+            self.expected.gdsmith_commit,
+            self.expected.gdsmith_dirty,
+            self.expected.rules_schema_sha256,
+        )
+        if current != expected:
+            raise ManifestMismatchError("source provenance changed during run")
+
+    def _artifact_signature(self) -> tuple[object, ...]:
+        config = GdsmithConfig(expected_source_commit=self.spec.generation.expected_commit)
+        jar_value = self.environment.get(config.jar_env)
+        jar = Path(jar_value).expanduser() if jar_value else None
+        manifest = jar.with_suffix(jar.suffix + ".manifest.json") if jar is not None else None
+        return (
+            jar_value,
+            self.environment.get(config.jar_sha256_env),
+            _path_identity(jar),
+            _path_identity(manifest),
+        )
+
+
+def _path_identity(path: Path | None) -> tuple[int, int, int, int, int] | None:
+    if path is None:
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
 
 __all__ = ["ExperimentLifecycle", "LifecycleResult", "RunStatus"]
