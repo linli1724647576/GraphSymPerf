@@ -18,6 +18,8 @@ Apache AGE 的 proxy URI 使用 `GRAPHSYMPERF_GDSMITH_PROXY_APACHE_AGE_URI`，Ar
 
 `systems.yaml` 中声明 `single_node_label` 能力的 AgensGraph、Apache AGE、ArcadeDB 和 LadybugDB 均会在各自 GDsmith 生成边界加入 `--label-num 1`，从生成空间源头约束为单标签；AgensGraph 兼容 JAR 仍保留多标签拒绝守卫，不能退化为“只取第一个 label”。GDsmith 默认字符串策略生成的双引号英数/下划线字面量仅在兼容 JAR 执行边界转换为 AgensGraph 单引号字面量；遇到其他双引号 token 必须失败关闭，不尝试处理转义或任意文本。
 
+ArcadeDB 的普通读查询走 HTTP `/query`，包含 `MERGE`、`CREATE`、`SET` 或删除动作的写查询走 `/command`。两条路径都必须原样携带参数映射；尤其 graph loader 的 `$id`、`$properties`、`$start_id` 与 `$end_id` 不得在切换端点时丢失。独立 validation 会回读全部节点、边、标签、类型与属性，因此任何空参数写入或拓扑缺失都会以 `graph_fingerprint_mismatch` 失败关闭。
+
 AgensGraph 的 GDsmith JDBC 连接在兼容 JAR 中对每个 statement 设置 60 秒查询超时；单条不可终止查询不应占满整个 shard 时间预算。ArcadeDB 原生 GDsmith backend 在 1×1000 门禁的四个 attempt 中仅产生 210/30/90/397 条可回放查询后 stall，因此不再作为正式生成边界。外层 120 秒无进展 watchdog 仍作为驱动/服务端未按时取消时的第二道守卫。
 
 AgensGraph 对未加引号的 label/type 标识符沿用 PostgreSQL 小写折叠。独立 validation 的 graph snapshot 回读仅对 label/type 应用这一 adapter 声明的规范化；节点/边 ID、拓扑、属性键和值仍逐项比较。这样可避免把 `L4/T3` 与数据库回读的 `l4/t3` 误判为图漂移，同时不放宽真实图内容校验。

@@ -40,6 +40,8 @@ Memgraph provider 复用 Neo4j Java Driver，但上游连接层没有传 transac
 
 ArcadeDB 的 shard、独立 validation session 和 reducer 使用服务器级 `drop database`/`create database` 重建 `mydb`；这一边界避免对旧图执行 `MATCH (n) DETACH DELETE n` 时的全图扫描与 Java heap 放大。数据库名只接受受限标识符，重建任一步失败都不会继续加载或测量。其他 adapter 未声明 database-level reset 时仍使用 Cypher 清图，再执行各自的 schema reset。
 
+ArcadeDB 重建后的 graph loader 通过 `/command` 执行带参数的 Cypher 写操作。运维验收不能只检查节点数：必须让 validation graph fingerprint 同时核对节点 ID/属性、边端点/类型/属性；否则“节点已创建但参数为空、边未创建”的退化图仍可能让空结果查询表面通过。
+
 Neo4j Community Edition 不能用 Enterprise-only database recreate 流程，因此其 adapter 使用 `CALL (n) { ... } IN TRANSACTIONS OF 1000 ROWS` 分批 `DETACH DELETE`，避免单一全图写事务占满 transaction memory/heap。该查询必须在 driver 的 implicit transaction 中运行，并继承同一 graph-reset hard deadline；超时仍失败关闭，不会在未知部分删除状态上开始测量。
 
 resume 只接受同一 `resolved_manifest.json`；配置默认值变化、任务身份变化、artifact hash 不一致或 event sequence 断裂都会拒绝恢复。append-only accepted/candidate hash 防止重试重复计数。

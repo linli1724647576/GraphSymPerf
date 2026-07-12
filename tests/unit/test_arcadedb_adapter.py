@@ -151,7 +151,7 @@ def test_arcadedb_execute_passes_timeout_to_http_request() -> None:
 
 
 def test_arcadedb_mutating_match_uses_the_command_endpoint() -> None:
-    calls: list[str] = []
+    calls: list[dict[str, object]] = []
 
     class FakeResponse:
         status_code = 200
@@ -167,14 +167,23 @@ def test_arcadedb_mutating_match_uses_the_command_endpoint() -> None:
 
     class FakeSession:
         def request(self, method: str, url: str, **kwargs):
-            calls.append(url)
+            calls.append({"method": method, "url": url, **kwargs})
             return FakeResponse()
 
     adapter._session = FakeSession()
 
-    adapter.execute("MATCH (n) DETACH DELETE n", {}, "reset")
+    adapter.execute(
+        "MATCH (n {id: $id}) SET n += $properties",
+        {"id": 7, "properties": {"active": True}},
+        "load",
+    )
 
-    assert calls == ["http://127.0.0.1:2481/api/v1/command/graphsymperf"]
+    assert calls[0]["url"] == "http://127.0.0.1:2481/api/v1/command/graphsymperf"
+    assert calls[0]["json"] == {
+        "language": "opencypher",
+        "command": "MATCH (n {id: $id}) SET n += $properties",
+        "params": {"id": 7, "properties": {"active": True}},
+    }
 
 
 def test_arcadedb_version_ignores_generic_server_header_and_uses_payload() -> None:
