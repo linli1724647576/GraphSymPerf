@@ -42,6 +42,8 @@ ArcadeDB 的 shard、独立 validation session 和 reducer 使用服务器级 `d
 
 ArcadeDB 重建后的 graph loader 通过 `/command` 执行带参数的 Cypher 写操作。运维验收不能只检查节点数：必须让 validation graph fingerprint 同时核对节点 ID/属性、边端点/类型/属性；否则“节点已创建但参数为空、边未创建”的退化图仍可能让空结果查询表面通过。
 
+ArcadeDB 同时以 `ARCADEDB_OPTS_MEMORY=-Xms1G -Xmx2G` 约束 JVM heap，并设置 `-Darcadedb.command.timeout=30000`。HTTP 客户端 deadline 只能停止等待，不能作为服务端取消证明；ArcadeDB 的 `command.timeout` 默认值为 0，因此若不设置服务端上限，超时查询可能在客户端离开后继续占用 CPU/heap。修改该环境变量后必须 recreate `graphsymperf-arcadedb`，并从容器 `Config.Env` 核对实际生效值。
+
 Neo4j Community Edition 不能用 Enterprise-only database recreate 流程，因此其 adapter 使用 `CALL (n) { ... } IN TRANSACTIONS OF 1000 ROWS` 分批 `DETACH DELETE`，避免单一全图写事务占满 transaction memory/heap。该查询必须在 driver 的 implicit transaction 中运行，并继承同一 graph-reset hard deadline；超时仍失败关闭，不会在未知部分删除状态上开始测量。
 
 resume 只接受同一 `resolved_manifest.json`；配置默认值变化、任务身份变化、artifact hash 不一致或 event sequence 断裂都会拒绝恢复。append-only accepted/candidate hash 防止重试重复计数。

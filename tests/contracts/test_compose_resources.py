@@ -29,3 +29,11 @@ def test_memgraph_has_a_bounded_memory_and_query_runtime_envelope() -> None:
     command = compose["services"]["memgraph"]["command"]
     assert "--memory-limit=1024" in command
     assert "--query-execution-timeout-sec=30" in command
+
+
+def test_arcadedb_has_a_bounded_heap_and_server_side_command_timeout() -> None:
+    compose = yaml.safe_load(Path("infra/docker-compose.graphdbs.yml").read_text(encoding="utf-8"))
+
+    environment = compose["services"]["arcadedb"]["environment"]
+    assert environment["ARCADEDB_OPTS_MEMORY"] == "-Xms1G -Xmx2G"
+    assert "-Darcadedb.command.timeout=30000" in environment["JAVA_TOOL_OPTIONS"]
