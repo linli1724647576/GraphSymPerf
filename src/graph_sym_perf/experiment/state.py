@@ -48,7 +48,12 @@ _ACTIVE = {
 }
 
 _NEXT = {
-    ShardState.PLANNED: {ShardState.GENERATING, ShardState.FAILED_RETRYABLE, ShardState.FAILED_FINAL},
+    ShardState.PLANNED: {
+        ShardState.GENERATING,
+        ShardState.INCOMPLETE,
+        ShardState.FAILED_RETRYABLE,
+        ShardState.FAILED_FINAL,
+    },
     ShardState.GENERATING: {ShardState.LOADING, ShardState.FAILED_RETRYABLE, ShardState.FAILED_FINAL},
     ShardState.LOADING: {ShardState.BUILDING_ACCEPTED_PAIRS, ShardState.FAILED_RETRYABLE, ShardState.FAILED_FINAL},
     ShardState.BUILDING_ACCEPTED_PAIRS: {
@@ -75,7 +80,11 @@ _NEXT = {
         ShardState.FAILED_RETRYABLE,
         ShardState.FAILED_FINAL,
     },
-    ShardState.FAILED_RETRYABLE: {ShardState.GENERATING, ShardState.FAILED_FINAL},
+    ShardState.FAILED_RETRYABLE: {
+        ShardState.GENERATING,
+        ShardState.INCOMPLETE,
+        ShardState.FAILED_FINAL,
+    },
 }
 
 

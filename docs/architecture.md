@@ -36,4 +36,4 @@ CLI
 
 ## 完成态不变量
 
-`ShardSupervisor` 只在以下条件同时满足时写 `COMPLETED`：accepted hash 与 canonical JSONL 一致；数量等于 manifest 目标；screening、validation、reduction 三类证据存在且 hash 可复核；状态链尾部为 `VALIDATING → REDUCING → COMPLETED`。重试耗尽只终止当前 shard。
+`ShardSupervisor` 只在以下条件同时满足时写 `COMPLETED`：accepted hash 与 canonical JSONL 一致；数量等于 manifest 目标；screening、validation、reduction 三类证据存在且 hash 可复核；状态链尾部为 `VALIDATING → REDUCING → COMPLETED`。基础设施重试耗尽只终止当前 shard；绑定 query hash 的 hard timeout 由独立 quarantine 恢复，并与所有 retry/resume 共享一个不可重置的 shard runtime budget。

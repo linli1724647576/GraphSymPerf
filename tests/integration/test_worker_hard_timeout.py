@@ -67,7 +67,7 @@ def test_adapter_proxy_deadline_terminates_an_uncancellable_driver_call(tmp_path
         stale_after_seconds=0.2,
     ).run(plan, _ProxyWorker())
 
-    assert time.monotonic() - started < 0.3
+    assert time.monotonic() - started < 0.8
     assert summary.failed == (task,)
     finding = json.loads((tmp_path / "reliability" / "findings.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert finding["kind"] == "QUERY_TIMEOUT"

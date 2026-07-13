@@ -18,7 +18,7 @@ def _raises_deterministic_evidence_error(_task):
     raise ValueError("reduction minimality proof does not verify")
 
 
-def test_isolated_worker_timeout_does_not_block_the_supervisor(tmp_path) -> None:
+def test_isolated_worker_budget_exhaustion_is_incomplete_without_blocking_supervisor(tmp_path) -> None:
     plan = RunPlan("timeout", 2, (_ShortDeadlineTask(),), 1, SourceRevision(None, None, None))  # type: ignore[arg-type]
     summary = ShardSupervisor(
         tmp_path,
@@ -27,7 +27,7 @@ def test_isolated_worker_timeout_does_not_block_the_supervisor(tmp_path) -> None
         hard_timeout_seconds=0.05,
     ).run(plan, _blocks_forever)
 
-    assert summary.failed
+    assert summary.incomplete
     assert not summary.completed
     assert "WORKER_HUNG" in (tmp_path / "events.jsonl").read_text(encoding="utf-8")
 

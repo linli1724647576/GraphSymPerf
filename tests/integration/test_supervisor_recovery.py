@@ -262,14 +262,123 @@ def test_inflight_query_deadline_kills_a_permanently_blocked_worker_before_shard
     ).run(plan, _WritesInflightThenBlocks(tmp_path))
 
     elapsed = time.monotonic() - started
-    assert elapsed < 0.3
-    assert summary.failed == (task,)
+    assert elapsed < 0.9
+    assert summary.incomplete == (task,)
     assert "QUERY_TIMEOUT" in (tmp_path / "events.jsonl").read_text(encoding="utf-8")
     timeout_quarantine = tmp_path / "shards" / "neo4j-000" / "query_timeout_quarantine.jsonl"
     record = json.loads(timeout_quarantine.read_text(encoding="utf-8").splitlines()[0])
     assert record["query_hash"] == "b" * 64
     assert record["graph_hash"] == "graph"
     assert record["error_kind"] == "QUERY_TIMEOUT"
+
+
+class _TimesOutDistinctQueriesThenCompletes:
+    def __init__(self, timeout_count: int) -> None:
+        self.timeout_count = timeout_count
+        self.context = None
+
+    def bind_attempt_context(self, context: AttemptContext) -> None:
+        self.context = context
+
+    def __call__(self, task):
+        assert self.context is not None
+        if self.context.attempt < self.timeout_count:
+            (self.context.attempt_dir / "inflight.json").write_text(
+                json.dumps(
+                    {
+                        "query_hash": _hash_for(f"slow-query-{self.context.attempt}"),
+                        "query_kind": "acceptance_base",
+                        "started_at": time.time(),
+                        "deadline": time.time() + 0.03,
+                        "graph_hash": "graph",
+                        "dbms_fingerprint": "dbms",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            time.sleep(10)
+        return _durable_result(self.context, task)
+
+
+def test_distinct_query_timeouts_do_not_consume_infrastructure_retry_budget(tmp_path) -> None:
+    task = _InflightDeadlineTask()
+    plan = RunPlan("query-timeout-recovery", 2, (task,), 1, SourceRevision(None, None, None))  # type: ignore[arg-type]
+
+    summary = ShardSupervisor(
+        tmp_path,
+        retry_limit=0,
+        process_isolation=True,
+        hard_timeout_seconds=1.0,
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.2,
+    ).run(plan, _TimesOutDistinctQueriesThenCompletes(timeout_count=4))
+
+    assert summary.completed == (task,)
+    shard_dir = tmp_path / "shards" / "neo4j-000"
+    assert len(tuple(shard_dir.glob("attempt-*"))) == 5
+    quarantine = (shard_dir / "query_timeout_quarantine.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(quarantine) == 4
+    assert len({json.loads(line)["query_hash"] for line in quarantine}) == 4
+
+
+def test_query_timeout_recovery_preserves_one_total_shard_deadline(tmp_path) -> None:
+    task = _InflightDeadlineTask()
+    plan = RunPlan("query-timeout-budget", 2, (task,), 1, SourceRevision(None, None, None))  # type: ignore[arg-type]
+    started = time.monotonic()
+
+    summary = ShardSupervisor(
+        tmp_path,
+        retry_limit=0,
+        process_isolation=True,
+        hard_timeout_seconds=0.2,
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.1,
+    ).run(plan, _TimesOutDistinctQueriesThenCompletes(timeout_count=100))
+
+    assert time.monotonic() - started < 0.5
+    assert summary.incomplete == (task,)
+
+
+class _RepeatsOneTimedOutQuery(_TimesOutDistinctQueriesThenCompletes):
+    def __call__(self, task):
+        assert self.context is not None
+        (self.context.attempt_dir / "inflight.json").write_text(
+            json.dumps(
+                {
+                    "query_hash": _hash_for("same-slow-query"),
+                    "query_kind": "acceptance_base",
+                    "started_at": time.time(),
+                    "deadline": time.time() + 0.03,
+                    "graph_hash": "graph",
+                    "dbms_fingerprint": "dbms",
+                }
+            ),
+            encoding="utf-8",
+        )
+        time.sleep(10)
+        return _durable_result(self.context, task)
+
+
+def test_repeated_quarantined_query_timeout_fails_closed_instead_of_looping(tmp_path) -> None:
+    task = _InflightDeadlineTask()
+    plan = RunPlan("repeated-query-timeout", 2, (task,), 1, SourceRevision(None, None, None))  # type: ignore[arg-type]
+
+    summary = ShardSupervisor(
+        tmp_path,
+        retry_limit=0,
+        process_isolation=True,
+        hard_timeout_seconds=1.0,
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.2,
+    ).run(plan, _RepeatsOneTimedOutQuery(timeout_count=100))
+
+    assert summary.failed == (task,)
+    shard_dir = tmp_path / "shards" / "neo4j-000"
+    assert len(tuple(shard_dir.glob("attempt-*"))) == 2
+    quarantine = (shard_dir / "query_timeout_quarantine.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(quarantine) == 1
+    final_event = json.loads((shard_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert final_event["error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
 
 
 class _StopsEntireWorkerProcess:
@@ -565,7 +674,7 @@ def test_complete_requires_durable_validation_and_reduction_stage_evidence(tmp_p
     assert [event["state"] for event in events][-3:] == ["validating", "reducing", "completed"]
 
 
-def test_resume_interrupted_attempt_three_is_atomically_failed_final(tmp_path) -> None:
+def test_resume_does_not_treat_attempt_number_as_infrastructure_retry_count(tmp_path) -> None:
     task = ShardTask(TargetSystem.NEO4J, 0, 24, 1, 1, 60)
     plan = RunPlan("attempt-exhausted", 2, (task,), 1, SourceRevision(None, None, None))
     shard_dir = tmp_path / "shards" / "neo4j-000"
@@ -577,11 +686,10 @@ def test_resume_interrupted_attempt_three_is_atomically_failed_final(tmp_path) -
 
     checkpoint = json.loads((shard_dir / "checkpoint.json").read_text(encoding="utf-8"))
     events = [json.loads(line) for line in (shard_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert summary.failed == (task,)
-    assert checkpoint["state"] == "failed_final"
-    assert checkpoint["attempt"] == 3
-    assert events[-1]["state"] == "failed_final"
-    assert events[-1]["error_kind"] == "WORKER_CRASHED"
+    assert summary.completed == (task,)
+    assert checkpoint["state"] == "completed"
+    assert checkpoint["attempt"] == 4
+    assert events[-1]["state"] == "completed"
 
 
 def test_status_rejects_checkpoint_copied_from_another_manifest_task(tmp_path) -> None:

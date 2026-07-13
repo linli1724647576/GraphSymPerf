@@ -114,6 +114,6 @@ def test_one_hung_shard_does_not_prevent_another_system_from_completing(tmp_path
 
     assert time.monotonic() - started < 5.0
     assert summary.completed == (healthy,)
-    assert summary.failed == (hung,)
-    assert summary.incomplete == ()
+    assert summary.incomplete == (hung,)
+    assert summary.failed == ()
     assert "WORKER_HUNG" in (tmp_path / "events.jsonl").read_text(encoding="utf-8")

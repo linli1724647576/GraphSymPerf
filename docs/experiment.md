@@ -11,10 +11,10 @@ accepted query pair 必须依次通过：GDsmith read-query 解析、目标方�
 - accepted target：1,000；
 - 最多 generated seeds：10,000；
 - 最长 shard 时间：6 小时；
-- 最多自动恢复：3 次；
+- 基础设施瞬态失败最多自动恢复：3 次；绑定 query hash 的确定性 timeout 独立隔离，统一受 6 小时总预算约束；
 - 完整 shard artifact：不超过 500 MiB。
 
-达到 seed 或时间边界但 accepted count 不足时写 `INCOMPLETE`。超时、崩溃和重启有独立错误分类；不允许无 checkpoint 自动退出，也不允许把 999 补写成 1,000。
+达到 seed 或时间边界但 accepted count 不足时写 `INCOMPLETE`。首个 attempt 写入的 `runtime_budget.json` 对 retry/resume 不可重置；attempt 编号不等于基础设施失败次数。超时、崩溃和重启有独立错误分类；不允许无 checkpoint 自动退出，也不允许把 999 补写成 1,000。
 
 ## 递进门禁
 
