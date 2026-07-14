@@ -6,6 +6,7 @@ import math
 import hashlib
 import json
 import os
+import tempfile
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -105,6 +106,11 @@ class DurableTimeoutQueue:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self.poison_path = self.path.with_name("timeout_queue.poison.json")
+        self._poisoned = False
+        if self.poison_path.exists():
+            self._validate_poison()
+            raise ArtifactIntegrityError("timeout queue has a durable write poison")
         self._lock = threading.Lock()
         self._records = self._load()
 
@@ -119,6 +125,8 @@ class DurableTimeoutQueue:
     def append(self, record: TimeoutQueueRecord) -> bool:
         payload = record.to_payload()
         with self._lock:
+            if self._poisoned:
+                raise ArtifactIntegrityError("timeout queue has an in-memory write poison")
             existing = self._records.get(record.dedupe_key)
             if existing is not None:
                 if existing != payload:
@@ -129,30 +137,151 @@ class DurableTimeoutQueue:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             previous_size = self.path.stat().st_size if self.path.exists() else 0
             try:
-                with self.path.open("a", encoding="utf-8") as handle:
-                    handle.write(_canonical_json(payload))
-                    handle.write("\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                _fsync_directory(self.path.parent)
-            except OSError as exc:
-                rollback_error: OSError | None = None
-                try:
-                    if self.path.exists():
-                        with self.path.open("r+b") as handle:
-                            handle.truncate(previous_size)
-                            handle.flush()
-                            os.fsync(handle.fileno())
-                        _fsync_directory(self.path.parent)
-                except OSError as rollback_exc:
-                    rollback_error = rollback_exc
-                if rollback_error is not None:
+                self._write_line(_canonical_json(payload))
+            except (OSError, TypeError, ValueError) as exc:
+                rollback_error = self._rollback(previous_size)
+                self._poisoned = True
+                poison_error = self._write_poison(
+                    record_digest=_sha256_json(payload),
+                    dedupe_key=record.dedupe_key,
+                    previous_size=previous_size,
+                    reason=str(exc),
+                    rollback_error=(
+                        str(rollback_error) if rollback_error is not None else None
+                    ),
+                )
+                if poison_error is not None:
                     raise ArtifactWriteError(
-                        f"{exc}; timeout queue rollback failed: {rollback_error}"
+                        f"{exc}; rollback={rollback_error!r}; poison={poison_error!r}"
                     ) from exc
                 raise ArtifactWriteError(str(exc)) from exc
             self._records[record.dedupe_key] = payload
             return True
+
+    def reconcile(self, expected: Iterable[TimeoutQueueRecord]) -> None:
+        expected_by_key: dict[str, tuple[TimeoutQueueRecord, dict[str, object]]] = {}
+        for record in expected:
+            if not isinstance(record, TimeoutQueueRecord):
+                raise TypeError("timeout reconciliation requires typed records")
+            payload = record.to_payload()
+            previous = expected_by_key.get(record.dedupe_key)
+            if previous is not None and previous[1] != payload:
+                raise ArtifactIntegrityError(
+                    "timeout reconciliation contains contradictory expected evidence"
+                )
+            expected_by_key[record.dedupe_key] = (record, payload)
+        with self._lock:
+            if self._poisoned:
+                raise ArtifactIntegrityError("timeout queue has an in-memory write poison")
+            for key, payload in self._records.items():
+                expected_value = expected_by_key.get(key)
+                if expected_value is None:
+                    raise ArtifactIntegrityError(
+                        "timeout queue contains foreign evidence outside the expected set"
+                    )
+                if payload != expected_value[1]:
+                    raise ArtifactIntegrityError(
+                        "timeout queue contains contradictory expected evidence"
+                    )
+        for key in sorted(expected_by_key):
+            if key not in self._records:
+                self.append(expected_by_key[key][0])
+        if self._records != {
+            key: payload for key, (_record, payload) in expected_by_key.items()
+        }:
+            raise ArtifactIntegrityError(
+                "timeout queue does not exactly match the expected evidence set"
+            )
+
+    def _write_line(self, line: str) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        existed = self.path.exists()
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if not existed:
+            _fsync_directory(self.path.parent)
+
+    def _rollback(self, previous_size: int) -> OSError | None:
+        try:
+            if self.path.exists():
+                with self.path.open("r+b") as handle:
+                    handle.truncate(previous_size)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                _fsync_directory(self.path.parent)
+        except OSError as exc:
+            return exc
+        return None
+
+    def _write_poison(
+        self,
+        *,
+        record_digest: str,
+        dedupe_key: str,
+        previous_size: int,
+        reason: str,
+        rollback_error: str | None,
+    ) -> OSError | None:
+        body = {
+            "dedupe_key": dedupe_key,
+            "previous_size": previous_size,
+            "reason": reason,
+            "record_digest": record_digest,
+            "rollback_error": rollback_error,
+            "schema_version": 1,
+        }
+        payload = {**body, "content_hash": _sha256_json(body)}
+        self.poison_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=self.poison_path.parent,
+                prefix=f".{self.poison_path.name}.",
+                delete=False,
+            ) as handle:
+                temporary = handle.name
+                handle.write(_canonical_json(payload))
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.poison_path)
+            _fsync_directory(self.poison_path.parent)
+        except OSError as exc:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)
+            return exc
+        return None
+
+    def _validate_poison(self) -> None:
+        try:
+            raw = self.poison_path.read_bytes()
+            if not raw.endswith(b"\n"):
+                raise ValueError("truncated poison")
+            payload = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ArtifactIntegrityError("timeout queue poison is unreadable or invalid") from exc
+        if not isinstance(payload, dict):
+            raise ArtifactIntegrityError("timeout queue poison is not an object")
+        body = {key: value for key, value in payload.items() if key != "content_hash"}
+        if (
+            set(body)
+            != {
+                "dedupe_key",
+                "previous_size",
+                "reason",
+                "record_digest",
+                "rollback_error",
+                "schema_version",
+            }
+            or body.get("schema_version") != 1
+            or payload.get("content_hash") != _sha256_json(body)
+        ):
+            raise ArtifactIntegrityError("timeout queue poison hash or shape differs")
 
     def _load(self) -> dict[str, dict[str, object]]:
         try:
@@ -203,7 +332,7 @@ def stage1_top_k(
     Query-timeout records are deliberately excluded for the timeout queue.
     """
 
-    noise = _positive_finite(noise_p99_ms, "noise_p99_ms")
+    noise = _nonnegative_finite(noise_p99_ms, "noise_p99_ms")
     frozen = tuple(records)
     if not frozen:
         return ()
@@ -282,7 +411,7 @@ def evaluate_stage2(
 ) -> Stage2Decision:
     """Apply the fixed relative-or-absolute Stage-2 wide-recall gate."""
 
-    noise = _positive_finite(noise_p99_ms, "noise_p99_ms")
+    noise = _nonnegative_finite(noise_p99_ms, "noise_p99_ms")
     if not isinstance(evidence, RuntimeEvidence):
         raise TypeError("Stage-2 screening requires RuntimeEvidence")
     if evidence.verdict is not RuntimeVerdict.PASS:
@@ -359,10 +488,10 @@ def _validate_ordinary_record(record: PairRuntimeRecord) -> None:
     # already-validated records and reject only malformed scalar domains here.
 
 
-def _positive_finite(value: float, name: str) -> float:
+def _nonnegative_finite(value: float, name: str) -> float:
     result = _finite_required(value, name)
-    if result <= 0:
-        raise ValueError(f"{name} must be positive")
+    if result < 0:
+        raise ValueError(f"{name} must be non-negative")
     return result
 
 

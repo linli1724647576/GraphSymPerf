@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import replace
 
 import pytest
@@ -135,7 +136,19 @@ def test_stage1_timeout_records_are_not_ranked_as_ordinary_runtime() -> None:
     assert timeout.pair_hash not in selected
 
 
-@pytest.mark.parametrize("noise", (0.0, -1.0, float("nan"), float("inf")))
+def test_stage1_top_k_accepts_zero_noise_and_keeps_deterministic_ranking() -> None:
+    records = _rank_fixture_records(200)
+
+    selected = stage1_top_k(records, noise_p99_ms=0.0)
+
+    assert len(selected) == 10
+    assert selected == stage1_top_k(tuple(reversed(records)), noise_p99_ms=0.0)
+    assert _pair("largest_abs") in selected
+    assert _pair("largest_ratio_above_half_noise") in selected
+    assert _pair("largest_noise_normalized") in selected
+
+
+@pytest.mark.parametrize("noise", (-1.0, float("nan"), float("inf")))
 def test_stage1_top_k_rejects_an_invalid_noise_floor(noise: float) -> None:
     with pytest.raises(ValueError, match="noise_p99_ms"):
         stage1_top_k((_record("record", delta=1.0, ratio=2.0, noise_score=1.0),), noise_p99_ms=noise)
@@ -256,7 +269,23 @@ def test_stage2_rejects_a_direction_change_from_stage1() -> None:
     assert "stage1_direction_changed" in decision.reason_codes
 
 
-@pytest.mark.parametrize("noise", (0.0, float("nan"), float("inf")))
+def test_stage2_uses_raw_zero_noise_for_gates() -> None:
+    decision = evaluate_stage2(
+        _evidence(
+            ratio=1.5,
+            ratio_ci_low=1.100_001,
+            delta=0.001,
+            delta_ci_low=-0.1,
+            direction=0.75,
+        ),
+        noise_p99_ms=0.0,
+    )
+
+    assert decision.relative_pass
+    assert not decision.absolute_pass
+
+
+@pytest.mark.parametrize("noise", (-1.0, float("nan"), float("inf")))
 def test_stage2_rejects_an_invalid_noise_floor(noise: float) -> None:
     with pytest.raises(ValueError, match="noise_p99_ms"):
         evaluate_stage2(
@@ -276,6 +305,15 @@ def _timeout_record() -> TimeoutQueueRecord:
         dbms_fingerprint="4" * 64,
         dbms_health_epoch="5" * 64,
         noise_floor_id="6" * 64,
+    )
+
+
+def _second_timeout_record() -> TimeoutQueueRecord:
+    return replace(
+        _timeout_record(),
+        pair_hash="7" * 64,
+        evidence_digest="8" * 64,
+        stage="stage1",
     )
 
 
@@ -322,3 +360,109 @@ def test_timeout_queue_rolls_back_a_failed_append(tmp_path, monkeypatch) -> None
 
     assert not path.exists() or path.read_bytes() == b""
     assert store.count == 0
+
+
+def test_timeout_queue_reconcile_allows_only_an_exact_expected_subset(tmp_path) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+    first = _timeout_record()
+    second = _second_timeout_record()
+    store.append(first)
+
+    store.reconcile((first, second))
+
+    assert store.count == 2
+    assert {record["dedupe_key"] for record in store.records} == {
+        first.dedupe_key,
+        second.dedupe_key,
+    }
+    reopened = DurableTimeoutQueue(path)
+    assert reopened.count == 2
+
+
+def test_timeout_queue_reconcile_rejects_foreign_or_contradictory_evidence(
+    tmp_path,
+) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    expected = _timeout_record()
+    foreign = _second_timeout_record()
+    store = DurableTimeoutQueue(path)
+    store.append(foreign)
+
+    with pytest.raises(ArtifactIntegrityError, match="expected|foreign|contradictory"):
+        store.reconcile((expected,))
+
+
+@pytest.mark.parametrize("write_shape", ("partial", "full"))
+def test_timeout_queue_unknown_write_outcome_is_rolled_back_and_durably_poisoned(
+    tmp_path,
+    monkeypatch,
+    write_shape,
+) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+
+    def write_then_fail(line: str) -> None:
+        if write_shape == "full":
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(line + "\n", encoding="utf-8")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(line[: len(line) // 2], encoding="utf-8")
+        raise OSError(f"{write_shape} write outcome unknown")
+
+    monkeypatch.setattr(store, "_write_line", write_then_fail, raising=False)
+
+    with pytest.raises(ArtifactWriteError, match="outcome unknown"):
+        store.append(_timeout_record())
+
+    poison_path = path.with_name("timeout_queue.poison.json")
+    poison = json.loads(poison_path.read_text(encoding="utf-8"))
+    assert poison["content_hash"] == _sha256_payload(
+        {key: value for key, value in poison.items() if key != "content_hash"}
+    )
+    assert store.count == 0
+    with pytest.raises(ArtifactIntegrityError, match="poison"):
+        DurableTimeoutQueue(path)
+
+
+def test_timeout_queue_poison_tamper_and_poison_write_failure_remain_fail_closed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+    monkeypatch.setattr(
+        store,
+        "_write_line",
+        lambda _line: (_ for _ in ()).throw(OSError("disk full")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        store,
+        "_write_poison",
+        lambda **_kwargs: OSError("poison disk full"),
+        raising=False,
+    )
+
+    with pytest.raises(ArtifactWriteError, match="poison disk full"):
+        store.append(_timeout_record())
+    with pytest.raises(ArtifactIntegrityError, match="poison"):
+        store.append(_second_timeout_record())
+
+    poison_path = path.with_name("timeout_queue.poison.json")
+    poison_path.write_text('{"tampered":true}\n', encoding="utf-8")
+    with pytest.raises(ArtifactIntegrityError, match="poison"):
+        DurableTimeoutQueue(path)
+
+
+def _sha256_payload(payload: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()

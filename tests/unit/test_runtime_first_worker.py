@@ -10,7 +10,13 @@ import graph_sym_perf.experiment.worker as worker_module
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
 from graph_sym_perf.core import ExecutionResult, QueryExecutionError, QueryTimeoutError, TargetSystem
-from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream, ShardTask
+from graph_sym_perf.experiment.plan_models import (
+    CampaignPhase,
+    FrozenMapping,
+    RulePlanEntry,
+    RuleStream,
+    ShardTask,
+)
 from graph_sym_perf.experiment.evidence_validation import candidate_artifact_hashes, canonical_hash
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.state import ErrorKind
@@ -25,7 +31,13 @@ from graph_sym_perf.experiment.worker import (
     _query_hash,
 )
 from graph_sym_perf.generation.corpus import GraphCorpus
-from graph_sym_perf.runtime.models import NoiseCalibration
+from graph_sym_perf.runtime.models import (
+    NoiseCalibration,
+    PairedSample,
+    RuntimeEvidence,
+    RuntimeVerdict,
+)
+from graph_sym_perf.runtime.screening import DurableTimeoutQueue, TimeoutQueueRecord
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 
 
@@ -1354,6 +1366,365 @@ def test_rule_entry_measures_only_stage1_top_k_with_fixed_stage2_protocol(
     assert candidate["content_hash"] == canonical_hash(body)
 
 
+def test_rule_entry_accepts_complete_zero_noise_calibration_and_uses_epsilon_score(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+    zero_noise = NoiseCalibration(
+        valid=True,
+        sample_count=200,
+        p95_delta_ms=0.0,
+        p99_delta_ms=0.0,
+        median_order_bias_ms=0.0,
+        long_tail_ratio=1.0,
+        reason_codes=(),
+    )
+    def fixed_zero_noise(*_args, **kwargs):
+        if kwargs["anchored_noise_floor_id"] is None:
+            kwargs["persist_intent"](
+                "f" * 64,
+                tuple(f"{index:064x}" for index in range(1, 21)),
+            )
+        return zero_noise, "f" * 64
+
+    monkeypatch.setattr(
+        worker_module,
+        "_load_or_calibrate_entry_noise",
+        fixed_zero_noise,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "_load_entry_noise",
+        lambda *_args, **_kwargs: (zero_noise, "f" * 64),
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    candidate = json.loads(
+        next(tmp_path.glob("entries/*/candidates/*/candidate.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert result["terminal_state"] == "stage2_complete"
+    assert candidate["noise_normalized_score"] == pytest.approx(30_000.0)
+
+
+@pytest.mark.parametrize(
+    ("entry_change", "config_change"),
+    (
+        ({"query_timeout_seconds": 31}, None),
+        ({"accepted_pair_quota": 2, "max_generated_seed_budget": 2}, None),
+        (None, ("stage1", "pairs", 4)),
+        (None, ("stage2", "relative_ratio", 1.6)),
+    ),
+)
+def test_stage2_resume_rejects_any_entry_or_screening_policy_drift(
+    tmp_path,
+    monkeypatch,
+    entry_change,
+    config_change,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "stage2_complete"
+
+    retry_entry = replace(entry, **entry_change) if entry_change else entry
+    retry_spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    if config_change:
+        section, key, value = config_change
+        runtime = {name: dict(policy) for name, policy in retry_spec.runtime.items()}
+        runtime[section][key] = value
+        retry_spec = replace(retry_spec, runtime=FrozenMapping(runtime))
+    retry = RuntimeFirstShardWorker(
+        retry_spec,
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _NoRuntimeAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(retry_entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+def test_stage2_progress_binds_ordered_candidates_and_complete_policy(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(
+        rule_id="constant_true_disjunction",
+        family="bool",
+        accepted_pair_quota=4,
+        max_generated_seed_budget=4,
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=tuple(
+                f"MATCH (n) WHERE n.id = {index} RETURN n" for index in range(1, 5)
+            ),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    assert worker(entry)["terminal_state"] == "stage2_complete"
+
+    entry_dir = next(tmp_path.glob("entries/*"))
+    progress = json.loads((entry_dir / "stage2_progress.json").read_text(encoding="utf-8"))
+    assert progress["schema_version"] == 1
+    assert progress["entry_payload"] == worker_module.to_jsonable(asdict(entry))
+    assert progress["entry_payload_hash"] == canonical_hash(progress["entry_payload"])
+    assert progress["selected_pair_hashes"] == [
+        item["pair_hash"] for item in progress["candidate_ledger"]
+    ]
+    assert progress["candidate_intent"] is None
+    assert progress["screening_policy"]["normalization"] == {
+        "denominator": "max(noise_p99_ms,0.001)",
+        "epsilon_ms": 0.001,
+    }
+    assert progress["screening_policy"]["stage2"]["warmups"] == 3
+    assert progress["screening_policy"]["stage2"]["pairs"] == 12
+    assert progress["screening_policy"]["stage2"]["bootstrap_resamples"] == 10_000
+    assert progress["content_hash"] == canonical_hash(
+        {key: value for key, value in progress.items() if key != "content_hash"}
+    )
+
+
+def test_stage2_resume_fails_closed_when_candidates_predate_progress_ledger(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "stage2_complete"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    (entry_dir / "stage2_progress.json").unlink(missing_ok=True)
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _NoRuntimeAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+@pytest.mark.parametrize("corruption", ("ledger_reorder", "digest_drift", "orphan_tail"))
+def test_stage2_progress_rejects_nontransactional_candidate_history(
+    tmp_path,
+    monkeypatch,
+    corruption,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(
+        rule_id="constant_true_disjunction",
+        family="bool",
+        accepted_pair_quota=4,
+        max_generated_seed_budget=4,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=tuple(
+            f"MATCH (n) WHERE n.id = {index} RETURN n" for index in range(1, 5)
+        ),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "stage2_complete"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    progress_path = entry_dir / "stage2_progress.json"
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    if corruption == "ledger_reorder":
+        progress["candidate_ledger"][:2] = reversed(progress["candidate_ledger"][:2])
+    elif corruption == "digest_drift":
+        progress["candidate_ledger"][0]["candidate_digest"] = "0" * 64
+    else:
+        progress["candidate_ledger"].pop()
+        progress["candidate_intent"] = None
+    body = {key: value for key, value in progress.items() if key != "content_hash"}
+    progress["content_hash"] = canonical_hash(body)
+    progress_path.write_text(json.dumps(progress), encoding="utf-8")
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _NoRuntimeAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+def test_stage2_progress_recovers_only_exact_intent_bound_durable_tail(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(
+        rule_id="constant_true_disjunction",
+        family="bool",
+        accepted_pair_quota=4,
+        max_generated_seed_budget=4,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=tuple(
+            f"MATCH (n) WHERE n.id = {index} RETURN n" for index in range(1, 5)
+        ),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "stage2_complete"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    progress_path = entry_dir / "stage2_progress.json"
+    selection_path = entry_dir / "stage2_selection.json"
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    tail = progress["candidate_ledger"].pop()
+    progress["candidate_intent"] = {
+        "selected_index": len(progress["candidate_ledger"]),
+        "pair_hash": tail["pair_hash"],
+        "candidate_digest": tail["candidate_digest"],
+    }
+    body = {key: value for key, value in progress.items() if key != "content_hash"}
+    progress["content_hash"] = canonical_hash(body)
+    progress_path.write_text(json.dumps(progress), encoding="utf-8")
+    selection_path.unlink()
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _NoRuntimeAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+    assert retry(entry)["terminal_state"] == "stage2_complete"
+
+    recovered = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert recovered["candidate_ledger"][-1] == tail
+    assert recovered["candidate_intent"] is None
+
+
+def test_stage2_resource_partial_ledger_resumes_without_remeasuring_anchored_tail(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(
+        rule_id="constant_true_disjunction",
+        family="bool",
+        accepted_pair_quota=4,
+        max_generated_seed_budget=4,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=tuple(
+            f"MATCH (n) WHERE n.id = {index} RETURN n" for index in range(1, 5)
+        ),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+
+    class OneShotStage2Deadline:
+        pulsed = False
+
+        def __call__(self) -> float:
+            candidate_count = len(
+                tuple(tmp_path.glob("entries/*/candidates/*/candidate.json"))
+            )
+            if candidate_count == 1 and not self.pulsed:
+                self.pulsed = True
+                return 601.0
+            return 0.0
+
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        clock=OneShotStage2Deadline(),
+    )
+    first.bind_run_dir(tmp_path)
+
+    first_result = first(entry)
+
+    entry_dir = next(tmp_path.glob("entries/*"))
+    progress_path = entry_dir / "stage2_progress.json"
+    partial = json.loads(progress_path.read_text(encoding="utf-8"))
+    anchored_path = next(entry_dir.glob("candidates/*/candidate.json"))
+    anchored_bytes = anchored_path.read_bytes()
+    assert first_result["terminal_state"] == "resource_exhausted"
+    assert len(partial["candidate_ledger"]) == 1
+    assert partial["candidate_intent"] is None
+    assert not (entry_dir / "stage2_selection.json").exists()
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        clock=lambda: 0.0,
+    )
+    retry.bind_run_dir(tmp_path)
+
+    retry_result = retry(entry)
+
+    complete = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert retry_result["terminal_state"] == "stage2_complete"
+    assert len(complete["candidate_ledger"]) == 3
+    assert complete["candidate_intent"] is None
+    assert anchored_path.read_bytes() == anchored_bytes
+    assert (entry_dir / "stage2_selection.json").exists()
+
+
 @pytest.mark.parametrize("corruption", ("query", "sample"))
 def test_rule_entry_reuses_valid_stage2_candidates_and_rejects_corruption(
     tmp_path,
@@ -1473,6 +1844,61 @@ def test_stage2_one_sided_query_timeout_enters_only_the_durable_timeout_queue(
     assert queued[0]["stage"] == "stage2"
     assert len(queued[0]["evidence_digest"]) == 64
     assert candidate["stage2_decision"]["promote"] is False
+
+
+def test_stage2_any_single_side_timeout_is_queued_even_below_eighty_percent() -> None:
+    samples = tuple(
+        PairedSample(
+            "AB" if index % 2 == 0 else "BA",
+            1.0,
+            None if index == 0 else 2.0,
+            b_timeout=index == 0,
+        )
+        for index in range(12)
+    )
+    evidence = RuntimeEvidence(
+        verdict=RuntimeVerdict.INCONCLUSIVE,
+        query_a_hash="a" * 64,
+        query_b_hash="b" * 64,
+        paired_samples=samples,
+        median_ratio=None,
+        median_delta_ms=None,
+        ci_ratio_low=None,
+        ci_ratio_high=None,
+        direction_consistency=0.0,
+        relative_mad=None,
+        reason_codes=("insufficient_timeout_dominance",),
+    )
+
+    assert worker_module._runtime_timeout_side(evidence) == "b"
+
+
+def test_stage2_both_side_timeout_is_never_a_performance_queue_record() -> None:
+    samples = tuple(
+        PairedSample(
+            "AB" if index % 2 == 0 else "BA",
+            None if index == 0 else 1.0,
+            None if index == 1 else 2.0,
+            a_timeout=index == 0,
+            b_timeout=index == 1,
+        )
+        for index in range(12)
+    )
+    evidence = RuntimeEvidence(
+        verdict=RuntimeVerdict.INCONCLUSIVE,
+        query_a_hash="a" * 64,
+        query_b_hash="b" * 64,
+        paired_samples=samples,
+        median_ratio=None,
+        median_delta_ms=None,
+        ci_ratio_low=None,
+        ci_ratio_high=None,
+        direction_consistency=0.0,
+        relative_mad=None,
+        reason_codes=("both_sides_timeout",),
+    )
+
+    assert worker_module._runtime_timeout_side(evidence) is None
 
 
 def test_stage2_driver_timeout_is_infrastructure_and_never_a_performance_timeout(
@@ -1612,6 +2038,58 @@ def test_corrupt_timeout_queue_fails_closed_on_resume(tmp_path, monkeypatch) -> 
     assert result["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
 
 
+def test_timeout_queue_resume_rejects_a_valid_but_foreign_record(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+
+    class Stage1TimeoutAdapter(_Adapter):
+        def execute(self, query, parameters, query_kind, **kwargs):
+            if query_kind == "runtime" and "OR true" in query:
+                raise QueryTimeoutError("one-sided timeout")
+            return super().execute(query, parameters, query_kind, **kwargs)
+
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: Stage1TimeoutAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "stage2_complete"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    DurableTimeoutQueue(entry_dir / "timeout_queue.jsonl").append(
+        TimeoutQueueRecord(
+            entry_id=entry.entry_id,
+            pair_hash="1" * 64,
+            timeout_side="a",
+            stage="stage1",
+            evidence_digest="2" * 64,
+            graph_snapshot_hash=_graph_snapshot_hash(generated.graph_statements),
+            dbms_fingerprint="a" * 64,
+            dbms_health_epoch="e" * 64,
+            noise_floor_id="f" * 64,
+        )
+    )
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _NoRuntimeAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    result = retry(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+
+
 def test_timeout_queue_is_not_committed_when_final_health_identity_drifts(
     tmp_path,
     monkeypatch,
@@ -1640,6 +2118,15 @@ def test_timeout_queue_is_not_committed_when_final_health_identity_drifts(
 
     assert result["terminal_state"] == "infrastructure_failed"
     assert not tuple(tmp_path.glob("entries/*/timeout_queue.jsonl"))
+    findings = [
+        json.loads(line)
+        for line in (tmp_path / "reliability" / "findings.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert findings[-1]["scope"] == "entry"
+    assert findings[-1]["query_hash"] is None
+    assert findings[-1]["entry_id"] == entry.entry_id
 
 
 def test_runtime_artifact_failure_never_advances_accepted_count(tmp_path, monkeypatch) -> None:
@@ -2394,7 +2881,7 @@ def test_retry_recomputes_noise_artifact_from_expected_probes_and_integer_sample
         adapter_factory=lambda _entry: _Adapter(),
     )
     first.bind_run_dir(tmp_path)
-    assert first(entry)["terminal_state"] == "infrastructure_failed"
+    assert first(entry)["terminal_state"] == "stage2_complete"
     noise_path = next(tmp_path.glob("entries/*/noise_calibration.json"))
     payload = json.loads(noise_path.read_text(encoding="utf-8"))
     body = {key: value for key, value in payload.items() if key != "content_hash"}
@@ -2818,6 +3305,26 @@ def test_final_identity_drift_invalidates_completed_rule_entry_acceptance(
     assert result["acceptance_status"] == "incomplete"
     assert result["acceptance_stop_reason"] == "INFRASTRUCTURE_FAILED"
     assert result["acceptance_invalidated"] is True
+    findings = [
+        json.loads(line)
+        for line in (tmp_path / "reliability" / "findings.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    finding = findings[-1]
+    assert finding["schema_version"] == 2
+    assert finding["scope"] == "entry"
+    assert finding["entry_id"] == entry.entry_id
+    assert finding["query_hash"] is None
+    assert finding["graph_hash"]
+    assert finding["observed_identity"]
+    assert finding["attempt_evidence"]
+    assert finding["kind"] == (
+        ErrorKind.DBMS_CRASHED.value
+        if adapter_type is _FinalFingerprintDriftAdapter
+        else ErrorKind.INFRASTRUCTURE_ERROR.value
+    )
+    assert not tuple(tmp_path.glob("entries/*/timeout_queue.jsonl"))
 
     retry = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
