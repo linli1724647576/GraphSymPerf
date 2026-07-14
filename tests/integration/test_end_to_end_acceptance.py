@@ -2,9 +2,20 @@ import hashlib
 import json
 import time
 
-from graph_sym_perf.core import TargetSystem
-from graph_sym_perf.experiment.plan_models import RunPlan, ShardTask, SourceRevision
+from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
+from graph_sym_perf.core import ExecutionResult, TargetSystem
+from graph_sym_perf.experiment.plan_models import (
+    CampaignPhase,
+    RulePlanEntry,
+    RuleStream,
+    RunPlan,
+    ShardTask,
+    SourceRevision,
+)
+from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.supervisor import ShardSupervisor
+from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
+from graph_sym_perf.generation.corpus import GraphCorpus
 
 
 class _AcceptanceWorker:
@@ -117,3 +128,99 @@ def test_one_hung_shard_does_not_prevent_another_system_from_completing(tmp_path
     assert summary.incomplete == (hung,)
     assert summary.failed == ()
     assert "WORKER_HUNG" in (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+
+
+class _EntryAdapter:
+    target = TargetSystem.NEO4J
+
+    def reset_graph(self, *, timeout_seconds=None) -> bool:
+        return True
+
+    def reset_schema(self) -> None:
+        return None
+
+    def ensure_schema(self) -> None:
+        return None
+
+    def load_graph(self, _corpus: GraphCorpus) -> None:
+        return None
+
+    def execute(self, _query, _parameters, query_kind, **_kwargs) -> ExecutionResult:
+        manifest = {
+            "graph_manifest_nodes": ("nodes", 1),
+            "graph_manifest_relationships": ("relationships", 0),
+            "graph_manifest_labels": ("labels", 1),
+            "graph_manifest_relationship_types": ("types", 0),
+            "graph_manifest_indexes": ("indexes", 0),
+        }
+        key, value = manifest.get(query_kind, ("value", 1))
+        return ExecutionResult(
+            system=TargetSystem.NEO4J,
+            query_kind=query_kind,
+            rows=({key: value},),
+            elapsed_ms=1.0,
+            summary={"truncated": False},
+        )
+
+    def dbms_fingerprint(self) -> DBMSFingerprint:
+        return DBMSFingerprint("a" * 64, server_version="neo4j/test")
+
+    def dbms_health_epoch(self) -> DBMSHealthEpoch:
+        return DBMSHealthEpoch("e" * 64, "test")
+
+    def close(self) -> None:
+        return None
+
+
+def _entry(rule_id: str, family: str) -> RulePlanEntry:
+    return RulePlanEntry(
+        entry_id=f"p1:neo4j:discovery:{rule_id}:128:0",
+        phase=CampaignPhase.P1,
+        target=TargetSystem.NEO4J,
+        rule_id=rule_id,
+        family=family,
+        tier="core",
+        graph_scale=128,
+        shard_index=0,
+        shard_seed=7,
+        accepted_pair_quota=1,
+        max_generated_seed_budget=1,
+        max_variants_per_seed=1,
+        proof_version="1",
+        query_timeout_seconds=30,
+        max_entry_runtime_seconds=600,
+        measurement_protocol_id="paired-runtime-v1",
+        stream=RuleStream.DISCOVERY,
+    )
+
+
+def test_bool_and_sym_rule_entries_keep_independent_quota_and_statistics(tmp_path) -> None:
+    query = "MATCH (a:Node), (b:Node) WHERE a.id = 1 RETURN a.id, b.id"
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=(query,),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": 128},
+    )
+    results = []
+    for entry in (
+        _entry("null_partition_tautology", "bool"),
+        _entry("pattern_order_symmetry", "sym"),
+    ):
+        worker = RuntimeFirstShardWorker(
+            load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+            generation_runner=lambda _entry, _raw_dir: generated,
+            adapter_factory=lambda _entry: _EntryAdapter(),
+        )
+        worker.bind_run_dir(tmp_path)
+        results.append(worker(entry))
+
+    assert [result["accepted_pairs"] for result in results] == [1, 1]
+    assert [result["terminal_state"] for result in results] == [
+        "building_accepted_pairs",
+        "building_accepted_pairs",
+    ]
+    assert [result["rule_stats"]["accepted"] for result in results] == [
+        {"null_partition_tautology": 1},
+        {"pattern_order_symmetry": 1},
+    ]
+    assert len(tuple((tmp_path / "entries").glob("*/accepted_pairs.jsonl"))) == 2

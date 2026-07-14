@@ -33,17 +33,44 @@ from graph_sym_perf.artifacts.store import (
     verify_candidate_record_reference,
 )
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
-from graph_sym_perf.core import GdsmithConfig, QueryTimeoutError, TargetSystem, to_jsonable
+from graph_sym_perf.core import (
+    AdapterError,
+    ConfirmationConfig,
+    DatasetConfig,
+    EquivalenceConfig,
+    GdsmithConfig,
+    QueryGenerationConfig,
+    QueryExecutionError,
+    QueryTimeoutError,
+    RunConfig,
+    RunPaths,
+    SystemConfig,
+    TargetSystem,
+    TransformConfig,
+    to_jsonable,
+)
 from graph_sym_perf.dialects.agensgraph import AgensGraphDialect
 from graph_sym_perf.dialects.apache_age import ApacheAgeDialect
 from graph_sym_perf.dialects.base import DecisionKind
 from graph_sym_perf.dialects.native import NativeCypherDialect
 from graph_sym_perf.equivalence.checker import compare_typed_results
-from graph_sym_perf.experiment.plan_models import ExperimentSpec, RulePlanEntry, ShardTask
+from graph_sym_perf.experiment.plan_models import (
+    ExperimentSpec,
+    RulePlanEntry,
+    ShardTask,
+    ValidatedYieldExperimentSpec,
+)
 from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.scheduling import AttemptContext
-from graph_sym_perf.experiment.state import ErrorKind, ShardState, _append_jsonl_fsync, _atomic_write_json, _fsync_directory
-from graph_sym_perf.generation.corpus import GraphCorpus, GraphManifest, portable_ast_hash
+from graph_sym_perf.experiment.state import (
+    EntryState,
+    ErrorKind,
+    ShardState,
+    _append_jsonl_fsync,
+    _atomic_write_json,
+    _fsync_directory,
+)
+from graph_sym_perf.generation.corpus import GraphCorpus, GraphManifest, PortableQuery, portable_ast_hash
 from graph_sym_perf.generation.gdsmith import GdsmithGenerator, GenerationRequest
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
@@ -66,6 +93,7 @@ from graph_sym_perf.workload.models import (
     PairProposal,
     PairValidation,
 )
+from graph_sym_perf.workload.rule_pairs import RulePairFactory
 from graph_sym_perf.workload.registry import AcceptedCorpusRegistry
 
 
@@ -82,11 +110,11 @@ class GeneratedShard:
 
 
 class _AdapterFactory(Protocol):
-    def __call__(self, task: ShardTask) -> Any: ...
+    def __call__(self, task: ShardTask | RulePlanEntry) -> Any: ...
 
 
 class _GenerationRunner(Protocol):
-    def __call__(self, task: ShardTask, raw_dir: Path) -> GeneratedShard: ...
+    def __call__(self, task: ShardTask | RulePlanEntry, raw_dir: Path) -> GeneratedShard: ...
 
 
 class _CandidatePipeline(Protocol):
@@ -277,18 +305,20 @@ class RuntimeFirstShardWorker:
 
     def __init__(
         self,
-        spec: ExperimentSpec,
+        spec: ExperimentSpec | ValidatedYieldExperimentSpec,
         *,
         environment: Mapping[str, str] | None = None,
         generation_runner: _GenerationRunner | None = None,
         adapter_factory: _AdapterFactory | None = None,
         candidate_pipeline: _CandidatePipeline | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.spec = spec
         self.environment = dict(os.environ if environment is None else environment)
         self._generation_runner = generation_runner or self._generate_with_gdsmith
         self._adapter_factory = adapter_factory or self._create_adapter
         self._candidate_pipeline = candidate_pipeline
+        self._clock = clock
         self._run_dir: Path | None = None
         self._attempt_dir: Path | None = None
         self._attempt_context: AttemptContext | None = None
@@ -305,7 +335,448 @@ class RuntimeFirstShardWorker:
         if attempt_dir is not None:
             self._attempt_dir = Path(attempt_dir)
 
-    def __call__(self, task: ShardTask) -> dict[str, object]:
+    def __call__(self, task: ShardTask | RulePlanEntry) -> dict[str, object]:
+        if isinstance(task, RulePlanEntry):
+            return self._run_rule_plan_entry(task)
+        if not isinstance(task, ShardTask):
+            raise TypeError("worker task must be a RulePlanEntry or schema-v2 ShardTask")
+        return self._run_schema_v2_compat(task)
+
+    def _run_rule_plan_entry(self, entry: RulePlanEntry) -> dict[str, object]:
+        """Execute the isolated schema-v3 acceptance lifecycle for one rule."""
+
+        if not isinstance(self.spec, ValidatedYieldExperimentSpec):
+            raise TypeError("RulePlanEntry requires a schema-v3 ValidatedYieldExperimentSpec")
+        if self._run_dir is None:
+            raise RuntimeError("entry worker was not bound to an immutable run directory")
+        entry_dir = self._run_dir / "entries" / _entry_directory_name(entry.entry_id)
+        entry_dir.mkdir(parents=True, exist_ok=True)
+        attempt_dir = self._attempt_dir
+        if attempt_dir is None:
+            attempt_dir = _next_entry_attempt_dir(entry_dir)
+            attempt_dir.mkdir(parents=True, exist_ok=False)
+            self._attempt_dir = attempt_dir
+        started = self._clock()
+        deadline = started + entry.max_entry_runtime_seconds
+        if self._clock() >= deadline:
+            return self._finish_entry(
+                entry,
+                attempt_dir,
+                terminal_state=EntryState.RESOURCE_EXHAUSTED,
+                generated=None,
+            )
+
+        generation_lease = self._attempt_context.generation_lease() if self._attempt_context else nullcontext()
+        with generation_lease:
+            task_identity = canonical_hash(to_jsonable(entry))
+            generation_path = entry_dir / "generation_corpus.json"
+            generated = _load_generation_corpus(generation_path, task_identity=task_identity)
+            if generated is None:
+                generated = self._generation_runner(entry, attempt_dir / "gdsmith_raw")
+                _seal_generation_corpus(generation_path, task_identity=task_identity, generated=generated)
+        if self._clock() >= deadline:
+            return self._finish_entry(
+                entry,
+                attempt_dir,
+                terminal_state=EntryState.RESOURCE_EXHAUSTED,
+                generated=generated,
+            )
+
+        graph_hash = _graph_snapshot_hash(generated.graph_statements)
+        adapter = self._adapter_factory(entry)
+        proxy = AdapterQueryProxy(
+            adapter,
+            attempt_dir=attempt_dir,
+            graph_hash=graph_hash,
+            dbms_fingerprint="unverified",
+            default_timeout_seconds=float(entry.query_timeout_seconds),
+            on_error=lambda kind, inflight: self._record_query_failure(kind, inflight, attempt_dir),
+        )
+        graph_manifest: GraphManifest | None = None
+        fingerprint = DBMSFingerprint(None, "not_loaded")
+        health_epoch = DBMSHealthEpoch(None, reason="not_loaded")
+        outcome: dict[str, object] = {
+            "accepted": (),
+            "accepted_hashes": (),
+            "generated_seeds": 0,
+            "rejects": {},
+            "rule_stats": {"accepted": {}, "not_applicable": {}},
+            "terminal_state": EntryState.INFRASTRUCTURE_FAILED,
+        }
+        measurement_lease = self._attempt_context.measurement_lease() if self._attempt_context else nullcontext()
+        try:
+            with measurement_lease:
+                self._reset_and_load(proxy, generated.graph_statements)
+                try:
+                    requested_max_nodes = _requested_max_nodes(entry, generated)
+                except (TypeError, ValueError) as exc:
+                    raise WorkerFailure(
+                        ErrorKind.INFRASTRUCTURE_ERROR,
+                        f"requested graph scale is invalid: {exc}",
+                    ) from exc
+                if entry.target is TargetSystem.NEO4J:
+                    try:
+                        graph_manifest = read_neo4j_graph_manifest(
+                            proxy,
+                            requested_max_nodes=requested_max_nodes,
+                            statements=generated.graph_statements,
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise WorkerFailure(
+                            ErrorKind.INFRASTRUCTURE_ERROR,
+                            f"graph manifest read failed: {exc}",
+                        ) from exc
+                    if graph_manifest.graph_fingerprint != graph_hash:
+                        raise WorkerFailure(
+                            ErrorKind.INFRASTRUCTURE_ERROR,
+                            "graph manifest fingerprint does not match sealed graph",
+                        )
+                    _atomic_write_json(attempt_dir / "graph_manifest.json", asdict(graph_manifest))
+                fingerprint = _adapter_dbms_fingerprint(proxy)
+                health_epoch = _adapter_dbms_health_epoch(proxy)
+                if not fingerprint.available or not health_epoch.available:
+                    raise WorkerFailure(
+                        ErrorKind.DBMS_UNAVAILABLE,
+                        fingerprint.reason or health_epoch.reason or "DBMS identity unavailable",
+                    )
+                assert fingerprint.value is not None
+                proxy.update_dbms_fingerprint(fingerprint.value)
+                outcome = self._build_rule_entry_pairs(
+                    proxy,
+                    entry,
+                    generated.query_texts,
+                    entry_dir,
+                    graph_snapshot_hash=(
+                        graph_manifest.graph_fingerprint if graph_manifest is not None else graph_hash
+                    ),
+                    dbms_fingerprint=fingerprint.value,
+                    deadline=deadline,
+                )
+                if outcome["terminal_state"] is not EntryState.INFRASTRUCTURE_FAILED:
+                    final_fingerprint = _adapter_dbms_fingerprint(proxy)
+                    final_epoch = _adapter_dbms_health_epoch(proxy)
+                    if (
+                        not final_fingerprint.available
+                        or not final_epoch.available
+                        or final_fingerprint.value != fingerprint.value
+                        or final_epoch.value != health_epoch.value
+                    ):
+                        outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+                        outcome["infrastructure_reason"] = "DBMS fingerprint or health epoch changed"
+                    elif graph_manifest is not None:
+                        try:
+                            final_graph = read_neo4j_graph_manifest(
+                                proxy,
+                                requested_max_nodes=entry.graph_scale,
+                                statements=generated.graph_statements,
+                            )
+                        except (TypeError, ValueError) as exc:
+                            raise WorkerFailure(
+                                ErrorKind.INFRASTRUCTURE_ERROR,
+                                f"final graph manifest read failed: {exc}",
+                            ) from exc
+                        if final_graph != graph_manifest:
+                            outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+                            outcome["infrastructure_reason"] = "observed graph manifest drifted during acceptance"
+        except WorkerFailure as exc:
+            if exc.kind in {
+                ErrorKind.DBMS_UNAVAILABLE,
+                ErrorKind.DBMS_CRASHED,
+                ErrorKind.INFRASTRUCTURE_ERROR,
+            }:
+                outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+                outcome["infrastructure_reason"] = str(exc)
+            else:
+                raise
+        except (OSError, AdapterError) as exc:
+            outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+            outcome["infrastructure_reason"] = str(exc)
+        finally:
+            adapter.close()
+
+        return self._finish_entry(
+            entry,
+            attempt_dir,
+            terminal_state=outcome["terminal_state"],
+            generated=generated,
+            accepted_hashes=tuple(outcome["accepted_hashes"]),
+            generated_seeds=int(outcome["generated_seeds"]),
+            rejects=dict(outcome["rejects"]),
+            rule_stats=dict(outcome["rule_stats"]),
+            graph_manifest=graph_manifest,
+            dbms_fingerprint=fingerprint,
+            health_epoch=health_epoch,
+            infrastructure_reason=outcome.get("infrastructure_reason"),
+        )
+
+    def _build_rule_entry_pairs(
+        self,
+        adapter: Any,
+        entry: RulePlanEntry,
+        queries: tuple[str, ...],
+        entry_dir: Path,
+        *,
+        graph_snapshot_hash: str,
+        dbms_fingerprint: str,
+        deadline: float,
+    ) -> dict[str, object]:
+        factory = RulePairFactory(RuleRegistry.default())
+        dialect = _dialect_for(entry.target)
+        replayable = getattr(adapter, "gdsmith_query_is_replayable", gdsmith_read_query_is_replayable)
+        max_rows = int(self.spec.validation["max_result_rows"])
+        rejects: Counter[str] = Counter()
+        not_applicable = 0
+        generated_seeds = 0
+        infrastructure_reason: str | None = None
+        records_path = entry_dir / "accepted_pairs.jsonl"
+        _ensure_jsonl(records_path)
+        accepted_hashes = _validated_entry_accepted_hashes(
+            records_path,
+            entry=entry,
+            graph_snapshot_hash=graph_snapshot_hash,
+            dbms_fingerprint=dbms_fingerprint,
+        )
+        if len(accepted_hashes) > entry.accepted_pair_quota:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "durable accepted pairs exceed the immutable entry quota",
+            )
+        if len(accepted_hashes) == entry.accepted_pair_quota:
+            return {
+                "accepted_hashes": tuple(sorted(accepted_hashes)),
+                "generated_seeds": 0,
+                "rejects": {},
+                "rule_stats": {
+                    "accepted": {entry.rule_id: len(accepted_hashes)},
+                    "not_applicable": {},
+                },
+                "terminal_state": EntryState.BUILDING_ACCEPTED_PAIRS,
+            }
+
+        for ordinal in range(1, entry.max_generated_seed_budget + 1):
+            if self._clock() >= deadline:
+                state = EntryState.RESOURCE_EXHAUSTED
+                break
+            generated_seeds = ordinal
+            if ordinal > len(queries):
+                rejects["RULE_NOT_APPLICABLE"] += 1
+                not_applicable += 1
+                continue
+            query = queries[ordinal - 1]
+            build = factory.build(query, entry, entry.target)
+            if build.quarantine:
+                _write_entry_quarantine(
+                    entry_dir,
+                    entry,
+                    query_a=query,
+                    query_b=None,
+                    reason=build.reject_code or "RULE_INVARIANT_MISMATCH",
+                    transform_metadata={},
+                )
+                state = EntryState.QUARANTINED
+                break
+            if build.pair is None:
+                reason = build.reject_code or "RULE_NOT_APPLICABLE"
+                rejects[reason] += 1
+                if reason == "RULE_NOT_APPLICABLE":
+                    not_applicable += 1
+                continue
+            pair = build.pair
+            left_query = PortableQuery(pair.query_a)
+            right_query = PortableQuery(pair.query_b)
+            left_decision = dialect.check(left_query)
+            right_decision = dialect.check(right_query)
+            if left_decision.kind is DecisionKind.REJECT:
+                rejects[f"DIALECT_{left_decision.reason_code.value}"] += 1
+                continue
+            if right_decision.kind is DecisionKind.REJECT:
+                rejects[f"DIALECT_{right_decision.reason_code.value}"] += 1
+                continue
+            if not replayable(pair.query_a) or not replayable(pair.query_b):
+                rejects["DIALECT_REPLAY_REJECT"] += 1
+                continue
+            if pair.pair_hash in accepted_hashes:
+                continue
+            if self._clock() >= deadline:
+                state = EntryState.RESOURCE_EXHAUSTED
+                break
+            try:
+                left = adapter.execute(
+                    pair.query_a,
+                    pair.parameters,
+                    "acceptance_base",
+                    max_rows=max_rows,
+                    timeout_seconds=entry.query_timeout_seconds,
+                )
+                if self._clock() >= deadline:
+                    state = EntryState.RESOURCE_EXHAUSTED
+                    break
+                right = adapter.execute(
+                    pair.query_b,
+                    pair.parameters,
+                    "acceptance_transformed",
+                    max_rows=max_rows,
+                    timeout_seconds=entry.query_timeout_seconds,
+                )
+            except (QueryTimeoutError, TimeoutError):
+                rejects["QUERY_TIMEOUT"] += 1
+                continue
+            except Exception as exc:
+                if _is_entry_infrastructure_exception(exc):
+                    state = EntryState.INFRASTRUCTURE_FAILED
+                    infrastructure_reason = str(exc)
+                    break
+                rejects["QUERY_EXECUTION_ERROR"] += 1
+                continue
+            if _is_truncated(left, max_rows) or _is_truncated(right, max_rows):
+                rejects["RESULT_TRUNCATED"] += 1
+                continue
+            equivalence = compare_typed_results(
+                left.rows,
+                right.rows,
+                ordered=_has_order_by(pair.query_a),
+            )
+            if not equivalence.equivalent:
+                if not equivalence.complete_result:
+                    reason = equivalence.reason_codes[0] if equivalence.reason_codes else "typed_equivalence_incomplete"
+                    rejects[reason.upper()] += 1
+                    continue
+                if entry.tier == "core":
+                    _write_entry_quarantine(
+                        entry_dir,
+                        entry,
+                        query_a=pair.query_a,
+                        query_b=pair.query_b,
+                        reason="TYPED_EQUIVALENCE_FAILED",
+                        transform_metadata=pair.transform_metadata,
+                    )
+                    state = EntryState.QUARANTINED
+                    break
+                rejects["TYPED_EQUIVALENCE_FAILED"] += 1
+                continue
+            accepted_hashes.add(pair.pair_hash)
+            _append_jsonl(
+                records_path,
+                {
+                    "certificate": to_jsonable(asdict(pair.certificate)),
+                    "dbms_fingerprint": dbms_fingerprint,
+                    "equivalence": "complete_typed_equivalent",
+                    "graph_snapshot_hash": graph_snapshot_hash,
+                    "pair_hash": pair.pair_hash,
+                    "parameters": to_jsonable(pair.parameters),
+                    "proof_version": pair.certificate.proof_version,
+                    "query_a": pair.query_a,
+                    "query_b": pair.query_b,
+                    "query_hash": portable_ast_hash(pair.query_a),
+                    "rule_id": entry.rule_id,
+                    "semantic_proof_sha256": pair.transform_metadata["semantic_proof_sha256"],
+                    "transform_metadata": to_jsonable(pair.transform_metadata),
+                },
+            )
+            if len(accepted_hashes) == entry.accepted_pair_quota:
+                state = EntryState.BUILDING_ACCEPTED_PAIRS
+                break
+        else:
+            state = EntryState.UNDERFILLED
+
+        if state is EntryState.BUILDING_ACCEPTED_PAIRS and len(accepted_hashes) != entry.accepted_pair_quota:
+            state = EntryState.UNDERFILLED
+        if state not in {
+            EntryState.BUILDING_ACCEPTED_PAIRS,
+            EntryState.QUARANTINED,
+            EntryState.RESOURCE_EXHAUSTED,
+            EntryState.INFRASTRUCTURE_FAILED,
+        }:
+            state = EntryState.UNDERFILLED
+        result: dict[str, object] = {
+            "accepted_hashes": tuple(sorted(accepted_hashes)),
+            "generated_seeds": generated_seeds,
+            "rejects": dict(sorted(rejects.items())),
+            "rule_stats": {
+                "accepted": ({entry.rule_id: len(accepted_hashes)} if accepted_hashes else {}),
+                "not_applicable": ({entry.rule_id: not_applicable} if not_applicable else {}),
+            },
+            "terminal_state": state,
+        }
+        if infrastructure_reason is not None:
+            result["infrastructure_reason"] = infrastructure_reason
+        return result
+
+    def _finish_entry(
+        self,
+        entry: RulePlanEntry,
+        attempt_dir: Path,
+        *,
+        terminal_state: object,
+        generated: GeneratedShard | None,
+        accepted_hashes: tuple[str, ...] = (),
+        generated_seeds: int = 0,
+        rejects: Mapping[str, int] | None = None,
+        rule_stats: Mapping[str, object] | None = None,
+        graph_manifest: GraphManifest | None = None,
+        dbms_fingerprint: DBMSFingerprint | None = None,
+        health_epoch: DBMSHealthEpoch | None = None,
+        infrastructure_reason: object | None = None,
+    ) -> dict[str, object]:
+        state = terminal_state if isinstance(terminal_state, EntryState) else EntryState(str(terminal_state))
+        summary: dict[str, object] = {
+            "accepted_pair_hashes": list(accepted_hashes),
+            "accepted_pairs": len(accepted_hashes),
+            "accepted_pair_quota": entry.accepted_pair_quota,
+            "acceptance_generated_seeds": generated_seeds,
+            "acceptance_status": (
+                "complete" if len(accepted_hashes) == entry.accepted_pair_quota else "incomplete"
+            ),
+            "acceptance_stop_reason": (
+                "ACCEPTED_TARGET_REACHED"
+                if len(accepted_hashes) == entry.accepted_pair_quota
+                else state.value.upper()
+            ),
+            "entry_id": entry.entry_id,
+            "entry_state": state.value,
+            "family": entry.family,
+            "generated_query_records": len(generated.query_texts) if generated is not None else 0,
+            "generation": dict(generated.generator_metadata) if generated is not None else {},
+            "graph_scale": entry.graph_scale,
+            "reject_reasons": dict(sorted((rejects or {}).items())),
+            "rule_id": entry.rule_id,
+            "rule_stats": dict(rule_stats or {"accepted": {}, "not_applicable": {}}),
+            "shard_index": entry.shard_index,
+            "stream": entry.stream.value,
+            "target": entry.target.value,
+            "terminal_state": state.value,
+        }
+        if graph_manifest is not None:
+            summary.update(
+                {
+                    "actual_nodes": graph_manifest.actual_nodes,
+                    "graph_fingerprint": graph_manifest.graph_fingerprint,
+                    "requested_max_nodes": graph_manifest.requested_max_nodes,
+                }
+            )
+        if dbms_fingerprint is not None:
+            summary["dbms_fingerprint"] = {
+                "available": dbms_fingerprint.available,
+                "reason": dbms_fingerprint.reason,
+                "value": dbms_fingerprint.value,
+            }
+        if health_epoch is not None:
+            summary["dbms_health_epoch"] = {
+                "available": health_epoch.available,
+                "reason": health_epoch.reason,
+                "source": health_epoch.source,
+                "value": health_epoch.value,
+            }
+        if infrastructure_reason:
+            summary["infrastructure_reason"] = str(infrastructure_reason)
+        _atomic_write_json(attempt_dir / "summary.json", summary)
+        return summary
+
+    def _run_schema_v2_compat(self, task: ShardTask) -> dict[str, object]:
+        """Explicit historical adapter; schema-v3 never falls back through it."""
+
+        if not isinstance(self.spec, ExperimentSpec):
+            raise TypeError("schema-v2 ShardTask requires an ExperimentSpec")
         if self._run_dir is None:
             raise RuntimeError("shard worker was not bound to an immutable run directory")
         shard_dir = self._run_dir / "shards" / f"{task.target.value}-{task.shard_index:03d}"
@@ -1003,8 +1474,17 @@ class RuntimeFirstShardWorker:
                     )
         return candidates, pipeline_outcomes
 
-    def _create_adapter(self, task: ShardTask) -> Any:
-        run_config = migrate_experiment_spec_to_run_config(self.spec, task.target)
+    def _create_adapter(self, task: ShardTask | RulePlanEntry) -> Any:
+        if isinstance(task, RulePlanEntry):
+            if not isinstance(self.spec, ValidatedYieldExperimentSpec):
+                raise TypeError("RulePlanEntry adapter creation requires a schema-v3 spec")
+            run_config = _entry_run_config(self.spec, task)
+        elif isinstance(task, ShardTask):
+            if not isinstance(self.spec, ExperimentSpec):
+                raise TypeError("ShardTask adapter creation requires a schema-v2 spec")
+            run_config = migrate_experiment_spec_to_run_config(self.spec, task.target)
+        else:
+            raise TypeError("adapter task must be RulePlanEntry or ShardTask")
         system = run_config.systems[0]
         return create_adapter(system, run_config, self.environment, allow_create=True)
 
@@ -1042,6 +1522,7 @@ class RuntimeFirstShardWorker:
             timeout_seconds = max(1.0, min(float(max_runtime_seconds) - 300.0, 6 * 3600.0))
             base_config = GdsmithConfig(
                 expected_source_commit=self.spec.generation.expected_commit,
+                algorithm=self.spec.generation.algorithm.lower(),
                 backend_extra_args=(
                     {backend: ("--label-num", "1")}
                     if requires_single_label
@@ -1050,7 +1531,7 @@ class RuntimeFirstShardWorker:
                 timeout_seconds=timeout_seconds,
                 max_raw_artifact_bytes=min(
                     350 * 1024 * 1024,
-                    int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024 * 7 // 10,
+                    _task_artifact_budget_mb(self.spec, task) * 1024 * 1024 * 7 // 10,
                 ),
             )
             result = run_gdsmith(
@@ -1135,6 +1616,11 @@ class FormalRuntimeFirstShardWorker(RuntimeFirstShardWorker):
 
     def bind_run_dir(self, run_dir: str | Path) -> None:
         super().bind_run_dir(run_dir)
+        if isinstance(self.spec, ValidatedYieldExperimentSpec):
+            # schema-v3 stages are wired by Tasks 6-10; the schema-v2 candidate
+            # pipeline accepts ShardTask only and must never receive an entry.
+            self._candidate_pipeline = None
+            return
         from graph_sym_perf.experiment.candidate_pipeline import ProductionCandidatePipeline
 
         self._candidate_pipeline = ProductionCandidatePipeline(
@@ -1144,7 +1630,78 @@ class FormalRuntimeFirstShardWorker(RuntimeFirstShardWorker):
         )
 
 
-def _generation_query_limit(task: ShardTask | RulePlanEntry, spec: ExperimentSpec) -> int:
+def _entry_run_config(
+    spec: ValidatedYieldExperimentSpec,
+    entry: RulePlanEntry,
+) -> RunConfig:
+    definition = spec.systems.get(entry.target)
+    if definition is None or entry.target not in spec.targets:
+        raise ValueError("RulePlanEntry target is not part of the schema-v3 spec")
+    optional_env = (
+        {"database": "GRAPHSYMPERF_NEO4J_DATABASE"}
+        if entry.target is TargetSystem.NEO4J
+        else {}
+    )
+    system = SystemConfig(
+        target=entry.target,
+        required_env=definition.required_env,
+        optional_env=optional_env,
+        settings={},
+    )
+    stage1 = spec.runtime["stage1"]
+    stage2 = spec.runtime["stage2"]
+    family_name = "bool_redundancy" if entry.family == "bool" else "symmetry"
+    return RunConfig(
+        source_path=str(spec.source_path),
+        paths=RunPaths(),
+        systems=(system,),
+        dataset=DatasetConfig(seed=entry.shard_seed),
+        query_generation=QueryGenerationConfig(
+            max_cases=entry.max_generated_seed_budget,
+            source=spec.generation.backend,
+            gdsmith=GdsmithConfig(
+                expected_source_commit=spec.generation.expected_commit,
+                algorithm=spec.generation.algorithm.lower(),
+                num_queries=entry.max_generated_seed_budget,
+                random_seed=entry.shard_seed,
+                timeout_seconds=float(entry.max_entry_runtime_seconds),
+                max_node_num=entry.graph_scale,
+            ),
+        ),
+        equivalence=EquivalenceConfig(
+            max_result_rows=int(spec.validation["max_result_rows"]),
+            timeout_seconds=float(entry.query_timeout_seconds),
+        ),
+        confirmation=ConfirmationConfig(
+            warmup=int(stage1["warmups"]),
+            repeats=int(stage1["pairs"]),
+            timeout_seconds=float(entry.query_timeout_seconds),
+            min_latency_ratio=float(stage2["relative_ratio"]),
+            min_latency_delta_ms=float(stage2["absolute_delta_ms"]),
+        ),
+        transforms=TransformConfig(
+            enabled_families=(family_name,),
+            enabled_rules=(entry.rule_id,),
+            max_variants_per_case=entry.max_variants_per_seed,
+        ),
+    )
+
+
+def _task_artifact_budget_mb(
+    spec: ExperimentSpec | ValidatedYieldExperimentSpec,
+    _task: ShardTask | RulePlanEntry,
+) -> int:
+    key = "entry_budget_mb" if isinstance(spec, ValidatedYieldExperimentSpec) else "shard_budget_mb"
+    value = spec.artifacts[key]
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"artifacts.{key} must be a positive integer")
+    return value
+
+
+def _generation_query_limit(
+    task: ShardTask | RulePlanEntry,
+    spec: ExperimentSpec | ValidatedYieldExperimentSpec,
+) -> int:
     if isinstance(task, RulePlanEntry):
         max_generated_seeds = task.max_generated_seed_budget
         accepted_query_pairs = task.accepted_pair_quota
@@ -1192,6 +1749,123 @@ def _generation_backend_provenance(target: TargetSystem, backend: str) -> str:
     if target is TargetSystem.LADYBUGDB:
         return "neo4j_proxy"
     return backend
+
+
+def _entry_directory_name(entry_id: str) -> str:
+    readable = re.sub(r"[^A-Za-z0-9._-]+", "-", entry_id).strip("-._") or "entry"
+    digest = hashlib.sha256(entry_id.encode("utf-8")).hexdigest()[:12]
+    return f"{readable[:120]}-{digest}"
+
+
+def _next_entry_attempt_dir(entry_dir: Path) -> Path:
+    indexes = []
+    for path in entry_dir.glob("attempt-[0-9][0-9][0-9]"):
+        try:
+            indexes.append(int(path.name.removeprefix("attempt-")))
+        except ValueError:
+            continue
+    return entry_dir / f"attempt-{(max(indexes, default=-1) + 1):03d}"
+
+
+def _validated_entry_accepted_hashes(
+    path: Path,
+    *,
+    entry: RulePlanEntry,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+) -> set[str]:
+    accepted: set[str] = set()
+    for record in _read_jsonl(path):
+        pair_hash = record.get("pair_hash")
+        query_a = record.get("query_a")
+        query_b = record.get("query_b")
+        parameters = record.get("parameters")
+        certificate = record.get("certificate")
+        transform_metadata = record.get("transform_metadata")
+        semantic_proof_sha256 = record.get("semantic_proof_sha256")
+        if (
+            not isinstance(pair_hash, str)
+            or len(pair_hash) != 64
+            or not isinstance(query_a, str)
+            or not query_a
+            or not isinstance(query_b, str)
+            or not query_b
+            or query_a == query_b
+            or not isinstance(parameters, Mapping)
+            or not isinstance(certificate, Mapping)
+            or certificate.get("canonical_rule_id") != entry.rule_id
+            or certificate.get("proof_version") != entry.proof_version
+            or not isinstance(transform_metadata, Mapping)
+            or transform_metadata.get("semantic_proof_sha256") != semantic_proof_sha256
+            or not isinstance(semantic_proof_sha256, str)
+            or len(semantic_proof_sha256) != 64
+            or record.get("rule_id") != entry.rule_id
+            or record.get("proof_version") != entry.proof_version
+            or record.get("graph_snapshot_hash") != graph_snapshot_hash
+            or record.get("dbms_fingerprint") != dbms_fingerprint
+            or record.get("equivalence") != "complete_typed_equivalent"
+        ):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "durable accepted pair is not bound to this RulePlanEntry",
+            )
+        if pair_hash in accepted:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "durable accepted pair hash is duplicated",
+            )
+        accepted.add(pair_hash)
+    return accepted
+
+
+def _is_entry_infrastructure_exception(exc: BaseException) -> bool:
+    if isinstance(exc, (QueryTimeoutError, TimeoutError)):
+        return False
+    if isinstance(exc, OSError):
+        return True
+    message = str(exc).lower()
+    infrastructure_markers = (
+        "broken pipe",
+        "connection closed",
+        "connection lost",
+        "connection reset",
+        "connection refused",
+        "database unavailable",
+        "database shutdown",
+        "java heap space",
+        "out of memory",
+        "service unavailable",
+    )
+    if any(marker in message for marker in infrastructure_markers):
+        return True
+    return isinstance(exc, AdapterError) and not isinstance(exc, QueryExecutionError)
+
+
+def _write_entry_quarantine(
+    entry_dir: Path,
+    entry: RulePlanEntry,
+    *,
+    query_a: str,
+    query_b: str | None,
+    reason: str,
+    transform_metadata: Mapping[str, object],
+) -> None:
+    _append_jsonl(
+        entry_dir / "rule_quarantine.jsonl",
+        {
+            "entry_id": entry.entry_id,
+            "family": entry.family,
+            "proof_version": entry.proof_version,
+            "query_a": query_a,
+            "query_a_hash": _query_hash(query_a),
+            "query_b": query_b,
+            "query_b_hash": _query_hash(query_b) if query_b is not None else None,
+            "reason": reason,
+            "rule_id": entry.rule_id,
+            "stream": entry.stream.value,
+            "transform_metadata": to_jsonable(transform_metadata),
+        },
+    )
 
 
 def _dialect_for(target: TargetSystem):

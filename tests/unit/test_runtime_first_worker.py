@@ -6,7 +6,7 @@ import pytest
 
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
-from graph_sym_perf.core import ExecutionResult, TargetSystem
+from graph_sym_perf.core import ExecutionResult, QueryExecutionError, TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream, ShardTask
 from graph_sym_perf.experiment.evidence_validation import candidate_artifact_hashes
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -167,6 +167,30 @@ class _UnsupportedEquivalenceAdapter(_Adapter):
         )
 
 
+class _OrdinaryQueryErrorAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **kwargs) -> ExecutionResult:
+        if query_kind.startswith("acceptance_"):
+            raise QueryExecutionError("invalid query for this generated graph")
+        return super().execute(query, parameters, query_kind, **kwargs)
+
+
+class _ConnectionLostAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **kwargs) -> ExecutionResult:
+        if query_kind.startswith("acceptance_"):
+            raise OSError("connection reset by peer")
+        return super().execute(query, parameters, query_kind, **kwargs)
+
+
+class _SteppedClock:
+    def __init__(self, *values: float) -> None:
+        self._values = iter(values)
+        self._last = values[-1]
+
+    def __call__(self) -> float:
+        self._last = next(self._values, self._last)
+        return self._last
+
+
 class _InflightCheckingAdapter(_Adapter):
     def __init__(self, attempt_dir) -> None:
         super().__init__()
@@ -240,23 +264,31 @@ class _LeaseContext:
             self.phases.append("measurement:end")
 
 
-def _rule_plan_entry(*, graph_scale: int = 256) -> RulePlanEntry:
+def _rule_plan_entry(
+    *,
+    graph_scale: int = 256,
+    rule_id: str = "constant_true_disjunction",
+    family: str = "bool",
+    accepted_pair_quota: int = 1,
+    max_generated_seed_budget: int = 2,
+    max_entry_runtime_seconds: int = 600,
+) -> RulePlanEntry:
     return RulePlanEntry(
-        entry_id=f"p1:neo4j:discovery:constant_true_disjunction:{graph_scale}:0",
+        entry_id=f"p1:neo4j:discovery:{rule_id}:{graph_scale}:0",
         phase=CampaignPhase.P1,
         target=TargetSystem.NEO4J,
-        rule_id="constant_true_disjunction",
-        family="BOOL",
-        tier="CORE",
+        rule_id=rule_id,
+        family=family,
+        tier="core",
         graph_scale=graph_scale,
         shard_index=0,
         shard_seed=7,
-        accepted_pair_quota=1,
-        max_generated_seed_budget=2,
+        accepted_pair_quota=accepted_pair_quota,
+        max_generated_seed_budget=max_generated_seed_budget,
         max_variants_per_seed=1,
-        proof_version="bool-v1",
+        proof_version="1",
         query_timeout_seconds=30,
-        max_entry_runtime_seconds=600,
+        max_entry_runtime_seconds=max_entry_runtime_seconds,
         measurement_protocol_id="paired-runtime-v1",
         stream=RuleStream.DISCOVERY,
     )
@@ -363,6 +395,80 @@ def test_worker_passes_rule_plan_graph_scale_to_gdsmith(monkeypatch, tmp_path) -
 
     assert captured["config"].max_node_num == 256
     assert generated.generator_metadata["requested_max_nodes"] == 256
+
+
+def test_schema_v3_entry_generation_uses_entry_artifact_budget_and_frozen_algorithm(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    captured = {}
+    record = SimpleNamespace(statement="MATCH (n) RETURN n")
+
+    def fake_run_gdsmith(**kwargs):
+        captured["config"] = kwargs["config"]
+        return SimpleNamespace(
+            returncode=0,
+            process_returncode=0,
+            fatal_stderr_markers=(),
+            query_record_limit_reached=False,
+            artifact_budget_exceeded=False,
+            generation_stalled=False,
+            parsed=SimpleNamespace(
+                graph_statements=("CREATE (n:Node {id: 1})",),
+                accepted_queries=(record,),
+            ),
+        )
+
+    monkeypatch.setattr("graph_sym_perf.experiment.worker.run_gdsmith", fake_run_gdsmith)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        environment={
+            "GRAPHSYMPERF_NEO4J_URI": "bolt://localhost:7687",
+            "GRAPHSYMPERF_NEO4J_USER": "neo4j",
+            "GRAPHSYMPERF_NEO4J_PASSWORD": "secret",
+        },
+    )
+
+    worker._generate_with_gdsmith(_rule_plan_entry(), tmp_path / "raw")
+
+    assert captured["config"].algorithm == "compared3"
+    assert captured["config"].max_raw_artifact_bytes == 350 * 1024 * 1024
+
+
+def test_schema_v3_entry_creates_adapter_from_entry_budgets(monkeypatch) -> None:
+    captured = {}
+    sentinel = object()
+
+    def fake_create_adapter(system, run_config, environment, *, allow_create):
+        captured.update(
+            {
+                "system": system,
+                "run_config": run_config,
+                "environment": environment,
+                "allow_create": allow_create,
+            }
+        )
+        return sentinel
+
+    monkeypatch.setattr("graph_sym_perf.experiment.worker.create_adapter", fake_create_adapter)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        environment={"GRAPHSYMPERF_NEO4J_URI": "bolt://localhost:7687"},
+    )
+    entry = _rule_plan_entry(
+        accepted_pair_quota=3,
+        max_generated_seed_budget=30,
+        max_entry_runtime_seconds=600,
+    )
+
+    adapter = worker._create_adapter(entry)
+
+    assert adapter is sentinel
+    assert captured["system"].target is TargetSystem.NEO4J
+    assert captured["run_config"].query_generation.max_cases == 30
+    assert captured["run_config"].query_generation.gdsmith.max_node_num == entry.graph_scale
+    assert captured["run_config"].equivalence.timeout_seconds == entry.query_timeout_seconds
+    assert captured["allow_create"] is True
 
 
 def test_formal_gdsmith_seam_retries_stalled_corpus_that_cannot_cover_target(
@@ -890,6 +996,186 @@ def test_worker_records_incomplete_when_seed_bound_cannot_fill_budget(tmp_path) 
     assert result["acceptance_status"] == "incomplete"
     assert result["acceptance_stop_reason"] == "MAX_GENERATED_SEEDS_EXHAUSTED"
     assert result["acceptance_generated_seeds"] == 2
+
+
+@pytest.mark.parametrize(
+    ("entry", "query"),
+    (
+        (
+            _rule_plan_entry(rule_id="null_partition_tautology", family="bool"),
+            "MATCH (n:Node) WHERE n.value = 1 RETURN n.value",
+        ),
+        (
+            _rule_plan_entry(rule_id="pattern_order_symmetry", family="sym"),
+            "MATCH (a:Node), (b:Node) RETURN a, b",
+        ),
+    ),
+)
+def test_worker_builds_each_rule_plan_entry_with_its_own_certified_rule(
+    tmp_path,
+    entry,
+    query,
+) -> None:
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+            query_texts=(query,),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["accepted_pairs"] == 1
+    assert result["acceptance_status"] == "complete"
+    assert result["terminal_state"] == "building_accepted_pairs"
+    assert result["rule_id"] == entry.rule_id
+    assert result["stream"] == "discovery"
+    assert result["rule_stats"] == {
+        "accepted": {entry.rule_id: 1},
+        "not_applicable": {},
+    }
+
+
+def test_worker_never_transfers_an_underfilled_rule_budget(tmp_path) -> None:
+    entry = _rule_plan_entry(
+        rule_id="pattern_order_symmetry",
+        family="sym",
+        accepted_pair_quota=2,
+        max_generated_seed_budget=1,
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["accepted_pairs"] == 0
+    assert result["terminal_state"] == "underfilled"
+    assert result["rule_id"] == "pattern_order_symmetry"
+    assert result["reject_reasons"] == {"RULE_NOT_APPLICABLE": 1}
+
+
+def test_worker_stops_at_the_entry_wall_clock_deadline(tmp_path) -> None:
+    entry = _rule_plan_entry(max_entry_runtime_seconds=600)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Adapter(),
+        clock=_SteppedClock(0.0, 0.0, 601.0),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["accepted_pairs"] == 0
+    assert result["terminal_state"] == "resource_exhausted"
+
+
+def test_worker_quarantines_one_core_entry_immediately_on_typed_mismatch(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _EquivalenceMismatchAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["accepted_pairs"] == 0
+    assert result["terminal_state"] == "quarantined"
+    counterexample = next(tmp_path.glob("entries/*/rule_quarantine.jsonl")).read_text(encoding="utf-8")
+    assert "semantic_proof_sha256" in counterexample
+    assert entry.rule_id in counterexample
+
+
+def test_worker_rejects_ordinary_query_error_without_failing_the_entry_infrastructure(tmp_path) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        max_generated_seed_budget=1,
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _OrdinaryQueryErrorAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "underfilled"
+    assert result["reject_reasons"] == {"QUERY_EXECUTION_ERROR": 1}
+
+
+def test_worker_classifies_connection_loss_as_entry_infrastructure_failure(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _ConnectionLostAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["accepted_pairs"] == 0
+
+
+def test_rule_entry_retry_resumes_durable_accepted_pairs_without_double_counting(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    for _attempt in range(2):
+        worker = RuntimeFirstShardWorker(
+            load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+            generation_runner=lambda _entry, _raw_dir: generated,
+            adapter_factory=lambda _entry: _Adapter(),
+        )
+        worker.bind_run_dir(tmp_path)
+        result = worker(entry)
+        assert result["accepted_pairs"] == 1
+        assert result["acceptance_status"] == "complete"
+        assert result["terminal_state"] == "building_accepted_pairs"
+
+    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    records = [json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 1
+    assert records[0]["query_a"] and records[0]["query_b"]
+    assert records[0]["parameters"] == {}
+    assert records[0]["certificate"]["canonical_rule_id"] == entry.rule_id
+    assert records[0]["transform_metadata"]["semantic_proof_sha256"]
 
 
 def test_worker_quarantines_each_core_rule_after_dynamic_equivalence_mismatch(tmp_path) -> None:

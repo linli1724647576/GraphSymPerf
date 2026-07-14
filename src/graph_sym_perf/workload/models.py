@@ -8,11 +8,45 @@ from typing import Mapping
 
 from graph_sym_perf.generation.corpus import PortableQuery
 from graph_sym_perf.generation.gdsmith import derive_generation_seed
+from graph_sym_perf.transforms.safety_points import SafetyCertificate
 
 
 class AcceptanceStatus(str, Enum):
     COMPLETE = "complete"
     INCOMPLETE = "incomplete"
+
+
+@dataclass(frozen=True)
+class CertifiedQueryPair:
+    pair_hash: str
+    query_a: str
+    query_b: str
+    parameters: Mapping[str, object]
+    certificate: SafetyCertificate
+    transform_metadata: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        if not self.pair_hash or not self.query_a or not self.query_b or self.query_a == self.query_b:
+            raise ValueError("certified pair identity and distinct query texts are required")
+        if not isinstance(self.certificate, SafetyCertificate):
+            raise TypeError("certified pair requires a typed SafetyCertificate")
+        object.__setattr__(self, "parameters", MappingProxyType(dict(self.parameters)))
+        object.__setattr__(self, "transform_metadata", MappingProxyType(dict(self.transform_metadata)))
+
+
+@dataclass(frozen=True)
+class PairBuildOutcome:
+    pair: CertifiedQueryPair | None
+    reject_code: str | None = None
+    quarantine: bool = False
+
+    def __post_init__(self) -> None:
+        if self.pair is None and not self.reject_code:
+            raise ValueError("rejected pair build requires a reason code")
+        if self.pair is not None and (self.reject_code is not None or self.quarantine):
+            raise ValueError("successful pair build cannot also be rejected or quarantined")
+        if self.quarantine and self.pair is not None:
+            raise ValueError("quarantine cannot carry an accepted pair")
 
 
 @dataclass(frozen=True)
@@ -146,6 +180,8 @@ __all__ = [
     "AcceptedPair",
     "AcceptedPairCorpus",
     "AcceptedPairRequest",
+    "CertifiedQueryPair",
+    "PairBuildOutcome",
     "PairProposal",
     "PairValidation",
     "SeedContext",

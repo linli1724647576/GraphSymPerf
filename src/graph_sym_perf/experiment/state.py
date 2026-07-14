@@ -23,6 +23,22 @@ class ErrorKind(str, Enum):
     EVIDENCE_INTEGRITY_ERROR = "EVIDENCE_INTEGRITY_ERROR"
 
 
+class EntryState(str, Enum):
+    PLANNED = "planned"
+    GENERATING = "generating"
+    BUILDING_ACCEPTED_PAIRS = "building_accepted_pairs"
+    STAGE1_COMPLETE = "stage1_complete"
+    STAGE2_COMPLETE = "stage2_complete"
+    VALIDATION_COMPLETE = "validation_complete"
+    REDUCTION_COMPLETE = "reduction_complete"
+    MATERIALIZED = "materialized"
+    COMPLETED = "completed"
+    UNDERFILLED = "underfilled"
+    QUARANTINED = "quarantined"
+    RESOURCE_EXHAUSTED = "resource_exhausted"
+    INFRASTRUCTURE_FAILED = "infrastructure_failed"
+
+
 class ShardState(str, Enum):
     PLANNED = "planned"
     GENERATING = "generating"

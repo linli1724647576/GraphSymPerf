@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream
 from graph_sym_perf.generation.corpus import PortableQuery
+from graph_sym_perf.transforms.rule_models import RuleRegistry
+from graph_sym_perf.transforms.safety_points import SafetyCertificate
 from graph_sym_perf.workload.acceptance import AcceptedPairBuilder
 from graph_sym_perf.workload.models import (
     AcceptanceStatus,
@@ -8,11 +12,95 @@ from graph_sym_perf.workload.models import (
     PairProposal,
     PairValidation,
 )
-from graph_sym_perf.transforms.rule_models import RuleRegistry
-from graph_sym_perf.transforms.safety_points import SafetyCertificate
+from graph_sym_perf.workload.rule_pairs import RulePairFactory
 
 
 _ACCEPTANCE_FIXTURE_RULE_ID = "duplicate_predicate_control"
+
+
+def _entry(
+    *,
+    rule_id: str,
+    family: str,
+    tier: str = "core",
+    stream: RuleStream = RuleStream.DISCOVERY,
+) -> RulePlanEntry:
+    return RulePlanEntry(
+        entry_id=f"p1:neo4j:discovery:{rule_id}:128:0",
+        phase=CampaignPhase.P1,
+        target=TargetSystem.NEO4J,
+        rule_id=rule_id,
+        family=family,
+        tier=tier,
+        graph_scale=128,
+        shard_index=0,
+        shard_seed=7,
+        accepted_pair_quota=1,
+        max_generated_seed_budget=10,
+        max_variants_per_seed=1,
+        proof_version="1",
+        query_timeout_seconds=30,
+        max_entry_runtime_seconds=3600,
+        measurement_protocol_id="paired-runtime-v1",
+        stream=stream,
+    )
+
+
+def test_rule_pair_factory_uses_the_entry_rule_not_a_worker_constant() -> None:
+    factory = RulePairFactory(RuleRegistry.default())
+    query = "MATCH (a:L0), (b:L1) WHERE a.id = 1 RETURN a.id, b.id"
+
+    bool_result = factory.build(
+        query,
+        _entry(rule_id="null_partition_tautology", family="bool"),
+        TargetSystem.NEO4J,
+    )
+    sym_result = factory.build(
+        query,
+        _entry(rule_id="pattern_order_symmetry", family="sym"),
+        TargetSystem.NEO4J,
+    )
+
+    assert bool_result.pair is not None
+    assert sym_result.pair is not None
+    assert bool_result.pair.certificate.canonical_rule_id == "null_partition_tautology"
+    assert sym_result.pair.certificate.canonical_rule_id == "pattern_order_symmetry"
+    assert bool_result.pair.query_b != sym_result.pair.query_b
+    assert bool_result.pair.transform_metadata["semantic_proof_sha256"]
+    assert sym_result.pair.transform_metadata["semantic_proof_sha256"]
+
+
+def test_rule_pair_factory_quarantines_entry_proof_version_drift() -> None:
+    entry = _entry(rule_id="null_partition_tautology", family="bool")
+    drifted = RulePlanEntry(**{**entry.__dict__, "proof_version": "stale"})
+
+    result = RulePairFactory(RuleRegistry.default()).build(
+        "MATCH (n) WHERE n.id = 1 RETURN n",
+        drifted,
+        TargetSystem.NEO4J,
+    )
+
+    assert result.pair is None
+    assert result.quarantine is True
+    assert result.reject_code == "RULE_PLAN_INVARIANT_MISMATCH"
+
+
+def test_rule_pair_factory_executes_a_control_rule_without_entering_core_selection() -> None:
+    result = RulePairFactory(RuleRegistry.default()).build(
+        "MATCH (a)-[r:R]->(b) RETURN a, b, r",
+        _entry(
+            rule_id="edge_notation_symmetry",
+            family="sym",
+            tier="control",
+            stream=RuleStream.CONTROL,
+        ),
+        TargetSystem.NEO4J,
+    )
+
+    assert result.pair is not None
+    assert result.pair.certificate.canonical_rule_id == "edge_notation_symmetry"
+    assert result.pair.certificate.submit_eligible is False
+    assert result.pair.transform_metadata["semantic_proof_sha256"]
 
 
 def _legacy_certificate(rule_id: str) -> SafetyCertificate:
