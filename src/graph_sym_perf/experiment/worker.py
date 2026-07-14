@@ -4277,6 +4277,7 @@ def _load_stage2_candidate(
             expected_slow_query=expected_direction,
             seed=seed,
             timeout_ms=float(entry.query_timeout_seconds * 1000),
+            policy=policy,
         )
         decision = evaluate_stage2(
             evidence,

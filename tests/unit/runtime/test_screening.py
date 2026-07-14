@@ -125,6 +125,18 @@ def test_screening_policy_is_immutable_and_drives_k_and_stage2_thresholds() -> N
         policy.stage2_relative_ratio = 1.0
 
 
+def test_screening_policy_cannot_construct_a_four_queue_variant() -> None:
+    with pytest.raises(TypeError):
+        screening_module.ScreeningPolicy(stage1_queue_count=4)
+    assert screening_module.DEFAULT_SCREENING_POLICY.stage1_queue_count == 3
+    assert (
+        screening_module.DEFAULT_SCREENING_POLICY.to_payload()["stage1"][
+            "queue_count"
+        ]
+        == 3
+    )
+
+
 def test_stage1_top_k_uses_abs_ratio_and_noise_queues() -> None:
     selected = stage1_top_k(_rank_fixture_records(200), noise_p99_ms=2.0)
 
@@ -370,7 +382,7 @@ def test_timeout_queue_rejects_a_truncated_tail(tmp_path) -> None:
         DurableTimeoutQueue(path)
 
 
-def test_timeout_queue_rolls_back_a_failed_append(tmp_path, monkeypatch) -> None:
+def test_timeout_queue_rejects_a_failed_pending_head_write(tmp_path, monkeypatch) -> None:
     path = tmp_path / "timeout_queue.jsonl"
     store = DurableTimeoutQueue(path)
     real_fsync = __import__("os").fsync
@@ -424,7 +436,7 @@ def test_timeout_queue_reconcile_rejects_foreign_or_contradictory_evidence(
 
 
 @pytest.mark.parametrize("write_shape", ("partial", "full"))
-def test_timeout_queue_unknown_write_outcome_is_rolled_back_and_durably_poisoned(
+def test_timeout_queue_unknown_write_outcome_is_resolved_from_pending_head(
     tmp_path,
     monkeypatch,
     write_shape,
@@ -446,101 +458,152 @@ def test_timeout_queue_unknown_write_outcome_is_rolled_back_and_durably_poisoned
     with pytest.raises(ArtifactWriteError, match="outcome unknown"):
         store.append(_timeout_record())
 
-    poison_path = path.with_name("timeout_queue.poison.json")
-    poison = json.loads(poison_path.read_text(encoding="utf-8"))
-    assert poison["content_hash"] == _sha256_payload(
-        {key: value for key, value in poison.items() if key != "content_hash"}
+    head = json.loads(store.head_path.read_text(encoding="utf-8"))
+    assert head["state"] == "pending"
+    assert head["content_hash"] == _sha256_payload(
+        {key: value for key, value in head.items() if key != "content_hash"}
     )
     assert store.count == 0
-    with pytest.raises(ArtifactIntegrityError, match="poison"):
-        DurableTimeoutQueue(path)
+    if write_shape == "partial":
+        with pytest.raises(ArtifactIntegrityError, match="truncated|head"):
+            DurableTimeoutQueue(path)
+    else:
+        assert DurableTimeoutQueue(path).count == 1
 
 
-def test_timeout_queue_poison_tamper_remains_fail_closed(tmp_path) -> None:
+def test_timeout_queue_head_tamper_remains_fail_closed(tmp_path) -> None:
     path = tmp_path / "timeout_queue.jsonl"
-    poison_path = path.with_name("timeout_queue.poison.json")
-    poison_path.write_text('{"tampered":true}\n', encoding="utf-8")
-    with pytest.raises(ArtifactIntegrityError, match="poison"):
+    head_path = path.with_name("timeout_queue.head.json")
+    head_path.write_text('{"tampered":true}\n', encoding="utf-8")
+    with pytest.raises(ArtifactIntegrityError, match="head"):
         DurableTimeoutQueue(path)
 
 
-def test_timeout_queue_prearm_failure_writes_no_queue_bytes(tmp_path, monkeypatch) -> None:
+def test_timeout_queue_pending_head_failure_writes_no_queue_bytes(
+    tmp_path,
+    monkeypatch,
+) -> None:
     path = tmp_path / "timeout_queue.jsonl"
     store = DurableTimeoutQueue(path)
     monkeypatch.setattr(
         store,
-        "_arm_write_marker",
-        lambda **_kwargs: (_ for _ in ()).throw(OSError("marker disk full")),
-        raising=False,
+        "_write_head",
+        lambda _body: (_ for _ in ()).throw(OSError("head disk full")),
     )
 
-    with pytest.raises(ArtifactWriteError, match="marker disk full"):
+    with pytest.raises(ArtifactWriteError, match="head disk full"):
         store.append(_timeout_record())
 
     assert not path.exists() or path.read_bytes() == b""
 
 
-def test_timeout_queue_marker_precedes_full_line_and_survives_rollback_failure(
+def test_timeout_queue_writes_pending_head_before_line_and_keeps_committed_head(
     tmp_path,
     monkeypatch,
 ) -> None:
-    path = tmp_path / "timeout_queue.jsonl"
-    store = DurableTimeoutQueue(path)
-
-    def write_full_then_fail(line: str) -> None:
-        assert store.poison_path.exists()
-        path.write_text(line + "\n", encoding="utf-8")
-        raise OSError("full line fsync unknown")
-
-    monkeypatch.setattr(store, "_write_line", write_full_then_fail)
-    monkeypatch.setattr(store, "_rollback", lambda _size: OSError("rollback failed"))
-
-    with pytest.raises(ArtifactWriteError, match="full line fsync unknown"):
-        store.append(_timeout_record())
-
-    assert store.poison_path.exists()
-    with pytest.raises(ArtifactIntegrityError, match="poison"):
-        DurableTimeoutQueue(path)
-
-
-def test_timeout_queue_success_clears_prearmed_marker(tmp_path, monkeypatch) -> None:
     path = tmp_path / "timeout_queue.jsonl"
     store = DurableTimeoutQueue(path)
     real_write = store._write_line
 
-    def assert_marker_then_write(line: str) -> None:
-        assert store.poison_path.exists()
+    def observe_pending(line: str) -> None:
+        head = json.loads(store.head_path.read_text(encoding="utf-8"))
+        assert head["state"] == "pending"
+        assert head["record_count"] == 0
+        assert head["new_record_key"] == _timeout_record().dedupe_key
         real_write(line)
 
-    monkeypatch.setattr(store, "_write_line", assert_marker_then_write)
+    monkeypatch.setattr(store, "_write_line", observe_pending)
 
     assert store.append(_timeout_record())
-    assert not store.poison_path.exists()
+    committed = json.loads(store.head_path.read_text(encoding="utf-8"))
+    assert committed["state"] == "committed"
+    assert committed["record_count"] == 1
+    assert committed["head_record_key"] == _timeout_record().dedupe_key
     assert DurableTimeoutQueue(path).count == 1
 
 
-def test_timeout_queue_clear_failure_keeps_marker_and_reopen_rejects(
+def test_timeout_queue_recovers_pending_before_line_to_committed_empty(
     tmp_path,
     monkeypatch,
 ) -> None:
     path = tmp_path / "timeout_queue.jsonl"
     store = DurableTimeoutQueue(path)
+
+    class SimulatedCrash(BaseException):
+        pass
+
     monkeypatch.setattr(
         store,
-        "_clear_write_marker",
-        lambda: (_ for _ in ()).throw(OSError("marker clear failed")),
-        raising=False,
+        "_write_line",
+        lambda _line: (_ for _ in ()).throw(SimulatedCrash()),
     )
-
-    with pytest.raises(ArtifactWriteError, match="marker clear failed"):
+    with pytest.raises(SimulatedCrash):
         store.append(_timeout_record())
 
-    assert store.poison_path.exists()
-    with pytest.raises(ArtifactIntegrityError, match="poison"):
+    recovered = DurableTimeoutQueue(path)
+    head = json.loads(recovered.head_path.read_text(encoding="utf-8"))
+    assert recovered.count == 0
+    assert head["state"] == "committed"
+    assert head["record_count"] == 0
+
+
+def test_timeout_queue_recovers_pending_with_exact_new_tail(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+
+    class SimulatedCommitCrash(BaseException):
+        pass
+
+    monkeypatch.setattr(
+        store,
+        "_commit_head",
+        lambda **_kwargs: (_ for _ in ()).throw(SimulatedCommitCrash()),
+        raising=False,
+    )
+    with pytest.raises(SimulatedCommitCrash):
+        store.append(_timeout_record())
+
+    recovered = DurableTimeoutQueue(path)
+    head = json.loads(recovered.head_path.read_text(encoding="utf-8"))
+    assert recovered.count == 1
+    assert head["state"] == "committed"
+    assert head["record_count"] == 1
+
+
+def test_timeout_queue_rejects_committed_head_mismatch_and_missing_nonempty_head(
+    tmp_path,
+) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+    store.append(_timeout_record())
+    head = json.loads(store.head_path.read_text(encoding="utf-8"))
+    head["record_count"] = 2
+    body = {key: value for key, value in head.items() if key != "content_hash"}
+    head["content_hash"] = _sha256_payload(body)
+    store.head_path.write_text(json.dumps(head) + "\n", encoding="utf-8")
+    with pytest.raises(ArtifactIntegrityError, match="head|count|digest"):
+        DurableTimeoutQueue(path)
+
+    store.head_path.unlink()
+    with pytest.raises(ArtifactIntegrityError, match="head|marker"):
         DurableTimeoutQueue(path)
 
 
-def test_timeout_queue_clear_fsync_failure_restores_marker(
+def test_timeout_queue_rejects_valid_extra_line_beyond_committed_head(tmp_path) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+    store.append(_timeout_record())
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_second_timeout_record().to_payload()) + "\n")
+
+    with pytest.raises(ArtifactIntegrityError, match="head|count|digest"):
+        DurableTimeoutQueue(path)
+
+
+def test_timeout_queue_commit_transition_fsync_failure_reopens_from_new_head(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -548,24 +611,23 @@ def test_timeout_queue_clear_fsync_failure_restores_marker(
     store = DurableTimeoutQueue(path)
     real_fsync_directory = screening_module._fsync_directory
 
-    def fail_only_after_marker_unlink(directory) -> None:
-        if not store.poison_path.exists():
-            raise OSError("clear directory fsync failed")
+    def fail_after_committed_replace(directory) -> None:
+        if store.head_path.exists():
+            head = json.loads(store.head_path.read_text(encoding="utf-8"))
+            if head.get("state") == "committed":
+                raise OSError("committed head directory fsync failed")
         real_fsync_directory(directory)
 
     monkeypatch.setattr(
         screening_module,
         "_fsync_directory",
-        fail_only_after_marker_unlink,
+        fail_after_committed_replace,
     )
-
-    with pytest.raises(ArtifactWriteError, match="clear directory fsync failed"):
+    with pytest.raises(ArtifactWriteError, match="committed head directory fsync failed"):
         store.append(_timeout_record())
 
-    assert store.poison_path.exists()
     monkeypatch.setattr(screening_module, "_fsync_directory", real_fsync_directory)
-    with pytest.raises(ArtifactIntegrityError, match="poison"):
-        DurableTimeoutQueue(path)
+    assert DurableTimeoutQueue(path).count == 1
 
 
 def _sha256_payload(payload: object) -> str:

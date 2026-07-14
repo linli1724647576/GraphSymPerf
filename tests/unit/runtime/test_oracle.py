@@ -4,11 +4,14 @@ from dataclasses import replace
 
 import pytest
 
+import graph_sym_perf.runtime.oracle as oracle_module
+
 from graph_sym_perf.core import QueryTimeoutError
-from graph_sym_perf.runtime.measurement import RuntimeHarness
+from graph_sym_perf.runtime.measurement import RuntimeHarness, paired_schedule
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, RuntimeVerdict
 from graph_sym_perf.runtime.noise import calibrate_aa_noise
-from graph_sym_perf.runtime.oracle import evaluate_runtime
+from graph_sym_perf.runtime.oracle import evaluate_runtime, validate_stage2_evidence
+from graph_sym_perf.runtime.screening import DEFAULT_SCREENING_POLICY
 
 
 class TimeoutFake:
@@ -269,3 +272,65 @@ def test_direction_mismatch_cannot_be_reoriented_into_a_pass() -> None:
 
     assert verdict.verdict is RuntimeVerdict.FAIL
     assert "direction_mismatch" in verdict.reason_codes
+
+
+def test_stage2_canonical_recompute_uses_the_same_nondefault_bootstrap_policy(
+    monkeypatch,
+) -> None:
+    policy = replace(
+        DEFAULT_SCREENING_POLICY,
+        stage2_warmups=0,
+        stage2_pairs=4,
+        stage2_bootstrap_resamples=7,
+    )
+    runtime_policy = RuntimePolicy(
+        warmups=policy.stage2_warmups,
+        pairs=policy.stage2_pairs,
+        seed=17,
+        require_exact_balance=policy.stage2_require_exact_balance,
+        timeout_ms=100.0,
+        bootstrap_resamples=policy.stage2_bootstrap_resamples,
+    )
+    evidence = RuntimeHarness().measure_pair(
+        TimeoutFake(),
+        "A",
+        "B",
+        policy=runtime_policy,
+        expected_slow_query="b",
+    )
+    observed_resamples: list[int] = []
+    real_ratio = oracle_module.bootstrap_ratio_ci
+    real_delta = oracle_module.bootstrap_delta_ci
+
+    def capture_ratio(samples, *, resamples, seed):
+        observed_resamples.append(resamples)
+        return real_ratio(samples, resamples=resamples, seed=seed)
+
+    def capture_delta(samples, *, slower_side, resamples, seed):
+        observed_resamples.append(resamples)
+        return real_delta(
+            samples,
+            slower_side=slower_side,
+            resamples=resamples,
+            seed=seed,
+        )
+
+    monkeypatch.setattr(oracle_module, "bootstrap_ratio_ci", capture_ratio)
+    monkeypatch.setattr(oracle_module, "bootstrap_delta_ci", capture_delta)
+
+    validate_stage2_evidence(
+        evidence,
+        query_a_hash=evidence.query_a_hash,
+        query_b_hash=evidence.query_b_hash,
+        expected_orders=paired_schedule(
+            policy.stage2_pairs,
+            seed=runtime_policy.seed,
+            require_exact_balance=policy.stage2_require_exact_balance,
+        ),
+        expected_slow_query="b",
+        seed=runtime_policy.seed,
+        timeout_ms=runtime_policy.timeout_ms,
+        policy=policy,
+    )
+
+    assert observed_resamples == [7, 7]

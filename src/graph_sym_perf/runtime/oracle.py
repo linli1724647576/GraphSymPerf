@@ -6,6 +6,7 @@ import math
 from statistics import median
 
 from graph_sym_perf.runtime.models import RuntimeEvidence, RuntimeVerdict
+from graph_sym_perf.runtime.screening import ScreeningPolicy
 from graph_sym_perf.runtime.statistics import (
     bootstrap_delta_ci,
     bootstrap_ratio_ci,
@@ -47,6 +48,7 @@ def validate_stage2_evidence(
     expected_slow_query: str,
     seed: int,
     timeout_ms: float,
+    policy: ScreeningPolicy,
 ) -> None:
     """Recompute a persisted Stage-2 summary from its raw paired samples."""
 
@@ -86,6 +88,7 @@ def validate_stage2_evidence(
         expected_slow_query=expected_slow_query,
         seed=seed,
         timeout_ms=timeout_ms,
+        policy=policy,
     )
     if evidence != expected:
         raise ValueError("Stage-2 summary differs from its canonical paired samples")
@@ -99,6 +102,7 @@ def _canonical_stage2_evidence(
     expected_slow_query: str,
     seed: int,
     timeout_ms: float,
+    policy: ScreeningPolicy,
 ) -> RuntimeEvidence:
     complete = tuple(
         (sample.a_ms, sample.b_ms)
@@ -206,11 +210,15 @@ def _canonical_stage2_evidence(
             None,
             ("nonpositive_baseline",),
         )
-    ratio_ci = bootstrap_ratio_ci(oriented, resamples=10_000, seed=seed)
+    ratio_ci = bootstrap_ratio_ci(
+        oriented,
+        resamples=policy.stage2_bootstrap_resamples,
+        seed=seed,
+    )
     delta_ci = bootstrap_delta_ci(
         complete,
         slower_side=expected_slow_query,
-        resamples=10_000,
+        resamples=policy.stage2_bootstrap_resamples,
         seed=seed,
     )
     return RuntimeEvidence(

@@ -10,7 +10,7 @@ import tempfile
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import ClassVar, Iterable
 
 from graph_sym_perf.runtime.models import RuntimeEvidence, RuntimeVerdict
 from graph_sym_perf.runtime.records import (
@@ -25,12 +25,12 @@ _TIMEOUT_STATES = {"a_timeout", "b_timeout", "both_timeout"}
 
 @dataclass(frozen=True)
 class ScreeningPolicy:
+    stage1_queue_count: ClassVar[int] = 3
     stage1_warmups: int = 2
     stage1_pairs: int = 3
     stage1_top_fraction: float = 0.05
     stage1_min_top_k: int = 3
     stage1_max_top_k: int = 30
-    stage1_queue_count: int = 3
     stage1_ratio_noise_multiplier: float = 0.5
     stage1_require_exact_balance: bool = False
     stage1_bootstrap_resamples: int = 10_000
@@ -200,17 +200,20 @@ class TimeoutQueueRecord:
 
 
 class DurableTimeoutQueue:
-    """Strict append-fsync timeout queue with rollback and exact deduplication."""
+    """Strict append-fsync queue governed by a permanent transactional head."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
-        self.poison_path = self.path.with_name("timeout_queue.poison.json")
+        self.head_path = self.path.with_name("timeout_queue.head.json")
         self._poisoned = False
-        if self.poison_path.exists():
-            self._validate_poison()
-            raise ArtifactIntegrityError("timeout queue has a durable write poison")
         self._lock = threading.Lock()
-        self._records = self._load()
+        self._records, self._raw = self._load()
+        if self.head_path.exists():
+            self._recover_head()
+        elif self._raw:
+            raise ArtifactIntegrityError(
+                "non-empty timeout queue is missing its committed head"
+            )
 
     @property
     def count(self) -> int:
@@ -233,33 +236,38 @@ class DurableTimeoutQueue:
                     )
                 return False
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            previous_size = self.path.stat().st_size if self.path.exists() else 0
+            line = (_canonical_json(payload) + "\n").encode("utf-8")
+            previous = self._queue_snapshot(self._records, self._raw)
+            expected_raw = self._raw + line
+            pending = {
+                "schema_version": 3,
+                "state": "pending",
+                **previous,
+                "new_record_key": record.dedupe_key,
+                "new_record_digest": _sha256_json(payload),
+                "expected_record_count": previous["record_count"] + 1,
+                "expected_queue_digest": hashlib.sha256(expected_raw).hexdigest(),
+            }
             try:
-                self._arm_write_marker(
-                    record_digest=_sha256_json(payload),
-                    dedupe_key=record.dedupe_key,
-                    previous_size=previous_size,
-                )
+                self._write_head(pending)
             except OSError as exc:
                 self._poisoned = True
                 raise ArtifactWriteError(str(exc)) from exc
             try:
-                self._write_line(_canonical_json(payload))
+                self._write_line(line.decode("utf-8").removesuffix("\n"))
             except (OSError, TypeError, ValueError) as exc:
-                rollback_error = self._rollback(previous_size)
                 self._poisoned = True
-                suffix = (
-                    f"; rollback={rollback_error!r}"
-                    if rollback_error is not None
-                    else ""
-                )
-                raise ArtifactWriteError(f"{exc}{suffix}") from exc
+                raise ArtifactWriteError(str(exc)) from exc
             try:
-                self._clear_write_marker()
+                self._commit_head(
+                    records={**self._records, record.dedupe_key: payload},
+                    raw=expected_raw,
+                )
             except OSError as exc:
                 self._poisoned = True
                 raise ArtifactWriteError(str(exc)) from exc
             self._records[record.dedupe_key] = payload
+            self._raw = expected_raw
             return True
 
     def reconcile(self, expected: Iterable[TimeoutQueueRecord]) -> None:
@@ -308,41 +316,16 @@ class DurableTimeoutQueue:
         if not existed:
             _fsync_directory(self.path.parent)
 
-    def _rollback(self, previous_size: int) -> OSError | None:
-        try:
-            if self.path.exists():
-                with self.path.open("r+b") as handle:
-                    handle.truncate(previous_size)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                _fsync_directory(self.path.parent)
-        except OSError as exc:
-            return exc
-        return None
-
-    def _arm_write_marker(
-        self,
-        *,
-        record_digest: str,
-        dedupe_key: str,
-        previous_size: int,
-    ) -> None:
-        body = {
-            "dedupe_key": dedupe_key,
-            "previous_size": previous_size,
-            "record_digest": record_digest,
-            "schema_version": 2,
-            "state": "write_armed",
-        }
+    def _write_head(self, body: dict[str, object]) -> None:
         payload = {**body, "content_hash": _sha256_json(body)}
-        self.poison_path.parent.mkdir(parents=True, exist_ok=True)
+        self.head_path.parent.mkdir(parents=True, exist_ok=True)
         temporary: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
                 "w",
                 encoding="utf-8",
-                dir=self.poison_path.parent,
-                prefix=f".{self.poison_path.name}.",
+                dir=self.head_path.parent,
+                prefix=f".{self.head_path.name}.",
                 delete=False,
             ) as handle:
                 temporary = handle.name
@@ -350,76 +333,148 @@ class DurableTimeoutQueue:
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self.poison_path)
-            _fsync_directory(self.poison_path.parent)
-        except OSError as exc:
-            if temporary is not None:
-                Path(temporary).unlink(missing_ok=True)
-            raise exc
-
-    def _clear_write_marker(self) -> None:
-        marker = self.poison_path.read_bytes()
-        self.poison_path.unlink()
-        try:
-            _fsync_directory(self.poison_path.parent)
-        except OSError as exc:
-            try:
-                self._restore_write_marker(marker)
-            except OSError as restore_exc:
-                raise OSError(f"{exc}; marker restore failed: {restore_exc}") from exc
-            raise
-
-    def _restore_write_marker(self, marker: bytes) -> None:
-        temporary: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "wb",
-                dir=self.poison_path.parent,
-                prefix=f".{self.poison_path.name}.",
-                delete=False,
-            ) as handle:
-                temporary = handle.name
-                handle.write(marker)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.poison_path)
-            _fsync_directory(self.poison_path.parent)
+            os.replace(temporary, self.head_path)
+            _fsync_directory(self.head_path.parent)
         except OSError:
             if temporary is not None:
                 Path(temporary).unlink(missing_ok=True)
             raise
 
-    def _validate_poison(self) -> None:
+    def _commit_head(
+        self,
+        *,
+        records: dict[str, dict[str, object]],
+        raw: bytes,
+    ) -> None:
+        self._write_head(
+            {
+                "schema_version": 3,
+                "state": "committed",
+                **self._queue_snapshot(records, raw),
+            }
+        )
+
+    def _read_head(self) -> dict[str, object]:
         try:
-            raw = self.poison_path.read_bytes()
+            raw = self.head_path.read_bytes()
             if not raw.endswith(b"\n"):
-                raise ValueError("truncated poison")
+                raise ValueError("truncated head")
             payload = json.loads(raw.decode("utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
-            raise ArtifactIntegrityError("timeout queue poison is unreadable or invalid") from exc
+            raise ArtifactIntegrityError(
+                "timeout queue head is unreadable or invalid"
+            ) from exc
         if not isinstance(payload, dict):
-            raise ArtifactIntegrityError("timeout queue poison is not an object")
+            raise ArtifactIntegrityError("timeout queue head is not an object")
         body = {key: value for key, value in payload.items() if key != "content_hash"}
+        common = {
+            "schema_version",
+            "state",
+            "record_count",
+            "queue_digest",
+            "head_record_key",
+            "head_record_digest",
+        }
+        pending = {
+            "new_record_key",
+            "new_record_digest",
+            "expected_record_count",
+            "expected_queue_digest",
+        }
+        state = body.get("state")
         if (
-            set(body)
-            != {
-                "dedupe_key",
-                "previous_size",
-                "record_digest",
-                "schema_version",
-                "state",
-            }
-            or body.get("schema_version") != 2
-            or body.get("state") != "write_armed"
+            body.get("schema_version") != 3
+            or state not in {"pending", "committed"}
+            or set(body) != (common | pending if state == "pending" else common)
             or payload.get("content_hash") != _sha256_json(body)
+            or type(body.get("record_count")) is not int
+            or int(body["record_count"]) < 0
+            or not _is_sha256_or_none(body.get("head_record_key"))
+            or not _is_sha256_or_none(body.get("head_record_digest"))
+            or not _is_sha256(body.get("queue_digest"))
+            or (
+                body["record_count"] == 0
+                and (
+                    body.get("head_record_key") is not None
+                    or body.get("head_record_digest") is not None
+                )
+            )
+            or (
+                body["record_count"] > 0
+                and (
+                    body.get("head_record_key") is None
+                    or body.get("head_record_digest") is None
+                )
+            )
         ):
-            raise ArtifactIntegrityError("timeout queue poison hash or shape differs")
+            raise ArtifactIntegrityError("timeout queue head hash or shape differs")
+        if state == "pending" and (
+            not _is_sha256(body.get("new_record_key"))
+            or not _is_sha256(body.get("new_record_digest"))
+            or type(body.get("expected_record_count")) is not int
+            or body["expected_record_count"] != body["record_count"] + 1
+            or not _is_sha256(body.get("expected_queue_digest"))
+        ):
+            raise ArtifactIntegrityError("timeout queue pending head is malformed")
+        return body
 
-    def _load(self) -> dict[str, dict[str, object]]:
+    def _recover_head(self) -> None:
+        head = self._read_head()
+        current = self._queue_snapshot(self._records, self._raw)
+        previous = {
+            key: head[key]
+            for key in (
+                "record_count",
+                "queue_digest",
+                "head_record_key",
+                "head_record_digest",
+            )
+        }
+        if head["state"] == "committed":
+            if previous != current:
+                raise ArtifactIntegrityError(
+                    "timeout queue committed head count or digest differs"
+                )
+            return
+        if current == previous:
+            self._commit_head(records=self._records, raw=self._raw)
+            return
+        expected = {
+            "record_count": head["expected_record_count"],
+            "queue_digest": head["expected_queue_digest"],
+            "head_record_key": head["new_record_key"],
+            "head_record_digest": head["new_record_digest"],
+        }
+        if current == expected:
+            self._commit_head(records=self._records, raw=self._raw)
+            return
+        raise ArtifactIntegrityError(
+            "timeout queue pending head does not match the previous head or exact new tail"
+        )
+
+    @staticmethod
+    def _queue_snapshot(
+        records: dict[str, dict[str, object]],
+        raw: bytes,
+    ) -> dict[str, object]:
+        if records:
+            head_record_key = next(reversed(records))
+            head_record_digest = _sha256_json(records[head_record_key])
+        else:
+            head_record_key = None
+            head_record_digest = None
+        return {
+            "record_count": len(records),
+            "queue_digest": hashlib.sha256(raw).hexdigest(),
+            "head_record_key": head_record_key,
+            "head_record_digest": head_record_digest,
+        }
+
+    def _load(self) -> tuple[dict[str, dict[str, object]], bytes]:
         try:
             raw = self.path.read_bytes()
         except FileNotFoundError:
-            return {}
+            return {}, b""
         except OSError as exc:
             raise ArtifactIntegrityError("timeout queue is unreadable") from exc
         if raw and not raw.endswith(b"\n"):
@@ -441,7 +496,7 @@ class DurableTimeoutQueue:
             if record.dedupe_key in records:
                 raise ArtifactIntegrityError("timeout queue contains a duplicate record")
             records[record.dedupe_key] = canonical
-        return records
+        return records, raw
 
 
 def stage1_k(
@@ -508,7 +563,6 @@ def stage1_top_k(
         return ()
 
     k = min(stage1_k(len(frozen), policy=policy), len(ordinary))
-    allocation = math.ceil(k / policy.stage1_queue_count)
     queues = (
         sorted(ordinary, key=lambda value: (-float(value.median_delta_ms), value.pair_hash)),
         sorted(
@@ -522,8 +576,11 @@ def stage1_top_k(
         ),
         sorted(ordinary, key=lambda value: (-float(value.delta_over_noise), value.pair_hash)),
     )
-    cursors = [0, 0, 0]
-    contributions = [0, 0, 0]
+    if len(queues) != ScreeningPolicy.stage1_queue_count:
+        raise AssertionError("Stage-1 screening must have exactly three queues")
+    allocation = math.ceil(k / len(queues))
+    cursors = [0] * len(queues)
+    contributions = [0] * len(queues)
     selected: list[str] = []
     selected_hashes: set[str] = set()
     while len(selected) < k:
@@ -589,15 +646,18 @@ def evaluate_stage2(
         raise ValueError("Stage-2 direction_consistency must be in [0, 1]")
 
     relative_checks = (
-        (ratio >= policy.stage2_relative_ratio, "relative_ratio_below_1_5"),
-        (ratio_ci_low > policy.stage2_relative_ci_low, "relative_ci_low_not_above_1_1"),
+        (ratio >= policy.stage2_relative_ratio, "relative_ratio_below_policy"),
+        (
+            ratio_ci_low > policy.stage2_relative_ci_low,
+            "relative_ci_low_not_above_policy",
+        ),
         (
             delta > policy.stage2_relative_noise_multiplier * noise,
             "relative_delta_within_noise",
         ),
         (
             direction >= policy.stage2_direction_consistency,
-            "relative_direction_below_0_75",
+            "relative_direction_below_policy",
         ),
     )
     absolute_checks = (
@@ -610,10 +670,10 @@ def evaluate_stage2(
             "absolute_delta_below_wide_gate",
         ),
         (delta_ci_low > 0.0, "absolute_delta_ci_not_positive"),
-        (ratio > policy.stage2_absolute_ratio, "absolute_ratio_not_above_1_1"),
+        (ratio > policy.stage2_absolute_ratio, "absolute_ratio_not_above_policy"),
         (
             direction >= policy.stage2_direction_consistency,
-            "absolute_direction_below_0_75",
+            "absolute_direction_below_policy",
         ),
     )
     relative_pass = all(passed for passed, _reason in relative_checks)
@@ -720,6 +780,18 @@ def _require_sha256(value: object, name: str) -> None:
         int(value, 16)
     except ValueError as exc:
         raise ValueError(f"{name} must be a SHA-256 digest") from exc
+
+
+def _is_sha256(value: object) -> bool:
+    try:
+        _require_sha256(value, "value")
+    except ValueError:
+        return False
+    return True
+
+
+def _is_sha256_or_none(value: object) -> bool:
+    return value is None or _is_sha256(value)
 
 
 def _fsync_directory(path: Path) -> None:
