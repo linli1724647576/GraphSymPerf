@@ -32,9 +32,23 @@ def test_predicate_order_symmetry_reorders_only_a_proved_conjunction() -> None:
     assert "a.y = 2 AND a.x = 1" in variant.query
 
 
-def test_pattern_order_symmetry_reorders_components_inside_one_match() -> None:
-    variant = _variant("MATCH (a:A), (b:B) RETURN a, b", "pattern_order_symmetry")
-    assert "MATCH (b:B), (a:A)" in variant.query
+def test_pattern_order_symmetry_reorders_one_comma_pattern_list() -> None:
+    family = generate_symmetry_family(
+        _case("MATCH (a:L0), (b:L1) RETURN a.id, b.id"),
+        TransformConfig(enabled_rules=("pattern_order_symmetry",)),
+    )
+    assert len(family.variants) == 1
+    assert family.variants[0].query.startswith("MATCH (b:L1), (a:L0)")
+    assert family.variants[0].metadata["semantic_proof"]["theorem"] == "MatchPatternConjunctionCommutativity"
+
+
+def test_core_pattern_order_never_swaps_match_clauses() -> None:
+    family = generate_symmetry_family(
+        _case("MATCH (a:L0) MATCH (b:L1) RETURN a.id, b.id"),
+        TransformConfig(enabled_rules=("pattern_order_symmetry",)),
+    )
+    assert not family.variants
+    assert family.skipped_variants[0].skip_reason == "NO_REORDERABLE_PATTERN_LIST"
 
 
 def test_label_order_is_capability_gated() -> None:

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 from graph_sym_perf.core import QueryCase, SymmetryFamily, SymmetryVariant, TargetSystem, TransformConfig
+from graph_sym_perf.cypher.ast import PatternList
+from graph_sym_perf.cypher.parser import parse_match_clause, parse_query
+from graph_sym_perf.cypher.proof import SemanticProof, prove_pattern_list_order
 from graph_sym_perf.transforms.engine import RuleNotApplicable, apply_certified_rule
 from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 from graph_sym_perf.transforms.safety_points import enumerate_safety_points
@@ -12,6 +17,29 @@ class TransformSkipError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+_PATTERN_COMPONENT_PATH = re.compile(r"^clauses\[(?P<clause>\d+)]\.pattern\.components\[\d+]$")
+
+
+def _prove_certified_pattern_order(
+    query: str,
+    transformed: str,
+    ast_path: str,
+) -> SemanticProof:
+    path = _PATTERN_COMPONENT_PATH.fullmatch(ast_path)
+    if path is None:
+        raise ValueError("pattern-order certificate does not identify one MATCH pattern component")
+    clause_index = int(path.group("clause"))
+    original_query = parse_query(query)
+    transformed_query = parse_query(transformed)
+    if clause_index >= len(original_query.clauses) or clause_index >= len(transformed_query.clauses):
+        raise ValueError("pattern-order certificate clause is outside the parsed query")
+    original = parse_match_clause(original_query.clauses[clause_index])
+    replacement = parse_match_clause(transformed_query.clauses[clause_index])
+    if not isinstance(original.pattern, PatternList) or not isinstance(replacement.pattern, PatternList):
+        raise ValueError("pattern-order proof requires one comma-separated MATCH pattern list")
+    return prove_pattern_list_order(original.pattern, replacement.pattern)
 
 
 def generate_symmetry_family(
@@ -37,15 +65,26 @@ def generate_symmetry_family(
     for rule in requested:
         transformed = None
         selected_certificate = None
+        selected_proof = None
         for certificate in enumerate_safety_points(query, rule, f"legacy-{dbms}"):
             try:
                 candidate = apply_certified_rule(query, rule, certificate)
+                proof = (
+                    _prove_certified_pattern_order(query, candidate, certificate.ast_path)
+                    if rule.rule_id == "pattern_order_symmetry"
+                    else None
+                )
             except (RuleNotApplicable, ValueError):
                 continue
             if candidate not in seen:
-                transformed, selected_certificate = candidate, certificate
+                transformed, selected_certificate, selected_proof = candidate, certificate, proof
                 break
         if transformed is None or selected_certificate is None:
+            skip_reason = (
+                "NO_REORDERABLE_PATTERN_LIST"
+                if rule.rule_id == "pattern_order_symmetry"
+                else "RULE_NOT_APPLICABLE"
+            )
             skipped.append(
                 SymmetryVariant(
                     variant_id=f"{query_case.case_id}_{rule.rule_id}",
@@ -54,7 +93,7 @@ def generate_symmetry_family(
                     proof_obligation=rule.proof_theorem,
                     static_safe=False,
                     safety_tier=rule.tier.value,
-                    skip_reason="RULE_NOT_APPLICABLE",
+                    skip_reason=skip_reason,
                 )
             )
             continue
@@ -64,12 +103,17 @@ def generate_symmetry_family(
                 variant_id=f"{query_case.case_id}_{rule.rule_id}",
                 query=transformed,
                 transform_rule=rule.rule_id,
-                proof_obligation=rule.proof_theorem,
+                proof_obligation=selected_proof.obligation if selected_proof is not None else rule.proof_theorem,
                 safety_tier=rule.tier.value,
                 metadata={
                     "transform_family": "symmetry",
                     "rule_version": rule.version,
                     "safety_certificate": selected_certificate,
+                    **(
+                        {"semantic_proof": selected_proof.to_metadata()}
+                        if selected_proof is not None
+                        else {}
+                    ),
                 },
             )
         )

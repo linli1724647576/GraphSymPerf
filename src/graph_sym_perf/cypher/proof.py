@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from graph_sym_perf.cypher.ast import AndPredicate, EdgePattern, MatchClause, NodePattern, PatternList, VarLengthPathPattern
-from graph_sym_perf.cypher.relational import RAExpression, lower_join, lower_pattern, lower_selection
+from graph_sym_perf.cypher.ast import AndPredicate, EdgePattern, NodePattern, PatternList, VarLengthPathPattern
+from graph_sym_perf.cypher.relational import RAExpression, lower_pattern, lower_selection
 
 
 class ProofFailure(ValueError):
@@ -98,34 +98,6 @@ def prove_predicate_order(original: AndPredicate, transformed: AndPredicate) -> 
                 "no conjunct contains function calls, arithmetic, list access, pattern predicates, OR, or CASE",
             ),
             invariant="reordering the conjunction preserves the truth value for every input row",
-            original_ra=(),
-            transformed_ra=(),
-        ),
-    )
-
-
-def prove_pattern_order(first: MatchClause, second: MatchClause, swapped_first: MatchClause, swapped_second: MatchClause) -> SemanticProof:
-    _require_no_match_filter(first)
-    _require_no_match_filter(second)
-    _require_no_match_filter(swapped_first)
-    _require_no_match_filter(swapped_second)
-    original = lower_join((lower_pattern(first.pattern), lower_pattern(second.pattern)))
-    transformed = lower_join((lower_pattern(swapped_first.pattern), lower_pattern(swapped_second.pattern)))
-    if lower_pattern(first.pattern).variables & lower_pattern(second.pattern).variables:
-        raise ProofFailure("SHARED_MATCH_VARIABLES", "independent MATCH proof currently requires disjoint variables")
-    return _prove_same_ra(
-        original,
-        transformed,
-        SemanticProof(
-            theorem="IndependentMatchConjunctionCommutativity",
-            fragment="two adjacent ordinary MATCH clauses with disjoint standalone atoms and no WHERE filters",
-            premises=(
-                "both MATCH clauses lower to standalone RA atoms",
-                "the two RA atoms bind disjoint variable sets",
-                "neither MATCH clause has a WHERE filter, path variable, variable-length relationship, or property map",
-                "the transformed query lowers to the same RA join after canonical child sorting",
-            ),
-            invariant="the two clauses denote an independent conjunction whose Cartesian-product multiset is commutative",
             original_ra=(),
             transformed_ra=(),
         ),
@@ -300,14 +272,3 @@ def _alpha_erased(expression: RAExpression) -> RAExpression:
     if expression.kind in {"directed_edge", "undirected_edge"}:
         return RAExpression(kind=expression.kind, signature=("_edge_shape",), variables=frozenset())
     return expression
-
-
-def _require_no_match_filter(match: MatchClause) -> None:
-    if match.where_region is not None:
-        raise ProofFailure("MATCH_WHERE_BOUNDARY", "MATCH clause with WHERE is outside this proof")
-    if isinstance(match.pattern, VarLengthPathPattern):
-        raise ProofFailure("UNPROVEN_MATCH_PATTERN", "variable-length paths are outside independent MATCH proof")
-    if isinstance(match.pattern, EdgePattern) and "{" in match.pattern.text:
-        raise ProofFailure("UNPROVEN_MATCH_PATTERN", "property maps are outside independent MATCH proof")
-    if isinstance(match.pattern, NodePattern) and "{" in match.pattern.text:
-        raise ProofFailure("UNPROVEN_MATCH_PATTERN", "property maps are outside independent MATCH proof")
