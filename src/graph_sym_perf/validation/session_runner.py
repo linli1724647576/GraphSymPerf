@@ -313,7 +313,7 @@ def _run_validation_session(
             require_exact_balance=True,
             timeout_ms=query_timeout_seconds * 1000,
         )
-        controls = (
+        measured_controls = (
             harness.measure_pair(
                 adapter,
                 candidate.pair.query_a,
@@ -328,6 +328,14 @@ def _run_validation_session(
                 parameters=candidate.pair.parameters,
                 policy=replace(control_policy, seed=request.policy.seed ^ 0xA5A5A5A5),
             ),
+        )
+        controls = tuple(
+            replace(
+                control,
+                graph_snapshot_hash=graph_fingerprint,
+                dbms_fingerprint=dbms_fingerprint,
+            )
+            for control in measured_controls
         )
         evidence = harness.measure_validation(
             adapter,

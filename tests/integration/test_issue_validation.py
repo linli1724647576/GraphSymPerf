@@ -41,7 +41,7 @@ def _bundle(*, discovery_slow_query: str = "b", noise_floor_ms: float = 0.0) -> 
     snapshot = GraphSnapshot.from_statements(("CREATE (n:Person {id: 1})",))
     pair = EquivalentQueryPair(
         "MATCH (n) RETURN n ORDER BY n.id",
-        "MATCH (n) RETURN n ORDER BY n.id",
+        "MATCH (n) WHERE true RETURN n ORDER BY n.id",
         {},
         snapshot.content_hash,
         "dbms",
@@ -94,9 +94,39 @@ class FakeIndependentRunner:
             dbms_fingerprint=candidate.pair.dbms_fingerprint,
         )
         control_samples = tuple(PairedSample("AB" if index % 2 == 0 else "BA", 10.0, 10.0) for index in range(20))
+        query_a_hash = hashlib.sha256(candidate.pair.query_a.encode("utf-8")).hexdigest()
+        query_b_hash = hashlib.sha256(candidate.pair.query_b.encode("utf-8")).hexdigest()
         controls = (
-            RuntimeEvidence(RuntimeVerdict.PASS, "a", "a", control_samples, 1.0, 0.0, 1.0, 1.0, 0.5, 0.0, ()),
-            RuntimeEvidence(RuntimeVerdict.PASS, "b", "b", control_samples, 1.0, 0.0, 1.0, 1.0, 0.5, 0.0, ()),
+            RuntimeEvidence(
+                RuntimeVerdict.PASS,
+                query_a_hash,
+                query_a_hash,
+                control_samples,
+                1.0,
+                0.0,
+                1.0,
+                1.0,
+                0.5,
+                0.0,
+                (),
+                graph_snapshot_hash=candidate.pair.graph_snapshot_hash,
+                dbms_fingerprint=candidate.pair.dbms_fingerprint,
+            ),
+            RuntimeEvidence(
+                RuntimeVerdict.PASS,
+                query_b_hash,
+                query_b_hash,
+                control_samples,
+                1.0,
+                0.0,
+                1.0,
+                1.0,
+                0.5,
+                0.0,
+                (),
+                graph_snapshot_hash=candidate.pair.graph_snapshot_hash,
+                dbms_fingerprint=candidate.pair.dbms_fingerprint,
+            ),
         )
         return EquivalenceEvidence(True, True, ()), ValidationSession(
             f"session-{session_number}",
@@ -264,6 +294,25 @@ class TimeoutSessionRunner(FakeIndependentRunner):
                     ),
                 ),
             )
+        elif self.mode == "control_hash_swap":
+            controls = (controls[1], controls[0])
+        elif self.mode == "control_hash_arbitrary":
+            controls = (
+                replace(controls[0], query_a_hash="f" * 64, query_b_hash="f" * 64),
+                controls[1],
+            )
+        elif self.mode == "control_duplicate":
+            controls = (controls[0], controls[0])
+        elif self.mode == "control_graph_mismatch":
+            controls = (
+                replace(controls[0], graph_snapshot_hash="different-graph"),
+                controls[1],
+            )
+        elif self.mode == "control_dbms_mismatch":
+            controls = (
+                replace(controls[0], dbms_fingerprint="different-dbms"),
+                controls[1],
+            )
         return equivalence, replace(session, evidence=evidence, negative_controls=controls)
 
 
@@ -289,6 +338,11 @@ def test_same_side_timeout_confirmation_stays_diagnostic_inconclusive() -> None:
         "control_empty",
         "control_short",
         "control_schedule",
+        "control_hash_swap",
+        "control_hash_arbitrary",
+        "control_duplicate",
+        "control_graph_mismatch",
+        "control_dbms_mismatch",
         "health",
         "graph_mismatch",
     ),

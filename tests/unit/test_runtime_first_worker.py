@@ -46,6 +46,7 @@ from graph_sym_perf.runtime.screening import (
     select_control_validation_pairs,
 )
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
+from graph_sym_perf.validation.session_runner import validation_schedule_seed
 from graph_sym_perf.validation.models import (
     EquivalenceEvidence,
     SessionLifecycle,
@@ -2281,6 +2282,28 @@ class _IndependentValidationRunner:
                 True,
                 f"validation-connection-{session_number}",
             ),
+            schedule_seed=validation_schedule_seed(
+                candidate.candidate_hash,
+                session_number,
+            ),
+        )
+
+
+class _RejectedIndependentValidationRunner(_IndependentValidationRunner):
+    def run_session(self, candidate, session_number, **kwargs):
+        equivalence, session = super().run_session(
+            candidate,
+            session_number,
+            **kwargs,
+        )
+        mismatched_side = "a" if candidate.discovery_slow_query == "b" else "b"
+        return equivalence, replace(
+            session,
+            evidence=replace(
+                session.evidence,
+                slow_query=mismatched_side,
+                slower_side=mismatched_side,
+            ),
         )
 
 
@@ -2328,6 +2351,12 @@ def test_worker_validates_discovery_promotions_through_injected_runner(
     assert evidence["pooled_ratio_ci_low"] >= 2.0
     assert "control_gate_hit" not in evidence
     assert len(evidence["stage2_candidate_digest"]) == 64
+    candidate_artifact = json.loads(
+        next(tmp_path.glob("entries/*/candidates/*/candidate.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert evidence["stage2_candidate_digest"] == candidate_artifact["content_hash"]
     sealed_report = evidence["report"]
     assert sealed_report["validation_protocol"] == "independent-two-session-v1"
     assert sealed_report["validation_policy"] == worker_module.to_jsonable(
@@ -2374,7 +2403,9 @@ def test_worker_validates_discovery_promotions_through_injected_runner(
         "candidate_hash",
         "stage2_evidence_digest",
         "stage2_candidate_digest",
+        "stage2_candidate_typed_digest",
         "stream",
+        "discovery_control_fields",
         "entry_identity",
         "report_equivalence",
         "report_process_identity",
@@ -2388,6 +2419,9 @@ def test_worker_validates_discovery_promotions_through_injected_runner(
         "report_non_finite",
         "report_runtime_enum",
         "report_process_type",
+        "report_schedule_seed_same",
+        "report_schedule_seed_none",
+        "report_schedule_seed_swapped",
         "legacy_schema",
         "raw_samples_and_summary",
     ),
@@ -2421,6 +2455,10 @@ def test_worker_validation_resume_rejects_tampered_identity_bound_artifact(
         payload["content_hash"] = "0" * 64
     elif tamper == "entry_identity":
         body["entry_identity"]["entry_id"] = "foreign-entry"
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "discovery_control_fields":
+        body["control_gate_hit"] = True
+        body["control_validation_pass"] = True
         payload = {**body, "content_hash": canonical_hash(body)}
     elif tamper == "report_equivalence":
         report["equivalence"]["equivalent"] = False
@@ -2465,8 +2503,39 @@ def test_worker_validation_resume_rejects_tampered_identity_bound_artifact(
         for sessions in (body["sessions"], report["sessions"]):
             sessions[0]["process_id"] = "10001"
         payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper.startswith("report_schedule_seed_"):
+        for sessions in (body["sessions"], report["sessions"]):
+            if tamper.endswith("same"):
+                sessions[0]["schedule_seed"] = 123
+                sessions[1]["schedule_seed"] = 123
+            elif tamper.endswith("none"):
+                sessions[0]["schedule_seed"] = None
+            else:
+                sessions[0]["schedule_seed"], sessions[1]["schedule_seed"] = (
+                    sessions[1]["schedule_seed"],
+                    sessions[0]["schedule_seed"],
+                )
+        payload = {**body, "content_hash": canonical_hash(body)}
     elif tamper == "legacy_schema":
         body["schema_version"] = 1
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "stage2_candidate_typed_digest":
+        candidate_artifact = json.loads(
+            next(tmp_path.glob("entries/*/candidates/*/candidate.json")).read_text(
+                encoding="utf-8"
+            )
+        )
+        typed_candidate = {
+            "pair_hash": candidate_artifact["pair_hash"],
+            "decision": {
+                key: value
+                for key, value in candidate_artifact["stage2_decision"].items()
+                if key != "promote"
+            },
+            "noise_normalized_score": candidate_artifact["noise_normalized_score"],
+            "evidence": candidate_artifact["stage2_evidence"],
+        }
+        body["stage2_candidate_digest"] = canonical_hash(typed_candidate)
         payload = {**body, "content_hash": canonical_hash(body)}
     elif tamper == "raw_samples_and_summary":
         for sessions in (body["sessions"], report["sessions"]):
@@ -2627,6 +2696,85 @@ def test_worker_control_validation_is_diagnostic_and_never_promotes_or_ranks(
     assert evidence["control_gate_hit"] is True
     assert evidence["control_validation_pass"] is True
     assert "submission_candidate_rank" not in evidence
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "string",
+        "gate_mismatch",
+        "validation_mismatch",
+        "missing",
+    ),
+)
+def test_worker_control_validation_resume_rejects_diagnostic_field_tampering(
+    tmp_path,
+    monkeypatch,
+    tamper,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = replace(
+        _rule_plan_entry(rule_id="edge_notation_symmetry", family="sym"),
+        entry_id="p1:neo4j:control:edge_notation_symmetry:256:0",
+        stream=RuleStream.CONTROL,
+        tier="control",
+    )
+    generated = GeneratedShard(
+        graph_statements=(
+            "CREATE (a:Node {id: 1}), (b:Node {id: 2}), (a)-[:R]->(b)",
+        ),
+        query_texts=("MATCH (n)-[:R]->(m) RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    validation_runner = (
+        _RejectedIndependentValidationRunner()
+        if tamper == "string"
+        else _IndependentValidationRunner()
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _ControlRuntimeGapAdapter(),
+        validation_runner_factory=lambda _entry: validation_runner,
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["control_validation_pass"] is (tamper != "string")
+
+    path = next(tmp_path.glob("entries/*/validation/*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    if tamper == "string":
+        body["control_validation_pass"] = "yes"
+    elif tamper == "gate_mismatch":
+        body["control_gate_hit"] = False
+    elif tamper == "validation_mismatch":
+        body["control_validation_pass"] = False
+    else:
+        body.pop("control_gate_hit")
+    path.write_text(
+        json.dumps(
+            {**body, "content_hash": canonical_hash(body)},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    class _MustNotRunValidation:
+        def run_session(self, *_args, **_kwargs):
+            raise AssertionError("tampered CONTROL evidence must fail before replay")
+
+    resumed = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _ControlRuntimeGapAdapter(),
+        validation_runner_factory=lambda _entry: _MustNotRunValidation(),
+    )
+    resumed.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        resumed(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
 def test_worker_validation_runner_failure_is_terminal_infrastructure(

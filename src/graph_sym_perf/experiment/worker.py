@@ -127,7 +127,10 @@ from graph_sym_perf.validation.models import (
     ValidationPolicy,
 )
 from graph_sym_perf.validation.evidence import issue_validation_report_is_complete
-from graph_sym_perf.validation.session_runner import SpawnedValidationSessionRunner
+from graph_sym_perf.validation.session_runner import (
+    SpawnedValidationSessionRunner,
+    validation_schedule_seed,
+)
 from graph_sym_perf.validation.validator import IssueValidator
 from graph_sym_perf.workload.acceptance import AcceptedPairBuilder
 from graph_sym_perf.workload.models import (
@@ -929,9 +932,9 @@ class RuntimeFirstShardWorker:
             validation_passed_pairs=int(
                 outcome.get("validation_passed_pairs", 0)
             ),
-            control_gate_hit=bool(outcome.get("control_gate_hit", False)),
-            control_validation_pass=bool(
-                outcome.get("control_validation_pass", False)
+            control_gate_hit=outcome.get("control_gate_hit", False) is True,
+            control_validation_pass=(
+                outcome.get("control_validation_pass", False) is True
             ),
             infrastructure_error_kind=outcome.get("infrastructure_error_kind"),
             infrastructure_reason=outcome.get("infrastructure_reason"),
@@ -1643,9 +1646,9 @@ class RuntimeFirstShardWorker:
             validation_passed_pairs = int(
                 stage2_outcome.get("validation_passed_pairs", 0)
             )
-            control_gate_hit = bool(stage2_outcome.get("control_gate_hit", False))
-            control_validation_pass = bool(
-                stage2_outcome.get("control_validation_pass", False)
+            control_gate_hit = stage2_outcome.get("control_gate_hit", False) is True
+            control_validation_pass = (
+                stage2_outcome.get("control_validation_pass", False) is True
             )
             timeout_records = tuple(stage2_outcome["timeout_records"])
             if stage2_outcome.get("infrastructure_reason") is not None:
@@ -2027,10 +2030,17 @@ class RuntimeFirstShardWorker:
         selected_for_validation = tuple(
             candidate.pair_hash for candidate in selected_candidates
         )
+        measured_by_pair_hash = {
+            candidate.pair_hash: (candidate, candidate_digest)
+            for candidate, candidate_digest in measured
+        }
         validation_outcomes = self._validate_stage2_pairs(
             entry,
             entry_dir,
-            selected_candidates=selected_candidates,
+            selected_candidates=tuple(
+                measured_by_pair_hash[pair_hash]
+                for pair_hash in selected_for_validation
+            ),
             pairs_by_hash=pairs_by_hash,
             graph_statements=graph_statements,
             graph_snapshot_hash=graph_snapshot_hash,
@@ -2067,16 +2077,15 @@ class RuntimeFirstShardWorker:
                     for outcome in validation_outcomes
                 )
             ),
-            "control_gate_hit": bool(
-                entry.stream is RuleStream.CONTROL
-                and any(outcome.get("control_gate_hit") for outcome in validation_outcomes)
+            "control_gate_hit": entry.stream is RuleStream.CONTROL
+            and any(
+                outcome.get("control_gate_hit") is True
+                for outcome in validation_outcomes
             ),
-            "control_validation_pass": bool(
-                entry.stream is RuleStream.CONTROL
-                and any(
-                    outcome.get("control_validation_pass")
-                    for outcome in validation_outcomes
-                )
+            "control_validation_pass": entry.stream is RuleStream.CONTROL
+            and any(
+                outcome.get("control_validation_pass") is True
+                for outcome in validation_outcomes
             ),
             "timeout_records": tuple(timeout_records),
         }
@@ -2086,7 +2095,7 @@ class RuntimeFirstShardWorker:
         entry: RulePlanEntry,
         entry_dir: Path,
         *,
-        selected_candidates: tuple[Stage2Candidate, ...],
+        selected_candidates: tuple[tuple[Stage2Candidate, str], ...],
         pairs_by_hash: Mapping[str, object],
         graph_statements: tuple[str, ...],
         graph_snapshot_hash: str,
@@ -2104,7 +2113,12 @@ class RuntimeFirstShardWorker:
                 "validation graph statements do not match the Stage-2 fingerprint",
             )
         outcomes: list[dict[str, object]] = []
-        for stage2_candidate in selected_candidates:
+        for stage2_candidate, sealed_candidate_digest in selected_candidates:
+            if not _is_sha256(sealed_candidate_digest):
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "validation requires a sealed Stage-2 candidate digest",
+                )
             certified_pair = pairs_by_hash[stage2_candidate.pair_hash]
             pair = EquivalentQueryPair(
                 certified_pair.query_a,
@@ -2151,15 +2165,18 @@ class RuntimeFirstShardWorker:
                 "stage2_evidence_digest": canonical_hash(
                     to_jsonable(asdict(stage2_candidate.evidence))
                 ),
-                "stage2_candidate_digest": canonical_hash(
-                    to_jsonable(asdict(stage2_candidate))
-                ),
+                "stage2_candidate_digest": sealed_candidate_digest,
                 "stream": entry.stream.value,
             }
             existing_outcome = _load_stage2_validation_outcome(
                 validation_path,
                 expected_identity=expected_identity,
                 candidate=candidate,
+                expected_control_gate_hit=(
+                    stage2_candidate.decision.promote
+                    if entry.stream is RuleStream.CONTROL
+                    else None
+                ),
             )
             if existing_outcome is not None:
                 outcomes.append(existing_outcome)
@@ -4701,6 +4718,7 @@ def _load_stage2_validation_outcome(
     *,
     expected_identity: Mapping[str, object],
     candidate: CandidateBundle,
+    expected_control_gate_hit: bool | None,
 ) -> dict[str, object] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -4738,6 +4756,8 @@ def _load_stage2_validation_outcome(
         "validated_ratio",
     }
     control_fields = {"control_gate_hit", "control_validation_pass"}
+    control_stream = expected_identity.get("stream") == RuleStream.CONTROL.value
+    expected_fields = required | control_fields if control_stream else required
     try:
         content_hash_matches = payload.get("content_hash") == canonical_hash(body)
     except (TypeError, ValueError) as exc:
@@ -4751,9 +4771,19 @@ def _load_stage2_validation_outcome(
         or body.get("stage") not in terminal_stages
         or not isinstance(report_payload, dict)
         or not isinstance(body.get("sessions"), list)
-        or not required <= set(body) <= required | control_fields
+        or set(body) != expected_fields
         or report_payload.get("sessions") != body["sessions"]
         or any(body.get(key) != to_jsonable(value) for key, value in expected_identity.items())
+        or (
+            control_stream
+            and (
+                type(expected_control_gate_hit) is not bool
+                or type(body.get("control_gate_hit")) is not bool
+                or type(body.get("control_validation_pass")) is not bool
+                or body.get("control_gate_hit") is not expected_control_gate_hit
+            )
+        )
+        or (not control_stream and expected_control_gate_hit is not None)
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -4781,6 +4811,16 @@ def _load_stage2_validation_outcome(
             report_payload.get("equivalence")
         )
         sessions = _validation_sessions_from_payload(report_payload.get("sessions"))
+        expected_schedule_seeds = tuple(
+            validation_schedule_seed(candidate.candidate_hash, session_number)
+            for session_number in (1, 2)
+        )
+        if (
+            tuple(session.schedule_seed for session in sessions)
+            != expected_schedule_seeds
+            or expected_schedule_seeds[0] == expected_schedule_seeds[1]
+        ):
+            raise ValueError("validation session schedule seed identity differs")
         recomputed = IssueValidator().validate(
             candidate,
             _SealedValidationReplayRunner(equivalence, sessions),
@@ -4793,6 +4833,10 @@ def _load_stage2_validation_outcome(
     if to_jsonable(asdict(recomputed)) != report_payload or (
         recomputed.stage is PipelineStage.VALIDATION_PASSED
         and not issue_validation_report_is_complete(recomputed)
+    ) or (
+        control_stream
+        and body.get("control_validation_pass")
+        is not (recomputed.stage is PipelineStage.VALIDATION_PASSED)
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,

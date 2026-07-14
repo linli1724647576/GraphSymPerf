@@ -314,7 +314,7 @@ def _timeout_validation_confirmed(
             len(samples) != 20
             or sum(sample.order == "AB" for sample in samples) != 10
             or sum(sample.order == "BA" for sample in samples) != 10
-            or not _timeout_negative_controls_complete(session)
+            or not _timeout_negative_controls_complete(candidate, session)
         ):
             return False
         a_only = all(
@@ -341,23 +341,42 @@ def _timeout_validation_confirmed(
     )
 
 
-def _timeout_negative_controls_complete(session: ValidationSession) -> bool:
+def _timeout_negative_controls_complete(
+    candidate: CandidateBundle,
+    session: ValidationSession,
+) -> bool:
     if len(session.negative_controls) != 2:
         return False
-    return all(
-        control.verdict is RuntimeVerdict.PASS
-        and len(control.paired_samples) == 20
-        and sum(sample.order == "AB" for sample in control.paired_samples) == 10
-        and sum(sample.order == "BA" for sample in control.paired_samples) == 10
-        and all(
-            sample.a_ms is not None
-            and sample.b_ms is not None
-            and not sample.a_timeout
-            and not sample.b_timeout
-            for sample in control.paired_samples
-        )
-        for control in session.negative_controls
+    expected_query_hashes = (
+        candidate.content_hashes["query_a"],
+        candidate.content_hashes["query_b"],
     )
+    for control, expected_query_hash in zip(
+        session.negative_controls,
+        expected_query_hashes,
+        strict=True,
+    ):
+        if (
+            control.query_a_hash != expected_query_hash
+            or control.query_b_hash != expected_query_hash
+            or control.graph_snapshot_hash != candidate.pair.graph_snapshot_hash
+            or control.graph_snapshot_hash != session.graph_fingerprint
+            or control.dbms_fingerprint != candidate.pair.dbms_fingerprint
+            or control.dbms_fingerprint != session.dbms_fingerprint
+            or control.verdict is not RuntimeVerdict.PASS
+            or len(control.paired_samples) != 20
+            or sum(sample.order == "AB" for sample in control.paired_samples) != 10
+            or sum(sample.order == "BA" for sample in control.paired_samples) != 10
+            or any(
+                sample.a_ms is None
+                or sample.b_ms is None
+                or sample.a_timeout
+                or sample.b_timeout
+                for sample in control.paired_samples
+            )
+        ):
+            return False
+    return True
 
 
 def _valid_session_protocol(session: ValidationSession) -> bool:
