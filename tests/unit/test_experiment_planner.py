@@ -14,6 +14,7 @@ from graph_sym_perf.core import ConfigError, TargetSystem
 from graph_sym_perf.experiment.plan_models import (
     CampaignPhase,
     FrozenMapping,
+    RulePlanEntry,
     RuleStream,
     SourceRevision,
 )
@@ -237,6 +238,56 @@ def test_p1_and_p2_do_not_repeat_the_regression_entry() -> None:
 
     assert all(entry.stream is not RuleStream.REGRESSION for entry in (*p1.entries, *p2.entries))
     assert all(entry.regression_case_id is None for entry in (*p1.entries, *p2.entries))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"phase": CampaignPhase.P1},
+        {"target": TargetSystem.APACHE_AGE},
+        {"accepted_pair_quota": 1},
+        {"max_generated_seed_budget": 1},
+        {"max_variants_per_seed": 1},
+        {"regression_case_id": None},
+    ),
+)
+def test_regression_rule_plan_entry_invariants_fail_closed(changes: dict[str, object]) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    entry = next(
+        value
+        for value in build_rule_plan(spec, CampaignPhase.P0).entries
+        if value.stream is RuleStream.REGRESSION
+    )
+
+    with pytest.raises(ValueError, match="REGRESSION"):
+        replace(entry, **changes)
+
+
+def test_non_regression_entry_cannot_carry_a_regression_case_id() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    entry = build_rule_plan(spec, CampaignPhase.P1).entries[0]
+
+    with pytest.raises(ValueError, match="regression_case_id"):
+        replace(entry, regression_case_id="neo4j_bug001_pattern_order")
+
+
+def test_p0_resolved_manifest_roundtrips_the_frozen_regression_identity(tmp_path: Path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    plan = build_rule_plan(spec, CampaignPhase.P0)
+    path = tmp_path / "p0-rule-plan.json"
+
+    write_resolved_manifest(plan, path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    regression = next(
+        entry for entry in payload["entries"] if entry["stream"] == RuleStream.REGRESSION.value
+    )
+    assert regression["phase"] == CampaignPhase.P0.value
+    assert regression["target"] == TargetSystem.NEO4J.value
+    assert regression["regression_case_id"] == "neo4j_bug001_pattern_order"
+    assert regression["accepted_pair_quota"] == 0
+    assert regression["max_generated_seed_budget"] == 0
+    assert regression["max_variants_per_seed"] == 0
 
 
 def test_rule_plan_resolved_manifest_is_atomic_immutable_and_auditable(tmp_path: Path) -> None:

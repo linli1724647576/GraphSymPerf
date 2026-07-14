@@ -10,8 +10,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
-import yaml
-
 from graph_sym_perf.core import ConfigError, GdsmithConfig, TargetSystem, to_jsonable
 from graph_sym_perf.gdsmith.runner import check_gdsmith_tooling
 from graph_sym_perf.experiment.plan_models import (
@@ -28,6 +26,10 @@ from graph_sym_perf.experiment.plan_models import (
     freeze_value,
 )
 from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
+from graph_sym_perf.validation.regression import (
+    RegressionConfigurationError,
+    RegressionManifest,
+)
 
 
 MAX_TOTAL_ACCEPTED_PAIR_BUDGET = 112_000
@@ -168,29 +170,20 @@ def _p0_regression_entry(
     max_entry_runtime_seconds: int,
 ) -> RulePlanEntry:
     try:
-        raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError) as exc:
-        raise ConfigError("regression manifest is not readable YAML") from exc
-    if not isinstance(raw, Mapping) or raw.get("schema_version") != 1:
-        raise ConfigError("regression manifest schema_version must be 1")
-    case_id = raw.get("case_id")
-    dbms = raw.get("dbms")
-    rule_id = raw.get("canonical_rule_id")
-    graph_nodes = raw.get("expected_graph_nodes")
-    if not isinstance(case_id, str) or not case_id.strip():
-        raise ConfigError("regression manifest case_id must be a non-empty string")
-    if dbms != TargetSystem.NEO4J.value or TargetSystem.NEO4J not in spec.targets:
+        manifest = RegressionManifest.load(manifest_path)
+    except RegressionConfigurationError as exc:
+        raise ConfigError(str(exc)) from exc
+    case_id = manifest.case_id
+    rule_id = manifest.canonical_rule_id
+    graph_nodes = manifest.expected_graph_nodes
+    if manifest.dbms != TargetSystem.NEO4J.value or TargetSystem.NEO4J not in spec.targets:
         raise ConfigError("P0 regression manifest target must be configured Neo4j")
-    if not isinstance(rule_id, str):
-        raise ConfigError("regression manifest canonical_rule_id must be a string")
     try:
         rule = registry.get(rule_id)
     except KeyError as exc:
         raise ConfigError(f"regression manifest contains unknown rule: {rule_id}") from exc
     if rule.rule_id not in spec.rules.discovery_rule_ids:
         raise ConfigError("regression manifest rule must be an approved discovery rule")
-    if not isinstance(graph_nodes, int) or isinstance(graph_nodes, bool) or graph_nodes <= 0:
-        raise ConfigError("regression manifest expected_graph_nodes must be positive")
     seed = _entry_seed(
         spec.seed,
         CampaignPhase.P0,

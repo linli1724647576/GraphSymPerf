@@ -177,8 +177,8 @@ class _EntryAdapter:
 
 def _entry(rule_id: str, family: str) -> RulePlanEntry:
     return RulePlanEntry(
-        entry_id=f"p1:neo4j:discovery:{rule_id}:128:0",
-        phase=CampaignPhase.P1,
+        entry_id=f"p0:neo4j:discovery:{rule_id}:128:0",
+        phase=CampaignPhase.P0,
         target=TargetSystem.NEO4J,
         rule_id=rule_id,
         family=family,

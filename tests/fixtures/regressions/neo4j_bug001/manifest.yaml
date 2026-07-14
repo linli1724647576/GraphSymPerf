@@ -4,13 +4,17 @@ dbms: neo4j
 affected_version: "2026.04.0 community"
 image_ref: "neo4j:2026.04.0-community"
 image_digest_env: GRAPHSYMPERF_NEO4J_BUG001_IMAGE_DIGEST
+container_env: GRAPHSYMPERF_NEO4J_BUG001_CONTAINER
 uri_env: GRAPHSYMPERF_NEO4J_BUG001_URI
 user_env: GRAPHSYMPERF_NEO4J_BUG001_USER
 password_env: GRAPHSYMPERF_NEO4J_BUG001_PASSWORD
 graph_path: reproducer_graph.cypher.txt
 graph_sha256: 718fd53bfffc8a16e6df1cc278272669bcf8d0edb89270df9f7e2e876062b6d9
 fast_query_path: fast_query.cypher
+fast_query_sha256: 2e4f0682a4919567bc6f47d52ae5b3db774b3e7cb20e91bbfbd688e3aae297b6
 slow_query_path: slow_query.cypher
+slow_query_sha256: 7d2b1528b6121bfbd4bf0352a50c10e709ff3d2fdeb1dfc425bd76c4fa0acdc2
+expected_slow_query: b
 canonical_rule_id: pattern_order_symmetry
 expected_graph_nodes: 1280
 expected_graph_relationships: 2290

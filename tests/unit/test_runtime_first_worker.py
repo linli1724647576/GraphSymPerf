@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import graph_sym_perf.experiment.worker as worker_module
+import graph_sym_perf.validation.regression as regression_module
 
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
@@ -52,6 +53,9 @@ from graph_sym_perf.validation.models import (
     SessionLifecycle,
     ValidationSession,
 )
+from graph_sym_perf.validation.regression import RegressionEnvironmentIdentity, RegressionRunner
+from graph_sym_perf.validation.validator import IssueValidator
+from tests.integration.test_issue_validation import FakeIndependentRunner
 
 
 class _Adapter:
@@ -126,6 +130,61 @@ def _install_valid_noise_stub(monkeypatch) -> None:
         "_load_or_calibrate_entry_noise",
         fixed_noise,
     )
+
+
+def _install_verified_regression_gate(tmp_path, monkeypatch, spec) -> dict[str, str]:
+    digest = "sha256:" + "a" * 64
+    environment = {
+        "GRAPHSYMPERF_NEO4J_BUG001_IMAGE_DIGEST": digest,
+        "GRAPHSYMPERF_NEO4J_BUG001_CONTAINER": "neo4j-bug001",
+        "GRAPHSYMPERF_NEO4J_BUG001_URI": "bolt://127.0.0.1:17687/bug001",
+        "GRAPHSYMPERF_NEO4J_BUG001_USER": "bug-user",
+        "GRAPHSYMPERF_NEO4J_BUG001_PASSWORD": "bug-secret",
+        "GRAPHSYMPERF_NEO4J_URI": "bolt://127.0.0.1:7687/main",
+        "GRAPHSYMPERF_NEO4J_CONTAINER": "neo4j-main",
+    }
+
+    def load_case(path, values):
+        return regression_module.load_regression_case(
+            path,
+            values,
+            provenance_probe=lambda mapped, target: (
+                mapped["GRAPHSYMPERF_NEO4J_IMAGE_DIGEST"]
+                if target is TargetSystem.NEO4J
+                else None
+            ),
+        )
+
+    case = load_case(spec.regression["manifest"], environment)
+    identity = RegressionEnvironmentIdentity(
+        case.affected_version,
+        "b" * 64,
+        "6.0.0",
+        case.provenance.verified_image_digest,
+        case.provenance.container_identity,
+        case.provenance.endpoint_identity,
+        case.index_names,
+        ("ONLINE",) * 7,
+    )
+    campaign_identity = regression_module.regression_campaign_identity(
+        spec_name=spec.name,
+        schema_version=spec.schema_version,
+        manifest_sha256=case.manifest_sha256,
+    )
+    report_path = (
+        tmp_path
+        / "regressions"
+        / case.case_id
+        / "regression_report.json"
+    )
+    RegressionRunner._for_test(
+        IssueValidator(),
+        report_path=report_path,
+        identity_probe=lambda _case: identity,
+        session_runner_factory=lambda _case: FakeIndependentRunner(),
+    ).run(case, campaign_identity_hash=campaign_identity)
+    monkeypatch.setattr(worker_module, "load_regression_case", load_case)
+    return environment
 
 
 class _DatabaseResetAdapter(_Adapter):
@@ -477,8 +536,8 @@ def _rule_plan_entry(
     max_entry_runtime_seconds: int = 600,
 ) -> RulePlanEntry:
     return RulePlanEntry(
-        entry_id=f"p1:neo4j:discovery:{rule_id}:{graph_scale}:0",
-        phase=CampaignPhase.P1,
+        entry_id=f"p0:neo4j:discovery:{rule_id}:{graph_scale}:0",
+        phase=CampaignPhase.P0,
         target=TargetSystem.NEO4J,
         rule_id=rule_id,
         family=family,
@@ -2117,6 +2176,8 @@ def test_p2_stage2_selection_caps_validation_at_five_candidates(
     monkeypatch,
 ) -> None:
     _install_valid_noise_stub(monkeypatch)
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = _install_verified_regression_gate(tmp_path, monkeypatch, spec)
     entry = replace(
         _rule_plan_entry(
             rule_id="constant_true_disjunction",
@@ -2135,7 +2196,8 @@ def test_p2_stage2_selection_caps_validation_at_five_candidates(
         ),
     )
     worker = RuntimeFirstShardWorker(
-        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        spec,
+        environment=environment,
         generation_runner=lambda _entry, _raw_dir: GeneratedShard(
             graph_statements=("CREATE (n:Node {id: 1})",),
             query_texts=tuple(

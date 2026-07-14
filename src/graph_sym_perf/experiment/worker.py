@@ -127,6 +127,17 @@ from graph_sym_perf.validation.models import (
     ValidationPolicy,
 )
 from graph_sym_perf.validation.evidence import issue_validation_report_is_complete
+from graph_sym_perf.validation.regression import (
+    RegressionArtifactError,
+    RegressionConfigurationError,
+    RegressionManifest,
+    build_production_regression_runner,
+    load_regression_case,
+    load_verified_regression_report,
+    regression_campaign_identity,
+    write_regression_configuration_failure,
+    write_unresolved_regression_configuration_failure,
+)
 from graph_sym_perf.validation.session_runner import (
     SpawnedValidationSessionRunner,
     validation_schedule_seed,
@@ -390,11 +401,21 @@ class RuntimeFirstShardWorker:
         self._validation_runner_factory = validation_runner_factory
         self._clock = clock
         self._run_dir: Path | None = None
+        self._regression_artifact_root: Path | None = None
         self._attempt_dir: Path | None = None
         self._attempt_context: AttemptContext | None = None
 
     def bind_run_dir(self, run_dir: str | Path) -> None:
         self._run_dir = Path(run_dir)
+
+    def bind_regression_artifact_root(self, artifact_root: str | Path) -> None:
+        """Bind the immutable cross-phase root that owns the P0 gate artifact.
+
+        Task-11 ancestry resolution can call this seam for independent phase
+        run directories; direct Task-9 use defaults to the bound run directory.
+        """
+
+        self._regression_artifact_root = Path(artifact_root)
 
     def bind_attempt_dir(self, attempt_dir: str | Path) -> None:
         self._attempt_dir = Path(attempt_dir)
@@ -431,6 +452,27 @@ class RuntimeFirstShardWorker:
             attempt_dir = _next_entry_attempt_dir(entry_dir)
             attempt_dir.mkdir(parents=True, exist_ok=False)
             self._attempt_dir = attempt_dir
+        if entry.stream is RuleStream.REGRESSION:
+            return self._run_regression_rule_plan_entry(entry, attempt_dir)
+        if entry.phase in {CampaignPhase.P1, CampaignPhase.P2}:
+            try:
+                manifest = self._regression_manifest()
+                campaign_identity_hash = self._regression_campaign_identity(manifest)
+                case = load_regression_case(manifest.path, self.environment)
+                load_verified_regression_report(
+                    self._regression_gate_path(manifest),
+                    case=case,
+                    campaign_identity_hash=campaign_identity_hash,
+                )
+            except (RegressionConfigurationError, RegressionArtifactError) as exc:
+                return self._finish_entry(
+                    entry,
+                    attempt_dir,
+                    terminal_state=EntryState.INFRASTRUCTURE_FAILED,
+                    generated=None,
+                    infrastructure_error_kind=ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    infrastructure_reason=str(exc),
+                )
         progress_path = entry_dir / "acceptance_progress.json"
         progress = _load_entry_progress(progress_path, entry=entry)
         prior_elapsed = float(progress["elapsed_seconds"])
@@ -452,6 +494,7 @@ class RuntimeFirstShardWorker:
                 infrastructure_reason=str(invalidation["reason"]),
                 **progress_finish_fields,
             )
+
         deadline = started + max(0.0, entry.max_entry_runtime_seconds - prior_elapsed)
         if prior_elapsed >= entry.max_entry_runtime_seconds or self._clock() >= deadline:
             return self._finish_entry(
@@ -938,6 +981,106 @@ class RuntimeFirstShardWorker:
             ),
             infrastructure_error_kind=outcome.get("infrastructure_error_kind"),
             infrastructure_reason=outcome.get("infrastructure_reason"),
+        )
+
+    def _regression_manifest(self) -> RegressionManifest:
+        manifest_path = self.spec.regression.get("manifest")
+        if not isinstance(manifest_path, Path):
+            raise RegressionConfigurationError("regression manifest is not configured")
+        return RegressionManifest.load(manifest_path)
+
+    def _regression_campaign_identity(self, manifest: RegressionManifest) -> str:
+        return regression_campaign_identity(
+            spec_name=self.spec.name,
+            schema_version=self.spec.schema_version,
+            manifest_sha256=manifest.manifest_sha256,
+        )
+
+    def _regression_gate_path(self, manifest: RegressionManifest) -> Path:
+        return self._regression_gate_path_for_case(manifest.case_id)
+
+    def _regression_gate_path_for_case(self, case_id: str) -> Path:
+        if self._run_dir is None:  # pragma: no cover - guarded by caller
+            raise RuntimeError("entry worker was not bound to an immutable run directory")
+        artifact_root = self._regression_artifact_root or self._run_dir
+        return artifact_root / "regressions" / case_id / "regression_report.json"
+
+    def _run_regression_rule_plan_entry(
+        self,
+        entry: RulePlanEntry,
+        attempt_dir: Path,
+    ) -> dict[str, object]:
+        try:
+            manifest = self._regression_manifest()
+            report_path = self._regression_gate_path(manifest)
+            campaign_identity_hash = self._regression_campaign_identity(manifest)
+            if entry.regression_case_id != manifest.case_id:
+                raise RegressionConfigurationError("regression entry case identity mismatch")
+            case = load_regression_case(manifest.path, self.environment)
+        except RegressionConfigurationError as exc:
+            if "manifest" in locals() and "campaign_identity_hash" in locals():
+                write_regression_configuration_failure(
+                    report_path=self._regression_gate_path(manifest),
+                    manifest=manifest,
+                    campaign_identity_hash=campaign_identity_hash,
+                    exception_type=type(exc).__name__,
+                )
+            else:
+                manifest_path = self.spec.regression.get("manifest")
+                manifest_sha256 = "0" * 64
+                if (
+                    isinstance(manifest_path, Path)
+                    and not manifest_path.is_symlink()
+                    and manifest_path.is_file()
+                ):
+                    try:
+                        manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+                    except OSError:
+                        manifest_sha256 = "0" * 64
+                unresolved_campaign_identity = regression_campaign_identity(
+                    spec_name=self.spec.name,
+                    schema_version=self.spec.schema_version,
+                    manifest_sha256=manifest_sha256,
+                )
+                write_unresolved_regression_configuration_failure(
+                    report_path=self._regression_gate_path_for_case(
+                        str(entry.regression_case_id)
+                    ),
+                    case_id=str(entry.regression_case_id),
+                    manifest_sha256=manifest_sha256,
+                    campaign_identity_hash=unresolved_campaign_identity,
+                    exception_type=type(exc).__name__,
+                )
+            return self._finish_entry(
+                entry,
+                attempt_dir,
+                terminal_state=EntryState.INFRASTRUCTURE_FAILED,
+                generated=None,
+                infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
+                infrastructure_reason="regression_configuration_error",
+            )
+        runner = build_production_regression_runner(report_path)
+        runner.run(case, campaign_identity_hash=campaign_identity_hash)
+        try:
+            load_verified_regression_report(
+                report_path,
+                case=case,
+                campaign_identity_hash=campaign_identity_hash,
+            )
+        except RegressionArtifactError as exc:
+            return self._finish_entry(
+                entry,
+                attempt_dir,
+                terminal_state=EntryState.INFRASTRUCTURE_FAILED,
+                generated=None,
+                infrastructure_error_kind=ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                infrastructure_reason=str(exc),
+            )
+        return self._finish_entry(
+            entry,
+            attempt_dir,
+            terminal_state=EntryState.COMPLETED,
+            generated=None,
         )
 
     def _build_rule_entry_pairs(

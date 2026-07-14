@@ -231,6 +231,24 @@ class RulePlanEntry:
     stream: RuleStream
     regression_case_id: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.stream is RuleStream.REGRESSION:
+            if (
+                self.phase is not CampaignPhase.P0
+                or self.target is not TargetSystem.NEO4J
+                or self.accepted_pair_quota != 0
+                or self.max_generated_seed_budget != 0
+                or self.max_variants_per_seed != 0
+                or not isinstance(self.regression_case_id, str)
+                or not self.regression_case_id.strip()
+            ):
+                raise ValueError(
+                    "REGRESSION entries require P0 Neo4j, zero generation budgets, "
+                    "and a non-empty regression_case_id"
+                )
+        elif self.regression_case_id is not None:
+            raise ValueError("non-REGRESSION entries must not carry regression_case_id")
+
 
 @dataclass(frozen=True)
 class RulePlan:
