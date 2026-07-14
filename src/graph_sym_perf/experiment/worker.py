@@ -56,6 +56,7 @@ from graph_sym_perf.dialects.base import DecisionKind
 from graph_sym_perf.dialects.native import NativeCypherDialect
 from graph_sym_perf.equivalence.checker import compare_typed_results
 from graph_sym_perf.experiment.plan_models import (
+    CampaignPhase,
     ExperimentSpec,
     RulePlanEntry,
     ShardTask,
@@ -76,11 +77,19 @@ from graph_sym_perf.generation.gdsmith import GdsmithGenerator, GenerationReques
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
 from graph_sym_perf.runtime.measurement import RuntimeHarness, paired_schedule
-from graph_sym_perf.runtime.models import EquivalentQueryPair, NoiseCalibration, RuntimePolicy, RuntimeVerdict
+from graph_sym_perf.runtime.models import (
+    EquivalentQueryPair,
+    NoiseCalibration,
+    PairedSample,
+    RuntimeEvidence,
+    RuntimePolicy,
+    RuntimeVerdict,
+)
 from graph_sym_perf.runtime.noise import (
     collect_aa_noise_samples,
     summarize_aa_noise_samples,
 )
+from graph_sym_perf.runtime.oracle import validate_stage2_evidence
 from graph_sym_perf.runtime.records import (
     ArtifactIntegrityError,
     ArtifactWriteError,
@@ -88,6 +97,14 @@ from graph_sym_perf.runtime.records import (
     PairRuntimeRecord,
     canonical_record_digest,
     summarize_integer_samples,
+)
+from graph_sym_perf.runtime.screening import (
+    DurableTimeoutQueue,
+    Stage2Candidate,
+    Stage2Decision,
+    TimeoutQueueRecord,
+    evaluate_stage2,
+    stage1_top_k,
 )
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
 from graph_sym_perf.transforms.provider import CoreRulePairProvider
@@ -641,6 +658,7 @@ class RuntimeFirstShardWorker:
                     entry,
                     generated.query_texts,
                     entry_dir,
+                    graph_manifest=graph_manifest,
                     graph_snapshot_hash=(
                         graph_manifest.graph_fingerprint if graph_manifest is not None else graph_hash
                     ),
@@ -653,6 +671,7 @@ class RuntimeFirstShardWorker:
                     prior_elapsed=prior_elapsed,
                 )
                 if outcome["terminal_state"] is not EntryState.INFRASTRUCTURE_FAILED:
+                    final_identity_stable = False
                     final_fingerprint = _adapter_dbms_fingerprint(proxy)
                     final_epoch = _adapter_dbms_health_epoch(proxy)
                     if (
@@ -709,6 +728,33 @@ class RuntimeFirstShardWorker:
                                 reason="observed graph manifest drifted during acceptance",
                                 observed=to_jsonable(asdict(final_graph)),
                             )
+                        else:
+                            final_identity_stable = True
+                    else:
+                        final_identity_stable = True
+                    if final_identity_stable:
+                        try:
+                            timeout_queue = DurableTimeoutQueue(
+                                entry_dir / "timeout_queue.jsonl"
+                            )
+                            for timeout_record in outcome.get("timeout_records", ()):
+                                if not isinstance(timeout_record, TimeoutQueueRecord):
+                                    raise ArtifactIntegrityError(
+                                        "Stage-2 timeout event is not typed"
+                                    )
+                                timeout_queue.append(timeout_record)
+                        except ArtifactIntegrityError as exc:
+                            outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+                            outcome["infrastructure_error_kind"] = (
+                                ErrorKind.EVIDENCE_INTEGRITY_ERROR
+                            )
+                            outcome["infrastructure_reason"] = str(exc)
+                        except ArtifactWriteError as exc:
+                            outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+                            outcome["infrastructure_error_kind"] = (
+                                ErrorKind.INFRASTRUCTURE_ERROR
+                            )
+                            outcome["infrastructure_reason"] = str(exc)
         except WorkerFailure as exc:
             if _entry_infrastructure_error_kind(exc) is not None:
                 latest_progress = _load_entry_progress(progress_path, entry=entry)
@@ -777,6 +823,12 @@ class RuntimeFirstShardWorker:
             graph_manifest=graph_manifest,
             dbms_fingerprint=fingerprint,
             health_epoch=health_epoch,
+            stage1_selected_pairs=int(outcome.get("stage1_selected_pairs", 0)),
+            stage2_measured_pairs=int(outcome.get("stage2_measured_pairs", 0)),
+            stage2_promoted_pairs=int(outcome.get("stage2_promoted_pairs", 0)),
+            validation_selected_pairs=int(
+                outcome.get("validation_selected_pairs", 0)
+            ),
             infrastructure_error_kind=outcome.get("infrastructure_error_kind"),
             infrastructure_reason=outcome.get("infrastructure_reason"),
         )
@@ -789,6 +841,7 @@ class RuntimeFirstShardWorker:
         entry_dir: Path,
         *,
         graph_snapshot_hash: str,
+        graph_manifest: GraphManifest | None,
         dbms_fingerprint: str,
         dbms_health_epoch: str,
         deadline: float,
@@ -1434,6 +1487,46 @@ class RuntimeFirstShardWorker:
                 else:
                     state = EntryState.STAGE1_COMPLETE
 
+        stage1_selected_pairs = 0
+        stage2_measured_pairs = 0
+        stage2_promoted_pairs = 0
+        validation_selected_pairs = 0
+        timeout_records: tuple[TimeoutQueueRecord, ...] = ()
+        if state is EntryState.STAGE1_COMPLETE:
+            if noise.p99_delta_ms is None:
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "Stage-2 screening requires a bound p99 noise floor",
+                )
+            stage2_outcome = self._screen_rule_entry_stage2(
+                adapter,
+                entry,
+                entry_dir,
+                queries=queries,
+                factory=factory,
+                records=store.records,
+                graph_manifest=graph_manifest,
+                graph_snapshot_hash=graph_snapshot_hash,
+                dbms_fingerprint=dbms_fingerprint,
+                dbms_health_epoch=dbms_health_epoch,
+                noise_floor_id=str(noise_floor_id),
+                noise_p99_ms=float(noise.p99_delta_ms),
+                deadline=deadline,
+            )
+            state = stage2_outcome["terminal_state"]
+            stage1_selected_pairs = int(stage2_outcome["stage1_selected_pairs"])
+            stage2_measured_pairs = int(stage2_outcome["stage2_measured_pairs"])
+            stage2_promoted_pairs = int(stage2_outcome["stage2_promoted_pairs"])
+            validation_selected_pairs = int(
+                stage2_outcome["validation_selected_pairs"]
+            )
+            timeout_records = tuple(stage2_outcome["timeout_records"])
+            if stage2_outcome.get("infrastructure_reason") is not None:
+                infrastructure_error_kind = stage2_outcome[
+                    "infrastructure_error_kind"
+                ]
+                infrastructure_reason = str(stage2_outcome["infrastructure_reason"])
+
         persist_progress()
         result: dict[str, object] = {
             "accepted_hashes": tuple(sorted(accepted_hashes)),
@@ -1452,12 +1545,278 @@ class RuntimeFirstShardWorker:
                 "accepted": ({entry.rule_id: len(accepted_hashes)} if accepted_hashes else {}),
                 "not_applicable": ({entry.rule_id: not_applicable} if not_applicable else {}),
             },
+            "stage1_selected_pairs": stage1_selected_pairs,
+            "stage2_measured_pairs": stage2_measured_pairs,
+            "stage2_promoted_pairs": stage2_promoted_pairs,
+            "validation_selected_pairs": validation_selected_pairs,
+            "timeout_records": timeout_records,
             "terminal_state": state,
         }
         if infrastructure_reason is not None:
             result["infrastructure_error_kind"] = infrastructure_error_kind
             result["infrastructure_reason"] = infrastructure_reason
         return result
+
+    def _screen_rule_entry_stage2(
+        self,
+        adapter: Any,
+        entry: RulePlanEntry,
+        entry_dir: Path,
+        *,
+        queries: tuple[str, ...],
+        factory: RulePairFactory,
+        records: tuple[dict[str, Any], ...],
+        graph_manifest: GraphManifest | None,
+        graph_snapshot_hash: str,
+        dbms_fingerprint: str,
+        dbms_health_epoch: str,
+        noise_floor_id: str,
+        noise_p99_ms: float,
+        deadline: float,
+    ) -> dict[str, object]:
+        """Upgrade only deterministic Stage-1 Top-K pairs to Stage-2 evidence."""
+
+        if graph_manifest is None:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "Neo4j Stage-2 candidate requires a complete graph manifest",
+            )
+        if not math.isfinite(noise_p99_ms) or noise_p99_ms <= 0:
+            return {
+                "terminal_state": EntryState.INFRASTRUCTURE_FAILED,
+                "stage1_selected_pairs": 0,
+                "stage2_measured_pairs": 0,
+                "stage2_promoted_pairs": 0,
+                "validation_selected_pairs": 0,
+                "timeout_records": (),
+                "infrastructure_error_kind": ErrorKind.INFRASTRUCTURE_ERROR,
+                "infrastructure_reason": (
+                    "Stage-2 screening requires a finite positive p99 noise floor"
+                ),
+            }
+        stage2_config = dict(self.spec.runtime["stage2"])
+        if stage2_config != {
+            "warmups": 3,
+            "pairs": 12,
+            "relative_ratio": 1.5,
+            "relative_ci_low": 1.1,
+            "absolute_delta_ms": 10.0,
+            "direction_consistency": 0.75,
+        }:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "Stage-2 configuration differs from the immutable wide-recall protocol",
+            )
+        typed_records: tuple[PairRuntimeRecord, ...] = tuple(
+            PairRuntimeRecord(
+                **{
+                    **record,
+                    "samples_us": tuple(
+                        tuple(sample) for sample in record["samples_us"]
+                    ),
+                }
+            )
+            for record in records
+        )
+        try:
+            selected_hashes = stage1_top_k(
+                typed_records,
+                noise_p99_ms=noise_p99_ms,
+            )
+        except (TypeError, ValueError) as exc:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                f"Stage-1 ranking evidence is invalid: {exc}",
+            ) from exc
+        records_by_hash = {
+            str(record["pair_hash"]): dict(record) for record in records
+        }
+        candidate_root = entry_dir / "candidates"
+        existing_candidate_dirs = (
+            {path.name for path in candidate_root.iterdir() if path.is_dir()}
+            if candidate_root.exists()
+            else set()
+        )
+        if existing_candidate_dirs - set(selected_hashes):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "Stage-2 candidate directory is not a deterministic Top-K subset",
+            )
+
+        timeout_records: list[TimeoutQueueRecord] = []
+        for record in typed_records:
+            timeout_side = _compact_timeout_side(record)
+            if timeout_side is not None:
+                timeout_records.append(
+                    TimeoutQueueRecord(
+                        entry_id=entry.entry_id,
+                        pair_hash=record.pair_hash,
+                        timeout_side=timeout_side,
+                        stage="stage1",
+                        evidence_digest=canonical_record_digest(
+                            records_by_hash[record.pair_hash]
+                        ),
+                        graph_snapshot_hash=graph_snapshot_hash,
+                        dbms_fingerprint=dbms_fingerprint,
+                        dbms_health_epoch=dbms_health_epoch,
+                        noise_floor_id=noise_floor_id,
+                    )
+                )
+
+        measured: list[tuple[Stage2Candidate, str]] = []
+        for pair_hash in selected_hashes:
+            if self._clock() >= deadline:
+                return {
+                    "terminal_state": EntryState.RESOURCE_EXHAUSTED,
+                    "stage1_selected_pairs": len(selected_hashes),
+                    "stage2_measured_pairs": len(measured),
+                    "stage2_promoted_pairs": sum(
+                        candidate.decision.promote for candidate, _digest in measured
+                    ),
+                    "validation_selected_pairs": 0,
+                    "timeout_records": tuple(timeout_records),
+                }
+            stage1_record = records_by_hash[pair_hash]
+            ordinal = int(stage1_record["source_query_ordinal"])
+            pair = _rebuild_pending_pair(factory, entry, queries, ordinal, pair_hash)
+            expected_direction = stage1_record.get("runtime_direction")
+            if expected_direction not in {"a", "b"}:
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "ordinary Stage-1 Top-K record has no frozen runtime direction",
+                )
+            seed = _stage2_seed(entry, pair_hash)
+            candidate_path = candidate_root / pair_hash / "candidate.json"
+            existing = _load_stage2_candidate(
+                candidate_path,
+                entry=entry,
+                pair=pair,
+                stage1_record=stage1_record,
+                graph_manifest=graph_manifest,
+                graph_snapshot_hash=graph_snapshot_hash,
+                dbms_fingerprint=dbms_fingerprint,
+                dbms_health_epoch=dbms_health_epoch,
+                noise_floor_id=noise_floor_id,
+                noise_p99_ms=noise_p99_ms,
+                seed=seed,
+                expected_direction=str(expected_direction),
+            )
+            if existing is None:
+                evidence = RuntimeHarness().measure_pair(
+                    adapter,
+                    pair.query_a,
+                    pair.query_b,
+                    parameters=pair.parameters,
+                    policy=RuntimePolicy(
+                        warmups=3,
+                        pairs=12,
+                        seed=seed,
+                        require_exact_balance=True,
+                        timeout_ms=float(entry.query_timeout_seconds * 1000),
+                        bootstrap_resamples=10_000,
+                    ),
+                    expected_slow_query=str(expected_direction),
+                )
+                if evidence.verdict is RuntimeVerdict.INVALID:
+                    kind = (
+                        ErrorKind.DRIVER_TIMEOUT
+                        if "execution_error:TimeoutError" in evidence.reason_codes
+                        else ErrorKind.INFRASTRUCTURE_ERROR
+                    )
+                    return {
+                        "terminal_state": EntryState.INFRASTRUCTURE_FAILED,
+                        "stage1_selected_pairs": len(selected_hashes),
+                        "stage2_measured_pairs": len(measured),
+                        "stage2_promoted_pairs": sum(
+                            candidate.decision.promote
+                            for candidate, _digest in measured
+                        ),
+                        "validation_selected_pairs": 0,
+                        "timeout_records": tuple(timeout_records),
+                        "infrastructure_error_kind": kind,
+                        "infrastructure_reason": (
+                            "Stage-2 measurement is invalid: "
+                            + ",".join(evidence.reason_codes)
+                        ),
+                    }
+                decision = evaluate_stage2(evidence, noise_p99_ms=noise_p99_ms)
+                score = (
+                    float(evidence.median_delta_ms) / noise_p99_ms
+                    if evidence.median_delta_ms is not None
+                    else float(stage1_record["delta_over_noise"])
+                )
+                stage2_candidate = Stage2Candidate(
+                    pair_hash=pair_hash,
+                    decision=decision,
+                    noise_normalized_score=score,
+                    evidence=evidence,
+                )
+                candidate_payload = _stage2_candidate_payload(
+                    entry=entry,
+                    pair=pair,
+                    stage1_record=stage1_record,
+                    graph_manifest=graph_manifest,
+                    graph_snapshot_hash=graph_snapshot_hash,
+                    dbms_fingerprint=dbms_fingerprint,
+                    dbms_health_epoch=dbms_health_epoch,
+                    noise_floor_id=noise_floor_id,
+                    seed=seed,
+                    expected_direction=str(expected_direction),
+                    candidate=stage2_candidate,
+                )
+                candidate_path.parent.mkdir(parents=True, exist_ok=True)
+                _fsync_directory(candidate_root)
+                _atomic_write_json(candidate_path, candidate_payload)
+                candidate_digest = str(candidate_payload["content_hash"])
+            else:
+                stage2_candidate, candidate_digest = existing
+            measured.append((stage2_candidate, candidate_digest))
+            timeout_side = _runtime_timeout_side(stage2_candidate.evidence)
+            if timeout_side is not None:
+                timeout_records.append(
+                    TimeoutQueueRecord(
+                        entry_id=entry.entry_id,
+                        pair_hash=pair_hash,
+                        timeout_side=timeout_side,
+                        stage="stage2",
+                        evidence_digest=canonical_hash(
+                            to_jsonable(asdict(stage2_candidate.evidence))
+                        ),
+                        graph_snapshot_hash=graph_snapshot_hash,
+                        dbms_fingerprint=dbms_fingerprint,
+                        dbms_health_epoch=dbms_health_epoch,
+                        noise_floor_id=noise_floor_id,
+                    )
+                )
+
+        promoted = [candidate for candidate, _digest in measured if candidate.decision.promote]
+        validation_limit = 5 if entry.phase is CampaignPhase.P2 else 2
+        selected_for_validation = tuple(
+            candidate.pair_hash
+            for candidate in sorted(
+                promoted,
+                key=_stage2_candidate_rank_key,
+            )[:validation_limit]
+        )
+        _persist_stage2_selection(
+            entry_dir / "stage2_selection.json",
+            entry=entry,
+            measured=tuple(measured),
+            selected_pair_hashes=selected_for_validation,
+            validation_limit=validation_limit,
+            graph_snapshot_hash=graph_snapshot_hash,
+            dbms_fingerprint=dbms_fingerprint,
+            dbms_health_epoch=dbms_health_epoch,
+            noise_floor_id=noise_floor_id,
+        )
+        return {
+            "terminal_state": EntryState.STAGE2_COMPLETE,
+            "stage1_selected_pairs": len(selected_hashes),
+            "stage2_measured_pairs": len(measured),
+            "stage2_promoted_pairs": len(promoted),
+            "validation_selected_pairs": len(selected_for_validation),
+            "timeout_records": tuple(timeout_records),
+        }
 
     def _finish_entry(
         self,
@@ -1475,10 +1834,22 @@ class RuntimeFirstShardWorker:
         health_epoch: DBMSHealthEpoch | None = None,
         infrastructure_error_kind: object | None = None,
         infrastructure_reason: object | None = None,
+        stage1_selected_pairs: int = 0,
+        stage2_measured_pairs: int = 0,
+        stage2_promoted_pairs: int = 0,
+        validation_selected_pairs: int = 0,
     ) -> dict[str, object]:
         state = terminal_state if isinstance(terminal_state, EntryState) else EntryState(str(terminal_state))
         acceptance_complete = (
-            state is EntryState.STAGE1_COMPLETE
+            state
+            in {
+                EntryState.STAGE1_COMPLETE,
+                EntryState.STAGE2_COMPLETE,
+                EntryState.VALIDATION_COMPLETE,
+                EntryState.REDUCTION_COMPLETE,
+                EntryState.MATERIALIZED,
+                EntryState.COMPLETED,
+            }
             and len(accepted_hashes) == entry.accepted_pair_quota
         )
         summary: dict[str, object] = {
@@ -1508,6 +1879,10 @@ class RuntimeFirstShardWorker:
             "rule_stats": dict(rule_stats or {"accepted": {}, "not_applicable": {}}),
             "shard_index": entry.shard_index,
             "stream": entry.stream.value,
+            "stage1_selected_pairs": stage1_selected_pairs,
+            "stage2_measured_pairs": stage2_measured_pairs,
+            "stage2_promoted_pairs": stage2_promoted_pairs,
+            "validation_selected_pairs": validation_selected_pairs,
             "target": entry.target.value,
             "terminal_state": state.value,
         }
@@ -3240,6 +3615,335 @@ def _expected_noise_probe_records(
         ordered[round(index * (len(ordered) - 1) / 19)]
         for index in range(20)
     ]
+
+
+def _stage2_candidate_payload(
+    *,
+    entry: RulePlanEntry,
+    pair: object,
+    stage1_record: Mapping[str, object],
+    graph_manifest: GraphManifest,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+    dbms_health_epoch: str,
+    noise_floor_id: str,
+    seed: int,
+    expected_direction: str,
+    candidate: Stage2Candidate,
+) -> dict[str, object]:
+    body = {
+        "schema_version": 1,
+        "entry_identity": _stage2_entry_identity(entry),
+        "evidence_identity": _runtime_evidence_identity(
+            graph_snapshot_hash=graph_snapshot_hash,
+            dbms_fingerprint=dbms_fingerprint,
+            dbms_health_epoch=dbms_health_epoch,
+        ),
+        "pair_hash": candidate.pair_hash,
+        "source_query_ordinal": stage1_record["source_query_ordinal"],
+        "noise_floor_id": noise_floor_id,
+        "stage1_record_digest": canonical_record_digest(dict(stage1_record)),
+        "stage1_evidence": dict(stage1_record),
+        "stage2_protocol": _stage2_protocol(
+            entry,
+            candidate.pair_hash,
+            seed=seed,
+            expected_direction=expected_direction,
+        ),
+        "query_a": pair.query_a,
+        "query_b": pair.query_b,
+        "parameters": to_jsonable(dict(pair.parameters)),
+        "safety_certificate": to_jsonable(asdict(pair.certificate)),
+        "transform_metadata": to_jsonable(dict(pair.transform_metadata)),
+        "graph_manifest": to_jsonable(asdict(graph_manifest)),
+        "stage2_evidence": to_jsonable(asdict(candidate.evidence)),
+        "stage2_decision": _stage2_decision_payload(candidate.decision),
+        "noise_normalized_score": candidate.noise_normalized_score,
+    }
+    return {**body, "content_hash": canonical_hash(body)}
+
+
+def _load_stage2_candidate(
+    path: Path,
+    *,
+    entry: RulePlanEntry,
+    pair: object,
+    stage1_record: Mapping[str, object],
+    graph_manifest: GraphManifest,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+    dbms_health_epoch: str,
+    noise_floor_id: str,
+    noise_p99_ms: float,
+    seed: int,
+    expected_direction: str,
+) -> tuple[Stage2Candidate, str] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-2 candidate evidence is unreadable",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-2 candidate evidence is not an object",
+        )
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    required = {
+        "entry_identity",
+        "evidence_identity",
+        "graph_manifest",
+        "noise_floor_id",
+        "noise_normalized_score",
+        "pair_hash",
+        "parameters",
+        "query_a",
+        "query_b",
+        "safety_certificate",
+        "schema_version",
+        "source_query_ordinal",
+        "stage1_evidence",
+        "stage1_record_digest",
+        "stage2_decision",
+        "stage2_evidence",
+        "stage2_protocol",
+        "transform_metadata",
+    }
+    expected_identity = _runtime_evidence_identity(
+        graph_snapshot_hash=graph_snapshot_hash,
+        dbms_fingerprint=dbms_fingerprint,
+        dbms_health_epoch=dbms_health_epoch,
+    )
+    expected_stage1 = to_jsonable(dict(stage1_record))
+    if (
+        set(body) != required
+        or body.get("schema_version") != 1
+        or payload.get("content_hash") != canonical_hash(body)
+        or body.get("entry_identity") != _stage2_entry_identity(entry)
+        or body.get("evidence_identity") != expected_identity
+        or body.get("pair_hash") != pair.pair_hash
+        or body.get("source_query_ordinal") != stage1_record["source_query_ordinal"]
+        or body.get("noise_floor_id") != noise_floor_id
+        or body.get("stage1_record_digest")
+        != canonical_record_digest(dict(stage1_record))
+        or body.get("stage1_evidence") != expected_stage1
+        or body.get("stage2_protocol")
+        != _stage2_protocol(
+            entry,
+            pair.pair_hash,
+            seed=seed,
+            expected_direction=expected_direction,
+        )
+        or body.get("query_a") != pair.query_a
+        or body.get("query_b") != pair.query_b
+        or body.get("parameters") != to_jsonable(dict(pair.parameters))
+        or body.get("safety_certificate") != to_jsonable(asdict(pair.certificate))
+        or body.get("transform_metadata")
+        != to_jsonable(dict(pair.transform_metadata))
+        or body.get("graph_manifest") != to_jsonable(asdict(graph_manifest))
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-2 candidate identity, hash, or source binding differs",
+        )
+    try:
+        evidence = _runtime_evidence_from_payload(body["stage2_evidence"])
+        if (
+            evidence.query_a_hash != _query_hash(pair.query_a)
+            or evidence.query_b_hash != _query_hash(pair.query_b)
+            or evidence.slow_query != expected_direction
+            or len(evidence.paired_samples) != 12
+            or tuple(sample.order for sample in evidence.paired_samples)
+            != paired_schedule(12, seed=seed, require_exact_balance=True)
+        ):
+            raise ValueError("Stage-2 runtime evidence binding differs")
+        validate_stage2_evidence(
+            evidence,
+            query_a_hash=_query_hash(pair.query_a),
+            query_b_hash=_query_hash(pair.query_b),
+            expected_orders=paired_schedule(
+                12,
+                seed=seed,
+                require_exact_balance=True,
+            ),
+            expected_slow_query=expected_direction,
+            seed=seed,
+            timeout_ms=float(entry.query_timeout_seconds * 1000),
+        )
+        decision = evaluate_stage2(evidence, noise_p99_ms=noise_p99_ms)
+        if body.get("stage2_decision") != _stage2_decision_payload(decision):
+            raise ValueError("Stage-2 decision differs from runtime evidence")
+        score = float(body["noise_normalized_score"])
+        expected_score = (
+            float(evidence.median_delta_ms) / noise_p99_ms
+            if evidence.median_delta_ms is not None
+            else float(stage1_record["delta_over_noise"])
+        )
+        if not math.isfinite(score) or score != expected_score:
+            raise ValueError("Stage-2 score differs from runtime evidence")
+        candidate = Stage2Candidate(pair.pair_hash, decision, score, evidence)
+    except (ArithmeticError, KeyError, TypeError, ValueError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-2 candidate runtime evidence is malformed",
+        ) from exc
+    return candidate, str(payload["content_hash"])
+
+
+def _runtime_evidence_from_payload(payload: object) -> RuntimeEvidence:
+    if not isinstance(payload, dict) or set(payload) != set(
+        RuntimeEvidence.__dataclass_fields__
+    ):
+        raise ValueError("RuntimeEvidence shape differs")
+    samples = payload["paired_samples"]
+    if not isinstance(samples, list) or any(
+        not isinstance(sample, dict)
+        or set(sample) != set(PairedSample.__dataclass_fields__)
+        for sample in samples
+    ):
+        raise ValueError("paired samples are malformed")
+    return RuntimeEvidence(
+        **{
+            **payload,
+            "verdict": RuntimeVerdict(str(payload["verdict"])),
+            "paired_samples": tuple(PairedSample(**sample) for sample in samples),
+            "reason_codes": tuple(payload["reason_codes"]),
+        }
+    )
+
+
+def _persist_stage2_selection(
+    path: Path,
+    *,
+    entry: RulePlanEntry,
+    measured: tuple[tuple[Stage2Candidate, str], ...],
+    selected_pair_hashes: tuple[str, ...],
+    validation_limit: int,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+    dbms_health_epoch: str,
+    noise_floor_id: str,
+) -> None:
+    body = {
+        "schema_version": 1,
+        "entry_identity": _stage2_entry_identity(entry),
+        "evidence_identity": _runtime_evidence_identity(
+            graph_snapshot_hash=graph_snapshot_hash,
+            dbms_fingerprint=dbms_fingerprint,
+            dbms_health_epoch=dbms_health_epoch,
+        ),
+        "noise_floor_id": noise_floor_id,
+        "candidate_digests": [
+            {"pair_hash": candidate.pair_hash, "content_hash": digest}
+            for candidate, digest in measured
+        ],
+        "selected_pair_hashes": list(selected_pair_hashes),
+        "validation_limit": validation_limit,
+    }
+    payload = {**body, "content_hash": canonical_hash(body)}
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        _atomic_write_json(path, payload)
+        return
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-2 selection artifact is unreadable",
+        ) from exc
+    if existing != payload:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-2 selection artifact differs from deterministic candidates",
+        )
+
+
+def _stage2_entry_identity(entry: RulePlanEntry) -> dict[str, object]:
+    return {
+        "entry_id": entry.entry_id,
+        "family": entry.family,
+        "graph_scale": entry.graph_scale,
+        "measurement_protocol_id": entry.measurement_protocol_id,
+        "phase": entry.phase.value,
+        "rule_id": entry.rule_id,
+        "shard_index": entry.shard_index,
+        "shard_seed": entry.shard_seed,
+        "stream": entry.stream.value,
+        "target": entry.target.value,
+        "tier": entry.tier,
+    }
+
+
+def _stage2_protocol(
+    entry: RulePlanEntry,
+    pair_hash: str,
+    *,
+    seed: int,
+    expected_direction: str,
+) -> dict[str, object]:
+    return {
+        "bootstrap_resamples": 10_000,
+        "expected_slow_query": expected_direction,
+        "pairs": 12,
+        "protocol_version": "stage2-balanced-12-v1",
+        "require_exact_balance": True,
+        "seed": seed,
+        "seed_sha256": hashlib.sha256(
+            f"{entry.shard_seed}:{entry.entry_id}:{pair_hash}:stage2".encode("utf-8")
+        ).hexdigest(),
+        "warmups": 3,
+    }
+
+
+def _stage2_decision_payload(decision: Stage2Decision) -> dict[str, object]:
+    return {
+        "absolute_pass": decision.absolute_pass,
+        "promote": decision.promote,
+        "reason_codes": list(decision.reason_codes),
+        "relative_pass": decision.relative_pass,
+    }
+
+
+def _stage2_candidate_rank_key(
+    candidate: Stage2Candidate,
+) -> tuple[float, float, float, str]:
+    return (
+        -candidate.noise_normalized_score,
+        -float(candidate.evidence.median_delta_ms or 0.0),
+        -float(candidate.evidence.median_ratio or 0.0),
+        candidate.pair_hash,
+    )
+
+
+def _compact_timeout_side(record: PairRuntimeRecord) -> str | None:
+    if record.timeout_state == "a_timeout":
+        return "a"
+    if record.timeout_state == "b_timeout":
+        return "b"
+    return None
+
+
+def _runtime_timeout_side(evidence: RuntimeEvidence) -> str | None:
+    if "one_sided_timeout" not in evidence.reason_codes:
+        return None
+    a_timeouts = sum(sample.a_timeout for sample in evidence.paired_samples)
+    b_timeouts = sum(sample.b_timeout for sample in evidence.paired_samples)
+    if a_timeouts and not b_timeouts:
+        return "a"
+    if b_timeouts and not a_timeouts:
+        return "b"
+    return None
+
+
+def _stage2_seed(entry: RulePlanEntry, pair_hash: str) -> int:
+    digest = hashlib.sha256(
+        f"{entry.shard_seed}:{entry.entry_id}:{pair_hash}:stage2".encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 
 
 def _stage1_seed(entry: RulePlanEntry, pair_hash: str) -> int:

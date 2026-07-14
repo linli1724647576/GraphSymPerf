@@ -236,8 +236,8 @@ def test_bool_and_sym_rule_entries_keep_independent_quota_and_statistics(
 
     assert [result["accepted_pairs"] for result in results] == [1, 1]
     assert [result["terminal_state"] for result in results] == [
-        "stage1_complete",
-        "stage1_complete",
+        "stage2_complete",
+        "stage2_complete",
     ]
     assert [result["rule_stats"]["accepted"] for result in results] == [
         {"null_partition_tautology": 1},
