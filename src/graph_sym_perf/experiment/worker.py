@@ -75,7 +75,7 @@ from graph_sym_perf.generation.corpus import GraphCorpus, GraphManifest, Portabl
 from graph_sym_perf.generation.gdsmith import GdsmithGenerator, GenerationRequest
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
-from graph_sym_perf.runtime.measurement import RuntimeHarness
+from graph_sym_perf.runtime.measurement import RuntimeHarness, paired_schedule
 from graph_sym_perf.runtime.models import EquivalentQueryPair, NoiseCalibration, RuntimePolicy, RuntimeVerdict
 from graph_sym_perf.runtime.noise import calibrate_aa_noise
 from graph_sym_perf.runtime.records import (
@@ -83,6 +83,8 @@ from graph_sym_perf.runtime.records import (
     ArtifactWriteError,
     CompactRuntimeStore,
     PairRuntimeRecord,
+    canonical_record_digest,
+    summarize_integer_samples,
 )
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
 from graph_sym_perf.transforms.provider import CoreRulePairProvider
@@ -382,6 +384,17 @@ class RuntimeFirstShardWorker:
             "rule_stats": _rule_stats_from_entry_progress(entry, progress),
         }
         started = self._clock()
+        invalidation = _load_entry_runtime_invalidation(entry_dir, entry=entry)
+        if invalidation is not None:
+            return self._finish_entry(
+                entry,
+                attempt_dir,
+                terminal_state=EntryState.INFRASTRUCTURE_FAILED,
+                generated=None,
+                infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
+                infrastructure_reason=str(invalidation["reason"]),
+                **progress_finish_fields,
+            )
         deadline = started + max(0.0, entry.max_entry_runtime_seconds - prior_elapsed)
         if prior_elapsed >= entry.max_entry_runtime_seconds or self._clock() >= deadline:
             return self._finish_entry(
@@ -424,6 +437,8 @@ class RuntimeFirstShardWorker:
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
+                evidence_identity=progress["evidence_identity"],
+                stage1_intent=progress["stage1_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -446,13 +461,17 @@ class RuntimeFirstShardWorker:
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
+                evidence_identity=progress["evidence_identity"],
+                stage1_intent=progress["stage1_intent"],
             )
             return self._finish_entry(
                 entry,
                 attempt_dir,
                 terminal_state=EntryState.INFRASTRUCTURE_FAILED,
                 generated=None,
-                infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
+                infrastructure_error_kind=(
+                    _entry_infrastructure_error_kind(exc) or ErrorKind.INFRASTRUCTURE_ERROR
+                ),
                 infrastructure_reason=str(exc),
                 **progress_finish_fields,
             )
@@ -468,6 +487,8 @@ class RuntimeFirstShardWorker:
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
+                evidence_identity=progress["evidence_identity"],
+                stage1_intent=progress["stage1_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -494,6 +515,8 @@ class RuntimeFirstShardWorker:
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
+                evidence_identity=progress["evidence_identity"],
+                stage1_intent=progress["stage1_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -516,13 +539,17 @@ class RuntimeFirstShardWorker:
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
+                evidence_identity=progress["evidence_identity"],
+                stage1_intent=progress["stage1_intent"],
             )
             return self._finish_entry(
                 entry,
                 attempt_dir,
                 terminal_state=EntryState.INFRASTRUCTURE_FAILED,
                 generated=generated,
-                infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
+                infrastructure_error_kind=(
+                    _entry_infrastructure_error_kind(exc) or ErrorKind.INFRASTRUCTURE_ERROR
+                ),
                 infrastructure_reason=str(exc),
                 **progress_finish_fields,
             )
@@ -539,21 +566,7 @@ class RuntimeFirstShardWorker:
         health_epoch = DBMSHealthEpoch(None, reason="not_loaded")
         outcome: dict[str, object] = {
             "accepted": (),
-            "accepted_hashes": tuple(progress["accepted_pair_hashes"]),
-            "generated_seeds": int(progress["attempted_query_records"]),
-            "rejects": dict(progress["reject_counts"]),
-            "rule_stats": {
-                "accepted": (
-                    {entry.rule_id: len(progress["accepted_pair_hashes"])}
-                    if progress["accepted_pair_hashes"]
-                    else {}
-                ),
-                "not_applicable": (
-                    {entry.rule_id: int(dict(progress["reject_counts"]).get("RULE_NOT_APPLICABLE", 0))}
-                    if dict(progress["reject_counts"]).get("RULE_NOT_APPLICABLE")
-                    else {}
-                ),
-            },
+            **_entry_outcome_from_progress(entry, progress),
             "terminal_state": EntryState.INFRASTRUCTURE_FAILED,
         }
         measurement_lease = self._attempt_context.measurement_lease() if self._attempt_context else nullcontext()
@@ -593,6 +606,7 @@ class RuntimeFirstShardWorker:
                         fingerprint.reason or health_epoch.reason or "DBMS identity unavailable",
                     )
                 assert fingerprint.value is not None
+                assert health_epoch.value is not None
                 proxy.update_dbms_fingerprint(fingerprint.value)
                 outcome = self._build_rule_entry_pairs(
                     proxy,
@@ -603,6 +617,7 @@ class RuntimeFirstShardWorker:
                         graph_manifest.graph_fingerprint if graph_manifest is not None else graph_hash
                     ),
                     dbms_fingerprint=fingerprint.value,
+                    dbms_health_epoch=health_epoch.value,
                     deadline=deadline,
                     progress_path=progress_path,
                     progress=progress,
@@ -621,6 +636,24 @@ class RuntimeFirstShardWorker:
                         outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
                         outcome["infrastructure_error_kind"] = ErrorKind.INFRASTRUCTURE_ERROR
                         outcome["infrastructure_reason"] = "DBMS fingerprint or health epoch changed"
+                        _write_entry_runtime_invalidation(
+                            entry_dir,
+                            entry=entry,
+                            evidence_identity=_runtime_evidence_identity(
+                                graph_snapshot_hash=(
+                                    graph_manifest.graph_fingerprint
+                                    if graph_manifest is not None
+                                    else graph_hash
+                                ),
+                                dbms_fingerprint=fingerprint.value,
+                                dbms_health_epoch=health_epoch.value,
+                            ),
+                            reason="DBMS fingerprint or health epoch changed",
+                            observed={
+                                "dbms_fingerprint": final_fingerprint.value,
+                                "dbms_health_epoch": final_epoch.value,
+                            },
+                        )
                     elif graph_manifest is not None:
                         try:
                             final_graph = read_neo4j_graph_manifest(
@@ -637,27 +670,42 @@ class RuntimeFirstShardWorker:
                             outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
                             outcome["infrastructure_error_kind"] = ErrorKind.INFRASTRUCTURE_ERROR
                             outcome["infrastructure_reason"] = "observed graph manifest drifted during acceptance"
+                            _write_entry_runtime_invalidation(
+                                entry_dir,
+                                entry=entry,
+                                evidence_identity=_runtime_evidence_identity(
+                                    graph_snapshot_hash=graph_manifest.graph_fingerprint,
+                                    dbms_fingerprint=fingerprint.value,
+                                    dbms_health_epoch=health_epoch.value,
+                                ),
+                                reason="observed graph manifest drifted during acceptance",
+                                observed=to_jsonable(asdict(final_graph)),
+                            )
         except WorkerFailure as exc:
-            if exc.kind in {
-                ErrorKind.DBMS_UNAVAILABLE,
-                ErrorKind.DBMS_CRASHED,
-                ErrorKind.INFRASTRUCTURE_ERROR,
-            }:
+            if _entry_infrastructure_error_kind(exc) is not None:
+                latest_progress = _load_entry_progress(progress_path, entry=entry)
                 outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
                 outcome["infrastructure_error_kind"] = exc.kind
                 outcome["infrastructure_reason"] = str(exc)
+                outcome.update(_entry_outcome_from_progress(entry, latest_progress))
             else:
                 raise
         except (MemoryError, OSError, AdapterError) as exc:
+            latest_progress = _load_entry_progress(progress_path, entry=entry)
             outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
-            outcome["infrastructure_error_kind"] = ErrorKind.INFRASTRUCTURE_ERROR
+            outcome["infrastructure_error_kind"] = (
+                _entry_infrastructure_error_kind(exc) or ErrorKind.INFRASTRUCTURE_ERROR
+            )
             outcome["infrastructure_reason"] = str(exc)
+            outcome.update(_entry_outcome_from_progress(entry, latest_progress))
         finally:
             try:
                 adapter.close()
             except (MemoryError, OSError, AdapterError) as exc:
                 outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
-                outcome["infrastructure_error_kind"] = ErrorKind.INFRASTRUCTURE_ERROR
+                outcome["infrastructure_error_kind"] = (
+                    _entry_infrastructure_error_kind(exc) or ErrorKind.INFRASTRUCTURE_ERROR
+                )
                 outcome["infrastructure_reason"] = str(exc)
 
         outcome_generated_seeds = int(outcome["generated_seeds"])
@@ -674,6 +722,8 @@ class RuntimeFirstShardWorker:
             accepted_hashes=outcome_accepted_hashes,
             pending_acceptances=tuple(outcome.get("pending_acceptances", ())),
             legacy_migration_sha256=outcome.get("legacy_migration_sha256"),
+            evidence_identity=outcome.get("evidence_identity", progress["evidence_identity"]),
+            stage1_intent=outcome.get("stage1_intent", progress["stage1_intent"]),
         )
 
         return self._finish_entry(
@@ -701,6 +751,7 @@ class RuntimeFirstShardWorker:
         *,
         graph_snapshot_hash: str,
         dbms_fingerprint: str,
+        dbms_health_epoch: str,
         deadline: float,
         progress_path: Path,
         progress: Mapping[str, object],
@@ -719,6 +770,31 @@ class RuntimeFirstShardWorker:
         last_query_ordinal = int(progress["last_query_ordinal"])
         generated_seeds = int(progress["attempted_query_records"])
         legacy_migration_sha256 = progress["legacy_migration_sha256"]
+        loaded_schema = int(progress["_loaded_schema_version"])
+        current_identity = _runtime_evidence_identity(
+            graph_snapshot_hash=graph_snapshot_hash,
+            dbms_fingerprint=dbms_fingerprint,
+            dbms_health_epoch=dbms_health_epoch,
+        )
+        persisted_identity = progress["evidence_identity"]
+        if persisted_identity is not None and dict(persisted_identity) != current_identity:
+            _write_entry_runtime_invalidation(
+                entry_dir,
+                entry=entry,
+                evidence_identity=dict(persisted_identity),
+                reason="runtime evidence identity changed before resume",
+                observed=current_identity,
+            )
+            raise WorkerFailure(
+                ErrorKind.INFRASTRUCTURE_ERROR,
+                "runtime evidence identity changed before resume",
+            )
+        evidence_identity: dict[str, object] = current_identity
+        stage1_intent = (
+            dict(progress["stage1_intent"])
+            if progress["stage1_intent"] is not None
+            else None
+        )
         pending = [dict(value) for value in progress["pending_acceptances"]]
         pending_by_hash = {str(value["pair_hash"]): value for value in pending}
         records_path = entry_dir / "pair_runtime.jsonl"
@@ -728,22 +804,51 @@ class RuntimeFirstShardWorker:
             raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, str(exc)) from exc
         except ArtifactWriteError as exc:
             raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, str(exc)) from exc
+        if loaded_schema == 2 and (
+            progress["accepted_pair_hashes"]
+            or pending
+            or store.count
+            or (entry_dir / "noise_calibration.json").exists()
+        ):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "schema-v2 runtime evidence cannot be bound to a guessed DBMS health epoch",
+            )
+        existing_noise: tuple[NoiseCalibration, str] | None = None
+        if store.count:
+            existing_noise = _load_entry_noise(
+                entry_dir / "noise_calibration.json",
+                entry=entry,
+                graph_snapshot_hash=graph_snapshot_hash,
+                dbms_fingerprint=dbms_fingerprint,
+                dbms_health_epoch=dbms_health_epoch,
+            )
+            if existing_noise is None or existing_noise[0].p99_delta_ms is None:
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "pair_runtime records exist without valid bound noise evidence",
+                )
         runtime_ordinals = _validate_runtime_records(
             store,
             entry=entry,
             graph_snapshot_hash=graph_snapshot_hash,
             source_queries=queries,
             factory=factory,
+            noise_floor_id=existing_noise[1] if existing_noise is not None else None,
+            noise_p99_ms=(
+                existing_noise[0].p99_delta_ms if existing_noise is not None else None
+            ),
+            dbms_fingerprint=dbms_fingerprint,
+            dbms_health_epoch=dbms_health_epoch,
         )
         accepted_hashes = set(store.pair_hashes)
         persisted_accepted_hashes = set(progress["accepted_pair_hashes"])
-        loaded_schema = int(progress["_loaded_schema_version"])
-        if loaded_schema == 2 and not persisted_accepted_hashes.issubset(accepted_hashes):
+        if loaded_schema == 3 and not persisted_accepted_hashes.issubset(accepted_hashes):
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "runtime progress advances beyond durable pair_runtime records",
             )
-        if loaded_schema == 2 and any(
+        if loaded_schema == 3 and any(
             runtime_ordinals[pair_hash] > last_query_ordinal
             for pair_hash in persisted_accepted_hashes
         ):
@@ -751,16 +856,45 @@ class RuntimeFirstShardWorker:
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "runtime progress binds a pair beyond its last query ordinal",
             )
-        durable_ahead = accepted_hashes - persisted_accepted_hashes if loaded_schema == 2 else set()
-        if len(durable_ahead) > 1:
-            raise WorkerFailure(
-                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "pair_runtime records advance more than one transaction beyond progress",
-            )
-        # append+fsync happens before the atomic progress replacement. A single
-        # durable-ahead record is the only valid crash window.
-        for pair_hash in durable_ahead:
-            pending_by_hash.pop(pair_hash, None)
+        durable_ahead = accepted_hashes - persisted_accepted_hashes if loaded_schema == 3 else set()
+        recovery_needs_persist = False
+        if stage1_intent is None:
+            if durable_ahead:
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "pair_runtime record exists without its exact Stage-1 intent",
+                )
+        else:
+            intent_hash = str(stage1_intent["pair_hash"])
+            intent_ordinal = int(stage1_intent["source_query_ordinal"])
+            pending_record = pending_by_hash.get(intent_hash)
+            if (
+                pending_record is None
+                or int(pending_record["source_query_ordinal"]) != intent_ordinal
+                or intent_hash in persisted_accepted_hashes
+                or durable_ahead not in ({intent_hash}, set())
+            ):
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "Stage-1 intent is not bound to exactly one pending transaction",
+                )
+            if intent_hash in accepted_hashes:
+                runtime_by_hash = {
+                    str(record["pair_hash"]): record for record in store.records
+                }
+                if canonical_record_digest(runtime_by_hash[intent_hash]) != stage1_intent["record_digest"]:
+                    raise WorkerFailure(
+                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                        "Stage-1 intent digest does not match the durable runtime record",
+                    )
+                pending_by_hash.pop(intent_hash)
+                stage1_intent = None
+                recovery_needs_persist = True
+            else:
+                # Intent persistence can precede the append. Without a record,
+                # clearing the intent and remeasuring the pending pair is safe.
+                stage1_intent = None
+                recovery_needs_persist = True
         pending = sorted(pending_by_hash.values(), key=lambda value: int(value["source_query_ordinal"]))
 
         def persist_progress() -> None:
@@ -775,6 +909,8 @@ class RuntimeFirstShardWorker:
                 accepted_hashes=tuple(sorted(accepted_hashes)),
                 pending_acceptances=tuple(pending),
                 legacy_migration_sha256=legacy_migration_sha256,
+                evidence_identity=evidence_identity,
+                stage1_intent=stage1_intent,
             )
 
         def complete_query_record(ordinal: int) -> None:
@@ -841,9 +977,25 @@ class RuntimeFirstShardWorker:
                     )
                 except Exception as exc:
                     raise WorkerFailure(
-                        ErrorKind.INFRASTRUCTURE_ERROR,
+                        _entry_infrastructure_error_kind(exc)
+                        or ErrorKind.INFRASTRUCTURE_ERROR,
                         f"legacy accepted-pair runtime migration failed: {exc}",
                     ) from exc
+                if _is_truncated(left, max_rows) or _is_truncated(right, max_rows):
+                    raise WorkerFailure(
+                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                        "legacy accepted-pair migration produced a truncated result",
+                    )
+                equivalence = compare_typed_results(
+                    left.rows,
+                    right.rows,
+                    ordered=_has_order_by(pair.query_a),
+                )
+                if not equivalence.equivalent or not equivalence.complete_result:
+                    raise WorkerFailure(
+                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                        "legacy accepted-pair migration failed typed equivalence revalidation",
+                    )
                 migrated = _pending_acceptance(pair_hash, ordinal, left, right)
                 pending.append(migrated)
                 pending_by_hash[pair_hash] = migrated
@@ -853,7 +1005,7 @@ class RuntimeFirstShardWorker:
             # every query/certificate from the sealed corpus.
             persist_progress()
             _unlink_fsync(legacy_path)
-            loaded_schema = 2
+            loaded_schema = 3
         elif loaded_schema == 1 and progress["accepted_pair_hashes"]:
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -870,7 +1022,7 @@ class RuntimeFirstShardWorker:
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "runtime and pending pairs exceed the immutable entry quota",
             )
-        if durable_ahead or loaded_schema == 1:
+        if recovery_needs_persist or loaded_schema in {1, 2}:
             persist_progress()
 
         infrastructure_error_kind: ErrorKind | None = None
@@ -938,10 +1090,16 @@ class RuntimeFirstShardWorker:
                     max_rows=max_rows,
                     timeout_seconds=entry.query_timeout_seconds,
                 )
-            except (QueryTimeoutError, TimeoutError):
+            except QueryTimeoutError:
                 rejects["QUERY_TIMEOUT"] += 1
                 complete_query_record(ordinal)
                 continue
+            except TimeoutError as exc:
+                state = EntryState.INFRASTRUCTURE_FAILED
+                infrastructure_error_kind = ErrorKind.DRIVER_TIMEOUT
+                infrastructure_reason = str(exc)
+                persist_progress()
+                break
             except Exception as exc:
                 if _is_entry_infrastructure_exception(exc):
                     state = EntryState.INFRASTRUCTURE_FAILED
@@ -1003,6 +1161,7 @@ class RuntimeFirstShardWorker:
                 pending=pending,
                 graph_snapshot_hash=graph_snapshot_hash,
                 dbms_fingerprint=dbms_fingerprint,
+                dbms_health_epoch=dbms_health_epoch,
             )
             if not noise.valid or noise.p99_delta_ms is None:
                 state = EntryState.INFRASTRUCTURE_FAILED
@@ -1045,9 +1204,20 @@ class RuntimeFirstShardWorker:
                         evidence=evidence,
                         noise_floor_id=noise_floor_id,
                         noise_p99_ms=noise.p99_delta_ms,
+                        dbms_fingerprint=dbms_fingerprint,
+                        dbms_health_epoch=dbms_health_epoch,
                         source_query_ordinal=ordinal,
                         graph_fingerprint=graph_snapshot_hash,
                     )
+                    stage1_intent = {
+                        "pair_hash": pair_hash,
+                        "record_digest": canonical_record_digest(record),
+                        "source_query_ordinal": ordinal,
+                    }
+                    # The digest intent is committed before the append. Recovery
+                    # accepts a durable-ahead record only when it matches this
+                    # exact pending transaction and canonical record digest.
+                    persist_progress()
                     try:
                         store.append(record)
                     except ArtifactWriteError as exc:
@@ -1058,6 +1228,7 @@ class RuntimeFirstShardWorker:
                     accepted_hashes.add(pair_hash)
                     pending.remove(pending_record)
                     pending_by_hash.pop(pair_hash, None)
+                    stage1_intent = None
                     persist_progress()
                 else:
                     state = EntryState.STAGE1_COMPLETE
@@ -1067,6 +1238,8 @@ class RuntimeFirstShardWorker:
             "accepted_hashes": tuple(sorted(accepted_hashes)),
             "pending_acceptances": tuple(pending),
             "legacy_migration_sha256": legacy_migration_sha256,
+            "evidence_identity": evidence_identity,
+            "stage1_intent": stage1_intent,
             "generated_seeds": generated_seeds,
             "rejects": dict(sorted(rejects.items())),
             "rule_stats": {
@@ -2220,6 +2393,10 @@ def _validate_runtime_records(
     graph_snapshot_hash: str,
     source_queries: tuple[str, ...],
     factory: RulePairFactory,
+    noise_floor_id: str | None,
+    noise_p99_ms: float | None,
+    dbms_fingerprint: str,
+    dbms_health_epoch: str,
 ) -> dict[str, int]:
     ordinals: set[int] = set()
     by_hash: dict[str, int] = {}
@@ -2246,6 +2423,8 @@ def _validate_runtime_records(
                 or record.get("lifecycle_status") != "stage1_recorded"
                 or record.get("equivalence_summary") != "complete_typed_equivalent"
                 or record.get("graph_fingerprint") != graph_snapshot_hash
+                or record.get("dbms_fingerprint") != dbms_fingerprint
+                or record.get("dbms_health_epoch") != dbms_health_epoch
             ):
                 raise ValueError("runtime record identity differs from the entry")
             pair = _rebuild_pending_pair(factory, entry, source_queries, ordinal, pair_hash)
@@ -2258,6 +2437,11 @@ def _validate_runtime_records(
             ):
                 raise ValueError("runtime record hashes do not bind the rebuilt pair")
             samples = record.get("samples_us")
+            expected_orders = paired_schedule(
+                stage1_pairs,
+                seed=_stage1_seed(entry, pair_hash),
+                require_exact_balance=False,
+            )
             if (
                 not isinstance(samples, list)
                 or len(samples) != stage1_pairs
@@ -2265,11 +2449,24 @@ def _validate_runtime_records(
                     not isinstance(sample, list)
                     or len(sample) != 3
                     or sample[0] not in {"AB", "BA"}
-                    or any(value is not None and type(value) is not int for value in sample[1:])
+                    or any(
+                        value is not None and (type(value) is not int or value < 0)
+                        for value in sample[1:]
+                    )
                     for sample in samples
                 )
+                or tuple(sample[0] for sample in samples) != expected_orders
+                or noise_floor_id is None
+                or noise_p99_ms is None
+                or record.get("noise_floor_id") != noise_floor_id
             ):
                 raise ValueError("runtime record samples violate the fixed Stage-1 protocol")
+            summary = summarize_integer_samples(
+                [tuple(sample) for sample in samples],
+                noise_p99_ms=noise_p99_ms,
+            )
+            if any(record.get(key) != value for key, value in summary.items()):
+                raise ValueError("runtime record summary differs from canonical integer samples")
         except (TypeError, ValueError) as exc:
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -2290,40 +2487,146 @@ def _load_or_calibrate_entry_noise(
     pending: list[dict[str, object]],
     graph_snapshot_hash: str,
     dbms_fingerprint: str,
+    dbms_health_epoch: str,
 ) -> tuple[NoiseCalibration, str]:
     path = entry_dir / "noise_calibration.json"
+    existing = _load_entry_noise(
+        path,
+        entry=entry,
+        graph_snapshot_hash=graph_snapshot_hash,
+        dbms_fingerprint=dbms_fingerprint,
+        dbms_health_epoch=dbms_health_epoch,
+    )
+    if existing is not None:
+        return existing
+
+    if not pending:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "durable runtime records exist without their noise calibration",
+        )
+    ordered = sorted(
+        pending,
+        key=lambda value: (int(value["acceptance_a_us"]), str(value["pair_hash"])),
+    )
+    distinct_hashes = {str(value["pair_hash"]) for value in ordered}
+    if len(distinct_hashes) < 20:
+        probe_hashes = sorted(distinct_hashes)
+        noise = NoiseCalibration(
+            valid=False,
+            sample_count=0,
+            p95_delta_ms=None,
+            p99_delta_ms=None,
+            median_order_bias_ms=None,
+            long_tail_ratio=None,
+            reason_codes=("insufficient_distinct_aa_probes",),
+        )
+    else:
+        probes = []
+        probe_hashes = []
+        for index in range(20):
+            selected = ordered[round(index * (len(ordered) - 1) / 19)]
+            pair = _rebuild_pending_pair(
+                factory,
+                entry,
+                queries,
+                int(selected["source_query_ordinal"]),
+                str(selected["pair_hash"]),
+            )
+            probes.append(pair.query_a)
+            probe_hashes.append(pair.pair_hash)
+        noise = calibrate_aa_noise(
+            RuntimeHarness(),
+            adapter,
+            tuple(probes),
+            pairs_per_query=10,
+        )
+    body = {
+        "calibration": to_jsonable(asdict(noise)),
+        "dbms_fingerprint": dbms_fingerprint,
+        "dbms_health_epoch": dbms_health_epoch,
+        "distinct_probe_count": len(set(probe_hashes)),
+        "entry_id": entry.entry_id,
+        "graph_snapshot_hash": graph_snapshot_hash,
+        "long_tail_ratio_max": 5.0,
+        "minimum_complete_samples": 200,
+        "order_bias_rule": "median_order_bias_ms<=p95_delta_ms",
+        "pairs_per_query": 10,
+        "probe_pair_hashes": probe_hashes,
+        "probe_queries": 20,
+        "protocol_version": "aa-noise-20x10-v1",
+    }
+    content_hash = canonical_hash(body)
+    _atomic_write_json(path, {**body, "content_hash": content_hash})
+    return noise, content_hash
+
+
+def _load_entry_noise(
+    path: Path,
+    *,
+    entry: RulePlanEntry,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+    dbms_health_epoch: str,
+) -> tuple[NoiseCalibration, str] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        payload = None
+        return None
     except (OSError, json.JSONDecodeError) as exc:
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
             "noise calibration artifact is unreadable",
         ) from exc
-    if payload is not None:
-        if not isinstance(payload, dict):
-            raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration is not an object")
-        body = {key: value for key, value in payload.items() if key != "content_hash"}
-        if (
-            payload.get("content_hash") != canonical_hash(body)
+    if not isinstance(payload, dict):
+        raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration is not an object")
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    probe_hashes = body.get("probe_pair_hashes")
+    expected_body_keys = {
+        "calibration",
+        "dbms_fingerprint",
+        "dbms_health_epoch",
+        "distinct_probe_count",
+        "entry_id",
+        "graph_snapshot_hash",
+        "long_tail_ratio_max",
+        "minimum_complete_samples",
+        "order_bias_rule",
+        "pairs_per_query",
+        "probe_pair_hashes",
+        "probe_queries",
+        "protocol_version",
+    }
+    valid_probe_hashes = (
+        isinstance(probe_hashes, list)
+        and all(isinstance(value, str) and len(value) == 64 for value in probe_hashes)
+        and len(probe_hashes) == len(set(probe_hashes))
+    )
+    if (
+            set(body) != expected_body_keys
+            or payload.get("content_hash") != canonical_hash(body)
             or body.get("entry_id") != entry.entry_id
             or body.get("graph_snapshot_hash") != graph_snapshot_hash
             or body.get("dbms_fingerprint") != dbms_fingerprint
+            or body.get("dbms_health_epoch") != dbms_health_epoch
+            or type(body.get("distinct_probe_count")) is not int
+            or not valid_probe_hashes
+            or body.get("distinct_probe_count") != len(probe_hashes)
             or body.get("probe_queries") != 20
             or body.get("pairs_per_query") != 10
             or body.get("minimum_complete_samples") != 200
             or body.get("order_bias_rule") != "median_order_bias_ms<=p95_delta_ms"
             or body.get("long_tail_ratio_max") != 5.0
-        ):
-            raise WorkerFailure(
-                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "noise calibration identity or immutable protocol changed",
-            )
-        calibration = body.get("calibration")
-        if not isinstance(calibration, dict):
-            raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration payload is missing")
-        try:
+            or body.get("protocol_version") != "aa-noise-20x10-v1"
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "noise calibration identity or immutable protocol changed",
+        )
+    calibration = body.get("calibration")
+    if not isinstance(calibration, dict):
+        raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration payload is missing")
+    try:
             expected_calibration_keys = {
                 "long_tail_ratio",
                 "median_order_bias_ms",
@@ -2369,6 +2672,7 @@ def _load_or_calibrate_entry_noise(
             )
             if noise.valid and (
                 noise.sample_count < 200
+                or len(probe_hashes) != 20
                 or noise.p95_delta_ms is None
                 or noise.p99_delta_ms is None
                 or noise.median_order_bias_ms is None
@@ -2378,54 +2682,9 @@ def _load_or_calibrate_entry_noise(
                 or noise.reason_codes
             ):
                 raise ValueError("valid noise calibration violates the fixed protocol")
-        except (KeyError, TypeError, ValueError) as exc:
-            raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration shape is invalid") from exc
-        return noise, str(payload["content_hash"])
-
-    if not pending:
-        raise WorkerFailure(
-            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-            "durable runtime records exist without their noise calibration",
-        )
-    ordered = sorted(
-        pending,
-        key=lambda value: (int(value["acceptance_a_us"]), str(value["pair_hash"])),
-    )
-    probes = []
-    probe_hashes = []
-    for index in range(20):
-        selected = ordered[round(index * (len(ordered) - 1) / 19)]
-        pair = _rebuild_pending_pair(
-            factory,
-            entry,
-            queries,
-            int(selected["source_query_ordinal"]),
-            str(selected["pair_hash"]),
-        )
-        probes.append(pair.query_a)
-        probe_hashes.append(pair.pair_hash)
-    noise = calibrate_aa_noise(
-        RuntimeHarness(),
-        adapter,
-        tuple(probes),
-        pairs_per_query=10,
-    )
-    body = {
-        "calibration": to_jsonable(asdict(noise)),
-        "dbms_fingerprint": dbms_fingerprint,
-        "entry_id": entry.entry_id,
-        "graph_snapshot_hash": graph_snapshot_hash,
-        "long_tail_ratio_max": 5.0,
-        "minimum_complete_samples": 200,
-        "order_bias_rule": "median_order_bias_ms<=p95_delta_ms",
-        "pairs_per_query": 10,
-        "probe_pair_hashes": probe_hashes,
-        "probe_queries": 20,
-        "protocol_version": "aa-noise-20x10-v1",
-    }
-    content_hash = canonical_hash(body)
-    _atomic_write_json(path, {**body, "content_hash": content_hash})
-    return noise, content_hash
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration shape is invalid") from exc
+    return noise, str(payload["content_hash"])
 
 
 def _stage1_seed(entry: RulePlanEntry, pair_hash: str) -> int:
@@ -2570,8 +2829,10 @@ def _is_entry_infrastructure_exception(exc: BaseException) -> bool:
 
 
 def _entry_infrastructure_error_kind(exc: BaseException) -> ErrorKind | None:
-    if isinstance(exc, (QueryTimeoutError, TimeoutError, QueryExecutionError)):
+    if isinstance(exc, (QueryTimeoutError, QueryExecutionError)):
         return None
+    if isinstance(exc, TimeoutError):
+        return ErrorKind.DRIVER_TIMEOUT
     if isinstance(exc, WorkerFailure):
         return exc.kind if exc.kind in {
             ErrorKind.DBMS_UNAVAILABLE,
@@ -2810,9 +3071,100 @@ def _require_unique_entry_query_asts(queries: tuple[str, ...]) -> None:
         seen.add(ast_hash)
 
 
+def _runtime_evidence_identity(
+    *,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+    dbms_health_epoch: str,
+) -> dict[str, str]:
+    identity = {
+        "graph_snapshot_hash": graph_snapshot_hash,
+        "dbms_fingerprint": dbms_fingerprint,
+        "dbms_health_epoch": dbms_health_epoch,
+    }
+    if any(not isinstance(value, str) or len(value) != 64 for value in identity.values()):
+        raise WorkerFailure(
+            ErrorKind.INFRASTRUCTURE_ERROR,
+            "runtime evidence identity values must be 64-character digests",
+        )
+    return identity
+
+
+def _load_entry_runtime_invalidation(
+    entry_dir: Path,
+    *,
+    entry: RulePlanEntry,
+) -> dict[str, object] | None:
+    path = entry_dir / "runtime_invalidation.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "runtime invalidation tombstone is unreadable",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "runtime invalidation tombstone is not an object",
+        )
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    identity = body.get("evidence_identity")
+    if (
+        set(body) != {
+            "entry_id",
+            "evidence_identity",
+            "observed",
+            "reason",
+            "schema_version",
+        }
+        or body.get("schema_version") != 1
+        or body.get("entry_id") != entry.entry_id
+        or not isinstance(body.get("reason"), str)
+        or not body["reason"]
+        or not isinstance(identity, dict)
+        or set(identity) != {
+            "dbms_fingerprint",
+            "dbms_health_epoch",
+            "graph_snapshot_hash",
+        }
+        or any(not isinstance(value, str) or len(value) != 64 for value in identity.values())
+        or payload.get("content_hash") != canonical_hash(body)
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "runtime invalidation tombstone is malformed or has a bad hash",
+        )
+    return body
+
+
+def _write_entry_runtime_invalidation(
+    entry_dir: Path,
+    *,
+    entry: RulePlanEntry,
+    evidence_identity: Mapping[str, object],
+    reason: str,
+    observed: object,
+) -> None:
+    path = entry_dir / "runtime_invalidation.json"
+    existing = _load_entry_runtime_invalidation(entry_dir, entry=entry)
+    if existing is not None:
+        return
+    body = {
+        "schema_version": 1,
+        "entry_id": entry.entry_id,
+        "evidence_identity": dict(evidence_identity),
+        "reason": reason,
+        "observed": to_jsonable(observed),
+    }
+    _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
+
+
 def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, object]:
     default: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "entry_id": entry.entry_id,
         "elapsed_seconds": 0.0,
         "last_query_ordinal": 0,
@@ -2821,7 +3173,9 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         "accepted_pair_hashes": [],
         "pending_acceptances": [],
         "legacy_migration_sha256": None,
-        "_loaded_schema_version": 2,
+        "evidence_identity": None,
+        "stage1_intent": None,
+        "_loaded_schema_version": 3,
     }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -2840,6 +3194,8 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     accepted = body.get("accepted_pair_hashes")
     pending = body.get("pending_acceptances", [])
     legacy_migration_sha256 = body.get("legacy_migration_sha256")
+    evidence_identity = body.get("evidence_identity")
+    stage1_intent = body.get("stage1_intent")
     valid_rejects = isinstance(rejects, dict) and all(
         isinstance(key, str)
         and key
@@ -2879,8 +3235,70 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     valid_migration = legacy_migration_sha256 is None or (
         isinstance(legacy_migration_sha256, str) and len(legacy_migration_sha256) == 64
     )
+    valid_identity = evidence_identity is None or (
+        isinstance(evidence_identity, dict)
+        and set(evidence_identity) == {
+            "dbms_fingerprint",
+            "dbms_health_epoch",
+            "graph_snapshot_hash",
+        }
+        and all(
+            isinstance(value, str) and len(value) == 64
+            for value in evidence_identity.values()
+        )
+    )
+    valid_intent = stage1_intent is None or (
+        isinstance(stage1_intent, dict)
+        and set(stage1_intent) == {
+            "pair_hash",
+            "record_digest",
+            "source_query_ordinal",
+        }
+        and isinstance(stage1_intent["pair_hash"], str)
+        and len(stage1_intent["pair_hash"]) == 64
+        and isinstance(stage1_intent["record_digest"], str)
+        and len(stage1_intent["record_digest"]) == 64
+        and type(stage1_intent["source_query_ordinal"]) is int
+        and 1 <= stage1_intent["source_query_ordinal"] <= entry.max_generated_seed_budget
+    )
+    schema_keys = {
+        1: {
+            "accepted_pair_hashes",
+            "attempted_query_records",
+            "elapsed_seconds",
+            "entry_id",
+            "last_query_ordinal",
+            "reject_counts",
+            "schema_version",
+        },
+        2: {
+            "accepted_pair_hashes",
+            "attempted_query_records",
+            "elapsed_seconds",
+            "entry_id",
+            "last_query_ordinal",
+            "legacy_migration_sha256",
+            "pending_acceptances",
+            "reject_counts",
+            "schema_version",
+        },
+        3: {
+            "accepted_pair_hashes",
+            "attempted_query_records",
+            "elapsed_seconds",
+            "entry_id",
+            "evidence_identity",
+            "last_query_ordinal",
+            "legacy_migration_sha256",
+            "pending_acceptances",
+            "reject_counts",
+            "schema_version",
+            "stage1_intent",
+        },
+    }
     if (
-        schema_version not in {1, 2}
+        schema_version not in {1, 2, 3}
+        or set(body) != schema_keys.get(schema_version, set())
         or body.get("entry_id") != entry.entry_id
         or payload.get("content_hash") != canonical_hash(body)
         or type(elapsed) not in {int, float}
@@ -2893,8 +3311,8 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         or attempted != last_ordinal
         or not valid_rejects
         or not valid_accepted
-        or (schema_version == 2 and (not valid_pending or not valid_migration))
-        or (schema_version == 1 and ("pending_acceptances" in body or "legacy_migration_sha256" in body))
+        or (schema_version in {2, 3} and (not valid_pending or not valid_migration))
+        or (schema_version == 3 and (not valid_identity or not valid_intent))
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -2903,6 +3321,11 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     if schema_version == 1:
         body["pending_acceptances"] = []
         body["legacy_migration_sha256"] = None
+        body["evidence_identity"] = None
+        body["stage1_intent"] = None
+    elif schema_version == 2:
+        body["evidence_identity"] = None
+        body["stage1_intent"] = None
     body["_loaded_schema_version"] = schema_version
     return body
 
@@ -2919,10 +3342,12 @@ def _persist_entry_progress(
     accepted_hashes: tuple[str, ...],
     pending_acceptances: tuple[Mapping[str, object], ...] = (),
     legacy_migration_sha256: object | None = None,
+    evidence_identity: Mapping[str, object] | None = None,
+    stage1_intent: Mapping[str, object] | None = None,
 ) -> None:
     elapsed = prior_elapsed + max(0.0, now - attempt_started)
     body = {
-        "schema_version": 2,
+        "schema_version": 3,
         "entry_id": entry.entry_id,
         "elapsed_seconds": elapsed,
         "last_query_ordinal": last_query_ordinal,
@@ -2934,6 +3359,8 @@ def _persist_entry_progress(
             key=lambda value: int(value["source_query_ordinal"]),
         ),
         "legacy_migration_sha256": legacy_migration_sha256,
+        "evidence_identity": dict(evidence_identity) if evidence_identity is not None else None,
+        "stage1_intent": dict(stage1_intent) if stage1_intent is not None else None,
     }
     _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
 
@@ -2947,6 +3374,22 @@ def _rule_stats_from_entry_progress(
     return {
         "accepted": ({entry.rule_id: accepted} if accepted else {}),
         "not_applicable": ({entry.rule_id: not_applicable} if not_applicable else {}),
+    }
+
+
+def _entry_outcome_from_progress(
+    entry: RulePlanEntry,
+    progress: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "accepted_hashes": tuple(progress["accepted_pair_hashes"]),
+        "pending_acceptances": tuple(progress["pending_acceptances"]),
+        "legacy_migration_sha256": progress["legacy_migration_sha256"],
+        "evidence_identity": progress["evidence_identity"],
+        "stage1_intent": progress["stage1_intent"],
+        "generated_seeds": int(progress["attempted_query_records"]),
+        "rejects": dict(progress["reject_counts"]),
+        "rule_stats": _rule_stats_from_entry_progress(entry, progress),
     }
 
 

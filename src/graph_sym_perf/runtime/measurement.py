@@ -148,7 +148,7 @@ class RuntimeHarness:
     def _elapsed(executor: ExecuteOnly, query: str, parameters: Mapping[str, Any], policy: RuntimePolicy) -> tuple[float | None, bool]:
         try:
             result = executor.execute(query, parameters, query_kind="runtime", timeout_seconds=(policy.timeout_ms / 1000 if policy.timeout_ms else None))
-        except (QueryTimeoutError, TimeoutError):
+        except QueryTimeoutError:
             return None, True
         except (AdapterError, MemoryError, OSError):
             raise

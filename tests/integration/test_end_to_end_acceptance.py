@@ -2,6 +2,8 @@ import hashlib
 import json
 import time
 
+import graph_sym_perf.experiment.worker as worker_module
+
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import (
@@ -16,6 +18,7 @@ from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.supervisor import ShardSupervisor
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
 from graph_sym_perf.generation.corpus import GraphCorpus
+from graph_sym_perf.runtime.models import NoiseCalibration
 
 
 class _AcceptanceWorker:
@@ -194,7 +197,17 @@ def _entry(rule_id: str, family: str) -> RulePlanEntry:
     )
 
 
-def test_bool_and_sym_rule_entries_keep_independent_quota_and_statistics(tmp_path) -> None:
+def test_bool_and_sym_rule_entries_keep_independent_quota_and_statistics(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    noise = NoiseCalibration(True, 200, 0.1, 0.2, 0.0, 1.0, ())
+    noise_result = (noise, "f" * 64)
+    monkeypatch.setattr(
+        worker_module,
+        "_load_or_calibrate_entry_noise",
+        lambda *_args, **_kwargs: noise_result,
+    )
     query = "MATCH (a:Node), (b:Node) WHERE a.id = 1 RETURN a.id, b.id"
     generated = GeneratedShard(
         graph_statements=("CREATE (n:Node {id: 1})",),

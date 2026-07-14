@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 
+from graph_sym_perf.core import QueryTimeoutError
 from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, RuntimeVerdict
 from graph_sym_perf.runtime.noise import calibrate_aa_noise
@@ -13,7 +14,7 @@ from graph_sym_perf.runtime.oracle import evaluate_runtime
 class TimeoutFake:
     def execute(self, query: str, parameters, **_kwargs) -> float:
         if query == "timeout":
-            raise TimeoutError("deadline")
+            raise QueryTimeoutError("deadline")
         return 10.0 if query == "A" else 50.0
 
 
@@ -48,7 +49,7 @@ def test_single_timeout_does_not_claim_a_repeated_timeout_lower_bound() -> None:
             if query == "B":
                 self.b_calls += 1
                 if self.b_calls == 1:
-                    raise TimeoutError("one outlier")
+                    raise QueryTimeoutError("one outlier")
                 return 50.0
             return 10.0
 

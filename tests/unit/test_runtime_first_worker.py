@@ -25,6 +25,7 @@ from graph_sym_perf.experiment.worker import (
     _query_hash,
 )
 from graph_sym_perf.generation.corpus import GraphCorpus
+from graph_sym_perf.runtime.models import NoiseCalibration
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 
 
@@ -74,6 +75,25 @@ class _Adapter:
 
     def dbms_health_epoch(self) -> DBMSHealthEpoch:
         return DBMSHealthEpoch("e" * 64, "test")
+
+
+def _install_valid_noise_stub(monkeypatch) -> None:
+    noise = NoiseCalibration(
+        valid=True,
+        sample_count=200,
+        p95_delta_ms=0.1,
+        p99_delta_ms=0.2,
+        median_order_bias_ms=0.0,
+        long_tail_ratio=1.0,
+        reason_codes=(),
+    )
+    result = (noise, "f" * 64)
+    monkeypatch.setattr(worker_module, "_load_entry_noise", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(
+        worker_module,
+        "_load_or_calibrate_entry_noise",
+        lambda *_args, **_kwargs: result,
+    )
 
 
 class _DatabaseResetAdapter(_Adapter):
@@ -1118,7 +1138,9 @@ def test_worker_builds_each_rule_plan_entry_with_its_own_certified_rule(
     tmp_path,
     entry,
     query,
+    monkeypatch,
 ) -> None:
+    _install_valid_noise_stub(monkeypatch)
     worker = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
         generation_runner=lambda _entry, _raw_dir: GeneratedShard(
@@ -1152,7 +1174,11 @@ def test_worker_builds_each_rule_plan_entry_with_its_own_certified_rule(
     assert "query_a" not in records[0] and "query_b" not in records[0]
 
 
-def test_rule_entry_stage1_timeout_is_durably_counted_without_query_text(tmp_path) -> None:
+def test_rule_entry_stage1_timeout_is_durably_counted_without_query_text(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
 
     class Stage1TimeoutAdapter(_Adapter):
@@ -1178,6 +1204,7 @@ def test_rule_entry_stage1_timeout_is_durably_counted_without_query_text(tmp_pat
     assert result["accepted_pairs"] == 1
     assert result["terminal_state"] == "stage1_complete"
     assert record["timeout_state"] == "b_timeout"
+    assert record["runtime_direction"] == "b"
     assert record["samples_us"]
     assert "query_a" not in record and "query_b" not in record
 
@@ -1204,6 +1231,53 @@ def test_runtime_artifact_failure_never_advances_accepted_count(tmp_path, monkey
     assert result["accepted_pairs"] == 0
     assert result["terminal_state"] == "infrastructure_failed"
     assert result["infrastructure_error_kind"] == ErrorKind.INFRASTRUCTURE_ERROR.value
+
+
+def test_raw_timeout_is_driver_infrastructure_not_query_timeout(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+
+    class DriverTimeoutAdapter(_Adapter):
+        def execute(self, query, parameters, query_kind, **kwargs):
+            if query_kind == "acceptance_base":
+                raise TimeoutError("driver socket timeout")
+            return super().execute(query, parameters, query_kind, **kwargs)
+
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: DriverTimeoutAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["infrastructure_error_kind"] == ErrorKind.DRIVER_TIMEOUT.value
+    assert result["reject_reasons"] == {}
+
+
+def test_noise_calibration_rejects_fewer_than_twenty_distinct_accepted_probes(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["accepted_pairs"] == 0
+    assert not tuple(tmp_path.glob("entries/*/pair_runtime.jsonl"))
 
 
 def test_invalid_stage1_measurement_never_becomes_an_accepted_record(tmp_path) -> None:
@@ -1498,7 +1572,12 @@ def test_early_lifecycle_failure_summary_preserves_durable_progress(tmp_path, fa
 
 
 @pytest.mark.parametrize("adapter_type", (_FinalFingerprintDriftAdapter, _FinalGraphDriftAdapter))
-def test_final_identity_drift_invalidates_completed_rule_entry_acceptance(tmp_path, adapter_type) -> None:
+def test_final_identity_drift_invalidates_completed_rule_entry_acceptance(
+    tmp_path,
+    adapter_type,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     worker = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
@@ -1519,8 +1598,24 @@ def test_final_identity_drift_invalidates_completed_rule_entry_acceptance(tmp_pa
     assert result["acceptance_stop_reason"] == "INFRASTRUCTURE_FAILED"
     assert result["acceptance_invalidated"] is True
 
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: pytest.fail("retry must use sealed corpus"),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
 
-def test_rule_entry_retry_resumes_durable_accepted_pairs_without_double_counting(tmp_path) -> None:
+    retry_result = retry(entry)
+
+    assert retry_result["terminal_state"] == "infrastructure_failed"
+    assert retry_result["acceptance_status"] == "incomplete"
+
+
+def test_rule_entry_retry_resumes_durable_accepted_pairs_without_double_counting(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     generated = GeneratedShard(
         graph_statements=("CREATE (n:Node {id: 1})",),
@@ -1549,6 +1644,7 @@ def test_rule_entry_retry_resumes_durable_accepted_pairs_without_double_counting
 
 
 def test_task5_legacy_evidence_migrates_crash_safely_to_pair_runtime(tmp_path, monkeypatch) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     query = "MATCH (n) WHERE n.id = 1 RETURN n"
     statements = ("CREATE (n:Node {id: 1})",)
@@ -1627,7 +1723,13 @@ def test_task5_legacy_evidence_migrates_crash_safely_to_pair_runtime(tmp_path, m
         first(entry)
 
     migration_progress = json.loads((entry_dir / "acceptance_progress.json").read_text())
-    assert migration_progress["schema_version"] == 2
+    assert migration_progress["schema_version"] == 3
+    assert migration_progress["evidence_identity"] == {
+        "dbms_fingerprint": "a" * 64,
+        "dbms_health_epoch": "e" * 64,
+        "graph_snapshot_hash": _graph_snapshot_hash(statements),
+    }
+    assert migration_progress["stage1_intent"] is None
     assert migration_progress["legacy_migration_sha256"]
     assert len(migration_progress["pending_acceptances"]) == 1
     assert (entry_dir / "accepted_pairs.jsonl").exists()
@@ -1650,7 +1752,11 @@ def test_task5_legacy_evidence_migrates_crash_safely_to_pair_runtime(tmp_path, m
     assert "query_a" not in compact and "query_b" not in compact
 
 
-def test_rule_entry_retry_keeps_reject_progress_and_does_not_repeat_completed_seed(tmp_path) -> None:
+def test_rule_entry_retry_keeps_reject_progress_and_does_not_repeat_completed_seed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(
         rule_id="null_partition_tautology",
         family="bool",
@@ -1767,6 +1873,7 @@ def test_rule_entry_progress_includes_final_identity_and_adapter_close_elapsed(t
 
 
 def test_retry_recovers_only_the_validated_single_record_crash_window(tmp_path, monkeypatch) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     generated = GeneratedShard(
         graph_statements=("CREATE (n:Node {id: 1})",),
@@ -1828,8 +1935,53 @@ def test_retry_recovers_only_the_validated_single_record_crash_window(tmp_path, 
     assert progress["pending_acceptances"] == []
 
 
+def test_retry_rejects_a_self_consistent_runtime_record_without_pending_intent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+    progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in progress.items() if key != "content_hash"}
+    body["accepted_pair_hashes"] = []
+    body["pending_acceptances"] = []
+    progress_path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
 @pytest.mark.parametrize("corruption", ("progress_ahead", "non_contiguous", "multi_step"))
-def test_retry_rejects_non_single_step_accepted_progress_divergence(tmp_path, corruption) -> None:
+def test_retry_rejects_non_single_step_accepted_progress_divergence(
+    tmp_path,
+    corruption,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
     quota = 2 if corruption == "multi_step" else 1
     queries = (
         "MATCH (n) WHERE n.id = 1 RETURN n",
@@ -1878,7 +2030,12 @@ def test_retry_rejects_non_single_step_accepted_progress_divergence(tmp_path, co
 
 
 @pytest.mark.parametrize("probe", ("source_query_ordinal_ahead", "rehashed_progress_behind"))
-def test_retry_rejects_durable_ordinal_ahead_of_matching_progress_hash_set(tmp_path, probe) -> None:
+def test_retry_rejects_durable_ordinal_ahead_of_matching_progress_hash_set(
+    tmp_path,
+    probe,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(
         rule_id="null_partition_tautology",
         family="bool",
@@ -2000,7 +2157,12 @@ def test_quota_two_retry_rejects_duplicate_sealed_corpus_ordinal_rebinding(tmp_p
 
 
 @pytest.mark.parametrize("corruption", ("truncated", "non_object"))
-def test_retry_treats_malformed_accepted_jsonl_as_evidence_integrity_failure(tmp_path, corruption) -> None:
+def test_retry_treats_malformed_accepted_jsonl_as_evidence_integrity_failure(
+    tmp_path,
+    corruption,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     generated = GeneratedShard(
         graph_statements=("CREATE (n:Node {id: 1})",),
@@ -2047,11 +2209,22 @@ def test_retry_treats_malformed_accepted_jsonl_as_evidence_integrity_failure(tmp
         "site_class",
         "graph_fingerprint",
         "samples_us",
+        "negative_sample",
+        "schedule_order",
+        "median_ratio",
+        "direction_consistency",
+        "delta_over_noise",
+        "noise_floor_id",
         "extra_field",
         "source_query_ordinal",
     ),
 )
-def test_rule_entry_retry_recomputes_every_compact_runtime_binding(tmp_path, tamper) -> None:
+def test_rule_entry_retry_recomputes_every_compact_runtime_binding(
+    tmp_path,
+    tamper,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     generated = GeneratedShard(
         graph_statements=("CREATE (n:Node {id: 1})",),
@@ -2071,6 +2244,18 @@ def test_rule_entry_retry_recomputes_every_compact_runtime_binding(tmp_path, tam
         record[tamper] = "0" * 64
     elif tamper == "samples_us":
         record["samples_us"] = []
+    elif tamper == "negative_sample":
+        record["samples_us"][0][1] = -1
+    elif tamper == "schedule_order":
+        record["samples_us"][0][0] = "BA" if record["samples_us"][0][0] == "AB" else "AB"
+    elif tamper == "median_ratio":
+        record["median_ratio"] = 999.0
+    elif tamper == "direction_consistency":
+        record["direction_consistency"] = 2.0
+    elif tamper == "delta_over_noise":
+        record["delta_over_noise"] = float("nan")
+    elif tamper == "noise_floor_id":
+        record["noise_floor_id"] = "0" * 64
     elif tamper == "extra_field":
         record["forged"] = "metadata"
     else:

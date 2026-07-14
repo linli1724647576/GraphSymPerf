@@ -48,7 +48,7 @@ def _pair():
 
 class _RuntimeFake:
     def execute(self, query: str, parameters, **_kwargs) -> float:
-        return 1.234 if "OR true" not in query else 5.678
+        return 1.2344 if "OR true" not in query else 5.6784
 
 
 def _record() -> PairRuntimeRecord:
@@ -66,6 +66,8 @@ def _record() -> PairRuntimeRecord:
         evidence=evidence,
         noise_floor_id="noise-1",
         noise_p99_ms=0.2,
+        dbms_fingerprint="d" * 64,
+        dbms_health_epoch="e" * 64,
         source_query_ordinal=1,
         graph_fingerprint="f" * 64,
     )
@@ -78,6 +80,10 @@ def test_pair_runtime_record_stores_integer_microseconds_without_query_or_plan(t
 
     payload = json.loads((tmp_path / "pair_runtime.jsonl").read_text(encoding="utf-8"))
     assert payload["samples_us"][0][1:] == [1234, 5678]
+    assert payload["median_a_ms"] == 1.234
+    assert payload["median_b_ms"] == 5.678
+    assert payload["median_delta_ms"] == 4.444
+    assert payload["runtime_direction"] == "b"
     assert "query_a" not in payload and "query_b" not in payload
     assert "profile" not in payload and "plan" not in payload
     assert store.count == 1
@@ -107,3 +113,27 @@ def test_store_rejects_duplicate_pair_hash_without_appending(tmp_path) -> None:
 
     assert store.count == 1
     assert len((tmp_path / "pair_runtime.jsonl").read_text().splitlines()) == 1
+
+
+def test_store_rolls_back_and_poisons_a_full_line_when_fsync_reports_failure(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    path = tmp_path / "pair_runtime.jsonl"
+    store = CompactRuntimeStore(path)
+    real_write = store._write_line
+
+    def write_then_fail(line: str) -> None:
+        real_write(line)
+        raise OSError("fsync outcome unknown")
+
+    monkeypatch.setattr(store, "_write_line", write_then_fail)
+
+    with pytest.raises(ArtifactWriteError, match="fsync outcome unknown"):
+        store.append(_record())
+
+    assert store.count == 0
+    assert not path.exists() or path.read_text(encoding="utf-8") == ""
+    assert path.with_name("pair_runtime.poison.json").exists()
+    with pytest.raises(ArtifactWriteError, match="poison"):
+        CompactRuntimeStore(path)
