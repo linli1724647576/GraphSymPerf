@@ -32,6 +32,7 @@ MAX_TOTAL_ACCEPTED_PAIR_BUDGET = 112_000
 CONTROL_ACCEPTED_PAIR_QUOTA = 50
 MAX_VARIANTS_PER_SEED = 2
 MEASUREMENT_PROTOCOL_ID = "validated-yield-v1"
+MAX_P2_RULE_SCALE_CELLS = 6
 
 
 def build_rule_plan(
@@ -162,6 +163,15 @@ def _validated_selected_cells(
         raise ConfigError("campaign.p2.max_rule_scale_cells is required")
     if not selected_cells:
         raise ConfigError("P2 selected_cells must be explicit and non-empty")
+    if len(selected_cells) > MAX_P2_RULE_SCALE_CELLS:
+        raise ConfigError(
+            f"P2 selected_cells must contain at most {MAX_P2_RULE_SCALE_CELLS} cells"
+        )
+    if maximum > MAX_P2_RULE_SCALE_CELLS:
+        raise ConfigError(
+            "campaign.p2.max_rule_scale_cells exceeds the planner hard limit "
+            f"{MAX_P2_RULE_SCALE_CELLS}"
+        )
     if len(selected_cells) > maximum:
         raise ConfigError(f"P2 selected_cells must contain at most {maximum} cells")
     normalized: list[tuple[str, int]] = []
@@ -179,7 +189,11 @@ def _validated_selected_cells(
             raise ConfigError(
                 f"selected_cells[{index}] is not an approved discovery rule: {canonical_rule_id}"
             )
-        if isinstance(graph_scale, bool) or graph_scale not in spec.matrix.graph_scales:
+        if (
+            not isinstance(graph_scale, int)
+            or isinstance(graph_scale, bool)
+            or graph_scale not in spec.matrix.graph_scales
+        ):
             raise ConfigError(
                 f"selected_cells[{index}] graph scale is not in matrix.graph_scales: {graph_scale}"
             )

@@ -108,6 +108,8 @@ _V3_POLICY_SCHEMAS: Mapping[str, Mapping[str, object | None]] = {
     "artifacts": {"entry_budget_mb": None},
 }
 
+MAX_P2_RULE_SCALE_CELLS = 6
+
 
 def load_experiment_spec(path: str | Path) -> ExperimentSpec | ValidatedYieldExperimentSpec:
     source_path = Path(path)
@@ -281,10 +283,16 @@ def _load_schema_v3(
 
     campaign_raw = _mapping(raw["campaign"], "campaign")
     _exact_keys(campaign_raw, {"p0", "p1", "p2", "generated_seed_multiplier"}, "campaign")
+    p2_budget = _phase_budget(campaign_raw["p2"], "campaign.p2", allow_cell_limit=True)
+    if p2_budget.max_rule_scale_cells != MAX_P2_RULE_SCALE_CELLS:
+        raise ConfigError(
+            "campaign.p2.max_rule_scale_cells must be exactly "
+            f"{MAX_P2_RULE_SCALE_CELLS}"
+        )
     campaign = CampaignBudgetSpec(
         p0=_phase_budget(campaign_raw["p0"], "campaign.p0", allow_cell_limit=False),
         p1=_phase_budget(campaign_raw["p1"], "campaign.p1", allow_cell_limit=False),
-        p2=_phase_budget(campaign_raw["p2"], "campaign.p2", allow_cell_limit=True),
+        p2=p2_budget,
         generated_seed_multiplier=_positive_int(
             campaign_raw["generated_seed_multiplier"],
             "campaign.generated_seed_multiplier",

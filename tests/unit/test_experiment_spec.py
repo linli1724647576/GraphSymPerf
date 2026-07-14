@@ -122,6 +122,17 @@ def test_schema_v3_config_cannot_override_registry_safety_facts(tmp_path: Path) 
         load_experiment_spec(path)
 
 
+def test_schema_v3_rejects_p2_cell_limit_above_formal_maximum(tmp_path: Path) -> None:
+    raw = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    raw["campaign"]["p2"]["max_rule_scale_cells"] = 7
+    path = _write_config_bundle(tmp_path, experiment=raw)
+
+    with pytest.raises(ConfigError, match=r"campaign\.p2\.max_rule_scale_cells.*exactly 6"):
+        load_experiment_spec(path)
+
+
 def test_schema_v3_resolved_policies_are_deeply_immutable() -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
 

@@ -138,6 +138,63 @@ def test_p2_requires_bounded_explicit_rule_scale_cells() -> None:
     assert not ({entry.shard_seed for entry in plan.entries} & {entry.shard_seed for entry in p1.entries})
 
 
+def test_p2_absolute_cell_limit_survives_a_forged_larger_spec() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    forged = replace(
+        spec,
+        campaign=replace(
+            spec.campaign,
+            p2=replace(spec.campaign.p2, max_rule_scale_cells=99),
+        ),
+    )
+    selected_cells = tuple(
+        (rule_id, scale)
+        for rule_id in spec.rules.discovery_rule_ids[:3]
+        for scale in spec.matrix.graph_scales
+    )[:7]
+
+    with pytest.raises(ConfigError, match="at most 6"):
+        build_rule_plan(forged, CampaignPhase.P2, selected_cells=selected_cells)
+
+
+@pytest.mark.parametrize("invalid_scale", (128.0, True, 129, "128"))
+def test_p2_rejects_non_integer_or_unconfigured_graph_scales(invalid_scale: object) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    with pytest.raises(ConfigError, match="graph scale"):
+        build_rule_plan(
+            spec,
+            CampaignPhase.P2,
+            selected_cells=(("constant_true_disjunction", invalid_scale),),  # type: ignore[arg-type]
+        )
+
+
+def test_p2_rejects_alias_duplicate_cells_after_canonicalization() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    with pytest.raises(ConfigError, match="duplicate canonical cells"):
+        build_rule_plan(
+            spec,
+            CampaignPhase.P2,
+            selected_cells=(
+                ("null_complete_excluded_middle", 128),
+                ("and_excluded_middle_or_null", 128),
+            ),
+        )
+
+
+@pytest.mark.parametrize("rule_id", ("alpha_renaming_symmetry", "double_negation_predicate"))
+def test_p2_rejects_control_or_inactive_non_core_rules(rule_id: str) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    with pytest.raises(ConfigError, match="not an approved discovery rule"):
+        build_rule_plan(
+            spec,
+            CampaignPhase.P2,
+            selected_cells=((rule_id, 128),),
+        )
+
+
 def test_p0_fails_closed_when_configured_regression_manifest_is_missing(tmp_path: Path) -> None:
     raw = yaml.safe_load(
         Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
