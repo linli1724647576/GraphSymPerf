@@ -1,4 +1,4 @@
-"""Audited boolean-equivalence family backed by certificate-bound CORE rules."""
+"""Audited boolean-equivalence family backed by certificate-bound CORE and CONTROL rules."""
 
 from __future__ import annotations
 

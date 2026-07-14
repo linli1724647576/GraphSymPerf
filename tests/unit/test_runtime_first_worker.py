@@ -10,7 +10,7 @@ from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
 from graph_sym_perf.core import ExecutionResult, QueryExecutionError, TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream, ShardTask
-from graph_sym_perf.experiment.evidence_validation import candidate_artifact_hashes
+from graph_sym_perf.experiment.evidence_validation import candidate_artifact_hashes, canonical_hash
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.state import ErrorKind
 from graph_sym_perf.experiment.worker import (
@@ -1651,6 +1651,93 @@ def test_retry_rejects_non_single_step_accepted_progress_divergence(tmp_path, co
             record = json.loads(records_path.read_text(encoding="utf-8"))
             record["source_query_ordinal"] = 2
             records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+@pytest.mark.parametrize("probe", ("duplicate_query_ordinal_ahead", "rehashed_progress_behind"))
+def test_retry_rejects_durable_ordinal_ahead_of_matching_progress_hash_set(tmp_path, probe) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=1,
+        max_generated_seed_budget=2,
+    )
+    duplicate_query = "MATCH (n) WHERE n.id = 1 RETURN n"
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=(duplicate_query, duplicate_query),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
+    if probe == "duplicate_query_ordinal_ahead":
+        record = json.loads(records_path.read_text(encoding="utf-8"))
+        record["source_query_ordinal"] = 2
+        records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    else:
+        progress = json.loads(progress_path.read_text(encoding="utf-8"))
+        body = {key: value for key, value in progress.items() if key != "content_hash"}
+        body["last_query_ordinal"] = 0
+        body["attempted_query_records"] = 0
+        progress_path.write_text(
+            json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+@pytest.mark.parametrize("corruption", ("truncated", "non_object"))
+def test_retry_treats_malformed_accepted_jsonl_as_evidence_integrity_failure(tmp_path, corruption) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    if corruption == "truncated":
+        records_path.write_text(
+            records_path.read_text(encoding="utf-8")[:-7],
+            encoding="utf-8",
+        )
+    else:
+        records_path.write_text("[]\n", encoding="utf-8")
 
     retry = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),

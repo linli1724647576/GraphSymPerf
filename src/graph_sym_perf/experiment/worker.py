@@ -699,6 +699,15 @@ class RuntimeFirstShardWorker:
         )
         accepted_hashes = set(validated_accepted_ordinals)
         persisted_accepted_hashes = set(progress["accepted_pair_hashes"])
+        if any(
+            pair_hash not in validated_accepted_ordinals
+            or validated_accepted_ordinals[pair_hash] > last_query_ordinal
+            for pair_hash in persisted_accepted_hashes
+        ):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "acceptance progress advances a durable pair beyond its last query ordinal",
+            )
         if persisted_accepted_hashes != accepted_hashes:
             appended_hashes = accepted_hashes - persisted_accepted_hashes
             missing_hashes = persisted_accepted_hashes - accepted_hashes
@@ -2027,7 +2036,11 @@ def _validated_entry_accepted_hashes(
     registry = RuleRegistry.default()
     rule = registry.get(entry.rule_id)
     factory = RulePairFactory(registry)
-    for record in _read_jsonl(path):
+    for record in _read_jsonl(
+        path,
+        error_kind=ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+        context="accepted pair evidence",
+    ):
         pair_hash = record.get("pair_hash")
         query_a = record.get("query_a")
         query_b = record.get("query_b")
@@ -2549,20 +2562,25 @@ def _bind_accepted_identity(
         raise WorkerFailure(ErrorKind.DBMS_CRASHED, "accepted-pair DBMS fingerprint changed across resume")
 
 
-def _read_jsonl(path: Path) -> Iterable[dict[str, object]]:
+def _read_jsonl(
+    path: Path,
+    *,
+    error_kind: ErrorKind = ErrorKind.INFRASTRUCTURE_ERROR,
+    context: str = "append-only record",
+) -> Iterable[dict[str, object]]:
     try:
-        stream = path.open("r", encoding="utf-8")
+        with path.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                value = json.loads(line)
+                if not isinstance(value, dict):
+                    raise WorkerFailure(error_kind, f"non-object {context} in {path}")
+                yield value
     except FileNotFoundError:
         return
-    with stream:
-        for line in stream:
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, f"invalid append-only record in {path}") from exc
-            if not isinstance(value, dict):
-                raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, f"non-object append-only record in {path}")
-            yield value
+    except WorkerFailure:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(error_kind, f"invalid {context} in {path}") from exc
 
 
 def _load_terminal_candidate_outcome(
