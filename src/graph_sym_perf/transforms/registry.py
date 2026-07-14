@@ -5,7 +5,16 @@ from __future__ import annotations
 from graph_sym_perf.core import QueryCase, TargetSystem, TransformConfig
 from graph_sym_perf.transforms.base import TransformFamily, TransformGenerator
 from graph_sym_perf.transforms.bool_redundancy import generate_bool_redundancy_family
+from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.transforms.symmetry import generate_symmetry_family
+
+__all__ = [
+    "RuleRegistry",
+    "available_families",
+    "family_generator",
+    "generate_transform_family",
+    "select_family_name",
+]
 
 _FAMILIES: dict[str, TransformGenerator] = {
     "bool_redundancy": generate_bool_redundancy_family,

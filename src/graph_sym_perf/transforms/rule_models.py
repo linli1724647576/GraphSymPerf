@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import Enum
+from functools import lru_cache
+from types import MappingProxyType
+from typing import Callable, Mapping
+
+from graph_sym_perf.core import QueryCase, QueryFamily, TargetSystem, TransformConfig
 
 
 class SafetyTier(str, Enum):
@@ -9,6 +14,11 @@ class SafetyTier(str, Enum):
     EXPERIMENTAL = "experimental"
     CONTROL = "control"
     REMOVED = "removed"
+
+
+class RuleFamily(str, Enum):
+    BOOL = "bool"
+    SYM = "sym"
 
 
 class RuleRole(str, Enum):
@@ -19,42 +29,119 @@ class RuleRole(str, Enum):
     REMOVED = "removed"
 
 
+TransformFactory = Callable[
+    [QueryCase, TransformConfig | None, TargetSystem | None],
+    QueryFamily,
+]
+
+
 @dataclass(frozen=True)
 class RuleSpec:
-    rule_id: str
-    version: str
+    canonical_rule_id: str
+    family: RuleFamily
     tier: SafetyTier
-    proof_id: str
-    proof_theorem: str
-    purity_requirements: tuple[str, ...]
-    dialects: tuple[str, ...]
-    required_capabilities: tuple[str, ...]
-    site_classes: tuple[str, ...]
     submit_eligible: bool
-    role: RuleRole
+    proof_id: str
+    proof_version: str
+    purity_requirements: tuple[str, ...]
+    supported_dialects: tuple[str, ...]
+    required_capabilities: tuple[str, ...]
+    allowed_site_classes: tuple[str, ...]
+    implementation_rule_id: str
+    transform_factory: TransformFactory = field(repr=False, compare=False)
+    proof_theorem: str = ""
+    role: RuleRole | None = None
 
     def __post_init__(self) -> None:
-        if not all((self.rule_id, self.version, self.proof_id, self.proof_theorem)):
+        if not all(
+            (
+                self.canonical_rule_id,
+                self.proof_id,
+                self.proof_version,
+                self.implementation_rule_id,
+            )
+        ):
             raise ValueError("rule identity and proof metadata are required")
-        if not self.purity_requirements or not self.dialects or not self.site_classes:
+        if not self.purity_requirements or not self.supported_dialects or not self.allowed_site_classes:
             raise ValueError("rule purity, dialect, and site scopes are required")
+        if not callable(self.transform_factory):
+            raise ValueError("rule transform factory must be callable")
         if self.submit_eligible is not (self.tier is SafetyTier.CORE):
             raise ValueError("only CORE rules are submit eligible")
-        if self.tier is SafetyTier.CONTROL and self.role is not RuleRole.NOISE_CONTROL:
+        role = self.role
+        if role is None:
+            role = {
+                SafetyTier.CONTROL: RuleRole.NOISE_CONTROL,
+                SafetyTier.EXPERIMENTAL: RuleRole.RESEARCH_ONLY,
+                SafetyTier.REMOVED: RuleRole.REMOVED,
+            }.get(self.tier, RuleRole.SEMANTIC_EQUIVALENCE)
+            object.__setattr__(self, "role", role)
+        if self.tier is SafetyTier.CONTROL and role is not RuleRole.NOISE_CONTROL:
             raise ValueError("CONTROL rules must have the noise-control role")
-        if self.tier is SafetyTier.REMOVED and self.role is not RuleRole.REMOVED:
+        if self.tier is SafetyTier.REMOVED and role is not RuleRole.REMOVED:
             raise ValueError("REMOVED rules must have the removed role")
+        if not self.proof_theorem:
+            object.__setattr__(self, "proof_theorem", self.proof_id)
+
+    @property
+    def rule_id(self) -> str:
+        return self.canonical_rule_id
+
+    @property
+    def version(self) -> str:
+        return self.proof_version
+
+    @property
+    def dialects(self) -> tuple[str, ...]:
+        return self.supported_dialects
+
+    @property
+    def site_classes(self) -> tuple[str, ...]:
+        return self.allowed_site_classes
 
 
 class RuleRegistry:
-    def __init__(self, rules: tuple[RuleSpec, ...]) -> None:
-        if len({rule.rule_id for rule in rules}) != len(rules):
-            raise ValueError("rule ids must be unique")
+    def __init__(self, rules: tuple[RuleSpec, ...], aliases: Mapping[str, str] | None = None) -> None:
+        canonical_ids = tuple(rule.canonical_rule_id for rule in rules)
+        if len(set(canonical_ids)) != len(canonical_ids):
+            raise ValueError("canonical rule ids must be unique")
+        for rule in rules:
+            if rule.tier is SafetyTier.CORE and not rule.submit_eligible:
+                raise ValueError("CORE rules must be submit eligible")
+            if rule.tier is SafetyTier.CONTROL and rule.submit_eligible:
+                raise ValueError("CONTROL rules cannot be submit eligible")
+        normalized_aliases = dict(aliases or {})
+        missing_targets = sorted(set(normalized_aliases.values()) - set(canonical_ids))
+        if missing_targets:
+            raise ValueError(f"alias targets must be canonical rules: {missing_targets}")
+        colliding_aliases = sorted(set(normalized_aliases) & set(canonical_ids))
+        if colliding_aliases:
+            raise ValueError(f"aliases cannot shadow canonical rules: {colliding_aliases}")
         self.rules = rules
+        self._rules_by_id = MappingProxyType({rule.canonical_rule_id: rule for rule in rules})
+        self._aliases = MappingProxyType(normalized_aliases)
 
     @classmethod
     def default(cls) -> "RuleRegistry":
-        return cls(_AUDITED_RULES)
+        return cls(_bound_default_rules(), _ALIASES)
+
+    def active_rules(
+        self,
+        *,
+        dialect: str,
+        tier: SafetyTier,
+        capabilities: frozenset[str],
+    ) -> tuple[RuleSpec, ...]:
+        active_capabilities = set(capabilities)
+        if "multiple_node_labels" in active_capabilities:
+            active_capabilities.add("multi_label_intersection")
+        return tuple(
+            rule
+            for rule in self.rules
+            if rule.tier is tier
+            and dialect in rule.supported_dialects
+            and set(rule.required_capabilities) <= active_capabilities
+        )
 
     def rules_for(
         self,
@@ -63,23 +150,47 @@ class RuleRegistry:
         capabilities: frozenset[str] | None = None,
     ) -> tuple[RuleSpec, ...]:
         dialect, profile_capabilities = _profile(dbms)
-        active_capabilities = profile_capabilities if capabilities is None else set(capabilities)
-        return tuple(
-            rule
-            for rule in self.rules
-            if rule.tier is tier
-            and dialect in rule.dialects
-            and set(rule.required_capabilities) <= active_capabilities
+        active_capabilities = frozenset(profile_capabilities if capabilities is None else capabilities)
+        return self.active_rules(
+            dialect=dialect,
+            tier=tier,
+            capabilities=active_capabilities,
         )
 
+    def resolve_id(self, rule_id: str) -> str:
+        canonical_id = self._aliases.get(rule_id, rule_id)
+        if canonical_id not in self._rules_by_id:
+            raise KeyError(rule_id)
+        return canonical_id
+
     def get(self, rule_id: str) -> RuleSpec:
-        for rule in self.rules:
-            if rule.rule_id == rule_id:
-                return rule
-        raise KeyError(rule_id)
+        return self._rules_by_id[self.resolve_id(rule_id)]
 
 
 _ALL_DIALECTS = ("cypher", "agensgraph", "apache_age")
+
+_BOOL_IMPLEMENTATIONS = {
+    "constant_true_disjunction": "and_true_or",
+    "constant_false_conjunction": "or_false_and",
+    "null_partition_tautology": "and_expr_null_partition",
+    "null_contradiction": "or_expr_null_contradiction",
+    "null_complete_excluded_middle": "and_excluded_middle_or_null",
+}
+
+
+def _family(rule_id: str) -> RuleFamily:
+    if any(token in rule_id for token in ("symmetry", "order", "renaming", "pattern", "match")):
+        return RuleFamily.SYM
+    return RuleFamily.BOOL
+
+
+def _unbound_transform_factory(
+    query_case: QueryCase,
+    config: TransformConfig | None,
+    target: TargetSystem | None,
+) -> QueryFamily:
+    del query_case, config, target
+    raise RuntimeError("default registry rules must bind a transform factory")
 
 
 def _rule(
@@ -95,16 +206,19 @@ def _rule(
     capabilities: tuple[str, ...] = (),
 ) -> RuleSpec:
     return RuleSpec(
-        rule_id=rule_id,
-        version="1",
+        canonical_rule_id=rule_id,
+        family=_family(rule_id),
         tier=tier,
-        proof_id=proof_id,
-        proof_theorem=theorem,
-        purity_requirements=purity,
-        dialects=dialects,
-        required_capabilities=capabilities,
-        site_classes=sites,
         submit_eligible=tier is SafetyTier.CORE,
+        proof_id=proof_id,
+        proof_version="1",
+        purity_requirements=purity,
+        supported_dialects=dialects,
+        required_capabilities=capabilities,
+        allowed_site_classes=sites,
+        implementation_rule_id=_BOOL_IMPLEMENTATIONS.get(rule_id, rule_id),
+        transform_factory=_unbound_transform_factory,
+        proof_theorem=theorem,
         role=role,
     )
 
@@ -121,7 +235,7 @@ _SYM_CORE = (
     _rule("pattern_order_symmetry", SafetyTier.CORE, "graph_pattern_product_commutativity_v1", "constituent path-pattern conjunction commutes inside one MATCH", purity=("pure", "relationship_uniqueness_preserved"), sites=("match_pattern_component",), role=RuleRole.OPTIMIZER_STRESS),
     _rule("predicate_order_symmetry", SafetyTier.CORE, "kleene_conjunction_commutativity_v1", "pure total conjunction terms commute", purity=("pure", "total"), sites=("where_boolean",), role=RuleRole.OPTIMIZER_STRESS),
     _rule("node_order_symmetry", SafetyTier.CORE, "edge_endpoint_alpha_equivalence_v1", "unobserved endpoint traversal orientation preserves matches", purity=("pure", "same_graph_pattern"), sites=("match_pattern_component",), role=RuleRole.OPTIMIZER_STRESS),
-    _rule("label_order_symmetry", SafetyTier.CORE, "label_conjunction_commutativity_v1", "multiple labels denote an unordered conjunction", purity=("pure",), sites=("match_pattern_component",), role=RuleRole.OPTIMIZER_STRESS, capabilities=("multiple_node_labels",)),
+    _rule("label_order_symmetry", SafetyTier.CORE, "label_conjunction_commutativity_v1", "multiple labels denote an unordered conjunction", purity=("pure",), sites=("match_pattern_component",), role=RuleRole.OPTIMIZER_STRESS, capabilities=("multi_label_intersection",)),
 )
 
 _CONTROL = (
@@ -166,6 +280,23 @@ _REMOVED = tuple(
 
 _AUDITED_RULES = _BOOL_CORE + _SYM_CORE + _CONTROL + _EXPERIMENTAL + _REMOVED
 
+_ALIASES = {"and_excluded_middle_or_null": "null_complete_excluded_middle"}
+
+
+@lru_cache(maxsize=1)
+def _bound_default_rules() -> tuple[RuleSpec, ...]:
+    from graph_sym_perf.transforms.bool_redundancy import generate_bool_redundancy_family
+    from graph_sym_perf.transforms.symmetry import generate_symmetry_family
+
+    factories = {
+        RuleFamily.BOOL: generate_bool_redundancy_family,
+        RuleFamily.SYM: generate_symmetry_family,
+    }
+    return tuple(
+        replace(rule, transform_factory=factories[rule.family])
+        for rule in _AUDITED_RULES
+    )
+
 
 def _profile(dbms: str) -> tuple[str, set[str]]:
     if dbms == "agensgraph":
@@ -176,7 +307,14 @@ def _profile(dbms: str) -> tuple[str, set[str]]:
         return "cypher", {"single_node_label"}
     if dbms not in {"neo4j", "memgraph", "falkordb"}:
         raise ValueError(f"unknown DBMS capability profile: {dbms}")
-    return "cypher", {"multiple_node_labels"}
+    return "cypher", {"multiple_node_labels", "multi_label_intersection"}
 
 
-__all__ = ["RuleRegistry", "RuleRole", "RuleSpec", "SafetyTier"]
+__all__ = [
+    "RuleFamily",
+    "RuleRegistry",
+    "RuleRole",
+    "RuleSpec",
+    "SafetyTier",
+    "TransformFactory",
+]

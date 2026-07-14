@@ -1,4 +1,112 @@
-from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
+from dataclasses import FrozenInstanceError
+
+import pytest
+
+from graph_sym_perf.transforms.bool_redundancy import generate_bool_redundancy_family
+from graph_sym_perf.transforms.registry import RuleRegistry
+from graph_sym_perf.transforms.rule_models import RuleFamily, SafetyTier
+from graph_sym_perf.transforms.safety_points import enumerate_safety_points
+from graph_sym_perf.transforms.symmetry import generate_symmetry_family
+
+
+def test_default_registry_exposes_the_approved_neo4j_rule_set() -> None:
+    registry = RuleRegistry.default()
+    core = registry.active_rules(
+        dialect="cypher",
+        tier=SafetyTier.CORE,
+        capabilities=frozenset({"multi_label_intersection"}),
+    )
+    assert {rule.canonical_rule_id for rule in core} == {
+        "constant_true_disjunction",
+        "constant_false_conjunction",
+        "null_partition_tautology",
+        "null_contradiction",
+        "null_complete_excluded_middle",
+        "pattern_order_symmetry",
+        "predicate_order_symmetry",
+        "node_order_symmetry",
+        "label_order_symmetry",
+    }
+    assert {rule.family for rule in core} == {RuleFamily.BOOL, RuleFamily.SYM}
+    assert all(rule.submit_eligible for rule in core)
+
+
+def test_legacy_alias_resolves_without_creating_a_second_budget_identity() -> None:
+    registry = RuleRegistry.default()
+    assert registry.resolve_id("and_excluded_middle_or_null") == "null_complete_excluded_middle"
+    assert registry.get("and_excluded_middle_or_null") is registry.get("null_complete_excluded_middle")
+
+
+def test_label_order_is_fail_closed_without_declared_capability() -> None:
+    active = RuleRegistry.default().active_rules(
+        dialect="cypher", tier=SafetyTier.CORE, capabilities=frozenset()
+    )
+    assert "label_order_symmetry" not in {rule.canonical_rule_id for rule in active}
+
+
+def test_rule_specs_expose_canonical_metadata_and_bind_their_family_factory() -> None:
+    registry = RuleRegistry.default()
+    for rule in registry.rules:
+        assert rule.canonical_rule_id == rule.rule_id
+        assert rule.proof_version == rule.version
+        assert rule.supported_dialects == rule.dialects
+        assert rule.allowed_site_classes == rule.site_classes
+        expected_factory = (
+            generate_bool_redundancy_family
+            if rule.family is RuleFamily.BOOL
+            else generate_symmetry_family
+        )
+        assert rule.transform_factory is expected_factory
+
+
+def test_boolean_rules_keep_canonical_and_implementation_ids_separate() -> None:
+    expected = {
+        "constant_true_disjunction": "and_true_or",
+        "constant_false_conjunction": "or_false_and",
+        "null_partition_tautology": "and_expr_null_partition",
+        "null_contradiction": "or_expr_null_contradiction",
+        "null_complete_excluded_middle": "and_excluded_middle_or_null",
+    }
+    registry = RuleRegistry.default()
+    assert {
+        rule.canonical_rule_id: rule.implementation_rule_id
+        for rule in registry.active_rules(
+            dialect="cypher",
+            tier=SafetyTier.CORE,
+            capabilities=frozenset({"multi_label_intersection"}),
+        )
+        if rule.family is RuleFamily.BOOL
+    } == expected
+
+
+def test_registry_rejects_aliases_that_do_not_resolve_to_a_canonical_rule() -> None:
+    rule = RuleRegistry.default().get("constant_true_disjunction")
+    with pytest.raises(ValueError, match="alias"):
+        RuleRegistry((rule,), aliases={"legacy": "missing"})
+
+
+def test_safety_certificate_carries_frozen_canonical_rule_facts() -> None:
+    rule = RuleRegistry.default().get("pattern_order_symmetry")
+    certificate = enumerate_safety_points(
+        "MATCH (a:A), (b:B) RETURN a, b", rule, "capability-v1"
+    )[0]
+    other_capability = enumerate_safety_points(
+        "MATCH (a:A), (b:B) RETURN a, b", rule, "capability-v2"
+    )[0]
+
+    assert certificate.canonical_rule_id == rule.canonical_rule_id
+    assert certificate.rule_id == rule.canonical_rule_id
+    assert certificate.family == rule.family.value
+    assert certificate.tier == rule.tier.value
+    assert certificate.submit_eligible is rule.submit_eligible
+    assert certificate.proof_id == rule.proof_id
+    assert certificate.proof_version == rule.proof_version
+    assert certificate.site_class == "match_pattern_component"
+    assert certificate.semantic_proof_hash
+    assert certificate.semantic_proof_hash == other_capability.semantic_proof_hash
+    assert certificate.capability_hash != other_capability.capability_hash
+    with pytest.raises(FrozenInstanceError):
+        certificate.tier = SafetyTier.CONTROL.value  # type: ignore[misc]
 
 
 def test_registry_exposes_only_submit_eligible_core_rules() -> None:

@@ -2,30 +2,160 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from hashlib import sha256
 
 from graph_sym_perf.cypher.ast import CypherQuery, PatternList
 from graph_sym_perf.cypher.parser import CypherParseError, parse_match_clause, parse_query
 from graph_sym_perf.equivalence.purity import assess_query_purity
-from graph_sym_perf.transforms.rule_models import RuleSpec, SafetyTier
+from graph_sym_perf.transforms.rule_models import RuleRegistry, RuleSpec, SafetyTier
 
 
-@dataclass(frozen=True)
+_CANONICAL_CERTIFICATE_FIELDS = (
+    "canonical_rule_id",
+    "family",
+    "tier",
+    "submit_eligible",
+    "proof_id",
+    "proof_version",
+    "site_class",
+    "ast_path",
+    "capability_hash",
+    "semantic_proof_hash",
+)
+_LEGACY_CERTIFICATE_FIELDS = (
+    "rule_id",
+    "ast_path",
+    "variables_in_scope",
+    "expression_type",
+    "nullability",
+    "clause_context",
+    "preconditions",
+    "proof_id",
+    "capability_hash",
+)
+
+
+@dataclass(frozen=True, init=False)
 class SafetyCertificate:
-    rule_id: str
-    ast_path: str
-    variables_in_scope: tuple[str, ...]
-    expression_type: str
-    nullability: str
-    clause_context: str
-    preconditions: tuple[str, ...]
+    canonical_rule_id: str
+    family: str
+    tier: str
+    submit_eligible: bool
     proof_id: str
+    proof_version: str
+    site_class: str
+    ast_path: str
     capability_hash: str
+    semantic_proof_hash: str
+    variables_in_scope: tuple[str, ...] = ()
+    expression_type: str = ""
+    nullability: str = ""
+    clause_context: str = ""
+    preconditions: tuple[str, ...] = ()
+    rule_id: str = ""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        legacy_input = "canonical_rule_id" not in kwargs and "rule_id" in kwargs
+        if args:
+            if len(args) == len(_LEGACY_CERTIFICATE_FIELDS):
+                positional_fields = _LEGACY_CERTIFICATE_FIELDS
+                legacy_input = True
+            elif len(args) == len(_CANONICAL_CERTIFICATE_FIELDS):
+                positional_fields = _CANONICAL_CERTIFICATE_FIELDS
+                legacy_input = False
+            else:
+                raise TypeError("SafetyCertificate expects 9 legacy or 10 canonical positional arguments")
+            overlap = set(positional_fields) & set(kwargs)
+            if overlap:
+                raise TypeError(f"multiple values for certificate fields: {sorted(overlap)}")
+            kwargs = {**dict(zip(positional_fields, args, strict=True)), **kwargs}
+        allowed = set(_CANONICAL_CERTIFICATE_FIELDS) | set(_LEGACY_CERTIFICATE_FIELDS)
+        unexpected = sorted(set(kwargs) - allowed)
+        if unexpected:
+            raise TypeError(f"unexpected certificate fields: {unexpected}")
+        defaults: dict[str, object] = {
+            "canonical_rule_id": "",
+            "family": "",
+            "tier": "",
+            "submit_eligible": None,
+            "proof_id": "",
+            "proof_version": "",
+            "site_class": "",
+            "ast_path": "",
+            "capability_hash": "",
+            "semantic_proof_hash": "",
+            "variables_in_scope": (),
+            "expression_type": "",
+            "nullability": "",
+            "clause_context": "",
+            "preconditions": (),
+            "rule_id": "",
+        }
+        defaults.update(kwargs)
+        for name, value in defaults.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "_legacy_input", legacy_input)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
-        if not all((self.rule_id, self.ast_path, self.expression_type, self.nullability, self.clause_context, self.proof_id, self.capability_hash)):
+        canonical_rule_id = self.canonical_rule_id or self.rule_id
+        if self.rule_id and self.rule_id != canonical_rule_id:
+            raise ValueError("legacy and canonical rule ids must agree")
+        object.__setattr__(self, "canonical_rule_id", canonical_rule_id)
+        object.__setattr__(self, "rule_id", canonical_rule_id)
+        try:
+            rule = RuleRegistry.default().get(canonical_rule_id)
+        except KeyError:
+            rule = None
+        if rule is not None:
+            site_class = self.site_class or _legacy_site_class(self.clause_context)
+            if site_class not in rule.allowed_site_classes:
+                raise ValueError("certificate site class is not allowed by the canonical rule")
+            expected = {
+                "family": rule.family.value,
+                "tier": rule.tier.value,
+                "submit_eligible": rule.submit_eligible,
+                "proof_id": rule.proof_id,
+                "proof_version": rule.proof_version,
+                "site_class": site_class,
+                "semantic_proof_hash": _semantic_proof_hash(rule, site_class),
+                "preconditions": rule.purity_requirements,
+            }
+            for name, value in expected.items():
+                current = getattr(self, name)
+                if not self._legacy_input and current not in ("", None, ()) and current != value:
+                    raise ValueError(f"certificate {name} cannot override canonical rule facts")
+                object.__setattr__(self, name, value)
+        else:
+            object.__setattr__(self, "family", self.family or "unknown")
+            object.__setattr__(self, "tier", self.tier or "unknown")
+            object.__setattr__(self, "submit_eligible", bool(self.submit_eligible))
+            object.__setattr__(self, "proof_version", self.proof_version or "legacy")
+            object.__setattr__(self, "site_class", self.site_class or _legacy_site_class(self.clause_context))
+            if not self.semantic_proof_hash:
+                legacy_facts = (canonical_rule_id, self.proof_id, self.proof_version, self.site_class)
+                object.__setattr__(self, "semantic_proof_hash", sha256(repr(legacy_facts).encode()).hexdigest())
+        if not all(
+            (
+                self.canonical_rule_id,
+                self.family,
+                self.tier,
+                self.proof_id,
+                self.proof_version,
+                self.site_class,
+                self.ast_path,
+                self.capability_hash,
+                self.semantic_proof_hash,
+            )
+        ):
             raise ValueError("safety certificate fields must be complete")
-        if not self.preconditions:
-            raise ValueError("safety certificate preconditions must be explicit")
+
+
+def _legacy_site_class(clause_context: str) -> str:
+    return {
+        "where": "where_boolean",
+        "match": "match_pattern_component",
+    }.get(clause_context, clause_context or "unknown")
 
 
 def enumerate_safety_points(
@@ -58,7 +188,16 @@ def enumerate_safety_points(
         variables = tuple(sorted(bound))
         if "mandatory_match_clause" in rule.site_classes:
             certificates.append(
-                _certificate(rule, f"clauses[{clause_index}].mandatory_match", variables, "graph_pattern", "non_null_introducing", "match", capability_hash)
+                _certificate(
+                    rule,
+                    f"clauses[{clause_index}].mandatory_match",
+                    "mandatory_match_clause",
+                    variables,
+                    "graph_pattern",
+                    "non_null_introducing",
+                    "match",
+                    capability_hash,
+                )
             )
         if "match_pattern_component" in rule.site_classes:
             for component_index, _component in enumerate(_pattern_components(match.pattern)):
@@ -66,6 +205,7 @@ def enumerate_safety_points(
                     _certificate(
                         rule,
                         f"clauses[{clause_index}].pattern.components[{component_index}]",
+                        "match_pattern_component",
                         variables,
                         "graph_pattern",
                         "pattern_defined",
@@ -79,6 +219,7 @@ def enumerate_safety_points(
                     _certificate(
                         rule,
                         f"clauses[{clause_index}].variables[{variable}]",
+                        "bound_variable",
                         variables,
                         "bound_variable",
                         "scope_bound",
@@ -96,6 +237,7 @@ def enumerate_safety_points(
                     _certificate(
                         rule,
                         f"clauses[{clause_index}].where{suffix}",
+                        "where_boolean",
                         variables,
                         "boolean",
                         "three_valued",
@@ -109,6 +251,7 @@ def enumerate_safety_points(
 def _certificate(
     rule: RuleSpec,
     ast_path: str,
+    site_class: str,
     variables: tuple[str, ...],
     expression_type: str,
     nullability: str,
@@ -116,16 +259,39 @@ def _certificate(
     capability_hash: str,
 ) -> SafetyCertificate:
     return SafetyCertificate(
-        rule_id=rule.rule_id,
+        canonical_rule_id=rule.canonical_rule_id,
+        family=rule.family.value,
+        tier=rule.tier.value,
+        submit_eligible=rule.submit_eligible,
+        proof_id=rule.proof_id,
+        proof_version=rule.proof_version,
+        site_class=site_class,
         ast_path=ast_path,
+        capability_hash=capability_hash,
+        semantic_proof_hash=_semantic_proof_hash(rule, site_class),
+        rule_id=rule.rule_id,
         variables_in_scope=variables,
         expression_type=expression_type,
         nullability=nullability,
         clause_context=context,
         preconditions=rule.purity_requirements,
-        proof_id=rule.proof_id,
-        capability_hash=capability_hash,
     )
+
+
+def _semantic_proof_hash(rule: RuleSpec, site_class: str) -> str:
+    facts = (
+        rule.canonical_rule_id,
+        rule.family.value,
+        rule.tier.value,
+        str(rule.submit_eligible),
+        rule.proof_id,
+        rule.proof_version,
+        rule.purity_requirements,
+        rule.supported_dialects,
+        rule.required_capabilities,
+        site_class,
+    )
+    return sha256(repr(facts).encode("utf-8")).hexdigest()
 
 
 def _pattern_components(pattern: object) -> tuple[object, ...]:
