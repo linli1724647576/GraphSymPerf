@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from graph_sym_perf.core import TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream
 from graph_sym_perf.generation.corpus import PortableQuery
 from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.transforms.safety_points import SafetyCertificate
+from graph_sym_perf.transforms.safety_points import canonical_semantic_proof_hash
+from graph_sym_perf.transforms.registry import generate_rule_transform as real_generate_rule_transform
 from graph_sym_perf.workload.acceptance import AcceptedPairBuilder
 from graph_sym_perf.workload.models import (
     AcceptanceStatus,
@@ -101,6 +107,49 @@ def test_rule_pair_factory_executes_a_control_rule_without_entering_core_selecti
     assert result.pair.certificate.canonical_rule_id == "edge_notation_symmetry"
     assert result.pair.certificate.submit_eligible is False
     assert result.pair.transform_metadata["semantic_proof_sha256"]
+
+
+def test_rule_pair_factory_requires_the_certificate_to_bind_the_actual_engine_proof() -> None:
+    result = RulePairFactory(RuleRegistry.default()).build(
+        "MATCH (n) WHERE n.id = 1 RETURN n",
+        _entry(rule_id="null_partition_tautology", family="bool"),
+        TargetSystem.NEO4J,
+    )
+
+    assert result.pair is not None
+    proof = result.pair.transform_metadata["semantic_proof"]
+    assert result.pair.certificate.proof_bound is True
+    assert result.pair.certificate.semantic_proof_hash == canonical_semantic_proof_hash(proof)
+    assert result.pair.transform_metadata["semantic_proof_sha256"] == result.pair.certificate.semantic_proof_hash
+
+
+def test_rule_pair_factory_quarantines_hidden_engine_proof_tampering(monkeypatch) -> None:
+    def forged_transform(rule, query_case, config, target):
+        family = real_generate_rule_transform(rule, query_case, config, target)
+        variant = family.variants[0]
+        metadata = dict(variant.metadata)
+        proof = dict(metadata.get("semantic_proof", {}))
+        proof["theorem"] = "ForgedHiddenTheorem"
+        metadata["semantic_proof"] = proof
+        return replace(
+            family,
+            variants=(replace(variant, metadata=metadata),),
+        )
+
+    monkeypatch.setattr(
+        "graph_sym_perf.workload.rule_pairs.generate_rule_transform",
+        forged_transform,
+    )
+
+    result = RulePairFactory(RuleRegistry.default()).build(
+        "MATCH (n) WHERE n.id = 1 RETURN n",
+        _entry(rule_id="null_partition_tautology", family="bool"),
+        TargetSystem.NEO4J,
+    )
+
+    assert result.pair is None
+    assert result.quarantine is True
+    assert result.reject_code == "SEMANTIC_PROOF_INVARIANT_MISMATCH"
 
 
 def _legacy_certificate(rule_id: str) -> SafetyCertificate:

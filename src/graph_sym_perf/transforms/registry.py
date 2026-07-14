@@ -5,7 +5,7 @@ from __future__ import annotations
 from graph_sym_perf.core import QueryCase, QueryFamily, QueryVariant, TargetSystem, TransformConfig
 from graph_sym_perf.transforms.base import TransformFamily, TransformGenerator
 from graph_sym_perf.transforms.bool_redundancy import generate_bool_redundancy_family
-from graph_sym_perf.transforms.engine import RuleNotApplicable, apply_certified_rule
+from graph_sym_perf.transforms.engine import RuleNotApplicable, apply_certified_rule_with_proof
 from graph_sym_perf.transforms.rule_models import RuleRegistry, RuleSpec, SafetyTier
 from graph_sym_perf.transforms.safety_points import enumerate_safety_points
 from graph_sym_perf.transforms.symmetry import generate_symmetry_family
@@ -104,7 +104,7 @@ def _generate_control_rule(
     query = query_case.query.rstrip().rstrip(";")
     for certificate in enumerate_safety_points(query, rule, f"rule-entry-{target.value}"):
         try:
-            transformed = apply_certified_rule(query, rule, certificate)
+            result = apply_certified_rule_with_proof(query, rule, certificate)
         except (RuleNotApplicable, ValueError):
             continue
         return QueryFamily(
@@ -114,7 +114,7 @@ def _generate_control_rule(
             variants=(
                 QueryVariant(
                     variant_id=f"{query_case.case_id}_{rule.rule_id}",
-                    query=transformed,
+                    query=result.query,
                     transform_rule=rule.rule_id,
                     proof_obligation=rule.proof_theorem,
                     safety_tier=rule.tier.value,
@@ -123,7 +123,8 @@ def _generate_control_rule(
                             "bool_redundancy" if rule.family.value == "bool" else "symmetry"
                         ),
                         "rule_version": rule.version,
-                        "safety_certificate": certificate,
+                        "safety_certificate": result.certificate,
+                        "semantic_proof": result.semantic_proof,
                     },
                 ),
             ),

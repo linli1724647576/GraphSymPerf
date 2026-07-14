@@ -41,6 +41,53 @@ class SemanticProof:
         }
 
 
+def prove_boolean_identity(rule_id: str, expression: str) -> SemanticProof:
+    if not expression.strip():
+        raise ProofFailure("BOOLEAN_IDENTITY_FRAGMENT", "boolean identity requires a parsed expression")
+    theorems = {
+        "constant_true_disjunction": "KleeneOrTrueTautology",
+        "constant_false_conjunction": "KleeneAndFalseContradictionNegation",
+        "null_partition_tautology": "KleeneNullPartitionTautology",
+        "null_contradiction": "KleeneNullContradictionNegation",
+        "null_complete_excluded_middle": "KleeneNullCompleteExcludedMiddle",
+    }
+    theorem = theorems.get(rule_id)
+    if theorem is None:
+        raise ProofFailure("BOOLEAN_IDENTITY_RULE", f"unsupported certified boolean identity: {rule_id}")
+    truth_values = ("TRUE", "FALSE", "NULL")
+    tautology = tuple((value, "TRUE") for value in truth_values)
+    return SemanticProof(
+        theorem=theorem,
+        fragment="one certified pure Cypher WHERE boolean-expression subtree under Kleene three-valued logic",
+        premises=(
+            "the certificate identifies the exact parsed WHERE subtree",
+            "the expression is deterministic and side-effect free",
+            "the selected identity evaluates to TRUE for TRUE, FALSE, and NULL",
+        ),
+        invariant="conjoining the certified tautology preserves the original WHERE selection for every input row",
+        original_ra=("Selection", expression.strip(), ("TRUE", "FALSE", "NULL")),
+        transformed_ra=("SelectionAndTautology", expression.strip(), rule_id, tautology),
+    )
+
+
+def prove_duplicate_predicate(expression: str) -> SemanticProof:
+    if not expression.strip():
+        raise ProofFailure("DUPLICATE_PREDICATE_FRAGMENT", "duplicate predicate requires a parsed expression")
+    truth_table = (("TRUE", "TRUE"), ("FALSE", "FALSE"), ("NULL", "NULL"))
+    return SemanticProof(
+        theorem="KleeneConjunctionIdempotence",
+        fragment="one certified pure total Cypher WHERE boolean-expression subtree",
+        premises=(
+            "the duplicated expression is the exact certificate-bound subtree",
+            "the expression is deterministic and side-effect free",
+            "Kleene conjunction is idempotent for TRUE, FALSE, and NULL",
+        ),
+        invariant="P AND P has the same three-valued result as P for every input row",
+        original_ra=("Predicate", expression.strip(), truth_table),
+        transformed_ra=("And", expression.strip(), expression.strip(), truth_table),
+    )
+
+
 def prove_node_order(original: EdgePattern, transformed: EdgePattern) -> SemanticProof:
     _require_edge(original, direction="undirected", code="NODE_ORDER_FRAGMENT")
     _require_edge(transformed, direction="undirected", code="NODE_ORDER_FRAGMENT")

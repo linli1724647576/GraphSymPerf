@@ -8,7 +8,7 @@ from graph_sym_perf.core import QueryCase, SymmetryFamily, SymmetryVariant, Targ
 from graph_sym_perf.cypher.ast import PatternList
 from graph_sym_perf.cypher.parser import CypherParseError, parse_match_clause, parse_query
 from graph_sym_perf.cypher.proof import SemanticProof, prove_pattern_list_order
-from graph_sym_perf.transforms.engine import RuleNotApplicable, apply_certified_rule
+from graph_sym_perf.transforms.engine import RuleNotApplicable, apply_certified_rule_with_proof
 from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 from graph_sym_perf.transforms.safety_points import enumerate_safety_points
 
@@ -88,20 +88,29 @@ def generate_symmetry_family(
         selected_pattern_count = None
         for certificate in enumerate_safety_points(query, rule, f"legacy-{dbms}"):
             try:
-                candidate = apply_certified_rule(query, rule, certificate)
+                result = apply_certified_rule_with_proof(query, rule, certificate)
+                candidate = result.query
                 proof_result = (
                     _prove_certified_pattern_order(query, candidate, certificate.ast_path)
                     if rule.rule_id == "pattern_order_symmetry"
                     else None
                 )
-                proof, pattern_count = proof_result if proof_result is not None else (None, None)
+                if proof_result is not None:
+                    verified_proof, pattern_count = proof_result
+                    if any(
+                        result.semantic_proof.get(name) != value
+                        for name, value in verified_proof.to_metadata().items()
+                    ):
+                        raise ValueError("engine and pattern-order proof metadata differ")
+                else:
+                    pattern_count = None
             except (RuleNotApplicable, ValueError):
                 continue
             if candidate not in seen:
-                transformed, selected_certificate = candidate, certificate
-                selected_proof, selected_pattern_count = proof, pattern_count
+                transformed, selected_certificate = candidate, result.certificate
+                selected_proof, selected_pattern_count = result.semantic_proof, pattern_count
                 break
-        if transformed is None or selected_certificate is None:
+        if transformed is None or selected_certificate is None or selected_proof is None:
             skip_reason = (
                 "NO_REORDERABLE_PATTERN_LIST"
                 if rule.rule_id == "pattern_order_symmetry"
@@ -126,17 +135,15 @@ def generate_symmetry_family(
                 variant_id=f"{query_case.case_id}_{rule.rule_id}",
                 query=transformed,
                 transform_rule=rule.rule_id,
-                proof_obligation=selected_proof.obligation if selected_proof is not None else rule.proof_theorem,
+                proof_obligation=(
+                    f"{selected_proof['theorem']}: {selected_proof['invariant']}"
+                ),
                 safety_tier=rule.tier.value,
                 metadata={
                     "transform_family": "symmetry",
                     "rule_version": rule.version,
                     "safety_certificate": selected_certificate,
-                    **(
-                        {"semantic_proof": selected_proof.to_metadata()}
-                        if selected_proof is not None
-                        else {}
-                    ),
+                    "semantic_proof": selected_proof,
                     **(
                         {
                             "pattern_count": selected_pattern_count,

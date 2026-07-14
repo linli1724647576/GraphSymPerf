@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from graph_sym_perf.core import QueryCase, QueryFamily, QueryPair, QueryVariant, TargetSystem, TransformConfig
-from graph_sym_perf.transforms.engine import RuleNotApplicable, apply_certified_rule
+from graph_sym_perf.transforms.engine import RuleNotApplicable, apply_certified_rule_with_proof
 from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 from graph_sym_perf.transforms.safety_points import enumerate_safety_points
 
@@ -42,15 +42,18 @@ def generate_bool_redundancy_family(
         certificates = enumerate_safety_points(query, rule, f"legacy-{dbms}")
         transformed = None
         selected_certificate = None
+        selected_proof = None
         for certificate in certificates:
             try:
-                candidate = apply_certified_rule(query, rule, certificate)
+                result = apply_certified_rule_with_proof(query, rule, certificate)
+                candidate = result.query
             except (RuleNotApplicable, ValueError):
                 continue
             if candidate not in seen:
-                transformed, selected_certificate = candidate, certificate
+                transformed, selected_certificate = candidate, result.certificate
+                selected_proof = result.semantic_proof
                 break
-        if transformed is None or selected_certificate is None:
+        if transformed is None or selected_certificate is None or selected_proof is None:
             skipped.append(
                 QueryVariant(
                     variant_id=f"{query_case.case_id}_{rule.rule_id}",
@@ -75,6 +78,7 @@ def generate_bool_redundancy_family(
                     "transform_family": "bool_redundancy",
                     "rule_version": rule.version,
                     "safety_certificate": selected_certificate,
+                    "semantic_proof": selected_proof,
                 },
             )
         )

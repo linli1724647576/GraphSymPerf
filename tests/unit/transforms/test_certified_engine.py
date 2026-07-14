@@ -1,4 +1,6 @@
+from graph_sym_perf.transforms import engine
 from graph_sym_perf.transforms.engine import RuleNotApplicable, apply_certified_rule
+from graph_sym_perf.transforms import safety_points
 from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.transforms.safety_points import enumerate_safety_points
 
@@ -67,3 +69,36 @@ def test_control_rules_remain_executable_but_outside_the_core_provider() -> None
             except RuleNotApplicable:
                 continue
         assert transformed is not None and transformed != query
+
+
+def test_certified_engine_returns_actual_proof_and_certificate_binds_its_canonical_hash() -> None:
+    query = "MATCH (a:A)-[r:R]->(b:B) RETURN a, b, r"
+    rule = _rule("edge_notation_symmetry")
+    certificate = enumerate_safety_points(query, rule, "cap")[0]
+
+    result = engine.apply_certified_rule_with_proof(query, rule, certificate)
+
+    assert result.query != query
+    assert result.semantic_proof["theorem"] == "DirectedEdgeNotationEquivalence"
+    assert result.semantic_proof["canonical_rule_id"] == rule.rule_id
+    assert result.semantic_proof["site_class"] == certificate.site_class
+    assert result.certificate.semantic_proof_hash == safety_points.canonical_semantic_proof_hash(
+        result.semantic_proof
+    )
+    assert result.certificate.semantic_proof_template_hash == certificate.semantic_proof_hash
+    assert result.certificate.semantic_proof_hash != result.certificate.semantic_proof_template_hash
+
+
+def test_boolean_certified_engine_emits_a_real_kleene_identity_proof() -> None:
+    query = "MATCH (n:A) WHERE n.x = 1 RETURN n"
+    rule = _rule("null_partition_tautology")
+    certificate = enumerate_safety_points(query, rule, "cap")[0]
+
+    result = engine.apply_certified_rule_with_proof(query, rule, certificate)
+
+    assert result.semantic_proof["theorem"] == "KleeneNullPartitionTautology"
+    assert result.semantic_proof["original_ra"]
+    assert result.semantic_proof["transformed_ra"]
+    assert result.certificate.semantic_proof_hash == safety_points.canonical_semantic_proof_hash(
+        result.semantic_proof
+    )

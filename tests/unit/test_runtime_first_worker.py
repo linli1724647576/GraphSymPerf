@@ -124,6 +124,36 @@ class _InvalidGraphManifestAdapter(_Adapter):
         )
 
 
+class _FinalFingerprintDriftAdapter(_Adapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fingerprint_reads = 0
+
+    def dbms_fingerprint(self) -> DBMSFingerprint:
+        self.fingerprint_reads += 1
+        value = "a" * 64 if self.fingerprint_reads == 1 else "b" * 64
+        return DBMSFingerprint(value, server_version="test-dbms/1")
+
+
+class _FinalGraphDriftAdapter(_Adapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.node_manifest_reads = 0
+
+    def execute(self, query, parameters, query_kind, **kwargs) -> ExecutionResult:
+        result = super().execute(query, parameters, query_kind, **kwargs)
+        if query_kind != "graph_manifest_nodes":
+            return result
+        self.node_manifest_reads += 1
+        return ExecutionResult(
+            system=result.system,
+            query_kind=result.query_kind,
+            rows=({"nodes": self.node_manifest_reads},),
+            elapsed_ms=result.elapsed_ms,
+            summary=result.summary,
+        )
+
+
 class _LegacyGenerationAdapter(_Adapter):
     def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
         self.executed.append((query, query_kind))
@@ -181,6 +211,18 @@ class _ConnectionLostAdapter(_Adapter):
         return super().execute(query, parameters, query_kind, **kwargs)
 
 
+class _ScaryOrdinaryQueryErrorAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **kwargs) -> ExecutionResult:
+        if query_kind.startswith("acceptance_"):
+            raise QueryExecutionError("connection reset while reporting Java heap space")
+        return super().execute(query, parameters, query_kind, **kwargs)
+
+
+class _CloseFailureAdapter(_Adapter):
+    def close(self) -> None:
+        raise OSError("driver close failed")
+
+
 class _SteppedClock:
     def __init__(self, *values: float) -> None:
         self._values = iter(values)
@@ -189,6 +231,50 @@ class _SteppedClock:
     def __call__(self) -> float:
         self._last = next(self._values, self._last)
         return self._last
+
+
+class _ManualClock:
+    def __init__(self, value: float = 0.0) -> None:
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+class _RejectThenInfrastructureAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **kwargs) -> ExecutionResult:
+        if query_kind == "acceptance_base" and "n.id = 1" in query:
+            raise QueryExecutionError("ordinary seed rejection")
+        if query_kind == "acceptance_base" and "n.id = 2" in query:
+            raise OSError("connection lost on the second seed")
+        return super().execute(query, parameters, query_kind, **kwargs)
+
+
+class _TimedQueryErrorAdapter(_Adapter):
+    def __init__(self, clock: _ManualClock, elapsed: float) -> None:
+        super().__init__()
+        self.clock = clock
+        self.elapsed = elapsed
+
+    def execute(self, query, parameters, query_kind, **kwargs) -> ExecutionResult:
+        if query_kind == "acceptance_base":
+            self.clock.advance(self.elapsed)
+            raise QueryExecutionError("ordinary query error at the deadline")
+        return super().execute(query, parameters, query_kind, **kwargs)
+
+
+class _TimedCloseAdapter(_Adapter):
+    def __init__(self, clock: _ManualClock, elapsed: float) -> None:
+        super().__init__()
+        self.clock = clock
+        self.elapsed = elapsed
+
+    def close(self) -> None:
+        self.clock.advance(self.elapsed)
+        super().close()
 
 
 class _InflightCheckingAdapter(_Adapter):
@@ -697,6 +783,13 @@ def test_generation_query_limit_is_capability_driven() -> None:
     ) == 100
 
 
+def test_rule_entry_generation_uses_its_full_immutable_seed_budget() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    entry = _rule_plan_entry(accepted_pair_quota=1, max_generated_seed_budget=17)
+
+    assert _generation_query_limit(entry, spec) == 17
+
+
 def test_formal_gdsmith_seam_keeps_replayable_corpus_at_raw_artifact_budget(tmp_path, monkeypatch) -> None:
     record = SimpleNamespace(statement="MATCH (n) RETURN n")
 
@@ -1086,6 +1179,31 @@ def test_worker_stops_at_the_entry_wall_clock_deadline(tmp_path) -> None:
     assert result["terminal_state"] == "resource_exhausted"
 
 
+def test_rule_entry_counts_only_real_generated_query_records(tmp_path) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        max_generated_seed_budget=5,
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "underfilled"
+    assert result["acceptance_generated_seeds"] == 1
+    assert result["generated_query_records"] == 1
+    assert result["reject_reasons"] == {"RULE_NOT_APPLICABLE": 1}
+
+
 def test_worker_quarantines_one_core_entry_immediately_on_typed_mismatch(tmp_path) -> None:
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     worker = RuntimeFirstShardWorker(
@@ -1150,6 +1268,89 @@ def test_worker_classifies_connection_loss_as_entry_infrastructure_failure(tmp_p
     assert result["accepted_pairs"] == 0
 
 
+def test_query_execution_error_is_ordinary_even_when_message_mentions_infrastructure(tmp_path) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        max_generated_seed_budget=1,
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _ScaryOrdinaryQueryErrorAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "underfilled"
+    assert result["reject_reasons"] == {"QUERY_EXECUTION_ERROR": 1}
+
+
+@pytest.mark.parametrize("failure_site", ("generation", "adapter_factory", "adapter_close"))
+def test_rule_entry_lifecycle_infrastructure_failures_return_typed_incomplete_summary(
+    tmp_path,
+    failure_site,
+) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+
+    def generate(_entry, _raw_dir):
+        if failure_site == "generation":
+            raise MemoryError("GDsmith exhausted memory")
+        return generated
+
+    def create(_entry):
+        if failure_site == "adapter_factory":
+            raise OSError("driver connection failed")
+        return _CloseFailureAdapter() if failure_site == "adapter_close" else _Adapter()
+
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=generate,
+        adapter_factory=create,
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["acceptance_status"] == "incomplete"
+    assert result["infrastructure_error_kind"] == ErrorKind.INFRASTRUCTURE_ERROR.value
+    assert result["infrastructure_reason"]
+
+
+@pytest.mark.parametrize("adapter_type", (_FinalFingerprintDriftAdapter, _FinalGraphDriftAdapter))
+def test_final_identity_drift_invalidates_completed_rule_entry_acceptance(tmp_path, adapter_type) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: adapter_type(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["accepted_pairs"] == 1
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["acceptance_status"] == "incomplete"
+    assert result["acceptance_stop_reason"] == "INFRASTRUCTURE_FAILED"
+    assert result["acceptance_invalidated"] is True
+
+
 def test_rule_entry_retry_resumes_durable_accepted_pairs_without_double_counting(tmp_path) -> None:
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     generated = GeneratedShard(
@@ -1176,6 +1377,177 @@ def test_rule_entry_retry_resumes_durable_accepted_pairs_without_double_counting
     assert records[0]["parameters"] == {}
     assert records[0]["certificate"]["canonical_rule_id"] == entry.rule_id
     assert records[0]["transform_metadata"]["semantic_proof_sha256"]
+
+
+def test_rule_entry_retry_keeps_reject_progress_and_does_not_repeat_completed_seed(tmp_path) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=1,
+        max_generated_seed_budget=2,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=(
+            "MATCH (n) WHERE n.id = 1 RETURN n",
+            "MATCH (n) WHERE n.id = 2 RETURN n",
+        ),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _RejectThenInfrastructureAdapter(),
+        clock=_ManualClock(10.0),
+    )
+    first.bind_run_dir(tmp_path)
+
+    first_result = first(entry)
+
+    assert first_result["terminal_state"] == "infrastructure_failed"
+    progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
+    first_progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert first_progress["last_query_ordinal"] == 1
+    assert first_progress["reject_counts"] == {"QUERY_EXECUTION_ERROR": 1}
+
+    retry_adapter = _Adapter()
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: retry_adapter,
+        clock=_ManualClock(1000.0),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    result = retry(entry)
+
+    accepted_base_queries = [query for query, kind in retry_adapter.executed if kind == "acceptance_base"]
+    assert accepted_base_queries == ["MATCH (n) WHERE n.id = 2 RETURN n"]
+    assert result["acceptance_status"] == "complete"
+    assert result["acceptance_generated_seeds"] == 2
+    assert result["reject_reasons"] == {"QUERY_EXECUTION_ERROR": 1}
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["elapsed_seconds"] < 10.0
+
+
+def test_rule_entry_retry_enforces_cumulative_elapsed_budget_without_absolute_clock(tmp_path) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        max_generated_seed_budget=1,
+        max_entry_runtime_seconds=5,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first_clock = _ManualClock(20.0)
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _TimedQueryErrorAdapter(first_clock, 5.0),
+        clock=first_clock,
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+
+    progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["elapsed_seconds"] == 5.0
+    assert progress["last_query_ordinal"] == 1
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("exhausted retry must not regenerate"),
+        adapter_factory=lambda *_args: pytest.fail("exhausted retry must not reconnect"),
+        clock=_ManualClock(5000.0),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    result = retry(entry)
+
+    assert result["terminal_state"] == "resource_exhausted"
+    assert result["acceptance_generated_seeds"] == 1
+    assert result["reject_reasons"] == {"QUERY_EXECUTION_ERROR": 1}
+    assert json.loads(progress_path.read_text(encoding="utf-8"))["elapsed_seconds"] == 5.0
+
+
+def test_rule_entry_progress_includes_final_identity_and_adapter_close_elapsed(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    clock = _ManualClock(50.0)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _TimedCloseAdapter(clock, 3.0),
+        clock=clock,
+    )
+    worker.bind_run_dir(tmp_path)
+
+    worker(entry)
+
+    progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["elapsed_seconds"] == 3.0
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "query_b",
+        "certificate_hash",
+        "proof_theorem",
+        "pair_hash",
+        "query_hash",
+        "entry_id",
+        "family",
+        "tier",
+        "stream",
+        "site",
+    ),
+)
+def test_rule_entry_retry_recomputes_every_accepted_record_binding(tmp_path, tamper) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    record = json.loads(records_path.read_text(encoding="utf-8"))
+    if tamper == "query_b":
+        record["query_b"] += " "
+    elif tamper == "certificate_hash":
+        record["certificate"]["semantic_proof_hash"] = "0" * 64
+    elif tamper == "proof_theorem":
+        record["transform_metadata"]["semantic_proof"]["theorem"] = "Forged"
+    elif tamper in {"pair_hash", "query_hash"}:
+        record[tamper] = "0" * 64
+    else:
+        record[tamper] = "forged"
+    records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
 def test_worker_quarantines_each_core_rule_after_dynamic_equivalence_mismatch(tmp_path) -> None:

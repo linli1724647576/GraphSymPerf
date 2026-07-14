@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 
-from graph_sym_perf.core import QueryCase, QueryVariant, TargetSystem, TransformConfig, to_jsonable
+from graph_sym_perf.core import QueryCase, QueryVariant, TargetSystem, TransformConfig
 from graph_sym_perf.experiment.plan_models import RulePlanEntry
+from graph_sym_perf.transforms.engine import apply_certified_rule_with_proof
 from graph_sym_perf.transforms.rule_models import RuleRegistry, RuleSpec
 from graph_sym_perf.transforms.registry import generate_rule_transform
-from graph_sym_perf.transforms.safety_points import SafetyCertificate
+from graph_sym_perf.transforms.safety_points import (
+    SafetyCertificate,
+    canonical_semantic_proof_hash,
+    validate_bound_semantic_proof,
+)
 from graph_sym_perf.workload.models import CertifiedQueryPair, PairBuildOutcome
 
 
@@ -68,33 +72,24 @@ class RulePairFactory:
         if not _variant_matches_rule(variant, certificate, rule, metadata):
             return _quarantine("SAFETY_CERTIFICATE_INVARIANT_MISMATCH")
 
-        semantic_proof = _semantic_proof(
-            rule,
-            certificate,
-            metadata,
-            query_a=query,
-            query_b=variant.query,
-            proof_obligation=variant.proof_obligation,
-        )
-        proof_payload = json.dumps(
-            to_jsonable(semantic_proof),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        )
-        proof_sha256 = hashlib.sha256(proof_payload.encode("utf-8")).hexdigest()
-        metadata.update(
-            {
-                "canonical_rule_id": rule.canonical_rule_id,
-                "proof_version": rule.proof_version,
-                "semantic_proof": semantic_proof,
-                "semantic_proof_sha256": proof_sha256,
-            }
-        )
-        certificate = _resign_certificate(rule, certificate)
-        metadata["safety_certificate"] = certificate
-        pair_hash = _pair_hash(query, variant.query, rule.canonical_rule_id, proof_sha256)
+        semantic_proof = metadata.get("semantic_proof")
+        if not isinstance(semantic_proof, Mapping):
+            return _quarantine("SEMANTIC_PROOF_INVARIANT_MISMATCH")
+        try:
+            validate_certified_pair(
+                rule,
+                query_a=query,
+                query_b=variant.query,
+                certificate=certificate,
+                semantic_proof=semantic_proof,
+            )
+        except (TypeError, ValueError):
+            return _quarantine("SEMANTIC_PROOF_INVARIANT_MISMATCH")
+        proof_sha256 = canonical_semantic_proof_hash(semantic_proof)
+        if metadata.get("semantic_proof_sha256") not in {None, proof_sha256}:
+            return _quarantine("SEMANTIC_PROOF_INVARIANT_MISMATCH")
+        metadata["semantic_proof_sha256"] = proof_sha256
+        pair_hash = certified_pair_hash(query, variant.query, rule.canonical_rule_id, proof_sha256)
         return PairBuildOutcome(
             CertifiedQueryPair(
                 pair_hash=pair_hash,
@@ -148,56 +143,23 @@ def _variant_matches_rule(
     )
 
 
-def _semantic_proof(
+def validate_certified_pair(
     rule: RuleSpec,
-    certificate: SafetyCertificate,
-    metadata: Mapping[str, object],
     *,
     query_a: str,
     query_b: str,
-    proof_obligation: str,
-) -> dict[str, object]:
-    supplied = metadata.get("semantic_proof")
-    proof = dict(supplied) if isinstance(supplied, Mapping) else {}
-    proof.update(
-        {
-            "canonical_rule_id": rule.canonical_rule_id,
-            "proof_id": rule.proof_id,
-            "proof_version": rule.proof_version,
-            "site_class": certificate.site_class,
-            "ast_path": certificate.ast_path,
-            "certificate_semantic_proof_hash": certificate.semantic_proof_hash,
-            "proof_obligation": proof_obligation,
-            "query_a_sha256": hashlib.sha256(query_a.encode("utf-8")).hexdigest(),
-            "query_b_sha256": hashlib.sha256(query_b.encode("utf-8")).hexdigest(),
-        }
-    )
-    if "theorem" not in proof:
-        proof["theorem"] = rule.proof_theorem
-    if "premises" not in proof:
-        proof["premises"] = rule.purity_requirements
-    return proof
-
-
-def _resign_certificate(rule: RuleSpec, certificate: SafetyCertificate) -> SafetyCertificate:
-    return SafetyCertificate(
-        canonical_rule_id=rule.canonical_rule_id,
-        family=rule.family.value,
-        tier=rule.tier.value,
-        submit_eligible=rule.submit_eligible,
-        proof_id=rule.proof_id,
-        proof_version=rule.proof_version,
-        site_class=certificate.site_class,
-        ast_path=certificate.ast_path,
-        capability_hash=certificate.capability_hash,
-        semantic_proof_hash=certificate.semantic_proof_hash,
-        rule_id=rule.canonical_rule_id,
-        variables_in_scope=certificate.variables_in_scope,
-        expression_type=certificate.expression_type,
-        nullability=certificate.nullability,
-        clause_context=certificate.clause_context,
-        preconditions=rule.purity_requirements,
-    )
+    certificate: SafetyCertificate,
+    semantic_proof: Mapping[str, object],
+) -> None:
+    validate_bound_semantic_proof(rule, certificate, semantic_proof)
+    replay = apply_certified_rule_with_proof(query_a, rule, certificate)
+    if (
+        replay.query != query_b
+        or canonical_semantic_proof_hash(replay.semantic_proof)
+        != canonical_semantic_proof_hash(semantic_proof)
+        or replay.certificate != certificate
+    ):
+        raise ValueError("certified pair does not match the independently replayed engine proof")
 
 
 def _skip_code(skipped_variants: tuple[object, ...]) -> str:
@@ -211,7 +173,7 @@ def _skip_code(skipped_variants: tuple[object, ...]) -> str:
     return "RULE_NOT_APPLICABLE"
 
 
-def _pair_hash(query_a: str, query_b: str, rule_id: str, proof_sha256: str) -> str:
+def certified_pair_hash(query_a: str, query_b: str, rule_id: str, proof_sha256: str) -> str:
     payload = json.dumps(
         {
             "proof_sha256": proof_sha256,
@@ -223,11 +185,13 @@ def _pair_hash(query_a: str, query_b: str, rule_id: str, proof_sha256: str) -> s
         separators=(",", ":"),
         ensure_ascii=False,
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    from hashlib import sha256
+
+    return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _quarantine(code: str) -> PairBuildOutcome:
     return PairBuildOutcome(None, code, quarantine=True)
 
 
-__all__ = ["RulePairFactory"]
+__all__ = ["RulePairFactory", "certified_pair_hash", "validate_certified_pair"]

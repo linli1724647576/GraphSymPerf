@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import Mapping
 
 from graph_sym_perf.cypher.ast import EdgePattern, NodePattern, PatternList
 from graph_sym_perf.cypher.parser import parse_and_predicate, parse_match_clause, parse_query
@@ -11,6 +12,8 @@ from graph_sym_perf.cypher.proof import (
     prove_label_order,
     prove_edge_notation,
     prove_alpha_renaming,
+    prove_boolean_identity,
+    prove_duplicate_predicate,
     prove_node_order,
     prove_pattern_equivalence,
     prove_pattern_list_order,
@@ -21,6 +24,7 @@ from graph_sym_perf.transforms.safety_points import (
     SafetyCertificate,
     _split_top_level_boolean,
     _strip_outer_parentheses,
+    bind_semantic_proof,
 )
 
 
@@ -28,11 +32,26 @@ class RuleNotApplicable(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class CertifiedTransformResult:
+    query: str
+    semantic_proof: Mapping[str, object]
+    certificate: SafetyCertificate
+
+
 _PATH = re.compile(r"^clauses\[(?P<clause>\d+)]\.(?P<site>.+)$")
 _COMPONENT = re.compile(r"^pattern\.components\[(?P<component>\d+)]$")
 
 
 def apply_certified_rule(query: str, rule: RuleSpec, certificate: SafetyCertificate) -> str:
+    return apply_certified_rule_with_proof(query, rule, certificate).query
+
+
+def apply_certified_rule_with_proof(
+    query: str,
+    rule: RuleSpec,
+    certificate: SafetyCertificate,
+) -> CertifiedTransformResult:
     if rule.tier not in {SafetyTier.CORE, SafetyTier.CONTROL}:
         raise ValueError("only CORE and CONTROL rules enter the certified engine")
     if certificate.rule_id != rule.rule_id or certificate.proof_id != rule.proof_id:
@@ -40,26 +59,31 @@ def apply_certified_rule(query: str, rule: RuleSpec, certificate: SafetyCertific
     if certificate.preconditions != rule.purity_requirements:
         raise ValueError("certificate preconditions do not match the selected rule")
     if rule.rule_id in _BOOLEAN_RULES:
-        transformed = _apply_boolean_rule(query, rule.rule_id, certificate)
+        transformed, proof = _apply_boolean_rule(query, rule.rule_id, certificate)
     elif rule.rule_id == "duplicate_predicate_control":
-        transformed = _apply_duplicate_predicate_control(query, certificate)
+        transformed, proof = _apply_duplicate_predicate_control(query, certificate)
     elif rule.rule_id == "edge_notation_symmetry":
-        transformed = _apply_edge_notation_control(query, certificate)
+        transformed, proof = _apply_edge_notation_control(query, certificate)
     elif rule.rule_id == "alpha_renaming_symmetry":
-        transformed = _apply_alpha_renaming_control(query, certificate)
+        transformed, proof = _apply_alpha_renaming_control(query, certificate)
     elif rule.rule_id == "predicate_order_symmetry":
-        transformed = _apply_predicate_order(query, certificate)
+        transformed, proof = _apply_predicate_order(query, certificate)
     elif rule.rule_id == "pattern_order_symmetry":
-        transformed = _apply_pattern_order(query, certificate)
+        transformed, proof = _apply_pattern_order(query, certificate)
     elif rule.rule_id == "node_order_symmetry":
-        transformed = _apply_node_order(query, certificate)
+        transformed, proof = _apply_node_order(query, certificate)
     elif rule.rule_id == "label_order_symmetry":
-        transformed = _apply_label_order(query, certificate)
+        transformed, proof = _apply_label_order(query, certificate)
     else:
         raise RuleNotApplicable(f"no automatic implementation for {rule.rule_id}")
     if transformed == query:
         raise RuleNotApplicable("certified transform produced no structural change")
-    return transformed
+    semantic_proof, signed_certificate = bind_semantic_proof(
+        rule,
+        certificate,
+        proof.to_metadata(),
+    )
+    return CertifiedTransformResult(transformed, semantic_proof, signed_certificate)
 
 
 _BOOLEAN_RULES = frozenset(
@@ -73,7 +97,7 @@ _BOOLEAN_RULES = frozenset(
 )
 
 
-def _apply_boolean_rule(query: str, rule_id: str, certificate: SafetyCertificate) -> str:
+def _apply_boolean_rule(query: str, rule_id: str, certificate: SafetyCertificate):
     clause, match = _match_at_certificate(query, certificate)
     if match.where_region is None or not certificate.ast_path.startswith(f"clauses[{_clause_index(certificate)}].where"):
         raise RuleNotApplicable("boolean rule requires a certified WHERE subtree")
@@ -86,30 +110,48 @@ def _apply_boolean_rule(query: str, rule_id: str, certificate: SafetyCertificate
         "null_complete_excluded_middle": f"({expression}) OR NOT ({expression}) OR ({expression}) IS NULL",
     }
     replacement = f"({match.where_region.text}) AND ({additions[rule_id]})"
-    return _replace_query_region(query, clause.start + match.where_region.start, clause.start + match.where_region.end, replacement)
+    transformed = _replace_query_region(
+        query,
+        clause.start + match.where_region.start,
+        clause.start + match.where_region.end,
+        replacement,
+    )
+    return transformed, prove_boolean_identity(rule_id, expression)
 
 
-def _apply_predicate_order(query: str, certificate: SafetyCertificate) -> str:
+def _apply_predicate_order(query: str, certificate: SafetyCertificate):
     clause, match = _match_at_certificate(query, certificate)
     if match.where_region is None or certificate.ast_path != f"clauses[{_clause_index(certificate)}].where":
         raise RuleNotApplicable("predicate-order proof requires the complete WHERE conjunction")
     original = parse_and_predicate(match.where_region.text)
     replacement = original.render_reversed()
     transformed = parse_and_predicate(replacement)
-    prove_predicate_order(original, transformed)
-    return _replace_query_region(query, clause.start + match.where_region.start, clause.start + match.where_region.end, replacement)
+    proof = prove_predicate_order(original, transformed)
+    result = _replace_query_region(
+        query,
+        clause.start + match.where_region.start,
+        clause.start + match.where_region.end,
+        replacement,
+    )
+    return result, proof
 
 
-def _apply_duplicate_predicate_control(query: str, certificate: SafetyCertificate) -> str:
+def _apply_duplicate_predicate_control(query: str, certificate: SafetyCertificate):
     clause, match = _match_at_certificate(query, certificate)
     if match.where_region is None:
         raise RuleNotApplicable("duplicate-predicate control requires WHERE")
     expression = _boolean_expression_at_path(match.where_region.text, certificate.ast_path)
     replacement = f"({match.where_region.text}) AND ({expression})"
-    return _replace_query_region(query, clause.start + match.where_region.start, clause.start + match.where_region.end, replacement)
+    transformed = _replace_query_region(
+        query,
+        clause.start + match.where_region.start,
+        clause.start + match.where_region.end,
+        replacement,
+    )
+    return transformed, prove_duplicate_predicate(expression)
 
 
-def _apply_edge_notation_control(query: str, certificate: SafetyCertificate) -> str:
+def _apply_edge_notation_control(query: str, certificate: SafetyCertificate):
     clause, match = _match_at_certificate(query, certificate)
     component_index = _component_index(certificate)
     atom = _component(match.pattern, component_index)
@@ -123,14 +165,14 @@ def _apply_edge_notation_control(query: str, certificate: SafetyCertificate) -> 
         text="",
     )
     if atom.direction == "out":
-        prove_edge_notation(atom, transformed_atom)
+        proof = prove_edge_notation(atom, transformed_atom)
     else:
-        prove_edge_notation(transformed_atom, atom)
+        proof = prove_edge_notation(transformed_atom, atom)
     transformed_pattern = _replace_component(match.pattern, component_index, transformed_atom)
-    return _replace_pattern(query, clause.start, match, transformed_pattern.render())
+    return _replace_pattern(query, clause.start, match, transformed_pattern.render()), proof
 
 
-def _apply_alpha_renaming_control(query: str, certificate: SafetyCertificate) -> str:
+def _apply_alpha_renaming_control(query: str, certificate: SafetyCertificate):
     clause, match = _match_at_certificate(query, certificate)
     variable_match = re.search(r"\.variables\[([A-Za-z]\w*)]$", certificate.ast_path)
     if variable_match is None:
@@ -150,11 +192,11 @@ def _apply_alpha_renaming_control(query: str, certificate: SafetyCertificate) ->
             count=1,
         ),
     )
-    prove_alpha_renaming(match.pattern, transformed_node)
-    return _replace_pattern(query, clause.start, match, transformed_node.render())
+    proof = prove_alpha_renaming(match.pattern, transformed_node)
+    return _replace_pattern(query, clause.start, match, transformed_node.render()), proof
 
 
-def _apply_pattern_order(query: str, certificate: SafetyCertificate) -> str:
+def _apply_pattern_order(query: str, certificate: SafetyCertificate):
     clause, match = _match_at_certificate(query, certificate)
     component_index = _component_index(certificate)
     if not isinstance(match.pattern, PatternList) or match.pattern.separator != "comma" or len(match.pattern.atoms) < 2:
@@ -165,29 +207,29 @@ def _apply_pattern_order(query: str, certificate: SafetyCertificate) -> str:
     other = (component_index + 1) % len(atoms)
     atoms[component_index], atoms[other] = atoms[other], atoms[component_index]
     transformed = replace(match.pattern, atoms=tuple(atoms), text="")
-    prove_pattern_list_order(match.pattern, transformed)
-    return _replace_pattern(query, clause.start, match, transformed.render())
+    proof = prove_pattern_list_order(match.pattern, transformed)
+    return _replace_pattern(query, clause.start, match, transformed.render()), proof
 
 
-def _apply_node_order(query: str, certificate: SafetyCertificate) -> str:
+def _apply_node_order(query: str, certificate: SafetyCertificate):
     clause, match = _match_at_certificate(query, certificate)
     component_index = _component_index(certificate)
     atom = _component(match.pattern, component_index)
     if not isinstance(atom, EdgePattern) or atom.direction != "undirected":
         raise RuleNotApplicable("node order requires a certified undirected edge component")
     transformed_atom = replace(atom, left=atom.right, right=atom.left, text="")
-    prove_node_order(atom, transformed_atom)
+    proof = prove_node_order(atom, transformed_atom)
     transformed_pattern = _replace_component(match.pattern, component_index, transformed_atom)
-    return _replace_pattern(query, clause.start, match, transformed_pattern.render())
+    return _replace_pattern(query, clause.start, match, transformed_pattern.render()), proof
 
 
-def _apply_label_order(query: str, certificate: SafetyCertificate) -> str:
+def _apply_label_order(query: str, certificate: SafetyCertificate):
     clause, match = _match_at_certificate(query, certificate)
     component_index = _component_index(certificate)
     atom = _component(match.pattern, component_index)
     transformed_atom = _reverse_first_label_list(atom)
     transformed_pattern = _replace_component(match.pattern, component_index, transformed_atom)
-    prove_pattern_equivalence(
+    proof = prove_pattern_equivalence(
         match.pattern,
         transformed_pattern,
         theorem="NodeLabelIntersectionCommutativity",
@@ -195,7 +237,7 @@ def _apply_label_order(query: str, certificate: SafetyCertificate) -> str:
         premises=("the unique static label set is unchanged", "variables and properties are unchanged"),
         invariant="label conjunction order is unobservable",
     )
-    return _replace_pattern(query, clause.start, match, transformed_pattern.render())
+    return _replace_pattern(query, clause.start, match, transformed_pattern.render()), proof
 
 
 def _reverse_first_label_list(atom: object) -> object:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 
@@ -47,6 +49,7 @@ class SafetyCertificate:
     ast_path: str
     capability_hash: str
     semantic_proof_hash: str
+    semantic_proof_template_hash: str = ""
     variables_in_scope: tuple[str, ...] = ()
     expression_type: str = ""
     nullability: str = ""
@@ -69,7 +72,11 @@ class SafetyCertificate:
             if overlap:
                 raise TypeError(f"multiple values for certificate fields: {sorted(overlap)}")
             kwargs = {**dict(zip(positional_fields, args, strict=True)), **kwargs}
-        allowed = set(_CANONICAL_CERTIFICATE_FIELDS) | set(_LEGACY_CERTIFICATE_FIELDS)
+        allowed = (
+            set(_CANONICAL_CERTIFICATE_FIELDS)
+            | set(_LEGACY_CERTIFICATE_FIELDS)
+            | {"semantic_proof_template_hash"}
+        )
         unexpected = sorted(set(kwargs) - allowed)
         if unexpected:
             raise TypeError(f"unexpected certificate fields: {unexpected}")
@@ -84,6 +91,7 @@ class SafetyCertificate:
             "ast_path": "",
             "capability_hash": "",
             "semantic_proof_hash": "",
+            "semantic_proof_template_hash": "",
             "variables_in_scope": (),
             "expression_type": "",
             "nullability": "",
@@ -145,11 +153,20 @@ class SafetyCertificate:
             "submit_eligible": rule.submit_eligible,
             "proof_id": rule.proof_id,
             "proof_version": rule.proof_version,
-            "semantic_proof_hash": _semantic_proof_hash(rule, self.site_class),
         }
         for name, value in expected.items():
             if getattr(self, name) != value:
                 raise ValueError(f"certificate {name} does not match canonical rule facts")
+        template_hash = _semantic_proof_hash(rule, self.site_class)
+        if self.semantic_proof_template_hash:
+            if self.semantic_proof_template_hash != template_hash:
+                raise ValueError("certificate semantic proof template hash does not match canonical rule facts")
+            if not _sha256_hex(self.semantic_proof_hash):
+                raise ValueError("certificate bound semantic proof hash must be SHA-256")
+        else:
+            if self.semantic_proof_hash != template_hash:
+                raise ValueError("unbound certificate semantic proof hash must match canonical rule facts")
+            object.__setattr__(self, "semantic_proof_template_hash", template_hash)
         if self.preconditions and self.preconditions != rule.purity_requirements:
             raise ValueError("certificate preconditions do not match canonical rule facts")
 
@@ -183,12 +200,17 @@ class SafetyCertificate:
             "proof_version": rule.proof_version,
             "site_class": site_class,
             "semantic_proof_hash": _semantic_proof_hash(rule, site_class),
+            "semantic_proof_template_hash": _semantic_proof_hash(rule, site_class),
         }
         for name, value in expected_new_facts.items():
             current = getattr(self, name)
             if current is not None and current != "" and current != value:
                 raise ValueError(f"legacy certificate {name} conflicts with the canonical rule")
             object.__setattr__(self, name, value)
+
+    @property
+    def proof_bound(self) -> bool:
+        return self.semantic_proof_hash != self.semantic_proof_template_hash
 
     def _validate_site(self, rule: RuleSpec, site_class: str) -> None:
         if site_class not in rule.allowed_site_classes:
@@ -357,6 +379,132 @@ def _semantic_proof_hash(rule: RuleSpec, site_class: str) -> str:
         site_class,
     )
     return sha256(repr(facts).encode("utf-8")).hexdigest()
+
+
+_SEMANTIC_PROOF_FIELDS = frozenset(
+    {
+        "ast_path",
+        "canonical_rule_id",
+        "family",
+        "fragment",
+        "invariant",
+        "original_ra",
+        "premises",
+        "proof_id",
+        "proof_version",
+        "site_class",
+        "submit_eligible",
+        "theorem",
+        "tier",
+        "transformed_ra",
+    }
+)
+
+
+def bind_semantic_proof(
+    rule: RuleSpec,
+    certificate: SafetyCertificate,
+    proof: Mapping[str, object],
+) -> tuple[dict[str, object], SafetyCertificate]:
+    if set(proof) != {
+        "theorem", "fragment", "premises", "invariant", "original_ra", "transformed_ra"
+    }:
+        raise ValueError("engine semantic proof metadata does not match the strict schema")
+    bound = {
+        "ast_path": certificate.ast_path,
+        "canonical_rule_id": rule.canonical_rule_id,
+        "family": rule.family.value,
+        "fragment": proof["fragment"],
+        "invariant": proof["invariant"],
+        "original_ra": proof["original_ra"],
+        "premises": proof["premises"],
+        "proof_id": rule.proof_id,
+        "proof_version": rule.proof_version,
+        "site_class": certificate.site_class,
+        "submit_eligible": rule.submit_eligible,
+        "theorem": proof["theorem"],
+        "tier": rule.tier.value,
+        "transformed_ra": proof["transformed_ra"],
+    }
+    proof_hash = canonical_semantic_proof_hash(bound)
+    signed = SafetyCertificate(
+        canonical_rule_id=rule.canonical_rule_id,
+        family=rule.family.value,
+        tier=rule.tier.value,
+        submit_eligible=rule.submit_eligible,
+        proof_id=rule.proof_id,
+        proof_version=rule.proof_version,
+        site_class=certificate.site_class,
+        ast_path=certificate.ast_path,
+        capability_hash=certificate.capability_hash,
+        semantic_proof_hash=proof_hash,
+        semantic_proof_template_hash=certificate.semantic_proof_template_hash,
+        rule_id=rule.rule_id,
+        variables_in_scope=certificate.variables_in_scope,
+        expression_type=certificate.expression_type,
+        nullability=certificate.nullability,
+        clause_context=certificate.clause_context,
+        preconditions=rule.purity_requirements,
+    )
+    validate_bound_semantic_proof(rule, signed, bound)
+    return bound, signed
+
+
+def validate_bound_semantic_proof(
+    rule: RuleSpec,
+    certificate: SafetyCertificate,
+    proof: Mapping[str, object],
+) -> None:
+    if set(proof) != _SEMANTIC_PROOF_FIELDS:
+        raise ValueError("bound semantic proof metadata does not match the strict schema")
+    expected = {
+        "ast_path": certificate.ast_path,
+        "canonical_rule_id": rule.canonical_rule_id,
+        "family": rule.family.value,
+        "proof_id": rule.proof_id,
+        "proof_version": rule.proof_version,
+        "site_class": certificate.site_class,
+        "submit_eligible": rule.submit_eligible,
+        "tier": rule.tier.value,
+    }
+    if any(proof.get(name) != value for name, value in expected.items()):
+        raise ValueError("bound semantic proof identity conflicts with canonical rule facts")
+    for field in ("theorem", "fragment", "invariant"):
+        if not isinstance(proof.get(field), str) or not proof[field]:
+            raise ValueError(f"bound semantic proof {field} must be non-empty")
+    premises = proof.get("premises")
+    if not isinstance(premises, list | tuple) or not premises or not all(
+        isinstance(item, str) and item for item in premises
+    ):
+        raise ValueError("bound semantic proof premises must be non-empty strings")
+    for field in ("original_ra", "transformed_ra"):
+        if not isinstance(proof.get(field), list | tuple) or not proof[field]:
+            raise ValueError(f"bound semantic proof {field} must be non-empty")
+    if certificate.semantic_proof_template_hash != _semantic_proof_hash(rule, certificate.site_class):
+        raise ValueError("certificate semantic proof template does not match canonical rule facts")
+    if not certificate.proof_bound:
+        raise ValueError("certificate is not bound to an actual semantic proof")
+    if certificate.semantic_proof_hash != canonical_semantic_proof_hash(proof):
+        raise ValueError("certificate semantic proof hash does not bind the supplied proof")
+
+
+def canonical_semantic_proof_hash(proof: Mapping[str, object]) -> str:
+    payload = json.dumps(
+        dict(proof),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _sha256_hex(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _pattern_components(pattern: object) -> tuple[object, ...]:

@@ -79,6 +79,10 @@ from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, Ru
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
 from graph_sym_perf.transforms.provider import CoreRulePairProvider
 from graph_sym_perf.transforms.rule_models import RuleRegistry
+from graph_sym_perf.transforms.safety_points import (
+    SafetyCertificate as TransformSafetyCertificate,
+    canonical_semantic_proof_hash,
+)
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.models import (
     CandidateBundle,
@@ -93,7 +97,11 @@ from graph_sym_perf.workload.models import (
     PairProposal,
     PairValidation,
 )
-from graph_sym_perf.workload.rule_pairs import RulePairFactory
+from graph_sym_perf.workload.rule_pairs import (
+    RulePairFactory,
+    certified_pair_hash,
+    validate_certified_pair,
+)
 from graph_sym_perf.workload.registry import AcceptedCorpusRegistry
 
 
@@ -356,34 +364,135 @@ class RuntimeFirstShardWorker:
             attempt_dir = _next_entry_attempt_dir(entry_dir)
             attempt_dir.mkdir(parents=True, exist_ok=False)
             self._attempt_dir = attempt_dir
+        progress_path = entry_dir / "acceptance_progress.json"
+        progress = _load_entry_progress(progress_path, entry=entry)
+        prior_elapsed = float(progress["elapsed_seconds"])
         started = self._clock()
-        deadline = started + entry.max_entry_runtime_seconds
-        if self._clock() >= deadline:
+        deadline = started + max(0.0, entry.max_entry_runtime_seconds - prior_elapsed)
+        if prior_elapsed >= entry.max_entry_runtime_seconds or self._clock() >= deadline:
             return self._finish_entry(
                 entry,
                 attempt_dir,
                 terminal_state=EntryState.RESOURCE_EXHAUSTED,
                 generated=None,
+                accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+                generated_seeds=int(progress["attempted_query_records"]),
+                rejects=dict(progress["reject_counts"]),
             )
 
         generation_lease = self._attempt_context.generation_lease() if self._attempt_context else nullcontext()
-        with generation_lease:
-            task_identity = canonical_hash(to_jsonable(entry))
-            generation_path = entry_dir / "generation_corpus.json"
-            generated = _load_generation_corpus(generation_path, task_identity=task_identity)
-            if generated is None:
-                generated = self._generation_runner(entry, attempt_dir / "gdsmith_raw")
-                _seal_generation_corpus(generation_path, task_identity=task_identity, generated=generated)
+        try:
+            with generation_lease:
+                task_identity = canonical_hash(to_jsonable(entry))
+                generation_path = entry_dir / "generation_corpus.json"
+                generated = _load_generation_corpus(generation_path, task_identity=task_identity)
+                if generated is None:
+                    generated = self._generation_runner(entry, attempt_dir / "gdsmith_raw")
+                    _seal_generation_corpus(generation_path, task_identity=task_identity, generated=generated)
+        except WorkerFailure as exc:
+            if _entry_infrastructure_error_kind(exc) is None:
+                raise
+            _persist_entry_progress(
+                progress_path,
+                entry=entry,
+                prior_elapsed=prior_elapsed,
+                attempt_started=started,
+                now=self._clock(),
+                last_query_ordinal=int(progress["last_query_ordinal"]),
+                rejects=dict(progress["reject_counts"]),
+                accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+            )
+            return self._finish_entry(
+                entry,
+                attempt_dir,
+                terminal_state=EntryState.INFRASTRUCTURE_FAILED,
+                generated=None,
+                infrastructure_error_kind=exc.kind,
+                infrastructure_reason=str(exc),
+            )
+        except (MemoryError, OSError, AdapterError) as exc:
+            _persist_entry_progress(
+                progress_path,
+                entry=entry,
+                prior_elapsed=prior_elapsed,
+                attempt_started=started,
+                now=self._clock(),
+                last_query_ordinal=int(progress["last_query_ordinal"]),
+                rejects=dict(progress["reject_counts"]),
+                accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+            )
+            return self._finish_entry(
+                entry,
+                attempt_dir,
+                terminal_state=EntryState.INFRASTRUCTURE_FAILED,
+                generated=None,
+                infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
+                infrastructure_reason=str(exc),
+            )
         if self._clock() >= deadline:
+            _persist_entry_progress(
+                progress_path,
+                entry=entry,
+                prior_elapsed=prior_elapsed,
+                attempt_started=started,
+                now=self._clock(),
+                last_query_ordinal=int(progress["last_query_ordinal"]),
+                rejects=dict(progress["reject_counts"]),
+                accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+            )
             return self._finish_entry(
                 entry,
                 attempt_dir,
                 terminal_state=EntryState.RESOURCE_EXHAUSTED,
                 generated=generated,
+                accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+                generated_seeds=int(progress["attempted_query_records"]),
+                rejects=dict(progress["reject_counts"]),
             )
 
         graph_hash = _graph_snapshot_hash(generated.graph_statements)
-        adapter = self._adapter_factory(entry)
+        try:
+            adapter = self._adapter_factory(entry)
+        except WorkerFailure as exc:
+            if _entry_infrastructure_error_kind(exc) is None:
+                raise
+            _persist_entry_progress(
+                progress_path,
+                entry=entry,
+                prior_elapsed=prior_elapsed,
+                attempt_started=started,
+                now=self._clock(),
+                last_query_ordinal=int(progress["last_query_ordinal"]),
+                rejects=dict(progress["reject_counts"]),
+                accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+            )
+            return self._finish_entry(
+                entry,
+                attempt_dir,
+                terminal_state=EntryState.INFRASTRUCTURE_FAILED,
+                generated=generated,
+                infrastructure_error_kind=exc.kind,
+                infrastructure_reason=str(exc),
+            )
+        except (MemoryError, OSError, AdapterError) as exc:
+            _persist_entry_progress(
+                progress_path,
+                entry=entry,
+                prior_elapsed=prior_elapsed,
+                attempt_started=started,
+                now=self._clock(),
+                last_query_ordinal=int(progress["last_query_ordinal"]),
+                rejects=dict(progress["reject_counts"]),
+                accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+            )
+            return self._finish_entry(
+                entry,
+                attempt_dir,
+                terminal_state=EntryState.INFRASTRUCTURE_FAILED,
+                generated=generated,
+                infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
+                infrastructure_reason=str(exc),
+            )
         proxy = AdapterQueryProxy(
             adapter,
             attempt_dir=attempt_dir,
@@ -397,10 +506,21 @@ class RuntimeFirstShardWorker:
         health_epoch = DBMSHealthEpoch(None, reason="not_loaded")
         outcome: dict[str, object] = {
             "accepted": (),
-            "accepted_hashes": (),
-            "generated_seeds": 0,
-            "rejects": {},
-            "rule_stats": {"accepted": {}, "not_applicable": {}},
+            "accepted_hashes": tuple(progress["accepted_pair_hashes"]),
+            "generated_seeds": int(progress["attempted_query_records"]),
+            "rejects": dict(progress["reject_counts"]),
+            "rule_stats": {
+                "accepted": (
+                    {entry.rule_id: len(progress["accepted_pair_hashes"])}
+                    if progress["accepted_pair_hashes"]
+                    else {}
+                ),
+                "not_applicable": (
+                    {entry.rule_id: int(dict(progress["reject_counts"]).get("RULE_NOT_APPLICABLE", 0))}
+                    if dict(progress["reject_counts"]).get("RULE_NOT_APPLICABLE")
+                    else {}
+                ),
+            },
             "terminal_state": EntryState.INFRASTRUCTURE_FAILED,
         }
         measurement_lease = self._attempt_context.measurement_lease() if self._attempt_context else nullcontext()
@@ -451,6 +571,10 @@ class RuntimeFirstShardWorker:
                     ),
                     dbms_fingerprint=fingerprint.value,
                     deadline=deadline,
+                    progress_path=progress_path,
+                    progress=progress,
+                    attempt_started=started,
+                    prior_elapsed=prior_elapsed,
                 )
                 if outcome["terminal_state"] is not EntryState.INFRASTRUCTURE_FAILED:
                     final_fingerprint = _adapter_dbms_fingerprint(proxy)
@@ -462,6 +586,7 @@ class RuntimeFirstShardWorker:
                         or final_epoch.value != health_epoch.value
                     ):
                         outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+                        outcome["infrastructure_error_kind"] = ErrorKind.INFRASTRUCTURE_ERROR
                         outcome["infrastructure_reason"] = "DBMS fingerprint or health epoch changed"
                     elif graph_manifest is not None:
                         try:
@@ -477,6 +602,7 @@ class RuntimeFirstShardWorker:
                             ) from exc
                         if final_graph != graph_manifest:
                             outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+                            outcome["infrastructure_error_kind"] = ErrorKind.INFRASTRUCTURE_ERROR
                             outcome["infrastructure_reason"] = "observed graph manifest drifted during acceptance"
         except WorkerFailure as exc:
             if exc.kind in {
@@ -485,14 +611,35 @@ class RuntimeFirstShardWorker:
                 ErrorKind.INFRASTRUCTURE_ERROR,
             }:
                 outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+                outcome["infrastructure_error_kind"] = exc.kind
                 outcome["infrastructure_reason"] = str(exc)
             else:
                 raise
-        except (OSError, AdapterError) as exc:
+        except (MemoryError, OSError, AdapterError) as exc:
             outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+            outcome["infrastructure_error_kind"] = ErrorKind.INFRASTRUCTURE_ERROR
             outcome["infrastructure_reason"] = str(exc)
         finally:
-            adapter.close()
+            try:
+                adapter.close()
+            except (MemoryError, OSError, AdapterError) as exc:
+                outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
+                outcome["infrastructure_error_kind"] = ErrorKind.INFRASTRUCTURE_ERROR
+                outcome["infrastructure_reason"] = str(exc)
+
+        outcome_generated_seeds = int(outcome["generated_seeds"])
+        outcome_rejects = dict(outcome["rejects"])
+        outcome_accepted_hashes = tuple(outcome["accepted_hashes"])
+        _persist_entry_progress(
+            progress_path,
+            entry=entry,
+            prior_elapsed=prior_elapsed,
+            attempt_started=started,
+            now=self._clock(),
+            last_query_ordinal=outcome_generated_seeds,
+            rejects=outcome_rejects,
+            accepted_hashes=outcome_accepted_hashes,
+        )
 
         return self._finish_entry(
             entry,
@@ -506,6 +653,7 @@ class RuntimeFirstShardWorker:
             graph_manifest=graph_manifest,
             dbms_fingerprint=fingerprint,
             health_epoch=health_epoch,
+            infrastructure_error_kind=outcome.get("infrastructure_error_kind"),
             infrastructure_reason=outcome.get("infrastructure_reason"),
         )
 
@@ -519,14 +667,20 @@ class RuntimeFirstShardWorker:
         graph_snapshot_hash: str,
         dbms_fingerprint: str,
         deadline: float,
+        progress_path: Path,
+        progress: Mapping[str, object],
+        attempt_started: float,
+        prior_elapsed: float,
     ) -> dict[str, object]:
         factory = RulePairFactory(RuleRegistry.default())
         dialect = _dialect_for(entry.target)
         replayable = getattr(adapter, "gdsmith_query_is_replayable", gdsmith_read_query_is_replayable)
         max_rows = int(self.spec.validation["max_result_rows"])
-        rejects: Counter[str] = Counter()
-        not_applicable = 0
-        generated_seeds = 0
+        rejects: Counter[str] = Counter(dict(progress["reject_counts"]))
+        not_applicable = rejects["RULE_NOT_APPLICABLE"]
+        last_query_ordinal = int(progress["last_query_ordinal"])
+        generated_seeds = int(progress["attempted_query_records"])
+        infrastructure_error_kind: ErrorKind | None = None
         infrastructure_reason: str | None = None
         records_path = entry_dir / "accepted_pairs.jsonl"
         _ensure_jsonl(records_path)
@@ -535,17 +689,44 @@ class RuntimeFirstShardWorker:
             entry=entry,
             graph_snapshot_hash=graph_snapshot_hash,
             dbms_fingerprint=dbms_fingerprint,
+            source_queries=queries,
         )
+        persisted_accepted_hashes = set(progress["accepted_pair_hashes"])
+        if progress_path.exists() and persisted_accepted_hashes != accepted_hashes:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "acceptance progress does not match durable accepted pair records",
+            )
+
+        def persist_progress() -> None:
+            _persist_entry_progress(
+                progress_path,
+                entry=entry,
+                prior_elapsed=prior_elapsed,
+                attempt_started=attempt_started,
+                now=self._clock(),
+                last_query_ordinal=last_query_ordinal,
+                rejects=rejects,
+                accepted_hashes=tuple(sorted(accepted_hashes)),
+            )
+
+        def complete_query_record(ordinal: int) -> None:
+            nonlocal generated_seeds, last_query_ordinal
+            last_query_ordinal = ordinal
+            generated_seeds = ordinal
+            persist_progress()
+
         if len(accepted_hashes) > entry.accepted_pair_quota:
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "durable accepted pairs exceed the immutable entry quota",
             )
         if len(accepted_hashes) == entry.accepted_pair_quota:
+            persist_progress()
             return {
                 "accepted_hashes": tuple(sorted(accepted_hashes)),
-                "generated_seeds": 0,
-                "rejects": {},
+                "generated_seeds": generated_seeds,
+                "rejects": dict(sorted(rejects.items())),
                 "rule_stats": {
                     "accepted": {entry.rule_id: len(accepted_hashes)},
                     "not_applicable": {},
@@ -553,16 +734,12 @@ class RuntimeFirstShardWorker:
                 "terminal_state": EntryState.BUILDING_ACCEPTED_PAIRS,
             }
 
-        for ordinal in range(1, entry.max_generated_seed_budget + 1):
+        final_ordinal = min(len(queries), entry.max_generated_seed_budget)
+        for ordinal in range(last_query_ordinal + 1, final_ordinal + 1):
+            query = queries[ordinal - 1]
             if self._clock() >= deadline:
                 state = EntryState.RESOURCE_EXHAUSTED
                 break
-            generated_seeds = ordinal
-            if ordinal > len(queries):
-                rejects["RULE_NOT_APPLICABLE"] += 1
-                not_applicable += 1
-                continue
-            query = queries[ordinal - 1]
             build = factory.build(query, entry, entry.target)
             if build.quarantine:
                 _write_entry_quarantine(
@@ -573,6 +750,7 @@ class RuntimeFirstShardWorker:
                     reason=build.reject_code or "RULE_INVARIANT_MISMATCH",
                     transform_metadata={},
                 )
+                complete_query_record(ordinal)
                 state = EntryState.QUARANTINED
                 break
             if build.pair is None:
@@ -580,6 +758,7 @@ class RuntimeFirstShardWorker:
                 rejects[reason] += 1
                 if reason == "RULE_NOT_APPLICABLE":
                     not_applicable += 1
+                complete_query_record(ordinal)
                 continue
             pair = build.pair
             left_query = PortableQuery(pair.query_a)
@@ -588,14 +767,18 @@ class RuntimeFirstShardWorker:
             right_decision = dialect.check(right_query)
             if left_decision.kind is DecisionKind.REJECT:
                 rejects[f"DIALECT_{left_decision.reason_code.value}"] += 1
+                complete_query_record(ordinal)
                 continue
             if right_decision.kind is DecisionKind.REJECT:
                 rejects[f"DIALECT_{right_decision.reason_code.value}"] += 1
+                complete_query_record(ordinal)
                 continue
             if not replayable(pair.query_a) or not replayable(pair.query_b):
                 rejects["DIALECT_REPLAY_REJECT"] += 1
+                complete_query_record(ordinal)
                 continue
             if pair.pair_hash in accepted_hashes:
+                complete_query_record(ordinal)
                 continue
             if self._clock() >= deadline:
                 state = EntryState.RESOURCE_EXHAUSTED
@@ -620,16 +803,21 @@ class RuntimeFirstShardWorker:
                 )
             except (QueryTimeoutError, TimeoutError):
                 rejects["QUERY_TIMEOUT"] += 1
+                complete_query_record(ordinal)
                 continue
             except Exception as exc:
                 if _is_entry_infrastructure_exception(exc):
                     state = EntryState.INFRASTRUCTURE_FAILED
+                    infrastructure_error_kind = _entry_infrastructure_error_kind(exc)
                     infrastructure_reason = str(exc)
+                    persist_progress()
                     break
                 rejects["QUERY_EXECUTION_ERROR"] += 1
+                complete_query_record(ordinal)
                 continue
             if _is_truncated(left, max_rows) or _is_truncated(right, max_rows):
                 rejects["RESULT_TRUNCATED"] += 1
+                complete_query_record(ordinal)
                 continue
             equivalence = compare_typed_results(
                 left.rows,
@@ -640,6 +828,7 @@ class RuntimeFirstShardWorker:
                 if not equivalence.complete_result:
                     reason = equivalence.reason_codes[0] if equivalence.reason_codes else "typed_equivalence_incomplete"
                     rejects[reason.upper()] += 1
+                    complete_query_record(ordinal)
                     continue
                 if entry.tier == "core":
                     _write_entry_quarantine(
@@ -650,9 +839,11 @@ class RuntimeFirstShardWorker:
                         reason="TYPED_EQUIVALENCE_FAILED",
                         transform_metadata=pair.transform_metadata,
                     )
+                    complete_query_record(ordinal)
                     state = EntryState.QUARANTINED
                     break
                 rejects["TYPED_EQUIVALENCE_FAILED"] += 1
+                complete_query_record(ordinal)
                 continue
             accepted_hashes.add(pair.pair_hash)
             _append_jsonl(
@@ -660,7 +851,9 @@ class RuntimeFirstShardWorker:
                 {
                     "certificate": to_jsonable(asdict(pair.certificate)),
                     "dbms_fingerprint": dbms_fingerprint,
+                    "entry_id": entry.entry_id,
                     "equivalence": "complete_typed_equivalent",
+                    "family": entry.family,
                     "graph_snapshot_hash": graph_snapshot_hash,
                     "pair_hash": pair.pair_hash,
                     "parameters": to_jsonable(pair.parameters),
@@ -670,9 +863,13 @@ class RuntimeFirstShardWorker:
                     "query_hash": portable_ast_hash(pair.query_a),
                     "rule_id": entry.rule_id,
                     "semantic_proof_sha256": pair.transform_metadata["semantic_proof_sha256"],
+                    "site": pair.certificate.site_class,
+                    "stream": entry.stream.value,
+                    "tier": entry.tier,
                     "transform_metadata": to_jsonable(pair.transform_metadata),
                 },
             )
+            complete_query_record(ordinal)
             if len(accepted_hashes) == entry.accepted_pair_quota:
                 state = EntryState.BUILDING_ACCEPTED_PAIRS
                 break
@@ -688,6 +885,7 @@ class RuntimeFirstShardWorker:
             EntryState.INFRASTRUCTURE_FAILED,
         }:
             state = EntryState.UNDERFILLED
+        persist_progress()
         result: dict[str, object] = {
             "accepted_hashes": tuple(sorted(accepted_hashes)),
             "generated_seeds": generated_seeds,
@@ -699,6 +897,7 @@ class RuntimeFirstShardWorker:
             "terminal_state": state,
         }
         if infrastructure_reason is not None:
+            result["infrastructure_error_kind"] = infrastructure_error_kind
             result["infrastructure_reason"] = infrastructure_reason
         return result
 
@@ -716,20 +915,28 @@ class RuntimeFirstShardWorker:
         graph_manifest: GraphManifest | None = None,
         dbms_fingerprint: DBMSFingerprint | None = None,
         health_epoch: DBMSHealthEpoch | None = None,
+        infrastructure_error_kind: object | None = None,
         infrastructure_reason: object | None = None,
     ) -> dict[str, object]:
         state = terminal_state if isinstance(terminal_state, EntryState) else EntryState(str(terminal_state))
+        acceptance_complete = (
+            state is EntryState.BUILDING_ACCEPTED_PAIRS
+            and len(accepted_hashes) == entry.accepted_pair_quota
+        )
         summary: dict[str, object] = {
             "accepted_pair_hashes": list(accepted_hashes),
             "accepted_pairs": len(accepted_hashes),
             "accepted_pair_quota": entry.accepted_pair_quota,
             "acceptance_generated_seeds": generated_seeds,
+            "acceptance_invalidated": bool(
+                accepted_hashes and state is EntryState.INFRASTRUCTURE_FAILED
+            ),
             "acceptance_status": (
-                "complete" if len(accepted_hashes) == entry.accepted_pair_quota else "incomplete"
+                "complete" if acceptance_complete else "incomplete"
             ),
             "acceptance_stop_reason": (
                 "ACCEPTED_TARGET_REACHED"
-                if len(accepted_hashes) == entry.accepted_pair_quota
+                if acceptance_complete
                 else state.value.upper()
             ),
             "entry_id": entry.entry_id,
@@ -768,6 +975,12 @@ class RuntimeFirstShardWorker:
                 "value": health_epoch.value,
             }
         if infrastructure_reason:
+            kind = (
+                infrastructure_error_kind.value
+                if isinstance(infrastructure_error_kind, ErrorKind)
+                else str(infrastructure_error_kind or ErrorKind.INFRASTRUCTURE_ERROR.value)
+            )
+            summary["infrastructure_error_kind"] = kind
             summary["infrastructure_reason"] = str(infrastructure_reason)
         _atomic_write_json(attempt_dir / "summary.json", summary)
         return summary
@@ -1567,9 +1780,15 @@ class RuntimeFirstShardWorker:
             replayable_nonzero_exit = partial_corpus or query_record_limit_reached
             if result.returncode != 0 and not replayable_nonzero_exit:
                 reason = "raw artifact budget exceeded" if artifact_budget_reached else "process failure"
-                raise RuntimeError(f"GDsmith failed with code {result.returncode}: {reason}")
+                raise WorkerFailure(
+                    ErrorKind.INFRASTRUCTURE_ERROR,
+                    f"GDsmith failed with code {result.returncode}: {reason}",
+                )
             if replayable_nonzero_exit and not result.parsed.accepted_queries:
-                raise RuntimeError("GDsmith stopped without a replayable query")
+                raise WorkerFailure(
+                    ErrorKind.INFRASTRUCTURE_ERROR,
+                    "GDsmith stopped without a replayable query",
+                )
             return tuple(record.statement for record in result.parsed.accepted_queries)
 
         corpus = GdsmithGenerator(invoke).generate(
@@ -1703,8 +1922,7 @@ def _generation_query_limit(
     spec: ExperimentSpec | ValidatedYieldExperimentSpec,
 ) -> int:
     if isinstance(task, RulePlanEntry):
-        max_generated_seeds = task.max_generated_seed_budget
-        accepted_query_pairs = task.accepted_pair_quota
+        return task.max_generated_seed_budget
     elif isinstance(task, ShardTask):
         max_generated_seeds = task.max_generated_seeds
         accepted_query_pairs = task.accepted_query_pairs
@@ -1773,8 +1991,11 @@ def _validated_entry_accepted_hashes(
     entry: RulePlanEntry,
     graph_snapshot_hash: str,
     dbms_fingerprint: str,
+    source_queries: tuple[str, ...],
 ) -> set[str]:
     accepted: set[str] = set()
+    rule = RuleRegistry.default().get(entry.rule_id)
+    source_query_set = set(source_queries)
     for record in _read_jsonl(path):
         pair_hash = record.get("pair_hash")
         query_a = record.get("query_a")
@@ -1783,32 +2004,67 @@ def _validated_entry_accepted_hashes(
         certificate = record.get("certificate")
         transform_metadata = record.get("transform_metadata")
         semantic_proof_sha256 = record.get("semantic_proof_sha256")
-        if (
-            not isinstance(pair_hash, str)
-            or len(pair_hash) != 64
-            or not isinstance(query_a, str)
-            or not query_a
-            or not isinstance(query_b, str)
-            or not query_b
-            or query_a == query_b
-            or not isinstance(parameters, Mapping)
-            or not isinstance(certificate, Mapping)
-            or certificate.get("canonical_rule_id") != entry.rule_id
-            or certificate.get("proof_version") != entry.proof_version
-            or not isinstance(transform_metadata, Mapping)
-            or transform_metadata.get("semantic_proof_sha256") != semantic_proof_sha256
-            or not isinstance(semantic_proof_sha256, str)
-            or len(semantic_proof_sha256) != 64
-            or record.get("rule_id") != entry.rule_id
-            or record.get("proof_version") != entry.proof_version
-            or record.get("graph_snapshot_hash") != graph_snapshot_hash
-            or record.get("dbms_fingerprint") != dbms_fingerprint
-            or record.get("equivalence") != "complete_typed_equivalent"
-        ):
+        try:
+            if (
+                not isinstance(pair_hash, str)
+                or len(pair_hash) != 64
+                or not isinstance(query_a, str)
+                or not query_a
+                or query_a not in source_query_set
+                or not isinstance(query_b, str)
+                or not query_b
+                or query_a == query_b
+                or not isinstance(parameters, Mapping)
+                or not isinstance(certificate, Mapping)
+                or not isinstance(transform_metadata, Mapping)
+                or not isinstance(semantic_proof_sha256, str)
+                or len(semantic_proof_sha256) != 64
+                or record.get("entry_id") != entry.entry_id
+                or record.get("rule_id") != entry.rule_id
+                or record.get("family") != entry.family
+                or record.get("tier") != entry.tier
+                or record.get("stream") != entry.stream.value
+                or record.get("proof_version") != entry.proof_version
+                or record.get("graph_snapshot_hash") != graph_snapshot_hash
+                or record.get("dbms_fingerprint") != dbms_fingerprint
+                or record.get("equivalence") != "complete_typed_equivalent"
+            ):
+                raise ValueError("record identity does not match the immutable entry")
+            certificate_payload = dict(certificate)
+            for tuple_field in ("variables_in_scope", "preconditions"):
+                value = certificate_payload.get(tuple_field)
+                if isinstance(value, list):
+                    certificate_payload[tuple_field] = tuple(value)
+            rebuilt_certificate = TransformSafetyCertificate(**certificate_payload)
+            proof = transform_metadata.get("semantic_proof")
+            embedded_certificate = transform_metadata.get("safety_certificate")
+            if not isinstance(proof, Mapping) or not isinstance(embedded_certificate, Mapping):
+                raise ValueError("record is missing its signed proof evidence")
+            if dict(embedded_certificate) != dict(certificate):
+                raise ValueError("embedded and top-level certificates differ")
+            proof_hash = canonical_semantic_proof_hash(proof)
+            if (
+                rebuilt_certificate.semantic_proof_hash != proof_hash
+                or semantic_proof_sha256 != proof_hash
+                or transform_metadata.get("semantic_proof_sha256") != proof_hash
+                or record.get("site") != rebuilt_certificate.site_class
+                or record.get("query_hash") != portable_ast_hash(query_a)
+                or pair_hash
+                != certified_pair_hash(query_a, query_b, entry.rule_id, proof_hash)
+            ):
+                raise ValueError("record hashes do not bind the accepted pair")
+            validate_certified_pair(
+                rule,
+                query_a=query_a,
+                query_b=query_b,
+                certificate=rebuilt_certificate,
+                semantic_proof=proof,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "durable accepted pair is not bound to this RulePlanEntry",
-            )
+            ) from exc
         if pair_hash in accepted:
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -1819,26 +2075,24 @@ def _validated_entry_accepted_hashes(
 
 
 def _is_entry_infrastructure_exception(exc: BaseException) -> bool:
-    if isinstance(exc, (QueryTimeoutError, TimeoutError)):
-        return False
-    if isinstance(exc, OSError):
-        return True
-    message = str(exc).lower()
-    infrastructure_markers = (
-        "broken pipe",
-        "connection closed",
-        "connection lost",
-        "connection reset",
-        "connection refused",
-        "database unavailable",
-        "database shutdown",
-        "java heap space",
-        "out of memory",
-        "service unavailable",
-    )
-    if any(marker in message for marker in infrastructure_markers):
-        return True
-    return isinstance(exc, AdapterError) and not isinstance(exc, QueryExecutionError)
+    return _entry_infrastructure_error_kind(exc) is not None
+
+
+def _entry_infrastructure_error_kind(exc: BaseException) -> ErrorKind | None:
+    if isinstance(exc, (QueryTimeoutError, TimeoutError, QueryExecutionError)):
+        return None
+    if isinstance(exc, WorkerFailure):
+        return exc.kind if exc.kind in {
+            ErrorKind.DBMS_UNAVAILABLE,
+            ErrorKind.DBMS_CRASHED,
+            ErrorKind.DRIVER_TIMEOUT,
+            ErrorKind.WORKER_HUNG,
+            ErrorKind.WORKER_CRASHED,
+            ErrorKind.INFRASTRUCTURE_ERROR,
+        } else None
+    if isinstance(exc, (MemoryError, OSError, AdapterError)):
+        return ErrorKind.INFRASTRUCTURE_ERROR
+    return None
 
 
 def _write_entry_quarantine(
@@ -2030,6 +2284,86 @@ def _load_generation_corpus(path: Path, *, task_identity: str) -> GeneratedShard
     ):
         raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "generation corpus identity or hash is invalid")
     return GeneratedShard(tuple(graph), tuple(queries), metadata)
+
+
+def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, object]:
+    default: dict[str, object] = {
+        "schema_version": 1,
+        "entry_id": entry.entry_id,
+        "elapsed_seconds": 0.0,
+        "last_query_ordinal": 0,
+        "attempted_query_records": 0,
+        "reject_counts": {},
+        "accepted_pair_hashes": [],
+    }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return default
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "acceptance progress is unreadable") from exc
+    if not isinstance(payload, dict):
+        raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "acceptance progress is not an object")
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    elapsed = body.get("elapsed_seconds")
+    last_ordinal = body.get("last_query_ordinal")
+    attempted = body.get("attempted_query_records")
+    rejects = body.get("reject_counts")
+    accepted = body.get("accepted_pair_hashes")
+    valid_rejects = isinstance(rejects, dict) and all(
+        isinstance(key, str)
+        and key
+        and type(value) is int
+        and value >= 0
+        for key, value in rejects.items()
+    )
+    valid_accepted = isinstance(accepted, list) and all(
+        isinstance(value, str) and len(value) == 64 for value in accepted
+    ) and len(set(accepted)) == len(accepted)
+    if (
+        body.get("schema_version") != 1
+        or body.get("entry_id") != entry.entry_id
+        or payload.get("content_hash") != canonical_hash(body)
+        or type(elapsed) not in {int, float}
+        or elapsed < 0
+        or elapsed != elapsed
+        or type(last_ordinal) is not int
+        or last_ordinal < 0
+        or last_ordinal > entry.max_generated_seed_budget
+        or type(attempted) is not int
+        or attempted != last_ordinal
+        or not valid_rejects
+        or not valid_accepted
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "acceptance progress identity, hash, or counters are invalid",
+        )
+    return body
+
+
+def _persist_entry_progress(
+    path: Path,
+    *,
+    entry: RulePlanEntry,
+    prior_elapsed: float,
+    attempt_started: float,
+    now: float,
+    last_query_ordinal: int,
+    rejects: Mapping[str, int],
+    accepted_hashes: tuple[str, ...],
+) -> None:
+    elapsed = prior_elapsed + max(0.0, now - attempt_started)
+    body = {
+        "schema_version": 1,
+        "entry_id": entry.entry_id,
+        "elapsed_seconds": elapsed,
+        "last_query_ordinal": last_query_ordinal,
+        "attempted_query_records": last_query_ordinal,
+        "reject_counts": dict(sorted(rejects.items())),
+        "accepted_pair_hashes": list(sorted(accepted_hashes)),
+    }
+    _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
 
 
 def _adapter_dbms_fingerprint(adapter: Any) -> DBMSFingerprint:
