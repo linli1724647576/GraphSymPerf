@@ -88,11 +88,18 @@ def _install_valid_noise_stub(monkeypatch) -> None:
         reason_codes=(),
     )
     result = (noise, "f" * 64)
+    probe_hashes = tuple(f"{index:064x}" for index in range(1, 21))
+
+    def fixed_noise(*_args, **kwargs):
+        if kwargs["anchored_noise_floor_id"] is None:
+            kwargs["persist_intent"]("f" * 64, probe_hashes)
+        return result
+
     monkeypatch.setattr(worker_module, "_load_entry_noise", lambda *_args, **_kwargs: result)
     monkeypatch.setattr(
         worker_module,
         "_load_or_calibrate_entry_noise",
-        lambda *_args, **_kwargs: result,
+        fixed_noise,
     )
 
 
@@ -1280,6 +1287,189 @@ def test_noise_calibration_rejects_fewer_than_twenty_distinct_accepted_probes(tm
     assert not tuple(tmp_path.glob("entries/*/pair_runtime.jsonl"))
 
 
+def test_noise_artifact_freezes_exact_integer_samples_and_progress_anchor(tmp_path) -> None:
+    queries = tuple(
+        f"MATCH (n) WHERE n.id = {index} RETURN n"
+        for index in range(1, 21)
+    )
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=20,
+        max_generated_seed_budget=20,
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=queries,
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "stage1_complete"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    noise = json.loads((entry_dir / "noise_calibration.json").read_text(encoding="utf-8"))
+    assert len(noise["probe_pair_hashes"]) == 20
+    assert [item["pair_hash"] for item in noise["probe_samples_us"]] == noise[
+        "probe_pair_hashes"
+    ]
+    assert all(len(item["samples_us"]) == 10 for item in noise["probe_samples_us"])
+    assert all(
+        type(value) is int and value >= 0
+        for item in noise["probe_samples_us"]
+        for _order, a_us, b_us in item["samples_us"]
+        for value in (a_us, b_us)
+    )
+    assert not {"queries", "query_texts", "probe_query_texts"}.intersection(noise)
+    progress = json.loads((entry_dir / "acceptance_progress.json").read_text(encoding="utf-8"))
+    assert progress["noise_floor_id"] == noise["content_hash"]
+    assert progress["noise_intent"] is None
+
+
+def test_retry_recovers_only_an_exact_noise_artifact_intent_window(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    queries = tuple(
+        f"MATCH (n) WHERE n.id = {index} RETURN n"
+        for index in range(1, 21)
+    )
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=20,
+        max_generated_seed_budget=20,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=queries,
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    real_persist = worker_module._persist_entry_progress
+
+    class SimulatedNoiseAnchorCrash(BaseException):
+        pass
+
+    crashed = False
+
+    def crash_before_noise_anchor(path, **kwargs):
+        nonlocal crashed
+        if kwargs["noise_floor_id"] is not None and not kwargs["accepted_record_ledger"] and not crashed:
+            crashed = True
+            raise SimulatedNoiseAnchorCrash("noise artifact fsynced before progress anchor")
+        return real_persist(path, **kwargs)
+
+    monkeypatch.setattr(worker_module, "_persist_entry_progress", crash_before_noise_anchor)
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+
+    with pytest.raises(SimulatedNoiseAnchorCrash):
+        first(entry)
+
+    entry_dir = next(tmp_path.glob("entries/*"))
+    noise = json.loads((entry_dir / "noise_calibration.json").read_text(encoding="utf-8"))
+    crashed_progress = json.loads(
+        (entry_dir / "acceptance_progress.json").read_text(encoding="utf-8")
+    )
+    assert crashed_progress["noise_floor_id"] is None
+    assert crashed_progress["noise_intent"] == {
+        "noise_floor_id": noise["content_hash"],
+        "probe_pair_hashes": noise["probe_pair_hashes"],
+    }
+
+    monkeypatch.setattr(worker_module, "_persist_entry_progress", real_persist)
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("retry must use sealed corpus"),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    result = retry(entry)
+
+    assert result["terminal_state"] == "stage1_complete"
+    recovered = json.loads((entry_dir / "acceptance_progress.json").read_text(encoding="utf-8"))
+    assert recovered["noise_floor_id"] == noise["content_hash"]
+    assert recovered["noise_intent"] is None
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ("forged_summary", "replacement_probes", "raw_samples", "swapped_order"),
+)
+def test_retry_recomputes_noise_artifact_from_expected_probes_and_integer_samples(
+    tmp_path,
+    tamper,
+) -> None:
+    queries = tuple(
+        f"MATCH (n) WHERE n.id = {index} RETURN n"
+        for index in range(1, 21)
+    )
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=20,
+        max_generated_seed_budget=20,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=queries,
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "stage1_complete"
+    noise_path = next(tmp_path.glob("entries/*/noise_calibration.json"))
+    payload = json.loads(noise_path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    if tamper == "forged_summary":
+        body["calibration"]["p95_delta_ms"] = 100.0
+        body["calibration"]["p99_delta_ms"] = 0.0
+    elif tamper == "replacement_probes":
+        body["probe_pair_hashes"][0] = "0" * 64
+        body["probe_samples_us"][0]["pair_hash"] = "0" * 64
+    elif tamper == "raw_samples":
+        body["probe_samples_us"][0]["samples_us"][0][1] += 100_000
+        body["calibration"] = worker_module.to_jsonable(
+            asdict(
+                worker_module.summarize_aa_noise_samples(
+                    [value["samples_us"] for value in body["probe_samples_us"]]
+                )
+            )
+        )
+    else:
+        first_sample = body["probe_samples_us"][0]["samples_us"][0]
+        first_sample[0] = "BA" if first_sample[0] == "AB" else "AB"
+    noise_path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("retry must use sealed corpus"),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
 def test_invalid_stage1_measurement_never_becomes_an_accepted_record(tmp_path) -> None:
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
 
@@ -1723,7 +1913,7 @@ def test_task5_legacy_evidence_migrates_crash_safely_to_pair_runtime(tmp_path, m
         first(entry)
 
     migration_progress = json.loads((entry_dir / "acceptance_progress.json").read_text())
-    assert migration_progress["schema_version"] == 3
+    assert migration_progress["schema_version"] == 4
     assert migration_progress["evidence_identity"] == {
         "dbms_fingerprint": "a" * 64,
         "dbms_health_epoch": "e" * 64,
@@ -1933,6 +2123,197 @@ def test_retry_recovers_only_the_validated_single_record_crash_window(tmp_path, 
     assert progress["last_query_ordinal"] == 1
     assert progress["accepted_pair_hashes"] == [record["pair_hash"]]
     assert progress["pending_acceptances"] == []
+
+
+def test_progress_records_an_ordered_digest_ledger_for_every_runtime_append(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=2,
+        max_generated_seed_budget=2,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=(
+            "MATCH (n) WHERE n.id = 1 RETURN n",
+            "MATCH (n) WHERE n.id = 2 RETURN n",
+        ),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "stage1_complete"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    records = [
+        json.loads(line)
+        for line in (entry_dir / "pair_runtime.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    progress = json.loads((entry_dir / "acceptance_progress.json").read_text(encoding="utf-8"))
+    ledger = progress["accepted_record_ledger"]
+    assert [item["pair_hash"] for item in ledger] == [record["pair_hash"] for record in records]
+    assert [item["source_query_ordinal"] for item in ledger] == [1, 2]
+    assert [item["record_digest"] for item in ledger] == [
+        worker_module.canonical_record_digest(record) for record in records
+    ]
+    assert progress["accepted_pair_hashes"] == sorted(item["pair_hash"] for item in ledger)
+
+
+def test_retry_rejects_reordered_runtime_jsonl_even_when_every_record_is_valid(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=2,
+        max_generated_seed_budget=2,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=(
+            "MATCH (n) WHERE n.id = 1 RETURN n",
+            "MATCH (n) WHERE n.id = 2 RETURN n",
+        ),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+    records_path = next(tmp_path.glob("entries/*/pair_runtime.jsonl"))
+    lines = records_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    records_path.write_text("\n".join(reversed(lines)) + "\n", encoding="utf-8")
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ("missing_ledger", "duplicate_ledger", "digest_drift", "accepted_hash_mirror"),
+)
+def test_retry_rejects_runtime_ledger_corruption(
+    tmp_path,
+    monkeypatch,
+    corruption,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=2,
+        max_generated_seed_budget=2,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=(
+            "MATCH (n) WHERE n.id = 1 RETURN n",
+            "MATCH (n) WHERE n.id = 2 RETURN n",
+        ),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+    progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
+    payload = json.loads(progress_path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    if corruption == "missing_ledger":
+        body.pop("accepted_record_ledger", None)
+    elif corruption == "duplicate_ledger":
+        body["accepted_record_ledger"][1] = dict(body["accepted_record_ledger"][0])
+    elif corruption == "digest_drift":
+        body["accepted_record_ledger"][0]["record_digest"] = "0" * 64
+    else:
+        body["accepted_pair_hashes"] = body["accepted_pair_hashes"][:1]
+    progress_path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+def test_schema3_accepted_runtime_evidence_without_a_ledger_fails_closed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+    progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in progress.items() if key != "content_hash"}
+    body["schema_version"] = 3
+    for key in (
+        "accepted_record_ledger",
+        "noise_floor_id",
+        "noise_intent",
+    ):
+        body.pop(key)
+    progress_path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("retry must use sealed corpus"),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
 def test_retry_rejects_a_self_consistent_runtime_record_without_pending_intent(
@@ -2217,6 +2598,7 @@ def test_retry_treats_malformed_accepted_jsonl_as_evidence_integrity_failure(
         "noise_floor_id",
         "extra_field",
         "source_query_ordinal",
+        "self_consistent_samples",
     ),
 )
 def test_rule_entry_retry_recomputes_every_compact_runtime_binding(
@@ -2256,6 +2638,17 @@ def test_rule_entry_retry_recomputes_every_compact_runtime_binding(
         record["delta_over_noise"] = float("nan")
     elif tamper == "noise_floor_id":
         record["noise_floor_id"] = "0" * 64
+    elif tamper == "self_consistent_samples":
+        record["samples_us"] = [
+            [order, a_us + 100_000, b_us + 200_000]
+            for order, a_us, b_us in record["samples_us"]
+        ]
+        record.update(
+            worker_module.summarize_integer_samples(
+                [tuple(sample) for sample in record["samples_us"]],
+                noise_p99_ms=0.2,
+            )
+        )
     elif tamper == "extra_field":
         record["forged"] = "metadata"
     else:

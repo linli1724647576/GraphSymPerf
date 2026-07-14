@@ -203,10 +203,17 @@ def test_bool_and_sym_rule_entries_keep_independent_quota_and_statistics(
 ) -> None:
     noise = NoiseCalibration(True, 200, 0.1, 0.2, 0.0, 1.0, ())
     noise_result = (noise, "f" * 64)
+    probe_hashes = tuple(f"{index:064x}" for index in range(1, 21))
+
+    def fixed_noise(*_args, **kwargs):
+        if kwargs["anchored_noise_floor_id"] is None:
+            kwargs["persist_intent"]("f" * 64, probe_hashes)
+        return noise_result
+
     monkeypatch.setattr(
         worker_module,
         "_load_or_calibrate_entry_noise",
-        lambda *_args, **_kwargs: noise_result,
+        fixed_noise,
     )
     query = "MATCH (a:Node), (b:Node) WHERE a.id = 1 RETURN a.id, b.id"
     generated = GeneratedShard(

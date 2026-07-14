@@ -165,7 +165,9 @@ class CompactRuntimeStore:
 
     @property
     def records(self) -> tuple[dict[str, Any], ...]:
-        return tuple(dict(self._records[pair_hash]) for pair_hash in sorted(self._records))
+        # Dict insertion order is the physical JSONL append order loaded by
+        # ``_load_records``. Evidence recovery must never sort this sequence.
+        return tuple(dict(record) for record in self._records.values())
 
     def append(self, record: PairRuntimeRecord) -> None:
         payload = to_jsonable(asdict(record))

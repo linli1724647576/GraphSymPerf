@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
 import time
@@ -77,7 +76,10 @@ from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
 from graph_sym_perf.runtime.measurement import RuntimeHarness, paired_schedule
 from graph_sym_perf.runtime.models import EquivalentQueryPair, NoiseCalibration, RuntimePolicy, RuntimeVerdict
-from graph_sym_perf.runtime.noise import calibrate_aa_noise
+from graph_sym_perf.runtime.noise import (
+    collect_aa_noise_samples,
+    summarize_aa_noise_samples,
+)
 from graph_sym_perf.runtime.records import (
     ArtifactIntegrityError,
     ArtifactWriteError,
@@ -439,6 +441,9 @@ class RuntimeFirstShardWorker:
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
                 evidence_identity=progress["evidence_identity"],
                 stage1_intent=progress["stage1_intent"],
+                accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
+                noise_floor_id=progress["noise_floor_id"],
+                noise_intent=progress["noise_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -463,6 +468,9 @@ class RuntimeFirstShardWorker:
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
                 evidence_identity=progress["evidence_identity"],
                 stage1_intent=progress["stage1_intent"],
+                accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
+                noise_floor_id=progress["noise_floor_id"],
+                noise_intent=progress["noise_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -489,6 +497,9 @@ class RuntimeFirstShardWorker:
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
                 evidence_identity=progress["evidence_identity"],
                 stage1_intent=progress["stage1_intent"],
+                accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
+                noise_floor_id=progress["noise_floor_id"],
+                noise_intent=progress["noise_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -517,6 +528,9 @@ class RuntimeFirstShardWorker:
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
                 evidence_identity=progress["evidence_identity"],
                 stage1_intent=progress["stage1_intent"],
+                accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
+                noise_floor_id=progress["noise_floor_id"],
+                noise_intent=progress["noise_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -541,6 +555,9 @@ class RuntimeFirstShardWorker:
                 legacy_migration_sha256=progress["legacy_migration_sha256"],
                 evidence_identity=progress["evidence_identity"],
                 stage1_intent=progress["stage1_intent"],
+                accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
+                noise_floor_id=progress["noise_floor_id"],
+                noise_intent=progress["noise_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -724,6 +741,11 @@ class RuntimeFirstShardWorker:
             legacy_migration_sha256=outcome.get("legacy_migration_sha256"),
             evidence_identity=outcome.get("evidence_identity", progress["evidence_identity"]),
             stage1_intent=outcome.get("stage1_intent", progress["stage1_intent"]),
+            accepted_record_ledger=tuple(
+                outcome.get("accepted_record_ledger", progress["accepted_record_ledger"])
+            ),
+            noise_floor_id=outcome.get("noise_floor_id", progress["noise_floor_id"]),
+            noise_intent=outcome.get("noise_intent", progress["noise_intent"]),
         )
 
         return self._finish_entry(
@@ -795,6 +817,15 @@ class RuntimeFirstShardWorker:
             if progress["stage1_intent"] is not None
             else None
         )
+        accepted_record_ledger = [
+            dict(value) for value in progress["accepted_record_ledger"]
+        ]
+        noise_floor_id = progress["noise_floor_id"]
+        noise_intent = (
+            dict(progress["noise_intent"])
+            if progress["noise_intent"] is not None
+            else None
+        )
         pending = [dict(value) for value in progress["pending_acceptances"]]
         pending_by_hash = {str(value["pair_hash"]): value for value in pending}
         records_path = entry_dir / "pair_runtime.jsonl"
@@ -814,6 +845,20 @@ class RuntimeFirstShardWorker:
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "schema-v2 runtime evidence cannot be bound to a guessed DBMS health epoch",
             )
+        if loaded_schema == 3 and (
+            progress["accepted_pair_hashes"]
+            or store.count
+            or (entry_dir / "noise_calibration.json").exists()
+        ):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "schema-v3 accepted evidence has no ordered digest ledger or raw noise anchor",
+            )
+        acceptance_records = accepted_record_ledger + pending
+        expected_probe_hashes = tuple(
+            str(value["pair_hash"])
+            for value in _expected_noise_probe_records(acceptance_records)
+        )
         existing_noise: tuple[NoiseCalibration, str] | None = None
         if store.count:
             existing_noise = _load_entry_noise(
@@ -822,11 +867,17 @@ class RuntimeFirstShardWorker:
                 graph_snapshot_hash=graph_snapshot_hash,
                 dbms_fingerprint=dbms_fingerprint,
                 dbms_health_epoch=dbms_health_epoch,
+                expected_probe_hashes=expected_probe_hashes,
             )
             if existing_noise is None or existing_noise[0].p99_delta_ms is None:
                 raise WorkerFailure(
                     ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                     "pair_runtime records exist without valid bound noise evidence",
+                )
+            if noise_floor_id != existing_noise[1] or noise_intent is not None:
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "pair_runtime records are not bound to the anchored noise artifact",
                 )
         runtime_ordinals = _validate_runtime_records(
             store,
@@ -841,60 +892,24 @@ class RuntimeFirstShardWorker:
             dbms_fingerprint=dbms_fingerprint,
             dbms_health_epoch=dbms_health_epoch,
         )
-        accepted_hashes = set(store.pair_hashes)
-        persisted_accepted_hashes = set(progress["accepted_pair_hashes"])
-        if loaded_schema == 3 and not persisted_accepted_hashes.issubset(accepted_hashes):
-            raise WorkerFailure(
-                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "runtime progress advances beyond durable pair_runtime records",
-            )
-        if loaded_schema == 3 and any(
-            runtime_ordinals[pair_hash] > last_query_ordinal
-            for pair_hash in persisted_accepted_hashes
-        ):
-            raise WorkerFailure(
-                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "runtime progress binds a pair beyond its last query ordinal",
-            )
-        durable_ahead = accepted_hashes - persisted_accepted_hashes if loaded_schema == 3 else set()
-        recovery_needs_persist = False
-        if stage1_intent is None:
-            if durable_ahead:
-                raise WorkerFailure(
-                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                    "pair_runtime record exists without its exact Stage-1 intent",
-                )
-        else:
-            intent_hash = str(stage1_intent["pair_hash"])
-            intent_ordinal = int(stage1_intent["source_query_ordinal"])
-            pending_record = pending_by_hash.get(intent_hash)
-            if (
-                pending_record is None
-                or int(pending_record["source_query_ordinal"]) != intent_ordinal
-                or intent_hash in persisted_accepted_hashes
-                or durable_ahead not in ({intent_hash}, set())
-            ):
-                raise WorkerFailure(
-                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                    "Stage-1 intent is not bound to exactly one pending transaction",
-                )
-            if intent_hash in accepted_hashes:
-                runtime_by_hash = {
-                    str(record["pair_hash"]): record for record in store.records
-                }
-                if canonical_record_digest(runtime_by_hash[intent_hash]) != stage1_intent["record_digest"]:
-                    raise WorkerFailure(
-                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                        "Stage-1 intent digest does not match the durable runtime record",
-                    )
-                pending_by_hash.pop(intent_hash)
-                stage1_intent = None
-                recovery_needs_persist = True
-            else:
-                # Intent persistence can precede the append. Without a record,
-                # clearing the intent and remeasuring the pending pair is safe.
-                stage1_intent = None
-                recovery_needs_persist = True
+        accepted_hashes = (
+            set(progress["accepted_pair_hashes"])
+            if loaded_schema == 4
+            else set()
+        )
+        (
+            accepted_record_ledger,
+            accepted_hashes,
+            pending_by_hash,
+            stage1_intent,
+            recovery_needs_persist,
+        ) = _reconcile_runtime_ledger(
+            records=store.records,
+            ledger=accepted_record_ledger,
+            accepted_hashes=accepted_hashes,
+            pending_by_hash=pending_by_hash,
+            stage1_intent=stage1_intent,
+        )
         pending = sorted(pending_by_hash.values(), key=lambda value: int(value["source_query_ordinal"]))
 
         def persist_progress() -> None:
@@ -911,6 +926,9 @@ class RuntimeFirstShardWorker:
                 legacy_migration_sha256=legacy_migration_sha256,
                 evidence_identity=evidence_identity,
                 stage1_intent=stage1_intent,
+                accepted_record_ledger=tuple(accepted_record_ledger),
+                noise_floor_id=noise_floor_id,
+                noise_intent=noise_intent,
             )
 
         def complete_query_record(ordinal: int) -> None:
@@ -1152,22 +1170,59 @@ class RuntimeFirstShardWorker:
             state = EntryState.UNDERFILLED
 
         if state is EntryState.BUILDING_ACCEPTED_PAIRS and total_pairs() == entry.accepted_pair_quota:
-            noise, noise_floor_id = _load_or_calibrate_entry_noise(
+            def persist_noise_intent(
+                artifact_id: str,
+                probe_hashes: tuple[str, ...],
+            ) -> None:
+                nonlocal noise_intent
+                noise_intent = {
+                    "noise_floor_id": artifact_id,
+                    "probe_pair_hashes": list(probe_hashes),
+                }
+                persist_progress()
+
+            noise, calibrated_noise_floor_id = _load_or_calibrate_entry_noise(
                 entry_dir,
                 entry=entry,
                 adapter=adapter,
                 factory=factory,
                 queries=queries,
-                pending=pending,
+                pending=accepted_record_ledger + pending,
                 graph_snapshot_hash=graph_snapshot_hash,
                 dbms_fingerprint=dbms_fingerprint,
                 dbms_health_epoch=dbms_health_epoch,
+                anchored_noise_floor_id=noise_floor_id,
+                pending_noise_intent=noise_intent,
+                persist_intent=persist_noise_intent,
             )
             if not noise.valid or noise.p99_delta_ms is None:
                 state = EntryState.INFRASTRUCTURE_FAILED
                 infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
                 infrastructure_reason = "invalid fixed-protocol A/A noise calibration"
             else:
+                if (
+                    noise_floor_id is not None
+                    and noise_floor_id != calibrated_noise_floor_id
+                ):
+                    raise WorkerFailure(
+                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                        "noise calibration identity differs from progress",
+                    )
+                if (
+                    noise_floor_id is None
+                    and (
+                        noise_intent is None
+                        or noise_intent.get("noise_floor_id")
+                        != calibrated_noise_floor_id
+                    )
+                ):
+                    raise WorkerFailure(
+                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                        "noise artifact was not preceded by its durable intent",
+                    )
+                noise_floor_id = calibrated_noise_floor_id
+                noise_intent = None
+                persist_progress()
                 stage1 = self.spec.runtime["stage1"]
                 for pending_record in tuple(pending):
                     if self._clock() >= deadline:
@@ -1226,6 +1281,12 @@ class RuntimeFirstShardWorker:
                         infrastructure_reason = f"pair_runtime durable append failed: {exc}"
                         break
                     accepted_hashes.add(pair_hash)
+                    accepted_record_ledger.append(
+                        {
+                            **pending_record,
+                            "record_digest": stage1_intent["record_digest"],
+                        }
+                    )
                     pending.remove(pending_record)
                     pending_by_hash.pop(pair_hash, None)
                     stage1_intent = None
@@ -1240,6 +1301,9 @@ class RuntimeFirstShardWorker:
             "legacy_migration_sha256": legacy_migration_sha256,
             "evidence_identity": evidence_identity,
             "stage1_intent": stage1_intent,
+            "accepted_record_ledger": tuple(accepted_record_ledger),
+            "noise_floor_id": noise_floor_id,
+            "noise_intent": noise_intent,
             "generated_seeds": generated_seeds,
             "rejects": dict(sorted(rejects.items())),
             "rule_stats": {
@@ -2386,6 +2450,80 @@ def _rebuild_pending_pair(
     return rebuilt.pair
 
 
+def _reconcile_runtime_ledger(
+    *,
+    records: tuple[dict[str, Any], ...],
+    ledger: list[dict[str, object]],
+    accepted_hashes: set[str],
+    pending_by_hash: dict[str, dict[str, object]],
+    stage1_intent: dict[str, object] | None,
+) -> tuple[
+    list[dict[str, object]],
+    set[str],
+    dict[str, dict[str, object]],
+    dict[str, object] | None,
+    bool,
+]:
+    if len(records) not in {len(ledger), len(ledger) + 1}:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "pair_runtime length is not an exact ledger prefix plus one intent tail",
+        )
+    for record, ledger_item in zip(records, ledger, strict=False):
+        if (
+            record.get("pair_hash") != ledger_item["pair_hash"]
+            or record.get("source_query_ordinal")
+            != ledger_item["source_query_ordinal"]
+            or canonical_record_digest(record) != ledger_item["record_digest"]
+        ):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "pair_runtime append order or canonical digest differs from its ledger",
+            )
+    if accepted_hashes != {str(value["pair_hash"]) for value in ledger}:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "accepted_pair_hashes is not an exact mirror of the runtime ledger",
+        )
+    if stage1_intent is None:
+        if len(records) != len(ledger):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "pair_runtime tail exists without its exact Stage-1 intent",
+            )
+        return ledger, accepted_hashes, pending_by_hash, None, False
+
+    intent_hash = str(stage1_intent["pair_hash"])
+    intent_ordinal = int(stage1_intent["source_query_ordinal"])
+    pending_record = pending_by_hash.get(intent_hash)
+    if (
+        pending_record is None
+        or int(pending_record["source_query_ordinal"]) != intent_ordinal
+        or intent_hash in accepted_hashes
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-1 intent is not bound to exactly one pending transaction",
+        )
+    if len(records) == len(ledger):
+        return ledger, accepted_hashes, pending_by_hash, None, True
+
+    tail = records[-1]
+    if (
+        tail.get("pair_hash") != intent_hash
+        or tail.get("source_query_ordinal") != intent_ordinal
+        or canonical_record_digest(tail) != stage1_intent["record_digest"]
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-1 intent does not match the durable runtime tail",
+        )
+    ledger.append({**pending_record, "record_digest": stage1_intent["record_digest"]})
+    accepted_hashes.add(intent_hash)
+    pending_by_hash.pop(intent_hash)
+    return ledger, accepted_hashes, pending_by_hash, None, True
+
+
 def _validate_runtime_records(
     store: CompactRuntimeStore,
     *,
@@ -2488,30 +2626,63 @@ def _load_or_calibrate_entry_noise(
     graph_snapshot_hash: str,
     dbms_fingerprint: str,
     dbms_health_epoch: str,
+    anchored_noise_floor_id: str | None,
+    pending_noise_intent: Mapping[str, object] | None,
+    persist_intent: Callable[[str, tuple[str, ...]], None],
 ) -> tuple[NoiseCalibration, str]:
     path = entry_dir / "noise_calibration.json"
+    selected = _expected_noise_probe_records(pending)
+    expected_probe_hashes = tuple(str(value["pair_hash"]) for value in selected)
     existing = _load_entry_noise(
         path,
         entry=entry,
         graph_snapshot_hash=graph_snapshot_hash,
         dbms_fingerprint=dbms_fingerprint,
         dbms_health_epoch=dbms_health_epoch,
+        expected_probe_hashes=expected_probe_hashes,
     )
     if existing is not None:
+        existing_id = existing[1]
+        if anchored_noise_floor_id is not None:
+            if anchored_noise_floor_id != existing_id or pending_noise_intent is not None:
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "anchored noise calibration differs from its artifact",
+                )
+        elif pending_noise_intent is not None:
+            if (
+                pending_noise_intent.get("noise_floor_id") != existing_id
+                or tuple(pending_noise_intent.get("probe_pair_hashes", ()))
+                != expected_probe_hashes
+            ):
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "durable noise artifact differs from its exact intent",
+                )
+        else:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "noise artifact exists without an anchor or durable intent",
+            )
         return existing
+
+    if anchored_noise_floor_id is not None:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "noise progress is anchored without its durable artifact",
+        )
+    if pending_noise_intent is not None:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "noise intent exists without its exact durable artifact",
+        )
 
     if not pending:
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
             "durable runtime records exist without their noise calibration",
         )
-    ordered = sorted(
-        pending,
-        key=lambda value: (int(value["acceptance_a_us"]), str(value["pair_hash"])),
-    )
-    distinct_hashes = {str(value["pair_hash"]) for value in ordered}
-    if len(distinct_hashes) < 20:
-        probe_hashes = sorted(distinct_hashes)
+    if len(expected_probe_hashes) < 20:
         noise = NoiseCalibration(
             valid=False,
             sample_count=0,
@@ -2521,26 +2692,38 @@ def _load_or_calibrate_entry_noise(
             long_tail_ratio=None,
             reason_codes=("insufficient_distinct_aa_probes",),
         )
+        return noise, ""
     else:
         probes = []
-        probe_hashes = []
-        for index in range(20):
-            selected = ordered[round(index * (len(ordered) - 1) / 19)]
+        probe_hashes = list(expected_probe_hashes)
+        for selected_record in selected:
             pair = _rebuild_pending_pair(
                 factory,
                 entry,
                 queries,
-                int(selected["source_query_ordinal"]),
-                str(selected["pair_hash"]),
+                int(selected_record["source_query_ordinal"]),
+                str(selected_record["pair_hash"]),
             )
             probes.append(pair.query_a)
-            probe_hashes.append(pair.pair_hash)
-        noise = calibrate_aa_noise(
+        noise, raw_probe_samples = collect_aa_noise_samples(
             RuntimeHarness(),
             adapter,
             tuple(probes),
             pairs_per_query=10,
         )
+        if not noise.valid or len(raw_probe_samples) != 20:
+            return noise, ""
+        probe_samples_us = [
+            {
+                "pair_hash": pair_hash,
+                "samples_us": [list(sample) for sample in samples],
+            }
+            for pair_hash, samples in zip(
+                probe_hashes,
+                raw_probe_samples,
+                strict=True,
+            )
+        ]
     body = {
         "calibration": to_jsonable(asdict(noise)),
         "dbms_fingerprint": dbms_fingerprint,
@@ -2553,10 +2736,12 @@ def _load_or_calibrate_entry_noise(
         "order_bias_rule": "median_order_bias_ms<=p95_delta_ms",
         "pairs_per_query": 10,
         "probe_pair_hashes": probe_hashes,
+        "probe_samples_us": probe_samples_us,
         "probe_queries": 20,
         "protocol_version": "aa-noise-20x10-v1",
     }
     content_hash = canonical_hash(body)
+    persist_intent(content_hash, tuple(probe_hashes))
     _atomic_write_json(path, {**body, "content_hash": content_hash})
     return noise, content_hash
 
@@ -2568,6 +2753,7 @@ def _load_entry_noise(
     graph_snapshot_hash: str,
     dbms_fingerprint: str,
     dbms_health_epoch: str,
+    expected_probe_hashes: tuple[str, ...],
 ) -> tuple[NoiseCalibration, str] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -2594,6 +2780,7 @@ def _load_entry_noise(
         "order_bias_rule",
         "pairs_per_query",
         "probe_pair_hashes",
+        "probe_samples_us",
         "probe_queries",
         "protocol_version",
     }
@@ -2603,88 +2790,77 @@ def _load_entry_noise(
         and len(probe_hashes) == len(set(probe_hashes))
     )
     if (
-            set(body) != expected_body_keys
-            or payload.get("content_hash") != canonical_hash(body)
-            or body.get("entry_id") != entry.entry_id
-            or body.get("graph_snapshot_hash") != graph_snapshot_hash
-            or body.get("dbms_fingerprint") != dbms_fingerprint
-            or body.get("dbms_health_epoch") != dbms_health_epoch
-            or type(body.get("distinct_probe_count")) is not int
-            or not valid_probe_hashes
-            or body.get("distinct_probe_count") != len(probe_hashes)
-            or body.get("probe_queries") != 20
-            or body.get("pairs_per_query") != 10
-            or body.get("minimum_complete_samples") != 200
-            or body.get("order_bias_rule") != "median_order_bias_ms<=p95_delta_ms"
-            or body.get("long_tail_ratio_max") != 5.0
-            or body.get("protocol_version") != "aa-noise-20x10-v1"
+        set(body) != expected_body_keys
+        or payload.get("content_hash") != canonical_hash(body)
+        or body.get("entry_id") != entry.entry_id
+        or body.get("graph_snapshot_hash") != graph_snapshot_hash
+        or body.get("dbms_fingerprint") != dbms_fingerprint
+        or body.get("dbms_health_epoch") != dbms_health_epoch
+        or type(body.get("distinct_probe_count")) is not int
+        or not valid_probe_hashes
+        or tuple(probe_hashes) != expected_probe_hashes
+        or body.get("distinct_probe_count") != len(probe_hashes)
+        or body.get("probe_queries") != 20
+        or body.get("pairs_per_query") != 10
+        or body.get("minimum_complete_samples") != 200
+        or body.get("order_bias_rule") != "median_order_bias_ms<=p95_delta_ms"
+        or body.get("long_tail_ratio_max") != 5.0
+        or body.get("protocol_version") != "aa-noise-20x10-v1"
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
             "noise calibration identity or immutable protocol changed",
         )
     calibration = body.get("calibration")
-    if not isinstance(calibration, dict):
+    probe_samples = body.get("probe_samples_us")
+    if not isinstance(calibration, dict) or not isinstance(probe_samples, list):
         raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration payload is missing")
     try:
-            expected_calibration_keys = {
-                "long_tail_ratio",
-                "median_order_bias_ms",
-                "p95_delta_ms",
-                "p99_delta_ms",
-                "reason_codes",
-                "sample_count",
-                "valid",
-            }
-            numeric_values = (
-                calibration["p95_delta_ms"],
-                calibration["p99_delta_ms"],
-                calibration["median_order_bias_ms"],
-                calibration["long_tail_ratio"],
+        expected_calibration_keys = {
+            "long_tail_ratio",
+            "median_order_bias_ms",
+            "p95_delta_ms",
+            "p99_delta_ms",
+            "reason_codes",
+            "sample_count",
+            "valid",
+        }
+        if (
+            set(calibration) != expected_calibration_keys
+            or len(probe_samples) != 20
+            or any(
+                not isinstance(value, dict)
+                or set(value) != {"pair_hash", "samples_us"}
+                or value["pair_hash"] != probe_hashes[index]
+                or not isinstance(value["samples_us"], list)
+                or len(value["samples_us"]) != 10
+                for index, value in enumerate(probe_samples)
             )
-            if (
-                set(calibration) != expected_calibration_keys
-                or type(calibration["valid"]) is not bool
-                or type(calibration["sample_count"]) is not int
-                or calibration["sample_count"] < 0
-                or not isinstance(calibration["reason_codes"], list)
-                or any(not isinstance(code, str) or not code for code in calibration["reason_codes"])
-                or any(
-                    value is not None
-                    and (
-                        isinstance(value, bool)
-                        or not isinstance(value, int | float)
-                        or not math.isfinite(value)
-                        or value < 0
-                    )
-                    for value in numeric_values
-                )
-            ):
-                raise ValueError("invalid noise calibration field")
-            noise = NoiseCalibration(
-                valid=calibration["valid"],
-                sample_count=calibration["sample_count"],
-                p95_delta_ms=calibration["p95_delta_ms"],
-                p99_delta_ms=calibration["p99_delta_ms"],
-                median_order_bias_ms=calibration["median_order_bias_ms"],
-                long_tail_ratio=calibration["long_tail_ratio"],
-                reason_codes=tuple(calibration["reason_codes"]),
-            )
-            if noise.valid and (
-                noise.sample_count < 200
-                or len(probe_hashes) != 20
-                or noise.p95_delta_ms is None
-                or noise.p99_delta_ms is None
-                or noise.median_order_bias_ms is None
-                or noise.long_tail_ratio is None
-                or noise.median_order_bias_ms > noise.p95_delta_ms
-                or noise.long_tail_ratio > 5.0
-                or noise.reason_codes
-            ):
-                raise ValueError("valid noise calibration violates the fixed protocol")
+        ):
+            raise ValueError("invalid noise calibration field")
+        noise = summarize_aa_noise_samples(
+            [value["samples_us"] for value in probe_samples]
+        )
+        if calibration != to_jsonable(asdict(noise)) or not noise.valid:
+            raise ValueError("noise summary differs from canonical integer samples")
     except (KeyError, TypeError, ValueError) as exc:
         raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration shape is invalid") from exc
     return noise, str(payload["content_hash"])
+
+
+def _expected_noise_probe_records(
+    acceptance_records: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    ordered = sorted(
+        acceptance_records,
+        key=lambda value: (int(value["acceptance_a_us"]), str(value["pair_hash"])),
+    )
+    if len({str(value["pair_hash"]) for value in ordered}) < 20:
+        return ordered
+    return [
+        ordered[round(index * (len(ordered) - 1) / 19)]
+        for index in range(20)
+    ]
 
 
 def _stage1_seed(entry: RulePlanEntry, pair_hash: str) -> int:
@@ -3164,7 +3340,7 @@ def _write_entry_runtime_invalidation(
 
 def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, object]:
     default: dict[str, object] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "entry_id": entry.entry_id,
         "elapsed_seconds": 0.0,
         "last_query_ordinal": 0,
@@ -3175,7 +3351,10 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         "legacy_migration_sha256": None,
         "evidence_identity": None,
         "stage1_intent": None,
-        "_loaded_schema_version": 3,
+        "accepted_record_ledger": [],
+        "noise_floor_id": None,
+        "noise_intent": None,
+        "_loaded_schema_version": 4,
     }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -3196,6 +3375,9 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     legacy_migration_sha256 = body.get("legacy_migration_sha256")
     evidence_identity = body.get("evidence_identity")
     stage1_intent = body.get("stage1_intent")
+    accepted_record_ledger = body.get("accepted_record_ledger", [])
+    noise_floor_id = body.get("noise_floor_id")
+    noise_intent = body.get("noise_intent")
     valid_rejects = isinstance(rejects, dict) and all(
         isinstance(key, str)
         and key
@@ -3261,6 +3443,61 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         and type(stage1_intent["source_query_ordinal"]) is int
         and 1 <= stage1_intent["source_query_ordinal"] <= entry.max_generated_seed_budget
     )
+    valid_ledger = isinstance(accepted_record_ledger, list) and all(
+        isinstance(value, dict)
+        and set(value) == {
+            "acceptance_a_us",
+            "acceptance_b_us",
+            "pair_hash",
+            "record_digest",
+            "source_query_ordinal",
+        }
+        and isinstance(value["pair_hash"], str)
+        and len(value["pair_hash"]) == 64
+        and isinstance(value["record_digest"], str)
+        and len(value["record_digest"]) == 64
+        and type(value["source_query_ordinal"]) is int
+        and 1 <= value["source_query_ordinal"] <= entry.max_generated_seed_budget
+        and type(value["acceptance_a_us"]) is int
+        and value["acceptance_a_us"] >= 0
+        and type(value["acceptance_b_us"]) is int
+        and value["acceptance_b_us"] >= 0
+        for value in accepted_record_ledger
+    )
+    ledger_hashes = (
+        [value["pair_hash"] for value in accepted_record_ledger]
+        if valid_ledger
+        else []
+    )
+    ledger_ordinals = (
+        [value["source_query_ordinal"] for value in accepted_record_ledger]
+        if valid_ledger
+        else []
+    )
+    valid_ledger = bool(
+        valid_ledger
+        and len(set(ledger_hashes)) == len(ledger_hashes)
+        and len(set(ledger_ordinals)) == len(ledger_ordinals)
+        and ledger_ordinals == sorted(ledger_ordinals)
+        and set(accepted if isinstance(accepted, list) else ()) == set(ledger_hashes)
+        and len(accepted if isinstance(accepted, list) else ()) == len(ledger_hashes)
+    )
+    valid_noise_floor = noise_floor_id is None or (
+        isinstance(noise_floor_id, str) and len(noise_floor_id) == 64
+    )
+    valid_noise_intent = noise_intent is None or (
+        isinstance(noise_intent, dict)
+        and set(noise_intent) == {"noise_floor_id", "probe_pair_hashes"}
+        and isinstance(noise_intent["noise_floor_id"], str)
+        and len(noise_intent["noise_floor_id"]) == 64
+        and isinstance(noise_intent["probe_pair_hashes"], list)
+        and len(noise_intent["probe_pair_hashes"]) == 20
+        and len(set(noise_intent["probe_pair_hashes"])) == 20
+        and all(
+            isinstance(value, str) and len(value) == 64
+            for value in noise_intent["probe_pair_hashes"]
+        )
+    )
     schema_keys = {
         1: {
             "accepted_pair_hashes",
@@ -3295,9 +3532,25 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
             "schema_version",
             "stage1_intent",
         },
+        4: {
+            "accepted_pair_hashes",
+            "accepted_record_ledger",
+            "attempted_query_records",
+            "elapsed_seconds",
+            "entry_id",
+            "evidence_identity",
+            "last_query_ordinal",
+            "legacy_migration_sha256",
+            "noise_floor_id",
+            "noise_intent",
+            "pending_acceptances",
+            "reject_counts",
+            "schema_version",
+            "stage1_intent",
+        },
     }
     if (
-        schema_version not in {1, 2, 3}
+        schema_version not in {1, 2, 3, 4}
         or set(body) != schema_keys.get(schema_version, set())
         or body.get("entry_id") != entry.entry_id
         or payload.get("content_hash") != canonical_hash(body)
@@ -3311,8 +3564,20 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         or attempted != last_ordinal
         or not valid_rejects
         or not valid_accepted
-        or (schema_version in {2, 3} and (not valid_pending or not valid_migration))
-        or (schema_version == 3 and (not valid_identity or not valid_intent))
+        or (schema_version in {2, 3, 4} and (not valid_pending or not valid_migration))
+        or (schema_version in {3, 4} and (not valid_identity or not valid_intent))
+        or (
+            schema_version == 4
+            and (not valid_ledger or not valid_noise_floor or not valid_noise_intent)
+        )
+        or (
+            schema_version == 4
+            and (
+                any(value > last_ordinal for value in ledger_ordinals)
+                or any(value > last_ordinal for value in pending_ordinals)
+            )
+        )
+        or (schema_version == 4 and noise_floor_id is not None and noise_intent is not None)
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -3326,6 +3591,10 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     elif schema_version == 2:
         body["evidence_identity"] = None
         body["stage1_intent"] = None
+    if schema_version in {1, 2, 3}:
+        body["accepted_record_ledger"] = []
+        body["noise_floor_id"] = None
+        body["noise_intent"] = None
     body["_loaded_schema_version"] = schema_version
     return body
 
@@ -3344,10 +3613,13 @@ def _persist_entry_progress(
     legacy_migration_sha256: object | None = None,
     evidence_identity: Mapping[str, object] | None = None,
     stage1_intent: Mapping[str, object] | None = None,
+    accepted_record_ledger: tuple[Mapping[str, object], ...] = (),
+    noise_floor_id: str | None = None,
+    noise_intent: Mapping[str, object] | None = None,
 ) -> None:
     elapsed = prior_elapsed + max(0.0, now - attempt_started)
     body = {
-        "schema_version": 3,
+        "schema_version": 4,
         "entry_id": entry.entry_id,
         "elapsed_seconds": elapsed,
         "last_query_ordinal": last_query_ordinal,
@@ -3361,6 +3633,9 @@ def _persist_entry_progress(
         "legacy_migration_sha256": legacy_migration_sha256,
         "evidence_identity": dict(evidence_identity) if evidence_identity is not None else None,
         "stage1_intent": dict(stage1_intent) if stage1_intent is not None else None,
+        "accepted_record_ledger": [dict(value) for value in accepted_record_ledger],
+        "noise_floor_id": noise_floor_id,
+        "noise_intent": dict(noise_intent) if noise_intent is not None else None,
     }
     _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
 
@@ -3387,6 +3662,9 @@ def _entry_outcome_from_progress(
         "legacy_migration_sha256": progress["legacy_migration_sha256"],
         "evidence_identity": progress["evidence_identity"],
         "stage1_intent": progress["stage1_intent"],
+        "accepted_record_ledger": tuple(progress["accepted_record_ledger"]),
+        "noise_floor_id": progress["noise_floor_id"],
+        "noise_intent": progress["noise_intent"],
         "generated_seeds": int(progress["attempted_query_records"]),
         "rejects": dict(progress["reject_counts"]),
         "rule_stats": _rule_stats_from_entry_progress(entry, progress),
