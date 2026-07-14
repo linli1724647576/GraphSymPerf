@@ -99,7 +99,9 @@ from graph_sym_perf.runtime.records import (
     summarize_integer_samples,
 )
 from graph_sym_perf.runtime.screening import (
+    DEFAULT_SCREENING_POLICY,
     DurableTimeoutQueue,
+    ScreeningPolicy,
     Stage2Candidate,
     Stage2Decision,
     TimeoutQueueRecord,
@@ -693,22 +695,6 @@ class RuntimeFirstShardWorker:
                             if graph_manifest is not None
                             else graph_hash
                         )
-                        _write_entry_runtime_invalidation(
-                            entry_dir,
-                            entry=entry,
-                            evidence_identity=_runtime_evidence_identity(
-                                graph_snapshot_hash=(
-                                    baseline_graph_hash
-                                ),
-                                dbms_fingerprint=fingerprint.value,
-                                dbms_health_epoch=health_epoch.value,
-                            ),
-                            reason="DBMS fingerprint or health epoch changed",
-                            observed={
-                                "dbms_fingerprint": final_fingerprint.value,
-                                "dbms_health_epoch": final_epoch.value,
-                            },
-                        )
                         ReliabilityFindingStore(self._run_dir).record_entry(
                             kind=ErrorKind.DBMS_CRASHED,
                             entry_id=entry.entry_id,
@@ -733,6 +719,20 @@ class RuntimeFirstShardWorker:
                                 attempt_dir.relative_to(self._run_dir)
                             ),
                         )
+                        _write_entry_runtime_invalidation(
+                            entry_dir,
+                            entry=entry,
+                            evidence_identity=_runtime_evidence_identity(
+                                graph_snapshot_hash=baseline_graph_hash,
+                                dbms_fingerprint=fingerprint.value,
+                                dbms_health_epoch=health_epoch.value,
+                            ),
+                            reason="DBMS fingerprint or health epoch changed",
+                            observed={
+                                "dbms_fingerprint": final_fingerprint.value,
+                                "dbms_health_epoch": final_epoch.value,
+                            },
+                        )
                     elif graph_manifest is not None:
                         try:
                             final_graph = read_neo4j_graph_manifest(
@@ -749,17 +749,6 @@ class RuntimeFirstShardWorker:
                             outcome["terminal_state"] = EntryState.INFRASTRUCTURE_FAILED
                             outcome["infrastructure_error_kind"] = ErrorKind.INFRASTRUCTURE_ERROR
                             outcome["infrastructure_reason"] = "observed graph manifest drifted during acceptance"
-                            _write_entry_runtime_invalidation(
-                                entry_dir,
-                                entry=entry,
-                                evidence_identity=_runtime_evidence_identity(
-                                    graph_snapshot_hash=graph_manifest.graph_fingerprint,
-                                    dbms_fingerprint=fingerprint.value,
-                                    dbms_health_epoch=health_epoch.value,
-                                ),
-                                reason="observed graph manifest drifted during acceptance",
-                                observed=to_jsonable(asdict(final_graph)),
-                            )
                             ReliabilityFindingStore(self._run_dir).record_entry(
                                 kind=ErrorKind.INFRASTRUCTURE_ERROR,
                                 entry_id=entry.entry_id,
@@ -788,6 +777,21 @@ class RuntimeFirstShardWorker:
                                 attempt_evidence=str(
                                     attempt_dir.relative_to(self._run_dir)
                                 ),
+                            )
+                            _write_entry_runtime_invalidation(
+                                entry_dir,
+                                entry=entry,
+                                evidence_identity=_runtime_evidence_identity(
+                                    graph_snapshot_hash=(
+                                        graph_manifest.graph_fingerprint
+                                    ),
+                                    dbms_fingerprint=fingerprint.value,
+                                    dbms_health_epoch=health_epoch.value,
+                                ),
+                                reason=(
+                                    "observed graph manifest drifted during acceptance"
+                                ),
+                                observed=to_jsonable(asdict(final_graph)),
                             )
                         else:
                             final_identity_stable = True
@@ -916,6 +920,8 @@ class RuntimeFirstShardWorker:
     ) -> dict[str, object]:
         """Build, calibrate, and durably promote one entry's Stage-1 pairs."""
 
+        screening_policy = DEFAULT_SCREENING_POLICY
+        _require_screening_policy_config(self.spec, policy=screening_policy)
         _require_unique_entry_query_asts(queries)
         factory = RulePairFactory(RuleRegistry.default())
         dialect = _dialect_for(entry.target)
@@ -1471,7 +1477,6 @@ class RuntimeFirstShardWorker:
                 infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
                 infrastructure_reason = "invalid fixed-protocol A/A noise calibration"
             else:
-                stage1 = self.spec.runtime["stage1"]
                 for pending_record in tuple(pending):
                     if self._clock() >= deadline:
                         state = EntryState.RESOURCE_EXHAUSTED
@@ -1485,12 +1490,20 @@ class RuntimeFirstShardWorker:
                         pair.query_b,
                         parameters=pair.parameters,
                         policy=RuntimePolicy(
-                            warmups=int(stage1["warmups"]),
-                            pairs=int(stage1["pairs"]),
-                            seed=_stage1_seed(entry, pair_hash),
-                            require_exact_balance=False,
+                            warmups=screening_policy.stage1_warmups,
+                            pairs=screening_policy.stage1_pairs,
+                            seed=_stage1_seed(
+                                entry,
+                                pair_hash,
+                                policy=screening_policy,
+                            ),
+                            require_exact_balance=(
+                                screening_policy.stage1_require_exact_balance
+                            ),
                             timeout_ms=float(entry.query_timeout_seconds * 1000),
-                            bootstrap_resamples=10_000,
+                            bootstrap_resamples=(
+                                screening_policy.stage1_bootstrap_resamples
+                            ),
                         ),
                     )
                     if evidence.verdict is RuntimeVerdict.INVALID:
@@ -1658,31 +1671,8 @@ class RuntimeFirstShardWorker:
                     "Stage-2 screening requires a finite non-negative p99 noise floor"
                 ),
             }
-        stage2_config = dict(self.spec.runtime["stage2"])
-        if stage2_config != {
-            "warmups": 3,
-            "pairs": 12,
-            "relative_ratio": 1.5,
-            "relative_ci_low": 1.1,
-            "absolute_delta_ms": 10.0,
-            "direction_consistency": 0.75,
-        }:
-            raise WorkerFailure(
-                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "Stage-2 configuration differs from the immutable wide-recall protocol",
-            )
-        stage1_config = dict(self.spec.runtime["stage1"])
-        if stage1_config != {
-            "warmups": 2,
-            "pairs": 3,
-            "top_fraction": 0.05,
-            "min_top_k": 3,
-            "max_top_k": 30,
-        }:
-            raise WorkerFailure(
-                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "Stage-1 configuration differs from the immutable ranking protocol",
-            )
+        policy = DEFAULT_SCREENING_POLICY
+        _require_screening_policy_config(self.spec, policy=policy)
         typed_records: tuple[PairRuntimeRecord, ...] = tuple(
             PairRuntimeRecord(
                 **{
@@ -1698,6 +1688,7 @@ class RuntimeFirstShardWorker:
             selected_hashes = stage1_top_k(
                 typed_records,
                 noise_p99_ms=noise_p99_ms,
+                policy=policy,
             )
         except (TypeError, ValueError) as exc:
             raise WorkerFailure(
@@ -1783,7 +1774,7 @@ class RuntimeFirstShardWorker:
                     ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                     "ordinary Stage-1 Top-K record has no frozen runtime direction",
                 )
-            seed = _stage2_seed(entry, pair_hash)
+            seed = _stage2_seed(entry, pair_hash, policy=policy)
             candidate_path = candidate_root / pair_hash / "candidate.json"
             existing = _load_stage2_candidate(
                 candidate_path,
@@ -1800,6 +1791,7 @@ class RuntimeFirstShardWorker:
                 expected_direction=str(expected_direction),
                 entry_payload=entry_payload,
                 screening_policy=screening_policy,
+                policy=policy,
             )
             if selected_index < len(candidate_ledger):
                 ledger_entry = candidate_ledger[selected_index]
@@ -1813,6 +1805,10 @@ class RuntimeFirstShardWorker:
                     )
             elif candidate_intent is not None:
                 if existing is None:
+                    _remove_empty_stage2_candidate_dir(
+                        candidate_path.parent,
+                        candidate_root=candidate_root,
+                    )
                     candidate_intent = None
                     persist_stage2_progress()
                 elif (
@@ -1857,12 +1853,12 @@ class RuntimeFirstShardWorker:
                     pair.query_b,
                     parameters=pair.parameters,
                     policy=RuntimePolicy(
-                        warmups=3,
-                        pairs=12,
+                        warmups=policy.stage2_warmups,
+                        pairs=policy.stage2_pairs,
                         seed=seed,
-                        require_exact_balance=True,
+                        require_exact_balance=policy.stage2_require_exact_balance,
                         timeout_ms=float(entry.query_timeout_seconds * 1000),
-                        bootstrap_resamples=10_000,
+                        bootstrap_resamples=policy.stage2_bootstrap_resamples,
                     ),
                     expected_slow_query=str(expected_direction),
                 )
@@ -1888,9 +1884,14 @@ class RuntimeFirstShardWorker:
                             + ",".join(evidence.reason_codes)
                         ),
                     }
-                decision = evaluate_stage2(evidence, noise_p99_ms=noise_p99_ms)
+                decision = evaluate_stage2(
+                    evidence,
+                    noise_p99_ms=noise_p99_ms,
+                    policy=policy,
+                )
                 score = (
-                    float(evidence.median_delta_ms) / max(noise_p99_ms, 0.001)
+                    float(evidence.median_delta_ms)
+                    / max(noise_p99_ms, policy.normalization_epsilon_ms)
                     if evidence.median_delta_ms is not None
                     else float(stage1_record["delta_over_noise"])
                 )
@@ -1914,6 +1915,7 @@ class RuntimeFirstShardWorker:
                     candidate=stage2_candidate,
                     entry_payload=entry_payload,
                     screening_policy=screening_policy,
+                    policy=policy,
                 )
                 candidate_digest = str(candidate_payload["content_hash"])
                 candidate_intent = {
@@ -3237,7 +3239,8 @@ def _validate_runtime_records(
     ordinals: set[int] = set()
     by_hash: dict[str, int] = {}
     required_keys = set(PairRuntimeRecord.__dataclass_fields__)
-    stage1_pairs = 3
+    policy = DEFAULT_SCREENING_POLICY
+    stage1_pairs = policy.stage1_pairs
     for record in store.records:
         ordinal = record.get("source_query_ordinal")
         pair_hash = record.get("pair_hash")
@@ -3275,8 +3278,8 @@ def _validate_runtime_records(
             samples = record.get("samples_us")
             expected_orders = paired_schedule(
                 stage1_pairs,
-                seed=_stage1_seed(entry, pair_hash),
-                require_exact_balance=False,
+                seed=_stage1_seed(entry, pair_hash, policy=policy),
+                require_exact_balance=policy.stage1_require_exact_balance,
             )
             if (
                 not isinstance(samples, list)
@@ -3791,51 +3794,66 @@ def _stage2_entry_payload(entry: RulePlanEntry) -> dict[str, object]:
     return payload
 
 
+def _remove_empty_stage2_candidate_dir(
+    pair_dir: Path,
+    *,
+    candidate_root: Path,
+) -> None:
+    """Remove only a provably empty unanchored candidate directory durably."""
+
+    try:
+        pair_dir.rmdir()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "missing Stage-2 candidate directory is not provably empty",
+        ) from exc
+    _fsync_directory(candidate_root)
+
+
+def _require_screening_policy_config(
+    spec: ValidatedYieldExperimentSpec,
+    *,
+    policy: ScreeningPolicy,
+) -> None:
+    if dict(spec.runtime["stage1"]) != policy.stage1_config():
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-1 configuration differs from the immutable ranking protocol",
+        )
+    if dict(spec.runtime["stage2"]) != policy.stage2_config():
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Stage-2 configuration differs from the immutable wide-recall protocol",
+        )
+
+
 def _stage2_screening_policy(
     spec: ValidatedYieldExperimentSpec,
     entry: RulePlanEntry,
     *,
     noise_floor_id: str,
 ) -> dict[str, object]:
-    stage1 = to_jsonable(dict(spec.runtime["stage1"]))
-    stage2 = to_jsonable(dict(spec.runtime["stage2"]))
+    policy = DEFAULT_SCREENING_POLICY
+    _require_screening_policy_config(spec, policy=policy)
+    payload = policy.to_payload()
+    stage2 = dict(payload["stage2"])
+    stage2.update(
+        {
+            "timeout_ms": float(entry.query_timeout_seconds * 1000),
+            "seed_derivation": (
+                "sha256(shard_seed:entry_id:pair_hash:"
+                f"{policy.stage2_seed_version})[:8]&2^63-1"
+            ),
+        }
+    )
     return {
-        "protocol_version": "two-stage-screening-v2",
+        **payload,
         "experiment_seed": spec.seed,
         "noise_floor_id": noise_floor_id,
-        "normalization": {
-            "denominator": "max(noise_p99_ms,0.001)",
-            "epsilon_ms": 0.001,
-        },
-        "stage1": {
-            "config": stage1,
-            "k_formula": "min(30,max(3,ceil(0.05*accepted_pairs)))",
-            "queue_allocation": "ceil(K/3)",
-            "merge_order": ["absolute_delta", "ratio", "noise_normalized"],
-            "ratio_min_delta_noise_multiplier": 0.5,
-            "tie_break": "score_desc_pair_hash_asc",
-        },
-        "stage2": {
-            "config": stage2,
-            "warmups": 3,
-            "pairs": 12,
-            "require_exact_balance": True,
-            "bootstrap_resamples": 10_000,
-            "timeout_ms": float(entry.query_timeout_seconds * 1000),
-            "seed_derivation": "sha256(shard_seed:entry_id:pair_hash:stage2)[:8]&2^63-1",
-            "relative_gate": {
-                "ratio_gte": 1.5,
-                "ratio_ci_low_gt": 1.1,
-                "delta_gt_raw_noise_p99": True,
-                "direction_gte": 0.75,
-            },
-            "absolute_gate": {
-                "delta_gte": "max(2*raw_noise_p99_ms,10.0)",
-                "delta_ci_low_gt": 0.0,
-                "ratio_gt": 1.1,
-                "direction_gte": 0.75,
-            },
-        },
+        "stage2": stage2,
     }
 
 
@@ -4096,6 +4114,7 @@ def _stage2_candidate_payload(
     candidate: Stage2Candidate,
     entry_payload: Mapping[str, object],
     screening_policy: Mapping[str, object],
+    policy: ScreeningPolicy,
 ) -> dict[str, object]:
     body = {
         "schema_version": 2,
@@ -4116,6 +4135,7 @@ def _stage2_candidate_payload(
             candidate.pair_hash,
             seed=seed,
             expected_direction=expected_direction,
+            policy=policy,
         ),
         "query_a": pair.query_a,
         "query_b": pair.query_b,
@@ -4146,6 +4166,7 @@ def _load_stage2_candidate(
     expected_direction: str,
     entry_payload: Mapping[str, object],
     screening_policy: Mapping[str, object],
+    policy: ScreeningPolicy,
 ) -> tuple[Stage2Candidate, str] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -4215,6 +4236,7 @@ def _load_stage2_candidate(
             pair.pair_hash,
             seed=seed,
             expected_direction=expected_direction,
+            policy=policy,
         )
         or body.get("query_a") != pair.query_a
         or body.get("query_b") != pair.query_b
@@ -4234,9 +4256,13 @@ def _load_stage2_candidate(
             evidence.query_a_hash != _query_hash(pair.query_a)
             or evidence.query_b_hash != _query_hash(pair.query_b)
             or evidence.slow_query != expected_direction
-            or len(evidence.paired_samples) != 12
+            or len(evidence.paired_samples) != policy.stage2_pairs
             or tuple(sample.order for sample in evidence.paired_samples)
-            != paired_schedule(12, seed=seed, require_exact_balance=True)
+            != paired_schedule(
+                policy.stage2_pairs,
+                seed=seed,
+                require_exact_balance=policy.stage2_require_exact_balance,
+            )
         ):
             raise ValueError("Stage-2 runtime evidence binding differs")
         validate_stage2_evidence(
@@ -4244,20 +4270,25 @@ def _load_stage2_candidate(
             query_a_hash=_query_hash(pair.query_a),
             query_b_hash=_query_hash(pair.query_b),
             expected_orders=paired_schedule(
-                12,
+                policy.stage2_pairs,
                 seed=seed,
-                require_exact_balance=True,
+                require_exact_balance=policy.stage2_require_exact_balance,
             ),
             expected_slow_query=expected_direction,
             seed=seed,
             timeout_ms=float(entry.query_timeout_seconds * 1000),
         )
-        decision = evaluate_stage2(evidence, noise_p99_ms=noise_p99_ms)
+        decision = evaluate_stage2(
+            evidence,
+            noise_p99_ms=noise_p99_ms,
+            policy=policy,
+        )
         if body.get("stage2_decision") != _stage2_decision_payload(decision):
             raise ValueError("Stage-2 decision differs from runtime evidence")
         score = float(body["noise_normalized_score"])
         expected_score = (
-            float(evidence.median_delta_ms) / max(noise_p99_ms, 0.001)
+            float(evidence.median_delta_ms)
+            / max(noise_p99_ms, policy.normalization_epsilon_ms)
             if evidence.median_delta_ms is not None
             else float(stage1_record["delta_over_noise"])
         )
@@ -4365,18 +4396,22 @@ def _stage2_protocol(
     *,
     seed: int,
     expected_direction: str,
+    policy: ScreeningPolicy,
 ) -> dict[str, object]:
     return {
-        "bootstrap_resamples": 10_000,
+        "bootstrap_resamples": policy.stage2_bootstrap_resamples,
         "expected_slow_query": expected_direction,
-        "pairs": 12,
-        "protocol_version": "stage2-balanced-12-v1",
-        "require_exact_balance": True,
+        "pairs": policy.stage2_pairs,
+        "protocol_version": f"stage2-balanced-{policy.stage2_pairs}-v2",
+        "require_exact_balance": policy.stage2_require_exact_balance,
         "seed": seed,
         "seed_sha256": hashlib.sha256(
-            f"{entry.shard_seed}:{entry.entry_id}:{pair_hash}:stage2".encode("utf-8")
+            (
+                f"{entry.shard_seed}:{entry.entry_id}:{pair_hash}:"
+                f"{policy.stage2_seed_version}"
+            ).encode("utf-8")
         ).hexdigest(),
-        "warmups": 3,
+        "warmups": policy.stage2_warmups,
     }
 
 
@@ -4418,16 +4453,32 @@ def _runtime_timeout_side(evidence: RuntimeEvidence) -> str | None:
     return None
 
 
-def _stage2_seed(entry: RulePlanEntry, pair_hash: str) -> int:
+def _stage2_seed(
+    entry: RulePlanEntry,
+    pair_hash: str,
+    *,
+    policy: ScreeningPolicy,
+) -> int:
     digest = hashlib.sha256(
-        f"{entry.shard_seed}:{entry.entry_id}:{pair_hash}:stage2".encode("utf-8")
+        (
+            f"{entry.shard_seed}:{entry.entry_id}:{pair_hash}:"
+            f"{policy.stage2_seed_version}"
+        ).encode("utf-8")
     ).digest()
     return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 
 
-def _stage1_seed(entry: RulePlanEntry, pair_hash: str) -> int:
+def _stage1_seed(
+    entry: RulePlanEntry,
+    pair_hash: str,
+    *,
+    policy: ScreeningPolicy,
+) -> int:
     digest = hashlib.sha256(
-        f"{entry.shard_seed}:{entry.entry_id}:{pair_hash}:stage1".encode("utf-8")
+        (
+            f"{entry.shard_seed}:{entry.entry_id}:{pair_hash}:"
+            f"{policy.stage1_seed_version}"
+        ).encode("utf-8")
     ).digest()
     return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 

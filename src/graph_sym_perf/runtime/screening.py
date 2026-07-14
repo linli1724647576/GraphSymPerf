@@ -24,6 +24,104 @@ _TIMEOUT_STATES = {"a_timeout", "b_timeout", "both_timeout"}
 
 
 @dataclass(frozen=True)
+class ScreeningPolicy:
+    stage1_warmups: int = 2
+    stage1_pairs: int = 3
+    stage1_top_fraction: float = 0.05
+    stage1_min_top_k: int = 3
+    stage1_max_top_k: int = 30
+    stage1_queue_count: int = 3
+    stage1_ratio_noise_multiplier: float = 0.5
+    stage1_require_exact_balance: bool = False
+    stage1_bootstrap_resamples: int = 10_000
+    normalization_epsilon_ms: float = 0.001
+    stage2_warmups: int = 3
+    stage2_pairs: int = 12
+    stage2_require_exact_balance: bool = True
+    stage2_bootstrap_resamples: int = 10_000
+    stage2_relative_ratio: float = 1.5
+    stage2_relative_ci_low: float = 1.1
+    stage2_relative_noise_multiplier: float = 1.0
+    stage2_absolute_delta_ms: float = 10.0
+    stage2_absolute_noise_multiplier: float = 2.0
+    stage2_absolute_ratio: float = 1.1
+    stage2_direction_consistency: float = 0.75
+    stage1_seed_version: str = "stage1-seed-v1"
+    stage2_seed_version: str = "stage2-seed-v1"
+
+    def stage1_config(self) -> dict[str, object]:
+        return {
+            "warmups": self.stage1_warmups,
+            "pairs": self.stage1_pairs,
+            "top_fraction": self.stage1_top_fraction,
+            "min_top_k": self.stage1_min_top_k,
+            "max_top_k": self.stage1_max_top_k,
+        }
+
+    def stage2_config(self) -> dict[str, object]:
+        return {
+            "warmups": self.stage2_warmups,
+            "pairs": self.stage2_pairs,
+            "relative_ratio": self.stage2_relative_ratio,
+            "relative_ci_low": self.stage2_relative_ci_low,
+            "absolute_delta_ms": self.stage2_absolute_delta_ms,
+            "direction_consistency": self.stage2_direction_consistency,
+        }
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "protocol_version": "two-stage-screening-v3",
+            "normalization": {
+                "denominator": (
+                    "max(noise_p99_ms,"
+                    f"{self.normalization_epsilon_ms:g})"
+                ),
+                "epsilon_ms": self.normalization_epsilon_ms,
+            },
+            "stage1": {
+                "config": self.stage1_config(),
+                "k_formula_version": "ceil-fraction-clamped-v1",
+                "queue_count": self.stage1_queue_count,
+                "queue_allocation": "ceil(K/queue_count)",
+                "merge_order": ["absolute_delta", "ratio", "noise_normalized"],
+                "ratio_min_delta_noise_multiplier": (
+                    self.stage1_ratio_noise_multiplier
+                ),
+                "require_exact_balance": self.stage1_require_exact_balance,
+                "bootstrap_resamples": self.stage1_bootstrap_resamples,
+                "seed_version": self.stage1_seed_version,
+                "tie_break": "score_desc_pair_hash_asc",
+            },
+            "stage2": {
+                "config": self.stage2_config(),
+                "warmups": self.stage2_warmups,
+                "pairs": self.stage2_pairs,
+                "require_exact_balance": self.stage2_require_exact_balance,
+                "bootstrap_resamples": self.stage2_bootstrap_resamples,
+                "seed_version": self.stage2_seed_version,
+                "relative_gate": {
+                    "ratio_gte": self.stage2_relative_ratio,
+                    "ratio_ci_low_gt": self.stage2_relative_ci_low,
+                    "delta_noise_multiplier_gt": (
+                        self.stage2_relative_noise_multiplier
+                    ),
+                    "direction_gte": self.stage2_direction_consistency,
+                },
+                "absolute_gate": {
+                    "minimum_delta_ms": self.stage2_absolute_delta_ms,
+                    "noise_multiplier": self.stage2_absolute_noise_multiplier,
+                    "delta_ci_low_gt": 0.0,
+                    "ratio_gt": self.stage2_absolute_ratio,
+                    "direction_gte": self.stage2_direction_consistency,
+                },
+            },
+        }
+
+
+DEFAULT_SCREENING_POLICY = ScreeningPolicy()
+
+
+@dataclass(frozen=True)
 class Stage2Decision:
     relative_pass: bool
     absolute_pass: bool
@@ -137,23 +235,29 @@ class DurableTimeoutQueue:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             previous_size = self.path.stat().st_size if self.path.exists() else 0
             try:
+                self._arm_write_marker(
+                    record_digest=_sha256_json(payload),
+                    dedupe_key=record.dedupe_key,
+                    previous_size=previous_size,
+                )
+            except OSError as exc:
+                self._poisoned = True
+                raise ArtifactWriteError(str(exc)) from exc
+            try:
                 self._write_line(_canonical_json(payload))
             except (OSError, TypeError, ValueError) as exc:
                 rollback_error = self._rollback(previous_size)
                 self._poisoned = True
-                poison_error = self._write_poison(
-                    record_digest=_sha256_json(payload),
-                    dedupe_key=record.dedupe_key,
-                    previous_size=previous_size,
-                    reason=str(exc),
-                    rollback_error=(
-                        str(rollback_error) if rollback_error is not None else None
-                    ),
+                suffix = (
+                    f"; rollback={rollback_error!r}"
+                    if rollback_error is not None
+                    else ""
                 )
-                if poison_error is not None:
-                    raise ArtifactWriteError(
-                        f"{exc}; rollback={rollback_error!r}; poison={poison_error!r}"
-                    ) from exc
+                raise ArtifactWriteError(f"{exc}{suffix}") from exc
+            try:
+                self._clear_write_marker()
+            except OSError as exc:
+                self._poisoned = True
                 raise ArtifactWriteError(str(exc)) from exc
             self._records[record.dedupe_key] = payload
             return True
@@ -216,22 +320,19 @@ class DurableTimeoutQueue:
             return exc
         return None
 
-    def _write_poison(
+    def _arm_write_marker(
         self,
         *,
         record_digest: str,
         dedupe_key: str,
         previous_size: int,
-        reason: str,
-        rollback_error: str | None,
-    ) -> OSError | None:
+    ) -> None:
         body = {
             "dedupe_key": dedupe_key,
             "previous_size": previous_size,
-            "reason": reason,
             "record_digest": record_digest,
-            "rollback_error": rollback_error,
-            "schema_version": 1,
+            "schema_version": 2,
+            "state": "write_armed",
         }
         payload = {**body, "content_hash": _sha256_json(body)}
         self.poison_path.parent.mkdir(parents=True, exist_ok=True)
@@ -254,8 +355,39 @@ class DurableTimeoutQueue:
         except OSError as exc:
             if temporary is not None:
                 Path(temporary).unlink(missing_ok=True)
-            return exc
-        return None
+            raise exc
+
+    def _clear_write_marker(self) -> None:
+        marker = self.poison_path.read_bytes()
+        self.poison_path.unlink()
+        try:
+            _fsync_directory(self.poison_path.parent)
+        except OSError as exc:
+            try:
+                self._restore_write_marker(marker)
+            except OSError as restore_exc:
+                raise OSError(f"{exc}; marker restore failed: {restore_exc}") from exc
+            raise
+
+    def _restore_write_marker(self, marker: bytes) -> None:
+        temporary: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "wb",
+                dir=self.poison_path.parent,
+                prefix=f".{self.poison_path.name}.",
+                delete=False,
+            ) as handle:
+                temporary = handle.name
+                handle.write(marker)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.poison_path)
+            _fsync_directory(self.poison_path.parent)
+        except OSError:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)
+            raise
 
     def _validate_poison(self) -> None:
         try:
@@ -273,12 +405,12 @@ class DurableTimeoutQueue:
             != {
                 "dedupe_key",
                 "previous_size",
-                "reason",
                 "record_digest",
-                "rollback_error",
                 "schema_version",
+                "state",
             }
-            or body.get("schema_version") != 1
+            or body.get("schema_version") != 2
+            or body.get("state") != "write_armed"
             or payload.get("content_hash") != _sha256_json(body)
         ):
             raise ArtifactIntegrityError("timeout queue poison hash or shape differs")
@@ -312,18 +444,29 @@ class DurableTimeoutQueue:
         return records
 
 
-def stage1_k(accepted_pairs: int) -> int:
+def stage1_k(
+    accepted_pairs: int,
+    *,
+    policy: ScreeningPolicy = DEFAULT_SCREENING_POLICY,
+) -> int:
     if isinstance(accepted_pairs, bool) or not isinstance(accepted_pairs, int):
         raise TypeError("accepted_pairs must be an integer")
     if accepted_pairs <= 0:
         raise ValueError("accepted_pairs must be positive")
-    return min(30, max(3, math.ceil(0.05 * accepted_pairs)))
+    return min(
+        policy.stage1_max_top_k,
+        max(
+            policy.stage1_min_top_k,
+            math.ceil(policy.stage1_top_fraction * accepted_pairs),
+        ),
+    )
 
 
 def stage1_top_k(
     records: Iterable[PairRuntimeRecord],
     *,
     noise_p99_ms: float,
+    policy: ScreeningPolicy = DEFAULT_SCREENING_POLICY,
 ) -> tuple[str, ...]:
     """Merge three deterministic Stage-1 queues with unique contributions.
 
@@ -364,15 +507,16 @@ def stage1_top_k(
     if not ordinary:
         return ()
 
-    k = min(stage1_k(len(frozen)), len(ordinary))
-    allocation = math.ceil(k / 3)
+    k = min(stage1_k(len(frozen), policy=policy), len(ordinary))
+    allocation = math.ceil(k / policy.stage1_queue_count)
     queues = (
         sorted(ordinary, key=lambda value: (-float(value.median_delta_ms), value.pair_hash)),
         sorted(
             (
                 value
                 for value in ordinary
-                if float(value.median_delta_ms) >= 0.5 * noise
+                if float(value.median_delta_ms)
+                >= policy.stage1_ratio_noise_multiplier * noise
             ),
             key=lambda value: (-float(value.median_ratio), value.pair_hash),
         ),
@@ -408,6 +552,7 @@ def evaluate_stage2(
     evidence: RuntimeEvidence,
     *,
     noise_p99_ms: float,
+    policy: ScreeningPolicy = DEFAULT_SCREENING_POLICY,
 ) -> Stage2Decision:
     """Apply the fixed relative-or-absolute Stage-2 wide-recall gate."""
 
@@ -444,16 +589,32 @@ def evaluate_stage2(
         raise ValueError("Stage-2 direction_consistency must be in [0, 1]")
 
     relative_checks = (
-        (ratio >= 1.5, "relative_ratio_below_1_5"),
-        (ratio_ci_low > 1.1, "relative_ci_low_not_above_1_1"),
-        (delta > noise, "relative_delta_within_noise"),
-        (direction >= 0.75, "relative_direction_below_0_75"),
+        (ratio >= policy.stage2_relative_ratio, "relative_ratio_below_1_5"),
+        (ratio_ci_low > policy.stage2_relative_ci_low, "relative_ci_low_not_above_1_1"),
+        (
+            delta > policy.stage2_relative_noise_multiplier * noise,
+            "relative_delta_within_noise",
+        ),
+        (
+            direction >= policy.stage2_direction_consistency,
+            "relative_direction_below_0_75",
+        ),
     )
     absolute_checks = (
-        (delta >= max(2.0 * noise, 10.0), "absolute_delta_below_wide_gate"),
+        (
+            delta
+            >= max(
+                policy.stage2_absolute_noise_multiplier * noise,
+                policy.stage2_absolute_delta_ms,
+            ),
+            "absolute_delta_below_wide_gate",
+        ),
         (delta_ci_low > 0.0, "absolute_delta_ci_not_positive"),
-        (ratio > 1.1, "absolute_ratio_not_above_1_1"),
-        (direction >= 0.75, "absolute_direction_below_0_75"),
+        (ratio > policy.stage2_absolute_ratio, "absolute_ratio_not_above_1_1"),
+        (
+            direction >= policy.stage2_direction_consistency,
+            "absolute_direction_below_0_75",
+        ),
     )
     relative_pass = all(passed for passed, _reason in relative_checks)
     absolute_pass = all(passed for passed, _reason in absolute_checks)
@@ -570,6 +731,8 @@ def _fsync_directory(path: Path) -> None:
 
 
 __all__ = [
+    "DEFAULT_SCREENING_POLICY",
+    "ScreeningPolicy",
     "Stage2Candidate",
     "Stage2Decision",
     "DurableTimeoutQueue",

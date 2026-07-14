@@ -1656,7 +1656,155 @@ def test_stage2_progress_recovers_only_exact_intent_bound_durable_tail(
     assert recovered["candidate_intent"] is None
 
 
-def test_stage2_resource_partial_ledger_resumes_without_remeasuring_anchored_tail(
+def _prepare_missing_stage2_candidate_intent(tmp_path, monkeypatch):
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(
+        rule_id="constant_true_disjunction",
+        family="bool",
+        accepted_pair_quota=4,
+        max_generated_seed_budget=4,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=tuple(
+            f"MATCH (n) WHERE n.id = {index} RETURN n" for index in range(1, 5)
+        ),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "stage2_complete"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    progress_path = entry_dir / "stage2_progress.json"
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    tail = progress["candidate_ledger"].pop()
+    progress["candidate_intent"] = {
+        "selected_index": len(progress["candidate_ledger"]),
+        "pair_hash": tail["pair_hash"],
+        "candidate_digest": tail["candidate_digest"],
+    }
+    body = {key: value for key, value in progress.items() if key != "content_hash"}
+    progress["content_hash"] = canonical_hash(body)
+    progress_path.write_text(json.dumps(progress), encoding="utf-8")
+    (entry_dir / "stage2_selection.json").unlink()
+    pair_dir = entry_dir / "candidates" / tail["pair_hash"]
+    (pair_dir / "candidate.json").unlink()
+    return entry, generated, entry_dir, progress_path, pair_dir
+
+
+def test_missing_candidate_intent_rejects_a_nonempty_unknown_pair_directory(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    entry, generated, _entry_dir, _progress_path, pair_dir = (
+        _prepare_missing_stage2_candidate_intent(tmp_path, monkeypatch)
+    )
+    (pair_dir / "unknown.bin").write_bytes(b"foreign")
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert (pair_dir / "unknown.bin").exists()
+
+
+def test_missing_candidate_clear_crash_removes_empty_dir_then_third_retry_recovers(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    entry, generated, _entry_dir, _progress_path, pair_dir = (
+        _prepare_missing_stage2_candidate_intent(tmp_path, monkeypatch)
+    )
+    real_persist = worker_module._persist_stage2_progress
+    crashed = False
+
+    class SimulatedClearCrash(BaseException):
+        pass
+
+    def crash_after_clear(path, **kwargs):
+        nonlocal crashed
+        result = real_persist(path, **kwargs)
+        if kwargs["candidate_intent"] is None and not crashed:
+            crashed = True
+            raise SimulatedClearCrash("cleared intent before remeasurement")
+        return result
+
+    monkeypatch.setattr(worker_module, "_persist_stage2_progress", crash_after_clear)
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+    with pytest.raises(SimulatedClearCrash):
+        retry(entry)
+
+    assert not pair_dir.exists()
+    monkeypatch.setattr(worker_module, "_persist_stage2_progress", real_persist)
+    third = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    third.bind_run_dir(tmp_path)
+    assert third(entry)["terminal_state"] == "stage2_complete"
+
+
+def test_missing_candidate_cleanup_is_idempotent_after_a_predelete_crash(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    entry, generated, _entry_dir, _progress_path, _pair_dir = (
+        _prepare_missing_stage2_candidate_intent(tmp_path, monkeypatch)
+    )
+
+    class SimulatedPredeleteCrash(BaseException):
+        pass
+
+    real_remove = worker_module._remove_empty_stage2_candidate_dir
+    monkeypatch.setattr(
+        worker_module,
+        "_remove_empty_stage2_candidate_dir",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            SimulatedPredeleteCrash("before empty directory removal")
+        ),
+        raising=False,
+    )
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(SimulatedPredeleteCrash):
+        retry(entry)
+
+    monkeypatch.setattr(
+        worker_module,
+        "_remove_empty_stage2_candidate_dir",
+        real_remove,
+    )
+    recovered = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    recovered.bind_run_dir(tmp_path)
+    assert recovered(entry)["terminal_state"] == "stage2_complete"
+
+
+def test_stage2_resource_partial_ledger_is_terminal_under_monotonic_budget(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1675,23 +1823,22 @@ def test_stage2_resource_partial_ledger_resumes_without_remeasuring_anchored_tai
         generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
     )
 
-    class OneShotStage2Deadline:
-        pulsed = False
+    class MonotonicStage2Deadline:
+        exhausted = False
 
         def __call__(self) -> float:
             candidate_count = len(
                 tuple(tmp_path.glob("entries/*/candidates/*/candidate.json"))
             )
-            if candidate_count == 1 and not self.pulsed:
-                self.pulsed = True
-                return 601.0
-            return 0.0
+            if candidate_count == 1:
+                self.exhausted = True
+            return 601.0 if self.exhausted else 0.0
 
     first = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
         generation_runner=lambda _entry, _raw_dir: generated,
         adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
-        clock=OneShotStage2Deadline(),
+        clock=MonotonicStage2Deadline(),
     )
     first.bind_run_dir(tmp_path)
 
@@ -1710,19 +1857,19 @@ def test_stage2_resource_partial_ledger_resumes_without_remeasuring_anchored_tai
     retry = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
         generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
-        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
-        clock=lambda: 0.0,
+        adapter_factory=lambda *_args: pytest.fail("terminal RESOURCE must not reconnect"),
+        clock=lambda: 1000.0,
     )
     retry.bind_run_dir(tmp_path)
 
     retry_result = retry(entry)
 
-    complete = json.loads(progress_path.read_text(encoding="utf-8"))
-    assert retry_result["terminal_state"] == "stage2_complete"
-    assert len(complete["candidate_ledger"]) == 3
-    assert complete["candidate_intent"] is None
+    terminal = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert retry_result["terminal_state"] == "resource_exhausted"
+    assert len(terminal["candidate_ledger"]) == 1
+    assert terminal["candidate_intent"] is None
     assert anchored_path.read_bytes() == anchored_bytes
-    assert (entry_dir / "stage2_selection.json").exists()
+    assert not (entry_dir / "stage2_selection.json").exists()
 
 
 @pytest.mark.parametrize("corruption", ("query", "sample"))
@@ -1970,7 +2117,9 @@ def test_p2_stage2_selection_caps_validation_at_five_candidates(
     monkeypatch.setattr(
         worker_module,
         "stage1_top_k",
-        lambda records, *, noise_p99_ms: tuple(record.pair_hash for record in records),
+        lambda records, *, noise_p99_ms, policy: tuple(
+            record.pair_hash for record in records
+        ),
     )
     worker = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
@@ -3337,6 +3486,149 @@ def test_final_identity_drift_invalidates_completed_rule_entry_acceptance(
 
     assert retry_result["terminal_state"] == "infrastructure_failed"
     assert retry_result["acceptance_status"] == "incomplete"
+
+
+def test_identity_drift_finding_failure_leaves_no_tombstone_and_retry_writes_both(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    real_record = worker_module.ReliabilityFindingStore.record_entry
+    failed = False
+
+    def fail_finding_once(self, **kwargs):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("finding append failed")
+        return real_record(self, **kwargs)
+
+    monkeypatch.setattr(
+        worker_module.ReliabilityFindingStore,
+        "record_entry",
+        fail_finding_once,
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _FinalFingerprintDriftAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "infrastructure_failed"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    assert not (entry_dir / "runtime_invalidation.json").exists()
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("retry must use sealed corpus"),
+        adapter_factory=lambda _entry: _FinalFingerprintDriftAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+    assert retry(entry)["terminal_state"] == "infrastructure_failed"
+    assert (entry_dir / "runtime_invalidation.json").exists()
+    findings = (tmp_path / "reliability" / "findings.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert '"scope":"entry"' in findings
+
+
+def test_identity_drift_tombstone_failure_keeps_finding_and_retry_writes_both(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    real_tombstone = worker_module._write_entry_runtime_invalidation
+    failed = False
+
+    def fail_tombstone_once(*args, **kwargs):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("tombstone write failed")
+        return real_tombstone(*args, **kwargs)
+
+    monkeypatch.setattr(
+        worker_module,
+        "_write_entry_runtime_invalidation",
+        fail_tombstone_once,
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _FinalFingerprintDriftAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "infrastructure_failed"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    assert not (entry_dir / "runtime_invalidation.json").exists()
+    finding_path = tmp_path / "reliability" / "findings.jsonl"
+    assert '"scope":"entry"' in finding_path.read_text(encoding="utf-8")
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("retry must use sealed corpus"),
+        adapter_factory=lambda _entry: _FinalFingerprintDriftAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+    assert retry(entry)["terminal_state"] == "infrastructure_failed"
+    assert (entry_dir / "runtime_invalidation.json").exists()
+    findings = [
+        json.loads(line) for line in finding_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert findings[-1]["reproductions"] >= 2
+
+
+def test_worker_rejects_typed_screening_policy_object_drift(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["terminal_state"] == "stage2_complete"
+    policy = replace(
+        worker_module.DEFAULT_SCREENING_POLICY,
+        stage2_relative_ratio=1.6,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "DEFAULT_SCREENING_POLICY",
+        policy,
+        raising=False,
+    )
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("resume must use sealed corpus"),
+        adapter_factory=lambda _entry: _NoRuntimeAdapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
 def test_rule_entry_retry_resumes_durable_accepted_pairs_without_double_counting(

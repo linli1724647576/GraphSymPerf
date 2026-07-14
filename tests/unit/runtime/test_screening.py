@@ -5,6 +5,7 @@ import json
 from dataclasses import replace
 
 import pytest
+import graph_sym_perf.runtime.screening as screening_module
 
 from graph_sym_perf.runtime.models import PairedSample, RuntimeEvidence, RuntimeVerdict
 from graph_sym_perf.runtime.records import PairRuntimeRecord
@@ -93,6 +94,35 @@ def _rank_fixture_records(accepted: int) -> tuple[PairRuntimeRecord, ...]:
 @pytest.mark.parametrize("accepted, expected", ((50, 3), (200, 10), (1000, 30)))
 def test_k1_formula(accepted: int, expected: int) -> None:
     assert stage1_k(accepted) == expected
+
+
+def test_screening_policy_is_immutable_and_drives_k_and_stage2_thresholds() -> None:
+    policy_type = screening_module.ScreeningPolicy
+    default = screening_module.DEFAULT_SCREENING_POLICY
+    policy = replace(
+        default,
+        stage1_top_fraction=1.0,
+        stage1_min_top_k=1,
+        stage1_max_top_k=10,
+        stage2_relative_ratio=2.0,
+    )
+
+    assert stage1_k(4, policy=policy) == 4
+    decision = evaluate_stage2(
+        _evidence(
+            ratio=1.6,
+            ratio_ci_low=1.2,
+            delta=8.0,
+            delta_ci_low=1.0,
+            direction=0.83,
+        ),
+        noise_p99_ms=5.0,
+        policy=policy,
+    )
+    assert not decision.relative_pass
+    assert policy_type.__dataclass_params__.frozen is True
+    with pytest.raises(Exception):
+        policy.stage2_relative_ratio = 1.0
 
 
 def test_stage1_top_k_uses_abs_ratio_and_noise_queues() -> None:
@@ -426,7 +456,70 @@ def test_timeout_queue_unknown_write_outcome_is_rolled_back_and_durably_poisoned
         DurableTimeoutQueue(path)
 
 
-def test_timeout_queue_poison_tamper_and_poison_write_failure_remain_fail_closed(
+def test_timeout_queue_poison_tamper_remains_fail_closed(tmp_path) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    poison_path = path.with_name("timeout_queue.poison.json")
+    poison_path.write_text('{"tampered":true}\n', encoding="utf-8")
+    with pytest.raises(ArtifactIntegrityError, match="poison"):
+        DurableTimeoutQueue(path)
+
+
+def test_timeout_queue_prearm_failure_writes_no_queue_bytes(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+    monkeypatch.setattr(
+        store,
+        "_arm_write_marker",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("marker disk full")),
+        raising=False,
+    )
+
+    with pytest.raises(ArtifactWriteError, match="marker disk full"):
+        store.append(_timeout_record())
+
+    assert not path.exists() or path.read_bytes() == b""
+
+
+def test_timeout_queue_marker_precedes_full_line_and_survives_rollback_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+
+    def write_full_then_fail(line: str) -> None:
+        assert store.poison_path.exists()
+        path.write_text(line + "\n", encoding="utf-8")
+        raise OSError("full line fsync unknown")
+
+    monkeypatch.setattr(store, "_write_line", write_full_then_fail)
+    monkeypatch.setattr(store, "_rollback", lambda _size: OSError("rollback failed"))
+
+    with pytest.raises(ArtifactWriteError, match="full line fsync unknown"):
+        store.append(_timeout_record())
+
+    assert store.poison_path.exists()
+    with pytest.raises(ArtifactIntegrityError, match="poison"):
+        DurableTimeoutQueue(path)
+
+
+def test_timeout_queue_success_clears_prearmed_marker(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+    real_write = store._write_line
+
+    def assert_marker_then_write(line: str) -> None:
+        assert store.poison_path.exists()
+        real_write(line)
+
+    monkeypatch.setattr(store, "_write_line", assert_marker_then_write)
+
+    assert store.append(_timeout_record())
+    assert not store.poison_path.exists()
+    assert DurableTimeoutQueue(path).count == 1
+
+
+def test_timeout_queue_clear_failure_keeps_marker_and_reopen_rejects(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -434,24 +527,43 @@ def test_timeout_queue_poison_tamper_and_poison_write_failure_remain_fail_closed
     store = DurableTimeoutQueue(path)
     monkeypatch.setattr(
         store,
-        "_write_line",
-        lambda _line: (_ for _ in ()).throw(OSError("disk full")),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        store,
-        "_write_poison",
-        lambda **_kwargs: OSError("poison disk full"),
+        "_clear_write_marker",
+        lambda: (_ for _ in ()).throw(OSError("marker clear failed")),
         raising=False,
     )
 
-    with pytest.raises(ArtifactWriteError, match="poison disk full"):
+    with pytest.raises(ArtifactWriteError, match="marker clear failed"):
         store.append(_timeout_record())
-    with pytest.raises(ArtifactIntegrityError, match="poison"):
-        store.append(_second_timeout_record())
 
-    poison_path = path.with_name("timeout_queue.poison.json")
-    poison_path.write_text('{"tampered":true}\n', encoding="utf-8")
+    assert store.poison_path.exists()
+    with pytest.raises(ArtifactIntegrityError, match="poison"):
+        DurableTimeoutQueue(path)
+
+
+def test_timeout_queue_clear_fsync_failure_restores_marker(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "timeout_queue.jsonl"
+    store = DurableTimeoutQueue(path)
+    real_fsync_directory = screening_module._fsync_directory
+
+    def fail_only_after_marker_unlink(directory) -> None:
+        if not store.poison_path.exists():
+            raise OSError("clear directory fsync failed")
+        real_fsync_directory(directory)
+
+    monkeypatch.setattr(
+        screening_module,
+        "_fsync_directory",
+        fail_only_after_marker_unlink,
+    )
+
+    with pytest.raises(ArtifactWriteError, match="clear directory fsync failed"):
+        store.append(_timeout_record())
+
+    assert store.poison_path.exists()
+    monkeypatch.setattr(screening_module, "_fsync_directory", real_fsync_directory)
     with pytest.raises(ArtifactIntegrityError, match="poison"):
         DurableTimeoutQueue(path)
 
