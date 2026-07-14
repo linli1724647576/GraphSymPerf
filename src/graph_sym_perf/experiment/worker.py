@@ -367,6 +367,12 @@ class RuntimeFirstShardWorker:
         progress_path = entry_dir / "acceptance_progress.json"
         progress = _load_entry_progress(progress_path, entry=entry)
         prior_elapsed = float(progress["elapsed_seconds"])
+        progress_finish_fields: dict[str, object] = {
+            "accepted_hashes": tuple(progress["accepted_pair_hashes"]),
+            "generated_seeds": int(progress["attempted_query_records"]),
+            "rejects": dict(progress["reject_counts"]),
+            "rule_stats": _rule_stats_from_entry_progress(entry, progress),
+        }
         started = self._clock()
         deadline = started + max(0.0, entry.max_entry_runtime_seconds - prior_elapsed)
         if prior_elapsed >= entry.max_entry_runtime_seconds or self._clock() >= deadline:
@@ -375,9 +381,7 @@ class RuntimeFirstShardWorker:
                 attempt_dir,
                 terminal_state=EntryState.RESOURCE_EXHAUSTED,
                 generated=None,
-                accepted_hashes=tuple(progress["accepted_pair_hashes"]),
-                generated_seeds=int(progress["attempted_query_records"]),
-                rejects=dict(progress["reject_counts"]),
+                **progress_finish_fields,
             )
 
         generation_lease = self._attempt_context.generation_lease() if self._attempt_context else nullcontext()
@@ -409,6 +413,7 @@ class RuntimeFirstShardWorker:
                 generated=None,
                 infrastructure_error_kind=exc.kind,
                 infrastructure_reason=str(exc),
+                **progress_finish_fields,
             )
         except (MemoryError, OSError, AdapterError) as exc:
             _persist_entry_progress(
@@ -428,6 +433,7 @@ class RuntimeFirstShardWorker:
                 generated=None,
                 infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
                 infrastructure_reason=str(exc),
+                **progress_finish_fields,
             )
         if self._clock() >= deadline:
             _persist_entry_progress(
@@ -445,9 +451,7 @@ class RuntimeFirstShardWorker:
                 attempt_dir,
                 terminal_state=EntryState.RESOURCE_EXHAUSTED,
                 generated=generated,
-                accepted_hashes=tuple(progress["accepted_pair_hashes"]),
-                generated_seeds=int(progress["attempted_query_records"]),
-                rejects=dict(progress["reject_counts"]),
+                **progress_finish_fields,
             )
 
         graph_hash = _graph_snapshot_hash(generated.graph_statements)
@@ -473,6 +477,7 @@ class RuntimeFirstShardWorker:
                 generated=generated,
                 infrastructure_error_kind=exc.kind,
                 infrastructure_reason=str(exc),
+                **progress_finish_fields,
             )
         except (MemoryError, OSError, AdapterError) as exc:
             _persist_entry_progress(
@@ -492,6 +497,7 @@ class RuntimeFirstShardWorker:
                 generated=generated,
                 infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
                 infrastructure_reason=str(exc),
+                **progress_finish_fields,
             )
         proxy = AdapterQueryProxy(
             adapter,
@@ -684,18 +690,40 @@ class RuntimeFirstShardWorker:
         infrastructure_reason: str | None = None
         records_path = entry_dir / "accepted_pairs.jsonl"
         _ensure_jsonl(records_path)
-        accepted_hashes = _validated_entry_accepted_hashes(
+        validated_accepted_ordinals = _validated_entry_accepted_hashes(
             records_path,
             entry=entry,
             graph_snapshot_hash=graph_snapshot_hash,
             dbms_fingerprint=dbms_fingerprint,
             source_queries=queries,
         )
+        accepted_hashes = set(validated_accepted_ordinals)
         persisted_accepted_hashes = set(progress["accepted_pair_hashes"])
-        if progress_path.exists() and persisted_accepted_hashes != accepted_hashes:
-            raise WorkerFailure(
-                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "acceptance progress does not match durable accepted pair records",
+        if persisted_accepted_hashes != accepted_hashes:
+            appended_hashes = accepted_hashes - persisted_accepted_hashes
+            missing_hashes = persisted_accepted_hashes - accepted_hashes
+            recoverable_hash = next(iter(appended_hashes), None)
+            if (
+                missing_hashes
+                or len(appended_hashes) != 1
+                or recoverable_hash is None
+                or validated_accepted_ordinals[recoverable_hash] != last_query_ordinal + 1
+            ):
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "acceptance progress does not match durable accepted pair records",
+                )
+            last_query_ordinal = validated_accepted_ordinals[recoverable_hash]
+            generated_seeds = last_query_ordinal
+            _persist_entry_progress(
+                progress_path,
+                entry=entry,
+                prior_elapsed=prior_elapsed,
+                attempt_started=attempt_started,
+                now=self._clock(),
+                last_query_ordinal=last_query_ordinal,
+                rejects=rejects,
+                accepted_hashes=tuple(sorted(accepted_hashes)),
             )
 
         def persist_progress() -> None:
@@ -864,6 +892,7 @@ class RuntimeFirstShardWorker:
                     "rule_id": entry.rule_id,
                     "semantic_proof_sha256": pair.transform_metadata["semantic_proof_sha256"],
                     "site": pair.certificate.site_class,
+                    "source_query_ordinal": ordinal,
                     "stream": entry.stream.value,
                     "tier": entry.tier,
                     "transform_metadata": to_jsonable(pair.transform_metadata),
@@ -1992,10 +2021,12 @@ def _validated_entry_accepted_hashes(
     graph_snapshot_hash: str,
     dbms_fingerprint: str,
     source_queries: tuple[str, ...],
-) -> set[str]:
-    accepted: set[str] = set()
-    rule = RuleRegistry.default().get(entry.rule_id)
-    source_query_set = set(source_queries)
+) -> dict[str, int]:
+    accepted: dict[str, int] = {}
+    accepted_ordinals: set[int] = set()
+    registry = RuleRegistry.default()
+    rule = registry.get(entry.rule_id)
+    factory = RulePairFactory(registry)
     for record in _read_jsonl(path):
         pair_hash = record.get("pair_hash")
         query_a = record.get("query_a")
@@ -2004,13 +2035,17 @@ def _validated_entry_accepted_hashes(
         certificate = record.get("certificate")
         transform_metadata = record.get("transform_metadata")
         semantic_proof_sha256 = record.get("semantic_proof_sha256")
+        source_query_ordinal = record.get("source_query_ordinal")
         try:
             if (
                 not isinstance(pair_hash, str)
                 or len(pair_hash) != 64
                 or not isinstance(query_a, str)
                 or not query_a
-                or query_a not in source_query_set
+                or type(source_query_ordinal) is not int
+                or source_query_ordinal < 1
+                or source_query_ordinal > min(len(source_queries), entry.max_generated_seed_budget)
+                or source_queries[source_query_ordinal - 1] != query_a
                 or not isinstance(query_b, str)
                 or not query_b
                 or query_a == query_b
@@ -2060,6 +2095,18 @@ def _validated_entry_accepted_hashes(
                 certificate=rebuilt_certificate,
                 semantic_proof=proof,
             )
+            rebuilt = factory.build(query_a, entry, entry.target)
+            if rebuilt.quarantine or rebuilt.pair is None:
+                raise ValueError("accepted record cannot be rebuilt by its canonical rule factory")
+            expected_pair = rebuilt.pair
+            if (
+                expected_pair.query_b != query_b
+                or to_jsonable(expected_pair.parameters) != dict(parameters)
+                or to_jsonable(asdict(expected_pair.certificate)) != dict(certificate)
+                or to_jsonable(expected_pair.transform_metadata) != dict(transform_metadata)
+                or expected_pair.pair_hash != pair_hash
+            ):
+                raise ValueError("accepted record differs from its canonical factory reconstruction")
         except (KeyError, TypeError, ValueError) as exc:
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -2070,7 +2117,13 @@ def _validated_entry_accepted_hashes(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "durable accepted pair hash is duplicated",
             )
-        accepted.add(pair_hash)
+        if source_query_ordinal in accepted_ordinals:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "durable accepted pair source query ordinal is duplicated",
+            )
+        accepted[pair_hash] = source_query_ordinal
+        accepted_ordinals.add(source_query_ordinal)
     return accepted
 
 
@@ -2364,6 +2417,18 @@ def _persist_entry_progress(
         "accepted_pair_hashes": list(sorted(accepted_hashes)),
     }
     _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
+
+
+def _rule_stats_from_entry_progress(
+    entry: RulePlanEntry,
+    progress: Mapping[str, object],
+) -> dict[str, dict[str, int]]:
+    accepted = len(progress["accepted_pair_hashes"])
+    not_applicable = int(dict(progress["reject_counts"]).get("RULE_NOT_APPLICABLE", 0))
+    return {
+        "accepted": ({entry.rule_id: accepted} if accepted else {}),
+        "not_applicable": ({entry.rule_id: not_applicable} if not_applicable else {}),
+    }
 
 
 def _adapter_dbms_fingerprint(adapter: Any) -> DBMSFingerprint:

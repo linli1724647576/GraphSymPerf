@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from graph_sym_perf.core import QueryCase, QueryVariant, TargetSystem, TransformConfig
-from graph_sym_perf.experiment.plan_models import RulePlanEntry
 from graph_sym_perf.transforms.engine import apply_certified_rule_with_proof
 from graph_sym_perf.transforms.rule_models import RuleRegistry, RuleSpec
 from graph_sym_perf.transforms.registry import generate_rule_transform
@@ -16,6 +16,9 @@ from graph_sym_perf.transforms.safety_points import (
     validate_bound_semantic_proof,
 )
 from graph_sym_perf.workload.models import CertifiedQueryPair, PairBuildOutcome
+
+if TYPE_CHECKING:
+    from graph_sym_perf.experiment.plan_models import RulePlanEntry
 
 
 class RulePairFactory:
@@ -57,7 +60,7 @@ class RulePairFactory:
         except TypeError:
             return _quarantine("TRANSFORM_INVARIANT_MISMATCH")
         except ValueError:
-            return PairBuildOutcome(None, "PROOF_PRECONDITION_REJECTED")
+            return _quarantine("TRANSFORM_INVARIANT_MISMATCH")
         variants = tuple(variant for variant in family.variants if variant.static_safe)
         if not variants:
             return PairBuildOutcome(None, _skip_code(family.skipped_variants))

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
-from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.core import QueryCase, TargetSystem, TransformConfig
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream
 from graph_sym_perf.generation.corpus import PortableQuery
 from graph_sym_perf.transforms.rule_models import RuleRegistry
@@ -22,6 +26,26 @@ from graph_sym_perf.workload.rule_pairs import RulePairFactory
 
 
 _ACCEPTANCE_FIXTURE_RULE_ID = "duplicate_predicate_control"
+
+
+def test_rule_pairs_imports_in_a_clean_interpreter_without_experiment_cycle() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import graph_sym_perf.workload.rule_pairs as m; print(m.RulePairFactory.__name__)",
+        ],
+        cwd=repo_root,
+        env={**os.environ, "PYTHONPATH": str(repo_root / "src")},
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "RulePairFactory"
 
 
 def _entry(
@@ -150,6 +174,57 @@ def test_rule_pair_factory_quarantines_hidden_engine_proof_tampering(monkeypatch
     assert result.pair is None
     assert result.quarantine is True
     assert result.reject_code == "SEMANTIC_PROOF_INVARIANT_MISMATCH"
+
+
+def test_rule_pair_factory_quarantines_internal_transform_value_error(monkeypatch) -> None:
+    def drifted_transform(*_args, **_kwargs):
+        raise ValueError("certificate/proof binding drift")
+
+    monkeypatch.setattr(
+        "graph_sym_perf.workload.rule_pairs.generate_rule_transform",
+        drifted_transform,
+    )
+
+    result = RulePairFactory(RuleRegistry.default()).build(
+        "MATCH (n) WHERE n.id = 1 RETURN n",
+        _entry(rule_id="null_partition_tautology", family="bool"),
+        TargetSystem.NEO4J,
+    )
+
+    assert result.pair is None
+    assert result.quarantine is True
+    assert result.reject_code == "TRANSFORM_INVARIANT_MISMATCH"
+
+
+def test_bool_family_does_not_swallow_internal_proof_value_error(monkeypatch) -> None:
+    def drifted_engine(*_args, **_kwargs):
+        raise ValueError("proof metadata drift")
+
+    monkeypatch.setattr(
+        "graph_sym_perf.transforms.bool_redundancy.family.apply_certified_rule_with_proof",
+        drifted_engine,
+    )
+    rule = RuleRegistry.default().get("null_partition_tautology")
+    query_case = QueryCase(
+        "case",
+        "gdsmith",
+        "MATCH (n) WHERE n.id = 1 RETURN n",
+        {},
+        "",
+        "",
+        source="gdsmith",
+    )
+
+    with pytest.raises(ValueError, match="proof metadata drift"):
+        rule.transform_factory(
+            query_case,
+            TransformConfig(
+                enabled_families=("bool_redundancy",),
+                enabled_rules=(rule.rule_id,),
+                max_variants_per_case=1,
+            ),
+            TargetSystem.NEO4J,
+        )
 
 
 def _legacy_certificate(rule_id: str) -> SafetyCertificate:

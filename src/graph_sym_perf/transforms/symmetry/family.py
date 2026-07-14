@@ -72,8 +72,9 @@ def generate_symmetry_family(
     registry = RuleRegistry.default()
     available = tuple(
         rule
-        for rule in registry.rules_for(dbms, SafetyTier.CORE)
-        if rule.rule_id.endswith("_symmetry")
+        for tier in (SafetyTier.CORE, SafetyTier.CONTROL)
+        for rule in registry.rules_for(dbms, tier)
+        if rule.family.value == "sym" and rule.rule_id.endswith("_symmetry")
     )
     requested = tuple(rule for rule in available if rule.rule_id in transform_config.enabled_rules)
     if transform_config.max_variants_per_case is not None:
@@ -104,7 +105,7 @@ def generate_symmetry_family(
                         raise ValueError("engine and pattern-order proof metadata differ")
                 else:
                     pattern_count = None
-            except (RuleNotApplicable, ValueError):
+            except RuleNotApplicable:
                 continue
             if candidate not in seen:
                 transformed, selected_certificate = candidate, result.certificate

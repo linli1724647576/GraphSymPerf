@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import graph_sym_perf.experiment.worker as worker_module
+
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
 from graph_sym_perf.core import ExecutionResult, QueryExecutionError, TargetSystem
@@ -250,6 +252,13 @@ class _RejectThenInfrastructureAdapter(_Adapter):
             raise QueryExecutionError("ordinary seed rejection")
         if query_kind == "acceptance_base" and "n.id = 2" in query:
             raise OSError("connection lost on the second seed")
+        return super().execute(query, parameters, query_kind, **kwargs)
+
+
+class _AcceptThenInfrastructureAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **kwargs) -> ExecutionResult:
+        if query_kind == "acceptance_base" and "n.id = 2" in query:
+            raise OSError("connection lost after one accepted seed")
         return super().execute(query, parameters, query_kind, **kwargs)
 
 
@@ -1328,6 +1337,57 @@ def test_rule_entry_lifecycle_infrastructure_failures_return_typed_incomplete_su
     assert result["infrastructure_reason"]
 
 
+@pytest.mark.parametrize("failure_site", ("generation", "adapter_factory"))
+def test_early_lifecycle_failure_summary_preserves_durable_progress(tmp_path, failure_site) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=2,
+        max_generated_seed_budget=2,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=(
+            "MATCH (n) WHERE n.id = 1 RETURN n",
+            "MATCH (n) WHERE n.id = 2 RETURN n",
+        ),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _AcceptThenInfrastructureAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first_result = first(entry)
+    assert first_result["accepted_pairs"] == 1
+    assert first_result["acceptance_generated_seeds"] == 1
+
+    if failure_site == "generation":
+        next(tmp_path.glob("entries/*/generation_corpus.json")).unlink()
+
+    def fail_generation(_entry, _raw_dir):
+        raise MemoryError("generation initialization failed")
+
+    def fail_adapter(_entry):
+        raise OSError("adapter initialization failed")
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=fail_generation if failure_site == "generation" else lambda *_args: generated,
+        adapter_factory=fail_adapter,
+    )
+    retry.bind_run_dir(tmp_path)
+
+    result = retry(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["accepted_pairs"] == 1
+    assert result["acceptance_generated_seeds"] == 1
+    assert result["reject_reasons"] == {}
+    assert result["rule_stats"]["accepted"] == {entry.rule_id: 1}
+
+
 @pytest.mark.parametrize("adapter_type", (_FinalFingerprintDriftAdapter, _FinalGraphDriftAdapter))
 def test_final_identity_drift_invalidates_completed_rule_entry_acceptance(tmp_path, adapter_type) -> None:
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
@@ -1495,6 +1555,116 @@ def test_rule_entry_progress_includes_final_identity_and_adapter_close_elapsed(t
     assert progress["elapsed_seconds"] == 3.0
 
 
+def test_retry_recovers_only_the_validated_single_record_crash_window(tmp_path, monkeypatch) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    real_persist = worker_module._persist_entry_progress
+
+    class SimulatedProcessCrash(BaseException):
+        pass
+
+    crashed = False
+
+    def crash_after_accepted_append(path, **kwargs):
+        nonlocal crashed
+        if kwargs["accepted_hashes"] and not crashed:
+            crashed = True
+            raise SimulatedProcessCrash("accepted JSONL fsynced before progress replace")
+        return real_persist(path, **kwargs)
+
+    monkeypatch.setattr(worker_module, "_persist_entry_progress", crash_after_accepted_append)
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+
+    with pytest.raises(SimulatedProcessCrash):
+        first(entry)
+
+    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    record = json.loads(records_path.read_text(encoding="utf-8"))
+    assert record["source_query_ordinal"] == 1
+    assert not next(tmp_path.glob("entries/*")).joinpath("acceptance_progress.json").exists()
+
+    monkeypatch.setattr(worker_module, "_persist_entry_progress", real_persist)
+    retry_adapter = _Adapter()
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: retry_adapter,
+    )
+    retry.bind_run_dir(tmp_path)
+
+    result = retry(entry)
+
+    assert result["acceptance_status"] == "complete"
+    assert [kind for _, kind in retry_adapter.executed if kind == "acceptance_base"] == []
+    progress = json.loads(
+        next(tmp_path.glob("entries/*/acceptance_progress.json")).read_text(encoding="utf-8")
+    )
+    assert progress["last_query_ordinal"] == 1
+    assert progress["accepted_pair_hashes"] == [record["pair_hash"]]
+
+
+@pytest.mark.parametrize("corruption", ("progress_ahead", "non_contiguous", "multi_step"))
+def test_retry_rejects_non_single_step_accepted_progress_divergence(tmp_path, corruption) -> None:
+    quota = 2 if corruption == "multi_step" else 1
+    queries = (
+        "MATCH (n) WHERE n.id = 1 RETURN n",
+        (
+            "MATCH (n) WHERE n.id = 2 RETURN n"
+            if corruption == "multi_step"
+            else "MATCH (n) WHERE n.id = 1 RETURN n"
+        ),
+    )
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=quota,
+        max_generated_seed_budget=2,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=queries,
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
+    if corruption == "progress_ahead":
+        records_path.write_text("", encoding="utf-8")
+    else:
+        progress_path.unlink()
+        if corruption == "non_contiguous":
+            record = json.loads(records_path.read_text(encoding="utf-8"))
+            record["source_query_ordinal"] = 2
+            records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
 @pytest.mark.parametrize(
     "tamper",
     (
@@ -1508,6 +1678,9 @@ def test_rule_entry_progress_includes_final_identity_and_adapter_close_elapsed(t
         "tier",
         "stream",
         "site",
+        "parameters",
+        "extra_metadata",
+        "source_query_ordinal",
     ),
 )
 def test_rule_entry_retry_recomputes_every_accepted_record_binding(tmp_path, tamper) -> None:
@@ -1534,6 +1707,10 @@ def test_rule_entry_retry_recomputes_every_accepted_record_binding(tmp_path, tam
         record["transform_metadata"]["semantic_proof"]["theorem"] = "Forged"
     elif tamper in {"pair_hash", "query_hash"}:
         record[tamper] = "0" * 64
+    elif tamper == "parameters":
+        record["parameters"]["forged"] = 1
+    elif tamper == "extra_metadata":
+        record["transform_metadata"]["forged"] = "metadata"
     else:
         record[tamper] = "forged"
     records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")

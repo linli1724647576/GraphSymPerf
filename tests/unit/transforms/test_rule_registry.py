@@ -1,9 +1,10 @@
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
+from graph_sym_perf.core import QueryCase, TargetSystem, TransformConfig
 from graph_sym_perf.transforms.bool_redundancy import generate_bool_redundancy_family
-from graph_sym_perf.transforms.registry import RuleRegistry
+from graph_sym_perf.transforms.registry import RuleRegistry, generate_rule_transform
 from graph_sym_perf.transforms.rule_models import RuleFamily, SafetyTier
 from graph_sym_perf.transforms.safety_points import enumerate_safety_points
 from graph_sym_perf.transforms.symmetry import generate_symmetry_family
@@ -79,6 +80,40 @@ def test_rule_specs_expose_canonical_metadata_and_bind_their_family_factory() ->
             else generate_symmetry_family
         )
         assert rule.transform_factory is expected_factory
+
+
+@pytest.mark.parametrize(
+    ("rule_id", "query"),
+    (
+        ("duplicate_predicate_control", "MATCH (n) WHERE n.id = 1 RETURN n"),
+        ("edge_notation_symmetry", "MATCH (a)-[r:R]->(b) RETURN a, b, r"),
+    ),
+)
+def test_control_rule_execution_calls_its_bound_rule_factory(rule_id, query) -> None:
+    rule = RuleRegistry.default().get(rule_id)
+    calls = []
+    bound_factory = rule.transform_factory
+
+    def tracking_factory(query_case, config, target):
+        calls.append((query_case, config, target))
+        return bound_factory(query_case, config, target)
+
+    tracked = replace(rule, transform_factory=tracking_factory)
+    family_name = "bool_redundancy" if rule.family is RuleFamily.BOOL else "symmetry"
+    family = generate_rule_transform(
+        tracked,
+        QueryCase("control", "gdsmith", query, {}, "", "", source="gdsmith"),
+        TransformConfig(
+            enabled_families=(family_name,),
+            enabled_rules=(rule.implementation_rule_id,),
+            max_variants_per_case=1,
+        ),
+        TargetSystem.NEO4J,
+    )
+
+    assert len(calls) == 1
+    assert family.variants
+    assert family.variants[0].transform_rule == rule_id
 
 
 def test_boolean_rules_keep_canonical_and_implementation_ids_separate() -> None:

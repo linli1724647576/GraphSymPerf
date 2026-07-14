@@ -29,8 +29,9 @@ def generate_bool_redundancy_family(
     dbms = target.value if target is not None else "neo4j"
     available = tuple(
         rule
-        for rule in registry.rules_for(dbms, SafetyTier.CORE)
-        if rule.site_classes == ("where_boolean",)
+        for tier in (SafetyTier.CORE, SafetyTier.CONTROL)
+        for rule in registry.rules_for(dbms, tier)
+        if rule.family.value == "bool" and rule.site_classes == ("where_boolean",)
     )
     requested = tuple(rule for rule in available if rule.rule_id in config.enabled_rules)
     if config.max_variants_per_case is not None:
@@ -47,7 +48,7 @@ def generate_bool_redundancy_family(
             try:
                 result = apply_certified_rule_with_proof(query, rule, certificate)
                 candidate = result.query
-            except (RuleNotApplicable, ValueError):
+            except RuleNotApplicable:
                 continue
             if candidate not in seen:
                 transformed, selected_certificate = candidate, result.certificate
