@@ -239,12 +239,11 @@ class RulePlanEntry:
                 or self.accepted_pair_quota != 0
                 or self.max_generated_seed_budget != 0
                 or self.max_variants_per_seed != 0
-                or not isinstance(self.regression_case_id, str)
-                or not self.regression_case_id.strip()
+                or self.regression_case_id != "neo4j_bug001_pattern_order"
             ):
                 raise ValueError(
                     "REGRESSION entries require P0 Neo4j, zero generation budgets, "
-                    "and a non-empty regression_case_id"
+                    "and the frozen neo4j_bug001_pattern_order case identity"
                 )
         elif self.regression_case_id is not None:
             raise ValueError("non-REGRESSION entries must not carry regression_case_id")

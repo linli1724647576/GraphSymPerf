@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 import shutil
@@ -11,12 +12,14 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+import graph_sym_perf.validation.regression as regression_module
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.validation.models import (
     CandidateBundle,
     EquivalenceEvidence,
     PipelineStage,
     ValidationPolicy,
+    canonical_content_hash,
 )
 from graph_sym_perf.validation.regression import (
     RegressionArtifactError,
@@ -31,8 +34,10 @@ from graph_sym_perf.validation.regression import (
     load_regression_case,
     load_verified_regression_report,
     regression_campaign_identity,
+    regression_validation_evidence_path,
 )
 from graph_sym_perf.validation.session_runner import SpawnedValidationSessionRunner
+from graph_sym_perf.validation.session_runner import validation_schedule_seed
 from graph_sym_perf.validation.validator import IssueValidator
 from tests.integration.test_issue_validation import FakeIndependentRunner
 
@@ -47,7 +52,7 @@ def _environment(**overrides: str) -> dict[str, str]:
     values = {
         "GRAPHSYMPERF_NEO4J_BUG001_IMAGE_DIGEST": IMAGE_DIGEST,
         "GRAPHSYMPERF_NEO4J_BUG001_CONTAINER": "neo4j-bug001",
-        "GRAPHSYMPERF_NEO4J_BUG001_URI": "bolt://127.0.0.1:17687/bug001",
+        "GRAPHSYMPERF_NEO4J_BUG001_URI": "bolt://127.0.0.1:17687",
         "GRAPHSYMPERF_NEO4J_BUG001_USER": "neo4j-bug001-user",
         "GRAPHSYMPERF_NEO4J_BUG001_PASSWORD": PASSWORD,
         "GRAPHSYMPERF_NEO4J_URI": "bolt://127.0.0.1:7687/main",
@@ -92,12 +97,21 @@ def _campaign(case) -> str:
     )
 
 
+class _SeededFakeIndependentRunner(FakeIndependentRunner):
+    def run_session(self, candidate, session_number, **kwargs):
+        equivalence, session = super().run_session(candidate, session_number, **kwargs)
+        return equivalence, replace(
+            session,
+            schedule_seed=validation_schedule_seed(candidate.candidate_hash, session_number),
+        )
+
+
 def _runner(case, report_path: Path, validator=None, session_runner=None):
     return RegressionRunner._for_test(
         validator or IssueValidator(),
         report_path=report_path,
         identity_probe=lambda _case: _identity(case),
-        session_runner_factory=lambda _case: session_runner or FakeIndependentRunner(),
+        session_runner_factory=lambda _case: session_runner or _SeededFakeIndependentRunner(),
     )
 
 
@@ -121,6 +135,43 @@ def _tampered_report(report, **changes: object):
     for name, value in changes.items():
         object.__setattr__(tampered, name, value)
     return tampered
+
+
+def _canonical_json_bytes(payload: dict[str, object]) -> bytes:
+    return (
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _rebind_sidecar_and_main(
+    report_path: Path,
+    sidecar_payload: dict[str, object],
+    *,
+    rehash_sidecar: bool = True,
+) -> None:
+    if rehash_sidecar:
+        sidecar_body = {
+            name: value
+            for name, value in sidecar_payload.items()
+            if name != "content_hash"
+        }
+        sidecar_payload["content_hash"] = canonical_content_hash(sidecar_body)
+    sidecar_bytes = _canonical_json_bytes(sidecar_payload)
+    regression_validation_evidence_path(report_path).write_bytes(sidecar_bytes)
+    main_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    main_payload["validation_evidence_sha256"] = hashlib.sha256(sidecar_bytes).hexdigest()
+    main_body = {
+        name: value for name, value in main_payload.items() if name != "content_hash"
+    }
+    main_payload["content_hash"] = canonical_content_hash(main_body)
+    report_path.write_bytes(_canonical_json_bytes(main_payload))
 
 
 class FixedReportValidator:
@@ -268,7 +319,7 @@ def test_provenance_probe_receives_exact_container_and_digest_and_mismatch_fails
 @pytest.mark.parametrize(
     "overrides",
     (
-        {"GRAPHSYMPERF_NEO4J_URI": "bolt://127.0.0.1:17687/bug001"},
+        {"GRAPHSYMPERF_NEO4J_URI": "bolt://127.0.0.1:17687"},
         {"GRAPHSYMPERF_NEO4J_CONTAINER": "neo4j-bug001"},
     ),
 )
@@ -277,6 +328,28 @@ def test_regression_endpoint_and_container_must_be_isolated(overrides: dict[str,
         load_regression_case(
             FIXTURE,
             _environment(**overrides),
+            provenance_probe=lambda *_args: IMAGE_DIGEST,
+        )
+
+
+@pytest.mark.parametrize(
+    ("bug_uri", "main_uri"),
+    (
+        ("bolt://127.0.0.1:17687/bug001", "bolt://127.0.0.1:7687/main"),
+        ("bolt://127.0.0.1:7687/bug001", "bolt://127.0.0.1:7687/main"),
+    ),
+)
+def test_regression_uri_rejects_database_paths_and_shared_main_host_port(
+    bug_uri: str,
+    main_uri: str,
+) -> None:
+    with pytest.raises(RegressionConfigurationError, match="URI|endpoint"):
+        load_regression_case(
+            FIXTURE,
+            _environment(
+                GRAPHSYMPERF_NEO4J_BUG001_URI=bug_uri,
+                GRAPHSYMPERF_NEO4J_URI=main_uri,
+            ),
             provenance_probe=lambda *_args: IMAGE_DIGEST,
         )
 
@@ -306,7 +379,10 @@ def test_typed_complete_issue_report_is_the_only_pass_and_seals_identities(tmp_p
     assert re.fullmatch(r"[0-9a-f]{64}", report.policy_hash or "")
     assert re.fullmatch(r"[0-9a-f]{64}", report.certificate_hash or "")
     assert load_verified_regression_report(
-        path, case=case, campaign_identity_hash=_campaign(case)
+        path,
+        case=case,
+        campaign_identity_hash=_campaign(case),
+        current_identity=_identity(case),
     ) == report
 
 
@@ -461,6 +537,39 @@ def test_failure_taxonomy_uses_typed_evidence_not_reason_substrings(tmp_path: Pa
         assert report.failure_kind is kind
 
 
+@pytest.mark.parametrize(
+    "reason_code",
+    (
+        "sessions_not_independent",
+        "session_fingerprint_or_health_failure",
+        "invalid_measurement_protocol",
+        "validation_identity_mismatch",
+        "session_lifecycle_incomplete",
+    ),
+)
+def test_top_level_infrastructure_reason_precedes_equivalence_taxonomy(
+    tmp_path: Path,
+    reason_code: str,
+) -> None:
+    case = _case()
+
+    def infrastructure_with_equivalence_failure(report, _candidate):
+        return _tampered_report(
+            report,
+            stage=PipelineStage.REJECTED,
+            reason_codes=(reason_code,),
+            equivalence=EquivalenceEvidence(False, True, ("typed_mismatch",)),
+        )
+
+    report = _runner(
+        case,
+        tmp_path / f"top-level-infrastructure-{reason_code}.json",
+        validator=FixedReportValidator(infrastructure_with_equivalence_failure),
+    ).run(case, campaign_identity_hash=_campaign(case))
+
+    assert report.failure_kind is RegressionFailureKind.INFRASTRUCTURE
+
+
 def test_fresh_session_version_drift_is_version_typed_and_reports_observed_version(
     tmp_path: Path,
 ) -> None:
@@ -554,10 +663,168 @@ def test_landed_report_rejects_campaign_manifest_environment_and_content_drift(t
     _runner(case, path).run(case, campaign_identity_hash=_campaign(case))
 
     with pytest.raises(RegressionArtifactError, match="identity"):
-        load_verified_regression_report(path, case=case, campaign_identity_hash="c" * 64)
+        load_verified_regression_report(
+            path,
+            case=case,
+            campaign_identity_hash="c" * 64,
+            current_identity=_identity(case),
+        )
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["passed"] = False
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(RegressionArtifactError, match="hash"):
-        load_verified_regression_report(path, case=case, campaign_identity_hash=_campaign(case))
+        load_verified_regression_report(
+            path,
+            case=case,
+            campaign_identity_hash=_campaign(case),
+            current_identity=_identity(case),
+        )
+
+
+def test_landed_report_rejects_coherently_rehashed_validation_identity_forgery(
+    tmp_path: Path,
+) -> None:
+    case = _case()
+    path = tmp_path / "report.json"
+    _runner(case, path).run(case, campaign_identity_hash=_campaign(case))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for index, name in enumerate(
+        ("candidate_hash", "validation_report_hash", "policy_hash", "certificate_hash"),
+        start=1,
+    ):
+        payload[name] = f"{index:x}" * 64
+    payload_without_hash = {name: value for name, value in payload.items() if name != "content_hash"}
+    payload["content_hash"] = canonical_content_hash(payload_without_hash)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RegressionArtifactError, match="evidence|identity|hash"):
+        load_verified_regression_report(
+            path,
+            case=case,
+            campaign_identity_hash=_campaign(case),
+            current_identity=_identity(case),
+        )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ("missing", "symlink", "unknown_key", "content_hash", "file_sha"),
+)
+def test_landed_report_rejects_sidecar_topology_schema_and_hash_drift(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    case = _case()
+    report_path = tmp_path / "report.json"
+    _runner(case, report_path).run(case, campaign_identity_hash=_campaign(case))
+    sidecar_path = regression_validation_evidence_path(report_path)
+    if tamper == "missing":
+        sidecar_path.unlink()
+    elif tamper == "symlink":
+        target = tmp_path / "sidecar-target.json"
+        sidecar_path.replace(target)
+        sidecar_path.symlink_to(target)
+    elif tamper == "unknown_key":
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        payload["unknown"] = True
+        _rebind_sidecar_and_main(report_path, payload)
+    elif tamper == "content_hash":
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        payload["content_hash"] = "0" * 64
+        _rebind_sidecar_and_main(report_path, payload, rehash_sidecar=False)
+    else:
+        sidecar_path.write_bytes(sidecar_path.read_bytes() + b"\n")
+
+    with pytest.raises(RegressionArtifactError, match="evidence"):
+        load_verified_regression_report(
+            report_path,
+            case=case,
+            campaign_identity_hash=_campaign(case),
+            current_identity=_identity(case),
+        )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ("query", "candidate", "policy", "certificate", "session"),
+)
+def test_landed_report_rejects_coherently_rebound_raw_validation_drift(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    case = _case()
+    report_path = tmp_path / "report.json"
+    _runner(case, report_path).run(case, campaign_identity_hash=_campaign(case))
+    sidecar_path = regression_validation_evidence_path(report_path)
+    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    raw_report = payload["report"]
+    if tamper == "query":
+        raw_report["manifest"]["pair"]["query_a"] += " "
+    elif tamper == "candidate":
+        raw_report["manifest"]["candidate_hash"] = "f" * 64
+    elif tamper == "policy":
+        raw_report["validation_policy"]["min_ratio"] = 99.0
+    elif tamper == "certificate":
+        raw_report["manifest"]["certificate"]["capability_hash"] = "forged"
+    else:
+        raw_report["sessions"][0]["schedule_seed"] += 1
+    _rebind_sidecar_and_main(report_path, payload)
+
+    with pytest.raises(RegressionArtifactError, match="evidence"):
+        load_verified_regression_report(
+            report_path,
+            case=case,
+            campaign_identity_hash=_campaign(case),
+            current_identity=_identity(case),
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"observed_version": "2026.04.1 community"},
+        {"driver_version": "6.0.1"},
+        {"dbms_fingerprint": "c" * 64},
+        {"index_states": ("ONLINE",) * 6 + ("POPULATING",)},
+    ),
+)
+def test_landed_report_rejects_live_environment_identity_drift(
+    tmp_path: Path,
+    changes: dict[str, object],
+) -> None:
+    case = _case()
+    report_path = tmp_path / "report.json"
+    _runner(case, report_path).run(case, campaign_identity_hash=_campaign(case))
+
+    with pytest.raises(RegressionArtifactError, match="identity"):
+        load_verified_regression_report(
+            report_path,
+            case=case,
+            campaign_identity_hash=_campaign(case),
+            current_identity=replace(_identity(case), **changes),
+        )
+
+
+def test_atomic_report_creation_fsyncs_each_new_directory_and_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "new-parent" / "new-child" / "artifact.json"
+    real_open = regression_module.os.open
+    opened_directories: list[Path] = []
+
+    def recording_open(path, flags, *args, **kwargs):
+        candidate = Path(path)
+        if candidate.is_dir():
+            opened_directories.append(candidate.resolve())
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(regression_module.os, "open", recording_open)
+    regression_module._atomic_write_payload(destination, {"value": 1})
+
+    assert {
+        tmp_path.resolve(),
+        (tmp_path / "new-parent").resolve(),
+        (tmp_path / "new-parent" / "new-child").resolve(),
+    } <= set(opened_directories)

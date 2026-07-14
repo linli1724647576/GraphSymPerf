@@ -18,6 +18,7 @@ from graph_sym_perf.experiment.planner import build_rule_plan
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.worker import RuntimeFirstShardWorker
 from graph_sym_perf.validation.regression import RegressionEnvironmentIdentity, RegressionRunner
+from graph_sym_perf.validation.session_runner import validation_schedule_seed
 from graph_sym_perf.validation.validator import IssueValidator
 from tests.integration.test_issue_validation import FakeIndependentRunner
 
@@ -39,7 +40,7 @@ def _environment() -> dict[str, str]:
     return {
         "GRAPHSYMPERF_NEO4J_BUG001_IMAGE_DIGEST": "sha256:" + "a" * 64,
         "GRAPHSYMPERF_NEO4J_BUG001_CONTAINER": "neo4j-bug001",
-        "GRAPHSYMPERF_NEO4J_BUG001_URI": "bolt://127.0.0.1:17687/bug001",
+        "GRAPHSYMPERF_NEO4J_BUG001_URI": "bolt://127.0.0.1:17687",
         "GRAPHSYMPERF_NEO4J_BUG001_USER": "bug-user",
         "GRAPHSYMPERF_NEO4J_BUG001_PASSWORD": "bug-secret",
         "GRAPHSYMPERF_NEO4J_URI": "bolt://127.0.0.1:7687/main",
@@ -64,9 +65,8 @@ def _install_offline_production_gate(monkeypatch: pytest.MonkeyPatch, *, validat
         loaded.append(case)
         return case
 
-    def build_runner(path):
-        case = loaded[-1]
-        identity = RegressionEnvironmentIdentity(
+    def identity(case):
+        return RegressionEnvironmentIdentity(
             case.affected_version,
             "b" * 64,
             "6.0.0",
@@ -76,15 +76,36 @@ def _install_offline_production_gate(monkeypatch: pytest.MonkeyPatch, *, validat
             case.index_names,
             ("ONLINE",) * 7,
         )
+
+    class SeededFakeIndependentRunner(FakeIndependentRunner):
+        def run_session(self, candidate, session_number, **kwargs):
+            equivalence, session = super().run_session(
+                candidate, session_number, **kwargs
+            )
+            return equivalence, replace(
+                session,
+                schedule_seed=validation_schedule_seed(
+                    candidate.candidate_hash,
+                    session_number,
+                ),
+            )
+
+    def build_runner(path):
+        case = loaded[-1]
         return RegressionRunner._for_test(
             validator or IssueValidator(),
             report_path=path,
-            identity_probe=lambda _case: identity,
-            session_runner_factory=lambda _case: FakeIndependentRunner(),
+            identity_probe=lambda _case: identity(case),
+            session_runner_factory=lambda _case: SeededFakeIndependentRunner(),
         )
 
     monkeypatch.setattr(worker_module, "load_regression_case", load_case)
     monkeypatch.setattr(worker_module, "build_production_regression_runner", build_runner)
+    monkeypatch.setattr(
+        worker_module,
+        "probe_current_regression_environment_identity",
+        identity,
+    )
     return loaded
 
 
@@ -162,6 +183,11 @@ def test_p0_dispatches_the_production_runner_but_trusts_only_the_landed_artifact
         "build_production_regression_runner",
         lambda _path: LyingRunner(),
         raising=False,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "probe_current_regression_environment_identity",
+        lambda _case: object(),
     )
     worker = RuntimeFirstShardWorker(spec, environment={}, generation_runner=_must_not_generate)
     worker.bind_run_dir(tmp_path)

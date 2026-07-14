@@ -2,6 +2,8 @@ import hashlib
 import json
 import time
 
+import pytest
+
 import graph_sym_perf.experiment.worker as worker_module
 
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
@@ -19,6 +21,29 @@ from graph_sym_perf.experiment.supervisor import ShardSupervisor
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
 from graph_sym_perf.generation.corpus import GraphCorpus
 from graph_sym_perf.runtime.models import NoiseCalibration
+from tests.helpers.regression_gate import (
+    build_verified_regression_gate_template,
+    install_verified_regression_gate,
+)
+
+
+@pytest.fixture(scope="module")
+def _verified_regression_gate_template(tmp_path_factory):
+    return build_verified_regression_gate_template(
+        tmp_path_factory.mktemp("acceptance-regression-gate")
+    )
+
+
+@pytest.fixture(autouse=True)
+def _verified_regression_gate(
+    monkeypatch,
+    _verified_regression_gate_template,
+) -> None:
+    install_verified_regression_gate(
+        monkeypatch,
+        worker_module,
+        _verified_regression_gate_template,
+    )
 
 
 class _AcceptanceWorker:
@@ -177,8 +202,8 @@ class _EntryAdapter:
 
 def _entry(rule_id: str, family: str) -> RulePlanEntry:
     return RulePlanEntry(
-        entry_id=f"p0:neo4j:discovery:{rule_id}:128:0",
-        phase=CampaignPhase.P0,
+        entry_id=f"p1:neo4j:discovery:{rule_id}:128:0",
+        phase=CampaignPhase.P1,
         target=TargetSystem.NEO4J,
         rule_id=rule_id,
         family=family,

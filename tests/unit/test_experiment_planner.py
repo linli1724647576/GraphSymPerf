@@ -263,6 +263,18 @@ def test_regression_rule_plan_entry_invariants_fail_closed(changes: dict[str, ob
         replace(entry, **changes)
 
 
+def test_regression_rule_plan_entry_rejects_noncanonical_case_identity() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    entry = next(
+        value
+        for value in build_rule_plan(spec, CampaignPhase.P0).entries
+        if value.stream is RuleStream.REGRESSION
+    )
+
+    with pytest.raises(ValueError, match="REGRESSION"):
+        replace(entry, regression_case_id="forged-regression-case")
+
+
 def test_non_regression_entry_cannot_carry_a_regression_case_id() -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
     entry = build_rule_plan(spec, CampaignPhase.P1).entries[0]

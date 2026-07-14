@@ -45,6 +45,7 @@ from graph_sym_perf.validation.models import (
     canonical_content_hash,
 )
 from graph_sym_perf.validation.session_runner import SpawnedValidationSessionRunner
+from graph_sym_perf.validation.sealed_replay import replay_issue_validation_report
 from graph_sym_perf.validation.validator import IssueValidator
 
 
@@ -129,6 +130,17 @@ _RUNTIME_REASON_CODES = frozenset(
 _VERSION_SESSION_CODES = frozenset({"regression_affected_version_mismatch"})
 _GRAPH_SESSION_CODES = frozenset(
     {"regression_index_state_mismatch", "graph_count_mismatch", "graph_fingerprint_mismatch"}
+)
+_INFRASTRUCTURE_REASON_CODES = frozenset(
+    {
+        "sessions_not_independent",
+        "session_fingerprint_or_health_failure",
+        "invalid_measurement_protocol",
+        "validation_identity_mismatch",
+        "validation_report_incomplete",
+        "session_lifecycle_incomplete",
+        "missing_paired_samples",
+    }
 )
 _VERSION_SESSION_REASON_RE = re.compile(
     r"regression_affected_version_mismatch\|observed=(?P<observed>\d{4}\.\d{2}\.\d+ community)\Z"
@@ -378,6 +390,7 @@ class RegressionGateReport:
     validation_report_hash: str | None
     policy_hash: str | None
     certificate_hash: str | None
+    validation_evidence_sha256: str | None
     fresh_issue_count: int
     discovery_accepted_pairs: int
     validated_runtime_yield: int
@@ -414,7 +427,7 @@ class RegressionGateReport:
             self.slow_query_sha256,
         )
         return bool(
-            self.schema_version == 2
+            self.schema_version == 3
             and self.case_id == _FROZEN_MANIFEST_VALUES["case_id"]
             and self.known_regression is True
             and isinstance(self.passed, bool)
@@ -534,6 +547,8 @@ def load_regression_case(
         )
     container = values["container_env"]
     uri = _validated_uri(values["uri_env"], manifest.uri_env)
+    if urlsplit(uri).path:
+        raise RegressionConfigurationError("BUG001 URI must not contain a database path")
     main_uri = _required_environment(env, "GRAPHSYMPERF_NEO4J_URI")
     normalized_main_uri = _validated_uri(main_uri, "GRAPHSYMPERF_NEO4J_URI")
     if normalized_main_uri == uri:
@@ -543,7 +558,13 @@ def load_regression_case(
     main_endpoint = dict(
         normalized_uri_endpoint(main_uri, default_port=7687, database=main_database)
     )
-    if not dedicated_endpoint or dedicated_endpoint == main_endpoint:
+    dedicated_host_port = _uri_host_port(uri)
+    main_host_port = _uri_host_port(normalized_main_uri)
+    if (
+        not dedicated_endpoint
+        or dedicated_endpoint == main_endpoint
+        or dedicated_host_port == main_host_port
+    ):
         raise RegressionConfigurationError("BUG001 endpoint must differ from the main Neo4j endpoint")
     main_container = env.get("GRAPHSYMPERF_NEO4J_CONTAINER", "").strip()
     if main_container and main_container == container:
@@ -677,6 +698,12 @@ class _AffectedVersionNeo4jAdapter:
                 timeout_seconds=60.0,
             )
         loaded = self._delegate.load_gdsmith_graph(statements)
+        self.verify_indexes()
+        return loaded
+
+    def verify_indexes(self) -> tuple[str, ...]:
+        """Read and verify the current frozen index identity without trusting an artifact."""
+
         self._delegate.execute(
             "CALL db.awaitIndexes(60)",
             {},
@@ -705,14 +732,18 @@ class _AffectedVersionNeo4jAdapter:
         if states != ("ONLINE",) * len(self._case.index_names):
             raise RegressionGraphStateError()
         self.verified_index_states = states
-        return loaded
+        return states
 
 
 def build_independent_session_runner(case: RegressionCase) -> SpawnedValidationSessionRunner:
     return SpawnedValidationSessionRunner(RegressionNeo4jAdapterFactory(case))
 
 
-def _probe_environment_identity(case: RegressionCase) -> RegressionEnvironmentIdentity:
+def _read_environment_identity(
+    case: RegressionCase,
+    *,
+    verify_indexes: bool,
+) -> RegressionEnvironmentIdentity:
     adapter = RegressionNeo4jAdapterFactory(case)(None)
     try:
         connected = adapter.connectivity_check()
@@ -726,6 +757,7 @@ def _probe_environment_identity(case: RegressionCase) -> RegressionEnvironmentId
             raise RuntimeError("regression_driver_version_unavailable")
         if not adapter.observed_version:
             raise RuntimeError("regression_version_identity_unavailable")
+        index_states = adapter.verify_indexes() if verify_indexes else ("ONLINE",) * 7
         return RegressionEnvironmentIdentity(
             observed_version=adapter.observed_version,
             dbms_fingerprint=str(fingerprint.value),
@@ -733,9 +765,26 @@ def _probe_environment_identity(case: RegressionCase) -> RegressionEnvironmentId
             verified_image_digest=case.provenance.verified_image_digest,
             container_identity=case.provenance.container_identity,
             endpoint_identity=case.provenance.endpoint_identity,
+            index_names=case.index_names,
+            index_states=index_states,
         )
     finally:
         adapter.close()
+
+
+def _probe_environment_identity(case: RegressionCase) -> RegressionEnvironmentIdentity:
+    return _read_environment_identity(case, verify_indexes=False)
+
+
+def probe_current_regression_environment_identity(
+    case: RegressionCase,
+) -> RegressionEnvironmentIdentity:
+    """Probe the current affected endpoint, including the live i0..i6 index states."""
+
+    try:
+        return _read_environment_identity(case, verify_indexes=True)
+    except Exception as exc:
+        raise RegressionArtifactError("regression_current_environment_probe_failed") from exc
 
 
 class RegressionRunner:
@@ -879,24 +928,46 @@ class RegressionRunner:
                 else "validation_report_incomplete"
             )
         failure_kind = None if complete else _validation_failure_kind(validation)
+        report = _make_report(
+            case,
+            campaign_identity_hash=campaign_identity_hash,
+            passed=complete,
+            failure_kind=failure_kind,
+            reason_codes=reasons,
+            observed_version=(
+                _session_observed_version(validation) or identity.observed_version
+            ),
+            identity=identity,
+            current_version_status=current_version_status,
+            validation=validation if exact_report else None,
+            candidate=candidate,
+        )
         return self._persist(
-            _make_report(
-                case,
-                campaign_identity_hash=campaign_identity_hash,
-                passed=complete,
-                failure_kind=failure_kind,
-                reason_codes=reasons,
-                observed_version=(
-                    _session_observed_version(validation) or identity.observed_version
-                ),
-                identity=identity,
-                current_version_status=current_version_status,
-                validation=validation if exact_report else None,
-                candidate=candidate,
-            )
+            report,
+            case=case if complete else None,
+            validation=validation if complete and exact_report else None,
+            candidate=candidate if complete else None,
         )
 
-    def _persist(self, report: RegressionGateReport) -> RegressionGateReport:
+    def _persist(
+        self,
+        report: RegressionGateReport,
+        *,
+        case: RegressionCase | None = None,
+        validation: IssueValidationReport | None = None,
+        candidate: CandidateBundle | None = None,
+    ) -> RegressionGateReport:
+        if report.passed:
+            if case is None or validation is None or candidate is None:
+                raise RegressionArtifactError("passing regression report requires typed evidence")
+            evidence_payload = _validation_evidence_payload(case, candidate, validation)
+            evidence_sha256 = _serialized_payload_sha256(evidence_payload)
+            if evidence_sha256 != report.validation_evidence_sha256:
+                raise RegressionArtifactError("regression evidence binding differs")
+            _atomic_write_payload(
+                regression_validation_evidence_path(self.report_path),
+                evidence_payload,
+            )
         write_regression_report(report, self.report_path)
         return report
 
@@ -1068,6 +1139,7 @@ def load_verified_regression_report(
     *,
     case: RegressionCase,
     campaign_identity_hash: str,
+    current_identity: RegressionEnvironmentIdentity,
 ) -> RegressionGateReport:
     artifact = load_regression_gate_artifact(report_path)
     if not isinstance(artifact, RegressionGateReport):
@@ -1087,8 +1159,18 @@ def load_verified_regression_report(
         "graph_snapshot_sha256": case.graph_snapshot.content_hash,
         "expected_slow_query": case.expected_slow_query,
         "expected_index_names": case.index_names,
+        "observed_version": current_identity.observed_version,
+        "dbms_fingerprint": current_identity.dbms_fingerprint,
+        "driver_version": current_identity.driver_version,
     }
-    if any(getattr(report, name) != value for name, value in expected.items()):
+    if (
+        _identity_reason(case, current_identity) is not None
+        or current_identity.verified_image_digest
+        != case.provenance.verified_image_digest
+        or current_identity.container_identity != case.provenance.container_identity
+        or current_identity.endpoint_identity != case.provenance.endpoint_identity
+        or any(getattr(report, name) != value for name, value in expected.items())
+    ):
         raise RegressionArtifactError("regression_gate_artifact_identity_mismatch")
     if (
         report.passed is not True
@@ -1105,12 +1187,108 @@ def load_verified_regression_report(
                 report.validation_report_hash,
                 report.policy_hash,
                 report.certificate_hash,
+                report.validation_evidence_sha256,
             )
         )
         or not _optional_metrics_are_finite(report.validated_ratio, report.pooled_delta_ms)
     ):
         raise RegressionArtifactError("regression_gate_artifact_failed")
+    candidate = _candidate(case, current_identity)
+    evidence_payload, evidence_file_sha256 = _load_validation_evidence_payload(
+        report_path,
+        case=case,
+    )
+    if (
+        evidence_file_sha256 != report.validation_evidence_sha256
+        or evidence_payload["candidate_hash"] != candidate.candidate_hash
+    ):
+        raise RegressionArtifactError("regression_gate_evidence_identity_mismatch")
+    raw_report = evidence_payload["report"]
+    try:
+        recomputed = replay_issue_validation_report(candidate, raw_report)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RegressionArtifactError("regression_gate_evidence_replay_failed") from exc
+    validation_report_hash = canonical_content_hash(raw_report)
+    exact_bindings = {
+        "candidate_hash": candidate.candidate_hash,
+        "validation_report_hash": validation_report_hash,
+        "policy_hash": str(candidate.content_hashes["validation_policy"]),
+        "certificate_hash": str(candidate.content_hashes["certificate"]),
+        "validation_stage": recomputed.stage.value,
+        "validation_protocol": recomputed.validation_protocol,
+        "validated_ratio": recomputed.validated_ratio,
+        "pooled_delta_ms": recomputed.pooled_delta_ms,
+    }
+    if (
+        recomputed.stage is not PipelineStage.VALIDATION_PASSED
+        or not issue_validation_report_is_complete(recomputed)
+        or not _validation_metrics_are_finite(recomputed)
+        or any(getattr(report, name) != value for name, value in exact_bindings.items())
+    ):
+        raise RegressionArtifactError("regression_gate_evidence_identity_mismatch")
     return report
+
+
+def regression_validation_evidence_path(report_path: str | Path) -> Path:
+    """Return the fixed typed-evidence sidecar within the frozen case directory."""
+
+    return Path(report_path).parent / "validation_evidence.json"
+
+
+def _validation_evidence_payload(
+    case: RegressionCase,
+    candidate: CandidateBundle,
+    validation: IssueValidationReport,
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_type": "regression_validation_evidence",
+        "case_id": case.case_id,
+        "candidate_hash": candidate.candidate_hash,
+        "report": to_jsonable(asdict(validation)),
+    }
+    return {**body, "content_hash": canonical_content_hash(body)}
+
+
+def _load_validation_evidence_payload(
+    report_path: str | Path,
+    *,
+    case: RegressionCase,
+) -> tuple[dict[str, object], str]:
+    path = regression_validation_evidence_path(report_path)
+    if path.is_symlink() or not path.is_file():
+        raise RegressionArtifactError("regression_gate_evidence_missing")
+    try:
+        raw_bytes = path.read_bytes()
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RegressionArtifactError("regression_gate_evidence_unreadable") from exc
+    expected_keys = {
+        "schema_version",
+        "artifact_type",
+        "case_id",
+        "candidate_hash",
+        "report",
+        "content_hash",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise RegressionArtifactError("regression_gate_evidence_schema_mismatch")
+    body = {name: value for name, value in payload.items() if name != "content_hash"}
+    try:
+        canonical_hash = canonical_content_hash(body)
+    except (TypeError, ValueError) as exc:
+        raise RegressionArtifactError("regression_gate_evidence_noncanonical") from exc
+    if (
+        payload["schema_version"] != 1
+        or payload["artifact_type"] != "regression_validation_evidence"
+        or payload["case_id"] != case.case_id
+        or not isinstance(payload["candidate_hash"], str)
+        or _SHA256_RE.fullmatch(payload["candidate_hash"]) is None
+        or not isinstance(payload["report"], dict)
+        or payload["content_hash"] != canonical_hash
+    ):
+        raise RegressionArtifactError("regression_gate_evidence_hash_mismatch")
+    return payload, hashlib.sha256(raw_bytes).hexdigest()
 
 
 def _candidate(case: RegressionCase, identity: RegressionEnvironmentIdentity) -> CandidateBundle:
@@ -1177,7 +1355,7 @@ def _make_report(
         validation is not None and _validation_metrics_are_finite(validation)
     )
     values: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "case_id": case.case_id,
         "known_regression": True,
         "passed": passed,
@@ -1224,6 +1402,13 @@ def _make_report(
         ),
         "certificate_hash": (
             str(candidate.content_hashes["certificate"]) if candidate else None
+        ),
+        "validation_evidence_sha256": (
+            _serialized_payload_sha256(
+                _validation_evidence_payload(case, candidate, validation)
+            )
+            if passed and validation is not None and candidate is not None
+            else None
         ),
         "fresh_issue_count": 0,
         "discovery_accepted_pairs": 0,
@@ -1274,6 +1459,8 @@ def _identity_reason(case: RegressionCase, identity: RegressionEnvironmentIdenti
 
 def _validation_failure_kind(validation: object) -> RegressionFailureKind:
     if not isinstance(validation, IssueValidationReport):
+        return RegressionFailureKind.INFRASTRUCTURE
+    if any(reason in _INFRASTRUCTURE_REASON_CODES for reason in validation.reason_codes):
         return RegressionFailureKind.INFRASTRUCTURE
     session_reasons = tuple(
         str(reason)
@@ -1359,31 +1546,61 @@ def write_regression_report(report: RegressionGateReport, path: str | Path) -> N
 
 
 def _atomic_write_payload(destination: Path, payload: Mapping[str, object]) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(
-        dict(payload),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ) + "\n"
+    _mkdir_parents_durable(destination.parent)
+    serialized = _serialized_payload(payload)
     descriptor, name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
     )
     temporary = Path(name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        with os.fdopen(descriptor, "wb") as handle:
             handle.write(serialized)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, destination)
-        directory = os.open(destination.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        _fsync_directory(destination.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _serialized_payload(payload: Mapping[str, object]) -> bytes:
+    return (
+        json.dumps(
+            dict(payload),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _serialized_payload_sha256(payload: Mapping[str, object]) -> str:
+    return hashlib.sha256(_serialized_payload(payload)).hexdigest()
+
+
+def _mkdir_parents_durable(directory: Path) -> None:
+    missing: list[Path] = []
+    cursor = directory
+    while not cursor.exists():
+        missing.append(cursor)
+        cursor = cursor.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    for created in reversed(missing):
+        _fsync_directory(created)
+        _fsync_directory(created.parent)
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(
+        directory,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _strict_fixture_path(manifest_path: Path, name: str) -> Path:
@@ -1455,6 +1672,13 @@ def _validated_uri(value: str, env_name: str) -> str:
     return urlunsplit((parsed.scheme.lower(), netloc, parsed.path, "", ""))
 
 
+def _uri_host_port(uri: str) -> tuple[str, int]:
+    parsed = urlsplit(uri)
+    if parsed.hostname is None:  # pragma: no cover - guarded by _validated_uri
+        raise RegressionConfigurationError("Neo4j URI hostname is unavailable")
+    return parsed.hostname.lower(), parsed.port or 7687
+
+
 def _endpoint_identity(endpoint: Mapping[str, object]) -> str:
     return canonical_content_hash(dict(endpoint))
 
@@ -1490,8 +1714,10 @@ __all__ = [
     "load_regression_case",
     "load_regression_gate_artifact",
     "load_verified_regression_report",
+    "probe_current_regression_environment_identity",
     "regression_campaign_identity",
     "regression_environment_identity_hash",
+    "regression_validation_evidence_path",
     "write_regression_configuration_failure",
     "write_unresolved_regression_configuration_failure",
     "write_regression_report",
