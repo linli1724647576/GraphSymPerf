@@ -8,10 +8,13 @@ import json
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from graph_sym_perf.core import GdsmithConfig
 from graph_sym_perf.gdsmith import check_gdsmith_tooling, neo4j_uri_to_host_port, parse_gdsmith_log
 from graph_sym_perf.gdsmith import runner as gdsmith_runner
 from graph_sym_perf.gdsmith.runner import (
+    build_gdsmith_command,
     _compact_large_text_artifact,
     _detect_fatal_stderr_markers,
     _detect_query_record_limit_sentinel,
@@ -93,6 +96,31 @@ MATCH (n0:L0) RETURN n0.id;
 def test_neo4j_uri_to_host_port() -> None:
     assert neo4j_uri_to_host_port("bolt://127.0.0.1:7687") == ("127.0.0.1", 7687)
     assert neo4j_uri_to_host_port("neo4j://localhost") == ("localhost", 7687)
+
+
+def test_gdsmith_command_exposes_max_node_num_before_backend() -> None:
+    command = build_gdsmith_command(
+        java_path="java",
+        jar_path="GDsmith.jar",
+        config=GdsmithConfig(max_node_num=512),
+        backend="neo4j",
+        host="127.0.0.1",
+        port=7687,
+        username="neo4j",
+        password="secret",
+        num_queries=10,
+        seed=7,
+    )
+
+    index = command.index("--max-node-num")
+    assert command[index + 1] == "512"
+    assert index < command.index("neo4j")
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, "128"])
+def test_gdsmith_config_rejects_non_positive_or_non_integer_max_node_num(value) -> None:
+    with pytest.raises((TypeError, ValueError), match="max_node_num"):
+        GdsmithConfig(max_node_num=value)
 
 
 def test_gdsmith_tooling_requires_destructive_guard(tmp_path: Path) -> None:
@@ -415,6 +443,16 @@ def test_gdsmith_database_connection_loss_is_fatal_even_when_upstream_exits_zero
     )
 
     assert _detect_fatal_stderr_markers(stderr) == ("DatabaseConnectionLost",)
+
+
+def test_gdsmith_java_heap_space_is_a_single_fatal_oom_marker(tmp_path: Path) -> None:
+    stderr = tmp_path / "gdsmith_stderr.txt"
+    stderr.write_text(
+        "Java heap space\nJava heap space\n",
+        encoding="utf-8",
+    )
+
+    assert _detect_fatal_stderr_markers(stderr) == ("OutOfMemoryError",)
 
 
 def test_gdsmith_query_record_limit_sentinel_is_detected_exactly(tmp_path: Path) -> None:

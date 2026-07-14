@@ -24,6 +24,7 @@ _FATAL_STDERR_RETURNCODE = 1
 _QUERY_RECORD_LIMIT_SENTINEL = "java.lang.RuntimeException: total number reached"
 _FATAL_STDERR_PATTERNS: tuple[tuple[str, str], ...] = (
     ("OutOfMemoryError", "OutOfMemoryError"),
+    ("OutOfMemoryError", "Java heap space"),
     ("StackOverflowError", "StackOverflowError"),
     ("NoClassDefFoundError", "NoClassDefFoundError"),
     ("UnsupportedClassVersionError", "UnsupportedClassVersionError"),
@@ -197,6 +198,8 @@ def build_gdsmith_command(
         "--print-progress-information=false",
         "--timeout-seconds",
         str(int(config.timeout_seconds)),
+        "--max-node-num",
+        str(config.max_node_num),
         *extra_args,
         backend,
         "--host",

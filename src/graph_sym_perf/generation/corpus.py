@@ -24,6 +24,34 @@ class GraphCorpus:
 
 
 @dataclass(frozen=True)
+class GraphManifest:
+    requested_max_nodes: int
+    actual_nodes: int
+    actual_relationships: int
+    label_count: int
+    relationship_type_count: int
+    index_count: int
+    graph_fingerprint: str
+
+    def __post_init__(self) -> None:
+        _require_positive_integer(self.requested_max_nodes, "requested_max_nodes")
+        for name in (
+            "actual_nodes",
+            "actual_relationships",
+            "label_count",
+            "relationship_type_count",
+            "index_count",
+        ):
+            _require_non_negative_integer(getattr(self, name), name)
+        if len(self.graph_fingerprint) != 64:
+            raise ValueError("graph_fingerprint must be a SHA-256 hex digest")
+        try:
+            int(self.graph_fingerprint, 16)
+        except ValueError as exc:
+            raise ValueError("graph_fingerprint must be a SHA-256 hex digest") from exc
+
+
+@dataclass(frozen=True)
 class PortableQuery:
     text: str
     source: str = "gdsmith"
@@ -56,4 +84,18 @@ def portable_ast_hash(text: str) -> str:
     return sha256(canonical.encode("utf-8")).hexdigest()
 
 
-__all__ = ["GraphCorpus", "PortableQuery", "QueryCorpus", "portable_ast_hash"]
+def _require_positive_integer(value: object, name: str) -> None:
+    if type(value) is not int:
+        raise TypeError(f"{name} must be a positive integer")
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+
+
+def _require_non_negative_integer(value: object, name: str) -> None:
+    if type(value) is not int:
+        raise TypeError(f"{name} must be a non-negative integer")
+    if value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+
+
+__all__ = ["GraphCorpus", "GraphManifest", "PortableQuery", "QueryCorpus", "portable_ast_hash"]

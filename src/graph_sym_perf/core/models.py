@@ -141,6 +141,13 @@ class GdsmithConfig:
     timeout_seconds: float = 180.0
     stall_timeout_seconds: float = 120.0
     max_raw_artifact_bytes: int | None = None
+    max_node_num: int = 128
+
+    def __post_init__(self) -> None:
+        if type(self.max_node_num) is not int:
+            raise TypeError("max_node_num must be a positive integer")
+        if self.max_node_num <= 0:
+            raise ValueError("max_node_num must be a positive integer")
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import unquote, urlparse
@@ -23,6 +23,7 @@ from urllib.parse import unquote, urlparse
 from graph_sym_perf.adapters import create_adapter
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.adapters.lifecycle import reset_graph_state
+from graph_sym_perf.adapters.neo4j import read_neo4j_graph_manifest
 from graph_sym_perf.artifacts.policy import ArtifactLevel
 from graph_sym_perf.artifacts.schema import ArtifactRecord
 from graph_sym_perf.artifacts.store import (
@@ -38,11 +39,11 @@ from graph_sym_perf.dialects.apache_age import ApacheAgeDialect
 from graph_sym_perf.dialects.base import DecisionKind
 from graph_sym_perf.dialects.native import NativeCypherDialect
 from graph_sym_perf.equivalence.checker import compare_typed_results
-from graph_sym_perf.experiment.plan_models import ExperimentSpec, ShardTask
+from graph_sym_perf.experiment.plan_models import ExperimentSpec, RulePlanEntry, ShardTask
 from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import ErrorKind, ShardState, _append_jsonl_fsync, _atomic_write_json, _fsync_directory
-from graph_sym_perf.generation.corpus import GraphCorpus, portable_ast_hash
+from graph_sym_perf.generation.corpus import GraphCorpus, GraphManifest, portable_ast_hash
 from graph_sym_perf.generation.gdsmith import GdsmithGenerator, GenerationRequest
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
@@ -376,6 +377,29 @@ class RuntimeFirstShardWorker:
         )
         try:
             self._reset_and_load(load_proxy, generated.graph_statements)
+            graph_manifest: GraphManifest | None = None
+            if task.target is TargetSystem.NEO4J:
+                try:
+                    requested_max_nodes = _requested_max_nodes(task, generated)
+                    if requested_max_nodes is not None:
+                        graph_manifest = read_neo4j_graph_manifest(
+                            load_proxy,
+                            requested_max_nodes=requested_max_nodes,
+                            statements=generated.graph_statements,
+                        )
+                except (TypeError, ValueError) as exc:
+                    raise WorkerFailure(
+                        ErrorKind.INFRASTRUCTURE_ERROR,
+                        f"graph manifest read failed: {exc}",
+                    ) from exc
+                if graph_manifest is not None and graph_manifest.graph_fingerprint != graph_hash:
+                    raise WorkerFailure(
+                        ErrorKind.INFRASTRUCTURE_ERROR,
+                        "graph manifest fingerprint does not match the sealed graph snapshot",
+                    )
+                if graph_manifest is not None:
+                    _atomic_write_json(attempt_dir / "graph_manifest.json", asdict(graph_manifest))
+            graph_fingerprint = graph_manifest.graph_fingerprint if graph_manifest is not None else graph_hash
             fingerprint = _adapter_dbms_fingerprint(load_proxy)
             health_epoch = _adapter_dbms_health_epoch(load_proxy)
             if fingerprint.available and health_epoch.available:
@@ -387,7 +411,7 @@ class RuntimeFirstShardWorker:
                     task,
                     generated.query_texts,
                     shard_dir,
-                    graph_snapshot_hash=graph_hash,
+                    graph_snapshot_hash=graph_fingerprint,
                     dbms_fingerprint=fingerprint.value,
                     max_seconds=max(0.0, shard_deadline - time.monotonic()),
                 )
@@ -533,6 +557,14 @@ class RuntimeFirstShardWorker:
                 "reason": health_epoch.reason,
             },
         }
+        if graph_manifest is not None:
+            summary.update(
+                {
+                    "requested_max_nodes": graph_manifest.requested_max_nodes,
+                    "actual_nodes": graph_manifest.actual_nodes,
+                    "graph_fingerprint": graph_manifest.graph_fingerprint,
+                }
+            )
         screening_path = attempt_dir / "screening.json"
         _atomic_write_json(
             screening_path,
@@ -976,35 +1008,53 @@ class RuntimeFirstShardWorker:
         system = run_config.systems[0]
         return create_adapter(system, run_config, self.environment, allow_create=True)
 
-    def _generate_with_gdsmith(self, task: ShardTask, raw_dir: Path) -> GeneratedShard:
-        backend, host, port, username, password = _gdsmith_connection(task.target, self.environment)
-        provenance = _generation_backend_provenance(task.target, backend)
-        if task.generation_backend not in {"unspecified", provenance}:
+    def _generate_with_gdsmith(self, task: ShardTask | RulePlanEntry, raw_dir: Path) -> GeneratedShard:
+        if isinstance(task, RulePlanEntry):
+            target = task.target
+            seed = task.shard_seed
+            accepted_pair_quota = task.accepted_pair_quota
+            max_runtime_seconds = task.max_entry_runtime_seconds
+            planned_generation_backend = self.spec.systems[target].generation_backend
+            max_node_num = task.graph_scale
+        elif isinstance(task, ShardTask):
+            target = task.target
+            seed = task.seed
+            accepted_pair_quota = task.accepted_query_pairs
+            max_runtime_seconds = task.max_runtime_seconds
+            planned_generation_backend = task.generation_backend
+            max_node_num = GdsmithConfig().max_node_num
+        else:
+            raise TypeError("GDsmith generation task must be ShardTask or RulePlanEntry")
+
+        backend, host, port, username, password = _gdsmith_connection(target, self.environment)
+        provenance = _generation_backend_provenance(target, backend)
+        if planned_generation_backend not in {"unspecified", provenance}:
             raise RuntimeError(
-                f"planned generation backend {task.generation_backend!r} does not match runtime {provenance!r}"
+                f"planned generation backend {planned_generation_backend!r} does not match runtime {provenance!r}"
             )
-        requires_single_label = "single_node_label" in self.spec.systems[task.target].capabilities
+        requires_single_label = "single_node_label" in self.spec.systems[target].capabilities
         generation_query_limit = _generation_query_limit(task, self.spec)
         result_holder: dict[str, object] = {}
 
         def invoke(request: GenerationRequest) -> tuple[str, ...]:
             # Leave a 30-second supervisor margin so timeout is emitted as an
             # auditable partial corpus instead of a killed worker process.
-            timeout_seconds = max(1.0, min(float(task.max_runtime_seconds) - 300.0, 6 * 3600.0))
-            result = run_gdsmith(
-                config=GdsmithConfig(
-                    expected_source_commit=self.spec.generation.expected_commit,
-                    backend_extra_args=(
-                        {backend: ("--label-num", "1")}
-                        if requires_single_label
-                        else {}
-                    ),
-                    timeout_seconds=timeout_seconds,
-                    max_raw_artifact_bytes=min(
-                        350 * 1024 * 1024,
-                        int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024 * 7 // 10,
-                    ),
+            timeout_seconds = max(1.0, min(float(max_runtime_seconds) - 300.0, 6 * 3600.0))
+            base_config = GdsmithConfig(
+                expected_source_commit=self.spec.generation.expected_commit,
+                backend_extra_args=(
+                    {backend: ("--label-num", "1")}
+                    if requires_single_label
+                    else {}
                 ),
+                timeout_seconds=timeout_seconds,
+                max_raw_artifact_bytes=min(
+                    350 * 1024 * 1024,
+                    int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024 * 7 // 10,
+                ),
+            )
+            result = run_gdsmith(
+                config=replace(base_config, max_node_num=max_node_num),
                 env=self.environment,
                 raw_dir=raw_dir,
                 backend=backend,
@@ -1042,15 +1092,15 @@ class RuntimeFirstShardWorker:
             return tuple(record.statement for record in result.parsed.accepted_queries)
 
         corpus = GdsmithGenerator(invoke).generate(
-            GenerationRequest(seed=task.seed, limit=generation_query_limit)
+            GenerationRequest(seed=seed, limit=generation_query_limit)
         )
         result = result_holder["result"]
-        if bool(getattr(result, "generation_stalled", False)) and len(corpus.queries) < task.accepted_query_pairs:
+        if bool(getattr(result, "generation_stalled", False)) and len(corpus.queries) < accepted_pair_quota:
             raise WorkerFailure(
                 ErrorKind.WORKER_HUNG,
                 (
                     f"GDsmith stalled after {len(corpus.queries)} query records; "
-                    f"cannot cover {task.accepted_query_pairs} accepted pairs"
+                    f"cannot cover {accepted_pair_quota} accepted pairs"
                 ),
             )
         return GeneratedShard(
@@ -1060,8 +1110,9 @@ class RuntimeFirstShardWorker:
                 "backend": backend,
                 "generation_backend": provenance,
                 "generation_source": "gdsmith",
-                "generation_seed": task.seed,
+                "generation_seed": seed,
                 "generated_query_record_limit": generation_query_limit,
+                "requested_max_nodes": max_node_num,
                 "gdsmith_returncode": result.returncode,
                 "duplicate_ast_records": len(corpus.duplicate_ast_hashes),
                 "generation_stop_reason": (
@@ -1093,14 +1144,40 @@ class FormalRuntimeFirstShardWorker(RuntimeFirstShardWorker):
         )
 
 
-def _generation_query_limit(task: ShardTask, spec: ExperimentSpec) -> int:
+def _generation_query_limit(task: ShardTask | RulePlanEntry, spec: ExperimentSpec) -> int:
+    if isinstance(task, RulePlanEntry):
+        max_generated_seeds = task.max_generated_seed_budget
+        accepted_query_pairs = task.accepted_pair_quota
+    elif isinstance(task, ShardTask):
+        max_generated_seeds = task.max_generated_seeds
+        accepted_query_pairs = task.accepted_query_pairs
+    else:
+        raise TypeError("generation task must be ShardTask or RulePlanEntry")
     capabilities = spec.systems[task.target].capabilities
     if "very_low_applicability_generation" in capabilities:
-        return min(task.max_generated_seeds, task.accepted_query_pairs * 10)
+        return min(max_generated_seeds, accepted_query_pairs * 10)
     if "very_low_yield_generation" in capabilities:
-        return min(task.max_generated_seeds, max(100, task.accepted_query_pairs * 5))
+        return min(max_generated_seeds, max(100, accepted_query_pairs * 5))
     multiplier = 5 if "low_yield_generation" in capabilities else 2
-    return min(task.max_generated_seeds, task.accepted_query_pairs * multiplier)
+    return min(max_generated_seeds, accepted_query_pairs * multiplier)
+
+
+def _requested_max_nodes(task: ShardTask | RulePlanEntry, generated: GeneratedShard) -> int | None:
+    value = generated.generator_metadata.get("requested_max_nodes")
+    if value is None:
+        if isinstance(task, RulePlanEntry):
+            value = task.graph_scale
+        elif generated.generator_metadata.get("generation_source") == "gdsmith":
+            value = GdsmithConfig().max_node_num
+        else:
+            return None
+    if type(value) is not int:
+        raise TypeError("requested_max_nodes must be a positive integer")
+    if value <= 0:
+        raise ValueError("requested_max_nodes must be a positive integer")
+    if isinstance(task, RulePlanEntry) and value != task.graph_scale:
+        raise ValueError("requested_max_nodes does not match RulePlanEntry.graph_scale")
+    return value
 
 
 def _generation_backend_provenance(target: TargetSystem, backend: str) -> str:

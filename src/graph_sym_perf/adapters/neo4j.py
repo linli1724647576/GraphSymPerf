@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from graph_sym_perf.adapters.base import BaseAdapter, normalized_uri_endpoint
 from graph_sym_perf.adapters.common_cypher import CypherLoaderMixin, _query_execution_error
 from graph_sym_perf.core import AdapterError, ExecutionResult, PlanRecord, QueryTimeoutError, TargetSystem, to_typed_value as to_jsonable
+from graph_sym_perf.generation.corpus import GraphCorpus, GraphManifest
 from graph_sym_perf.plan import make_plan_record, unavailable_plan
 
 
@@ -181,6 +182,67 @@ def _query_with_timeout(query: str, timeout_seconds: float | None) -> Any:
 
 def _is_gdsmith_index_name(name: str) -> bool:
     return re.fullmatch(r"i\d+", name) is not None
+
+
+def read_neo4j_graph_manifest(
+    adapter: Any,
+    *,
+    requested_max_nodes: int,
+    statements: tuple[str, ...],
+) -> GraphManifest:
+    if type(requested_max_nodes) is not int:
+        raise TypeError("requested_max_nodes must be a positive integer")
+    if requested_max_nodes <= 0:
+        raise ValueError("requested_max_nodes must be a positive integer")
+
+    queries = (
+        ("nodes", "MATCH (n) RETURN count(n) AS nodes", "graph_manifest_nodes"),
+        (
+            "relationships",
+            "MATCH ()-[r]->() RETURN count(r) AS relationships",
+            "graph_manifest_relationships",
+        ),
+        (
+            "labels",
+            "MATCH (n) UNWIND labels(n) AS label RETURN count(DISTINCT label) AS labels",
+            "graph_manifest_labels",
+        ),
+        (
+            "types",
+            "MATCH ()-[r]->() RETURN count(DISTINCT type(r)) AS types",
+            "graph_manifest_relationship_types",
+        ),
+        (
+            "indexes",
+            "SHOW INDEXES YIELD name RETURN count(name) AS indexes",
+            "graph_manifest_indexes",
+        ),
+    )
+    observed: dict[str, int] = {}
+    for field, query, query_kind in queries:
+        result = adapter.execute(query, {}, query_kind, max_rows=1)
+        if isinstance(getattr(result, "summary", None), Mapping) and result.summary.get("truncated"):
+            raise ValueError(f"graph manifest {field} result was truncated")
+        rows = getattr(result, "rows", None)
+        if not isinstance(rows, tuple | list) or len(rows) != 1 or not isinstance(rows[0], Mapping):
+            raise ValueError(f"graph manifest {field} result must contain exactly one row")
+        value = rows[0].get(field)
+        if type(value) is not int:
+            raise TypeError(f"graph manifest {field} must be a non-negative integer")
+        if value < 0:
+            raise ValueError(f"graph manifest {field} must be a non-negative integer")
+        observed[field] = value
+
+    graph_fingerprint = GraphCorpus(tuple(statements)).content_hash
+    return GraphManifest(
+        requested_max_nodes=requested_max_nodes,
+        actual_nodes=observed["nodes"],
+        actual_relationships=observed["relationships"],
+        label_count=observed["labels"],
+        relationship_type_count=observed["types"],
+        index_count=observed["indexes"],
+        graph_fingerprint=graph_fingerprint,
+    )
 
 
 def _collect_rows(result: Any, max_rows: int | None) -> tuple[tuple[Mapping[str, Any], ...], Any, bool]:

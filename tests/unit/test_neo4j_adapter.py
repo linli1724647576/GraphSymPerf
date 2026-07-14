@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
+from graph_sym_perf.adapters import neo4j as neo4j_adapter
 from graph_sym_perf.adapters.neo4j import Neo4jAdapter, _collect_rows, _is_gdsmith_index_name, _neo4j_summary
+from graph_sym_perf.generation.corpus import GraphCorpus
 
 
 class FakeRecord:
@@ -22,6 +28,29 @@ class FakeResult:
     def consume(self):
         self.consumed = True
         return object()
+
+
+class _ResultSequenceAdapter:
+    def __init__(self, rows):
+        self._rows = iter(rows)
+        self.calls = []
+
+    def execute(self, query, parameters, query_kind, **kwargs):
+        self.calls.append((query, parameters, query_kind, kwargs))
+        return SimpleNamespace(
+            rows=next(self._rows),
+            summary={"truncated": False},
+        )
+
+
+def _valid_graph_manifest_rows():
+    return [
+        ({"nodes": 256},),
+        ({"relationships": 430},),
+        ({"labels": 5},),
+        ({"types": 4},),
+        ({"indexes": 3},),
+    ]
 
 
 def test_collect_rows_stops_after_row_cap_plus_one() -> None:
@@ -76,3 +105,67 @@ def test_neo4j_reset_graph_uses_bounded_transaction_batches() -> None:
     assert "IN TRANSACTIONS OF 1000 ROWS" in query
     assert kind == "neo4j_database_reset"
     assert timeout == 45
+
+
+def test_graph_manifest_records_requested_and_observed_scale_from_execute_calls() -> None:
+    adapter = _ResultSequenceAdapter(_valid_graph_manifest_rows())
+    statements = (" CREATE (n {id: 1}) ", "CREATE (m {id: 2})")
+
+    manifest = neo4j_adapter.read_neo4j_graph_manifest(
+        adapter,
+        requested_max_nodes=256,
+        statements=statements,
+    )
+
+    assert manifest.requested_max_nodes == 256
+    assert manifest.actual_nodes == 256
+    assert manifest.actual_relationships == 430
+    assert manifest.label_count == 5
+    assert manifest.relationship_type_count == 4
+    assert manifest.index_count == 3
+    assert manifest.graph_fingerprint == GraphCorpus(statements).content_hash
+    assert [call[2] for call in adapter.calls] == [
+        "graph_manifest_nodes",
+        "graph_manifest_relationships",
+        "graph_manifest_labels",
+        "graph_manifest_relationship_types",
+        "graph_manifest_indexes",
+    ]
+    assert all(call[3]["max_rows"] == 1 for call in adapter.calls)
+
+
+@pytest.mark.parametrize(
+    ("row_index", "invalid_row"),
+    [
+        (0, ()),
+        (0, ({"unexpected": 256},)),
+        (0, ({"nodes": -1},)),
+        (1, ({"relationships": True},)),
+        (2, ({"labels": 1.5},)),
+        (3, ({"types": "4"},)),
+        (4, ({"indexes": None},)),
+    ],
+)
+def test_graph_manifest_fails_closed_on_missing_or_invalid_observed_facts(
+    row_index,
+    invalid_row,
+) -> None:
+    rows = _valid_graph_manifest_rows()
+    rows[row_index] = invalid_row
+
+    with pytest.raises((TypeError, ValueError)):
+        neo4j_adapter.read_neo4j_graph_manifest(
+            _ResultSequenceAdapter(rows),
+            requested_max_nodes=256,
+            statements=("CREATE (n {id: 1})",),
+        )
+
+
+@pytest.mark.parametrize("requested_max_nodes", [True, False, 0, -1, 1.5, "256"])
+def test_graph_manifest_rejects_invalid_requested_scale(requested_max_nodes) -> None:
+    with pytest.raises((TypeError, ValueError), match="requested_max_nodes"):
+        neo4j_adapter.read_neo4j_graph_manifest(
+            _ResultSequenceAdapter(_valid_graph_manifest_rows()),
+            requested_max_nodes=requested_max_nodes,
+            statements=("CREATE (n {id: 1})",),
+        )

@@ -7,7 +7,7 @@ import pytest
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
 from graph_sym_perf.core import ExecutionResult, TargetSystem
-from graph_sym_perf.experiment.plan_models import ShardTask
+from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream, ShardTask
 from graph_sym_perf.experiment.evidence_validation import candidate_artifact_hashes
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.state import ErrorKind
@@ -44,10 +44,18 @@ class _Adapter:
 
     def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
         self.executed.append((query, query_kind))
+        manifest_values = {
+            "graph_manifest_nodes": ("nodes", 1),
+            "graph_manifest_relationships": ("relationships", 0),
+            "graph_manifest_labels": ("labels", 1),
+            "graph_manifest_relationship_types": ("types", 0),
+            "graph_manifest_indexes": ("indexes", 0),
+        }
+        key, value = manifest_values.get(query_kind, ("n", 1))
         return ExecutionResult(
             system=TargetSystem.NEO4J,
             query_kind=query_kind,
-            rows=({"n": 1},),
+            rows=({key: value},),
             elapsed_ms=1.0,
             summary={"truncated": False},
         )
@@ -100,6 +108,32 @@ class _RuntimeGapAdapter(_Adapter):
 class _FingerprintUnavailableAdapter(_Adapter):
     def dbms_fingerprint(self) -> DBMSFingerprint:
         return DBMSFingerprint(None, "server_version_unavailable")
+
+
+class _InvalidGraphManifestAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **kwargs) -> ExecutionResult:
+        result = super().execute(query, parameters, query_kind, **kwargs)
+        if query_kind != "graph_manifest_nodes":
+            return result
+        return ExecutionResult(
+            system=result.system,
+            query_kind=result.query_kind,
+            rows=({"nodes": "unknown"},),
+            elapsed_ms=result.elapsed_ms,
+            summary=result.summary,
+        )
+
+
+class _LegacyGenerationAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **_kwargs) -> ExecutionResult:
+        self.executed.append((query, query_kind))
+        return ExecutionResult(
+            system=TargetSystem.NEO4J,
+            query_kind=query_kind,
+            rows=({"n": 1},),
+            elapsed_ms=1.0,
+            summary={"truncated": False},
+        )
 
 
 class _EquivalenceMismatchAdapter(_Adapter):
@@ -206,6 +240,28 @@ class _LeaseContext:
             self.phases.append("measurement:end")
 
 
+def _rule_plan_entry(*, graph_scale: int = 256) -> RulePlanEntry:
+    return RulePlanEntry(
+        entry_id=f"p1:neo4j:discovery:constant_true_disjunction:{graph_scale}:0",
+        phase=CampaignPhase.P1,
+        target=TargetSystem.NEO4J,
+        rule_id="constant_true_disjunction",
+        family="BOOL",
+        tier="CORE",
+        graph_scale=graph_scale,
+        shard_index=0,
+        shard_seed=7,
+        accepted_pair_quota=1,
+        max_generated_seed_budget=2,
+        max_variants_per_seed=1,
+        proof_version="bool-v1",
+        query_timeout_seconds=30,
+        max_entry_runtime_seconds=600,
+        measurement_protocol_id="paired-runtime-v1",
+        stream=RuleStream.DISCOVERY,
+    )
+
+
 def test_worker_graph_identity_matches_validation_snapshot_contract() -> None:
     statements = (" CREATE (a) ", "", "CREATE (b)")
 
@@ -272,6 +328,41 @@ def test_formal_gdsmith_seam_keeps_partial_stalled_corpus_and_deduplicates_ast(t
     assert generated.query_texts == (record.statement,)
     assert generated.generator_metadata["generation_stop_reason"] == "NO_PROGRESS_TIMEOUT"
     assert generated.generator_metadata["duplicate_ast_records"] == 1
+
+
+def test_worker_passes_rule_plan_graph_scale_to_gdsmith(monkeypatch, tmp_path) -> None:
+    captured = {}
+    record = SimpleNamespace(statement="MATCH (n) RETURN n")
+
+    def fake_run_gdsmith(**kwargs):
+        captured["config"] = kwargs["config"]
+        return SimpleNamespace(
+            returncode=0,
+            process_returncode=0,
+            fatal_stderr_markers=(),
+            query_record_limit_reached=False,
+            artifact_budget_exceeded=False,
+            generation_stalled=False,
+            parsed=SimpleNamespace(
+                graph_statements=("CREATE (n:Node {id: 1})",),
+                accepted_queries=(record,),
+            ),
+        )
+
+    monkeypatch.setattr("graph_sym_perf.experiment.worker.run_gdsmith", fake_run_gdsmith)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={
+            "GRAPHSYMPERF_NEO4J_URI": "bolt://localhost:7687",
+            "GRAPHSYMPERF_NEO4J_USER": "neo4j",
+            "GRAPHSYMPERF_NEO4J_PASSWORD": "secret",
+        },
+    )
+
+    generated = worker._generate_with_gdsmith(_rule_plan_entry(graph_scale=256), tmp_path / "raw")
+
+    assert captured["config"].max_node_num == 256
+    assert generated.generator_metadata["requested_max_nodes"] == 256
 
 
 def test_formal_gdsmith_seam_retries_stalled_corpus_that_cannot_cover_target(
@@ -679,6 +770,105 @@ def test_worker_accepts_only_complete_equivalent_gdsmith_pairs_and_writes_minima
     )
     assert identity["graph_snapshot_hash"] == result["graph_snapshot_ref"]["content_hash"]
     assert identity["dbms_fingerprint"] == "a" * 64
+
+
+def test_worker_writes_observed_graph_manifest_and_binds_summary_identity(tmp_path) -> None:
+    statements = ("CREATE (n:Node {id: 1, value: 1})",)
+    shard = GeneratedShard(
+        graph_statements=statements,
+        query_texts=("MATCH (n) WHERE n.value = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": 256},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+
+    manifest_path = tmp_path / "shards" / "neo4j-000" / "attempt-000" / "graph_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest == {
+        "actual_nodes": 1,
+        "actual_relationships": 0,
+        "graph_fingerprint": GraphSnapshot.from_statements(statements).content_hash,
+        "index_count": 0,
+        "label_count": 1,
+        "relationship_type_count": 0,
+        "requested_max_nodes": 256,
+    }
+    assert result["requested_max_nodes"] == 256
+    assert result["actual_nodes"] == 1
+    assert result["graph_fingerprint"] == manifest["graph_fingerprint"]
+    identity = json.loads(
+        (tmp_path / "shards" / "neo4j-000" / "accepted_identity.json").read_text(encoding="utf-8")
+    )
+    assert identity["graph_snapshot_hash"] == manifest["graph_fingerprint"]
+
+
+def test_worker_fails_closed_when_observed_graph_manifest_is_invalid(tmp_path) -> None:
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": 128},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _InvalidGraphManifestAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+
+    assert captured.value.kind is ErrorKind.INFRASTRUCTURE_ERROR
+    assert "graph manifest" in str(captured.value)
+    assert not (tmp_path / "shards" / "neo4j-000" / "accepted_pairs.jsonl").exists()
+
+
+def test_worker_classifies_invalid_requested_graph_scale_as_infrastructure_failure(tmp_path) -> None:
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": "128"},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+
+    assert captured.value.kind is ErrorKind.INFRASTRUCTURE_ERROR
+    assert "requested_max_nodes" in str(captured.value)
+
+
+def test_legacy_custom_generation_without_requested_scale_does_not_fabricate_manifest(tmp_path) -> None:
+    shard = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+        query_texts=("MATCH (n) WHERE n.value = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith"},
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        generation_runner=lambda _task, _raw_dir: shard,
+        adapter_factory=lambda _task: _LegacyGenerationAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
+
+    assert result["acceptance_status"] == "complete"
+    assert "requested_max_nodes" not in result
+    assert not (
+        tmp_path / "shards" / "neo4j-000" / "attempt-000" / "graph_manifest.json"
+    ).exists()
 
 
 def test_worker_records_incomplete_when_seed_bound_cannot_fill_budget(tmp_path) -> None:
