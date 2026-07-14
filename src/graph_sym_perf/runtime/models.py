@@ -63,11 +63,19 @@ class RuntimeEvidence:
     dbms_fingerprint: str | None = None
     measurement_source: str | None = None
     measurement_protocol: str | None = None
+    median_a_ms: float | None = None
+    median_b_ms: float | None = None
+    slower_side: str | None = None
+    ci_delta_low_ms: float | None = None
+    ci_delta_high_ms: float | None = None
 
 
 @dataclass(frozen=True)
 class NoiseCalibration:
     valid: bool
     sample_count: int
+    p95_delta_ms: float | None
     p99_delta_ms: float | None
+    median_order_bias_ms: float | None
+    long_tail_ratio: float | None
     reason_codes: tuple[str, ...]

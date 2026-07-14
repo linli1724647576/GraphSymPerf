@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -75,7 +76,14 @@ from graph_sym_perf.generation.gdsmith import GdsmithGenerator, GenerationReques
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
 from graph_sym_perf.runtime.measurement import RuntimeHarness
-from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy, RuntimeVerdict
+from graph_sym_perf.runtime.models import EquivalentQueryPair, NoiseCalibration, RuntimePolicy, RuntimeVerdict
+from graph_sym_perf.runtime.noise import calibrate_aa_noise
+from graph_sym_perf.runtime.records import (
+    ArtifactIntegrityError,
+    ArtifactWriteError,
+    CompactRuntimeStore,
+    PairRuntimeRecord,
+)
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
 from graph_sym_perf.transforms.provider import CoreRulePairProvider
 from graph_sym_perf.transforms.rule_models import RuleRegistry
@@ -414,6 +422,8 @@ class RuntimeFirstShardWorker:
                 last_query_ordinal=int(progress["last_query_ordinal"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+                pending_acceptances=tuple(progress["pending_acceptances"]),
+                legacy_migration_sha256=progress["legacy_migration_sha256"],
             )
             return self._finish_entry(
                 entry,
@@ -434,6 +444,8 @@ class RuntimeFirstShardWorker:
                 last_query_ordinal=int(progress["last_query_ordinal"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+                pending_acceptances=tuple(progress["pending_acceptances"]),
+                legacy_migration_sha256=progress["legacy_migration_sha256"],
             )
             return self._finish_entry(
                 entry,
@@ -454,6 +466,8 @@ class RuntimeFirstShardWorker:
                 last_query_ordinal=int(progress["last_query_ordinal"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+                pending_acceptances=tuple(progress["pending_acceptances"]),
+                legacy_migration_sha256=progress["legacy_migration_sha256"],
             )
             return self._finish_entry(
                 entry,
@@ -478,6 +492,8 @@ class RuntimeFirstShardWorker:
                 last_query_ordinal=int(progress["last_query_ordinal"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+                pending_acceptances=tuple(progress["pending_acceptances"]),
+                legacy_migration_sha256=progress["legacy_migration_sha256"],
             )
             return self._finish_entry(
                 entry,
@@ -498,6 +514,8 @@ class RuntimeFirstShardWorker:
                 last_query_ordinal=int(progress["last_query_ordinal"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
+                pending_acceptances=tuple(progress["pending_acceptances"]),
+                legacy_migration_sha256=progress["legacy_migration_sha256"],
             )
             return self._finish_entry(
                 entry,
@@ -654,6 +672,8 @@ class RuntimeFirstShardWorker:
             last_query_ordinal=outcome_generated_seeds,
             rejects=outcome_rejects,
             accepted_hashes=outcome_accepted_hashes,
+            pending_acceptances=tuple(outcome.get("pending_acceptances", ())),
+            legacy_migration_sha256=outcome.get("legacy_migration_sha256"),
         )
 
         return self._finish_entry(
@@ -687,6 +707,8 @@ class RuntimeFirstShardWorker:
         attempt_started: float,
         prior_elapsed: float,
     ) -> dict[str, object]:
+        """Build, calibrate, and durably promote one entry's Stage-1 pairs."""
+
         _require_unique_entry_query_asts(queries)
         factory = RulePairFactory(RuleRegistry.default())
         dialect = _dialect_for(entry.target)
@@ -696,54 +718,50 @@ class RuntimeFirstShardWorker:
         not_applicable = rejects["RULE_NOT_APPLICABLE"]
         last_query_ordinal = int(progress["last_query_ordinal"])
         generated_seeds = int(progress["attempted_query_records"])
-        infrastructure_error_kind: ErrorKind | None = None
-        infrastructure_reason: str | None = None
-        records_path = entry_dir / "accepted_pairs.jsonl"
-        _ensure_jsonl(records_path)
-        validated_accepted_ordinals = _validated_entry_accepted_hashes(
-            records_path,
+        legacy_migration_sha256 = progress["legacy_migration_sha256"]
+        pending = [dict(value) for value in progress["pending_acceptances"]]
+        pending_by_hash = {str(value["pair_hash"]): value for value in pending}
+        records_path = entry_dir / "pair_runtime.jsonl"
+        try:
+            store = CompactRuntimeStore(records_path)
+        except ArtifactIntegrityError as exc:
+            raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, str(exc)) from exc
+        except ArtifactWriteError as exc:
+            raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, str(exc)) from exc
+        runtime_ordinals = _validate_runtime_records(
+            store,
             entry=entry,
             graph_snapshot_hash=graph_snapshot_hash,
-            dbms_fingerprint=dbms_fingerprint,
             source_queries=queries,
+            factory=factory,
         )
-        accepted_hashes = set(validated_accepted_ordinals)
+        accepted_hashes = set(store.pair_hashes)
         persisted_accepted_hashes = set(progress["accepted_pair_hashes"])
-        if any(
-            pair_hash not in validated_accepted_ordinals
-            or validated_accepted_ordinals[pair_hash] > last_query_ordinal
+        loaded_schema = int(progress["_loaded_schema_version"])
+        if loaded_schema == 2 and not persisted_accepted_hashes.issubset(accepted_hashes):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "runtime progress advances beyond durable pair_runtime records",
+            )
+        if loaded_schema == 2 and any(
+            runtime_ordinals[pair_hash] > last_query_ordinal
             for pair_hash in persisted_accepted_hashes
         ):
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "acceptance progress advances a durable pair beyond its last query ordinal",
+                "runtime progress binds a pair beyond its last query ordinal",
             )
-        if persisted_accepted_hashes != accepted_hashes:
-            appended_hashes = accepted_hashes - persisted_accepted_hashes
-            missing_hashes = persisted_accepted_hashes - accepted_hashes
-            recoverable_hash = next(iter(appended_hashes), None)
-            if (
-                missing_hashes
-                or len(appended_hashes) != 1
-                or recoverable_hash is None
-                or validated_accepted_ordinals[recoverable_hash] != last_query_ordinal + 1
-            ):
-                raise WorkerFailure(
-                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                    "acceptance progress does not match durable accepted pair records",
-                )
-            last_query_ordinal = validated_accepted_ordinals[recoverable_hash]
-            generated_seeds = last_query_ordinal
-            _persist_entry_progress(
-                progress_path,
-                entry=entry,
-                prior_elapsed=prior_elapsed,
-                attempt_started=attempt_started,
-                now=self._clock(),
-                last_query_ordinal=last_query_ordinal,
-                rejects=rejects,
-                accepted_hashes=tuple(sorted(accepted_hashes)),
+        durable_ahead = accepted_hashes - persisted_accepted_hashes if loaded_schema == 2 else set()
+        if len(durable_ahead) > 1:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "pair_runtime records advance more than one transaction beyond progress",
             )
+        # append+fsync happens before the atomic progress replacement. A single
+        # durable-ahead record is the only valid crash window.
+        for pair_hash in durable_ahead:
+            pending_by_hash.pop(pair_hash, None)
+        pending = sorted(pending_by_hash.values(), key=lambda value: int(value["source_query_ordinal"]))
 
         def persist_progress() -> None:
             _persist_entry_progress(
@@ -755,6 +773,8 @@ class RuntimeFirstShardWorker:
                 last_query_ordinal=last_query_ordinal,
                 rejects=rejects,
                 accepted_hashes=tuple(sorted(accepted_hashes)),
+                pending_acceptances=tuple(pending),
+                legacy_migration_sha256=legacy_migration_sha256,
             )
 
         def complete_query_record(ordinal: int) -> None:
@@ -763,26 +783,104 @@ class RuntimeFirstShardWorker:
             generated_seeds = ordinal
             persist_progress()
 
-        if len(accepted_hashes) > entry.accepted_pair_quota:
+        legacy_path = entry_dir / "accepted_pairs.jsonl"
+        if legacy_path.exists():
+            legacy_sha256 = _path_sha256(legacy_path)
+            if legacy_migration_sha256 not in {None, legacy_sha256}:
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "legacy accepted-pair migration identity changed",
+                )
+            legacy_ordinals = _validated_entry_accepted_hashes(
+                legacy_path,
+                entry=entry,
+                graph_snapshot_hash=graph_snapshot_hash,
+                dbms_fingerprint=dbms_fingerprint,
+                source_queries=queries,
+            )
+            old_progress_hashes = (
+                set(progress["accepted_pair_hashes"])
+                if loaded_schema == 1
+                else set(pending_by_hash).union(accepted_hashes)
+            )
+            legacy_hashes = set(legacy_ordinals)
+            appended = legacy_hashes - old_progress_hashes
+            if (
+                old_progress_hashes - legacy_hashes
+                or len(appended) > 1
+                or (
+                    appended
+                    and legacy_ordinals[next(iter(appended))] != last_query_ordinal + 1
+                )
+            ):
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "legacy accepted pairs do not match their Task-5 progress",
+                )
+            if appended:
+                last_query_ordinal = legacy_ordinals[next(iter(appended))]
+                generated_seeds = last_query_ordinal
+            for pair_hash, ordinal in sorted(legacy_ordinals.items(), key=lambda item: item[1]):
+                if pair_hash in accepted_hashes or pair_hash in pending_by_hash:
+                    continue
+                pair = _rebuild_pending_pair(factory, entry, queries, ordinal, pair_hash)
+                try:
+                    left = adapter.execute(
+                        pair.query_a,
+                        pair.parameters,
+                        "acceptance_migration_base",
+                        max_rows=max_rows,
+                        timeout_seconds=entry.query_timeout_seconds,
+                    )
+                    right = adapter.execute(
+                        pair.query_b,
+                        pair.parameters,
+                        "acceptance_migration_transformed",
+                        max_rows=max_rows,
+                        timeout_seconds=entry.query_timeout_seconds,
+                    )
+                except Exception as exc:
+                    raise WorkerFailure(
+                        ErrorKind.INFRASTRUCTURE_ERROR,
+                        f"legacy accepted-pair runtime migration failed: {exc}",
+                    ) from exc
+                migrated = _pending_acceptance(pair_hash, ordinal, left, right)
+                pending.append(migrated)
+                pending_by_hash[pair_hash] = migrated
+            legacy_migration_sha256 = legacy_sha256
+            # This checkpoint is the commit point. Before it, Task-5 JSONL is
+            # authoritative; after it, the checkpoint is sufficient to rebuild
+            # every query/certificate from the sealed corpus.
+            persist_progress()
+            _unlink_fsync(legacy_path)
+            loaded_schema = 2
+        elif loaded_schema == 1 and progress["accepted_pair_hashes"]:
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "durable accepted pairs exceed the immutable entry quota",
+                "Task-5 accepted progress exists without its durable evidence",
             )
-        if len(accepted_hashes) == entry.accepted_pair_quota:
-            persist_progress()
-            return {
-                "accepted_hashes": tuple(sorted(accepted_hashes)),
-                "generated_seeds": generated_seeds,
-                "rejects": dict(sorted(rejects.items())),
-                "rule_stats": {
-                    "accepted": {entry.rule_id: len(accepted_hashes)},
-                    "not_applicable": {},
-                },
-                "terminal_state": EntryState.BUILDING_ACCEPTED_PAIRS,
-            }
 
+        if set(pending_by_hash).intersection(accepted_hashes):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "a pair cannot be both pending and durably accepted",
+            )
+        if len(accepted_hashes) + len(pending) > entry.accepted_pair_quota:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "runtime and pending pairs exceed the immutable entry quota",
+            )
+        if durable_ahead or loaded_schema == 1:
+            persist_progress()
+
+        infrastructure_error_kind: ErrorKind | None = None
+        infrastructure_reason: str | None = None
+        state = EntryState.BUILDING_ACCEPTED_PAIRS
         final_ordinal = min(len(queries), entry.max_generated_seed_budget)
+        total_pairs = lambda: len(accepted_hashes) + len(pending)
         for ordinal in range(last_query_ordinal + 1, final_ordinal + 1):
+            if total_pairs() >= entry.accepted_pair_quota:
+                break
             query = queries[ordinal - 1]
             if self._clock() >= deadline:
                 state = EntryState.RESOURCE_EXHAUSTED
@@ -808,10 +906,8 @@ class RuntimeFirstShardWorker:
                 complete_query_record(ordinal)
                 continue
             pair = build.pair
-            left_query = PortableQuery(pair.query_a)
-            right_query = PortableQuery(pair.query_b)
-            left_decision = dialect.check(left_query)
-            right_decision = dialect.check(right_query)
+            left_decision = dialect.check(PortableQuery(pair.query_a))
+            right_decision = dialect.check(PortableQuery(pair.query_b))
             if left_decision.kind is DecisionKind.REJECT:
                 rejects[f"DIALECT_{left_decision.reason_code.value}"] += 1
                 complete_query_record(ordinal)
@@ -824,12 +920,9 @@ class RuntimeFirstShardWorker:
                 rejects["DIALECT_REPLAY_REJECT"] += 1
                 complete_query_record(ordinal)
                 continue
-            if pair.pair_hash in accepted_hashes:
+            if pair.pair_hash in accepted_hashes or pair.pair_hash in pending_by_hash:
                 complete_query_record(ordinal)
                 continue
-            if self._clock() >= deadline:
-                state = EntryState.RESOURCE_EXHAUSTED
-                break
             try:
                 left = adapter.execute(
                     pair.query_a,
@@ -838,9 +931,6 @@ class RuntimeFirstShardWorker:
                     max_rows=max_rows,
                     timeout_seconds=entry.query_timeout_seconds,
                 )
-                if self._clock() >= deadline:
-                    state = EntryState.RESOURCE_EXHAUSTED
-                    break
                 right = adapter.execute(
                     pair.query_b,
                     pair.parameters,
@@ -892,50 +982,91 @@ class RuntimeFirstShardWorker:
                 rejects["TYPED_EQUIVALENCE_FAILED"] += 1
                 complete_query_record(ordinal)
                 continue
-            accepted_hashes.add(pair.pair_hash)
-            _append_jsonl(
-                records_path,
-                {
-                    "certificate": to_jsonable(asdict(pair.certificate)),
-                    "dbms_fingerprint": dbms_fingerprint,
-                    "entry_id": entry.entry_id,
-                    "equivalence": "complete_typed_equivalent",
-                    "family": entry.family,
-                    "graph_snapshot_hash": graph_snapshot_hash,
-                    "pair_hash": pair.pair_hash,
-                    "parameters": to_jsonable(pair.parameters),
-                    "proof_version": pair.certificate.proof_version,
-                    "query_a": pair.query_a,
-                    "query_b": pair.query_b,
-                    "query_hash": portable_ast_hash(pair.query_a),
-                    "rule_id": entry.rule_id,
-                    "semantic_proof_sha256": pair.transform_metadata["semantic_proof_sha256"],
-                    "site": pair.certificate.site_class,
-                    "source_query_ordinal": ordinal,
-                    "stream": entry.stream.value,
-                    "tier": entry.tier,
-                    "transform_metadata": to_jsonable(pair.transform_metadata),
-                },
-            )
+            pending_record = _pending_acceptance(pair.pair_hash, ordinal, left, right)
+            pending.append(pending_record)
+            pending_by_hash[pair.pair_hash] = pending_record
             complete_query_record(ordinal)
-            if len(accepted_hashes) == entry.accepted_pair_quota:
-                state = EntryState.BUILDING_ACCEPTED_PAIRS
-                break
         else:
+            if total_pairs() < entry.accepted_pair_quota:
+                state = EntryState.UNDERFILLED
+
+        if state is EntryState.BUILDING_ACCEPTED_PAIRS and total_pairs() < entry.accepted_pair_quota:
             state = EntryState.UNDERFILLED
 
-        if state is EntryState.BUILDING_ACCEPTED_PAIRS and len(accepted_hashes) != entry.accepted_pair_quota:
-            state = EntryState.UNDERFILLED
-        if state not in {
-            EntryState.BUILDING_ACCEPTED_PAIRS,
-            EntryState.QUARANTINED,
-            EntryState.RESOURCE_EXHAUSTED,
-            EntryState.INFRASTRUCTURE_FAILED,
-        }:
-            state = EntryState.UNDERFILLED
+        if state is EntryState.BUILDING_ACCEPTED_PAIRS and total_pairs() == entry.accepted_pair_quota:
+            noise, noise_floor_id = _load_or_calibrate_entry_noise(
+                entry_dir,
+                entry=entry,
+                adapter=adapter,
+                factory=factory,
+                queries=queries,
+                pending=pending,
+                graph_snapshot_hash=graph_snapshot_hash,
+                dbms_fingerprint=dbms_fingerprint,
+            )
+            if not noise.valid or noise.p99_delta_ms is None:
+                state = EntryState.INFRASTRUCTURE_FAILED
+                infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
+                infrastructure_reason = "invalid fixed-protocol A/A noise calibration"
+            else:
+                stage1 = self.spec.runtime["stage1"]
+                for pending_record in tuple(pending):
+                    if self._clock() >= deadline:
+                        state = EntryState.RESOURCE_EXHAUSTED
+                        break
+                    ordinal = int(pending_record["source_query_ordinal"])
+                    pair_hash = str(pending_record["pair_hash"])
+                    pair = _rebuild_pending_pair(factory, entry, queries, ordinal, pair_hash)
+                    evidence = RuntimeHarness().measure_pair(
+                        adapter,
+                        pair.query_a,
+                        pair.query_b,
+                        parameters=pair.parameters,
+                        policy=RuntimePolicy(
+                            warmups=int(stage1["warmups"]),
+                            pairs=int(stage1["pairs"]),
+                            seed=_stage1_seed(entry, pair_hash),
+                            require_exact_balance=False,
+                            timeout_ms=float(entry.query_timeout_seconds * 1000),
+                            bootstrap_resamples=10_000,
+                        ),
+                    )
+                    if evidence.verdict is RuntimeVerdict.INVALID:
+                        state = EntryState.INFRASTRUCTURE_FAILED
+                        infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
+                        infrastructure_reason = (
+                            "Stage-1 measurement is invalid: "
+                            + ",".join(evidence.reason_codes)
+                        )
+                        break
+                    record = PairRuntimeRecord.from_evidence(
+                        pair=pair,
+                        entry=entry,
+                        evidence=evidence,
+                        noise_floor_id=noise_floor_id,
+                        noise_p99_ms=noise.p99_delta_ms,
+                        source_query_ordinal=ordinal,
+                        graph_fingerprint=graph_snapshot_hash,
+                    )
+                    try:
+                        store.append(record)
+                    except ArtifactWriteError as exc:
+                        state = EntryState.INFRASTRUCTURE_FAILED
+                        infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
+                        infrastructure_reason = f"pair_runtime durable append failed: {exc}"
+                        break
+                    accepted_hashes.add(pair_hash)
+                    pending.remove(pending_record)
+                    pending_by_hash.pop(pair_hash, None)
+                    persist_progress()
+                else:
+                    state = EntryState.STAGE1_COMPLETE
+
         persist_progress()
         result: dict[str, object] = {
             "accepted_hashes": tuple(sorted(accepted_hashes)),
+            "pending_acceptances": tuple(pending),
+            "legacy_migration_sha256": legacy_migration_sha256,
             "generated_seeds": generated_seeds,
             "rejects": dict(sorted(rejects.items())),
             "rule_stats": {
@@ -968,7 +1099,7 @@ class RuntimeFirstShardWorker:
     ) -> dict[str, object]:
         state = terminal_state if isinstance(terminal_state, EntryState) else EntryState(str(terminal_state))
         acceptance_complete = (
-            state is EntryState.BUILDING_ACCEPTED_PAIRS
+            state is EntryState.STAGE1_COMPLETE
             and len(accepted_hashes) == entry.accepted_pair_quota
         )
         summary: dict[str, object] = {
@@ -2033,6 +2164,290 @@ def _next_entry_attempt_dir(entry_dir: Path) -> Path:
     return entry_dir / f"attempt-{(max(indexes, default=-1) + 1):03d}"
 
 
+def _pending_acceptance(
+    pair_hash: str,
+    source_query_ordinal: int,
+    left: object,
+    right: object,
+) -> dict[str, object]:
+    def elapsed_us(result: object) -> int:
+        value = getattr(result, "elapsed_ms", None)
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise WorkerFailure(
+                ErrorKind.INFRASTRUCTURE_ERROR,
+                "acceptance runtime is missing or non-numeric",
+            )
+        if value < 0 or value != value or value in {float("inf"), float("-inf")}:
+            raise WorkerFailure(
+                ErrorKind.INFRASTRUCTURE_ERROR,
+                "acceptance runtime is not a finite non-negative value",
+            )
+        return int(round(float(value) * 1000.0))
+
+    return {
+        "acceptance_a_us": elapsed_us(left),
+        "acceptance_b_us": elapsed_us(right),
+        "pair_hash": pair_hash,
+        "source_query_ordinal": source_query_ordinal,
+    }
+
+
+def _rebuild_pending_pair(
+    factory: RulePairFactory,
+    entry: RulePlanEntry,
+    source_queries: tuple[str, ...],
+    ordinal: int,
+    pair_hash: str,
+):
+    if ordinal < 1 or ordinal > min(len(source_queries), entry.max_generated_seed_budget):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "pending pair source ordinal is outside the sealed corpus",
+        )
+    rebuilt = factory.build(source_queries[ordinal - 1], entry, entry.target)
+    if rebuilt.quarantine or rebuilt.pair is None or rebuilt.pair.pair_hash != pair_hash:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "pending pair cannot be rebuilt from the sealed corpus",
+        )
+    return rebuilt.pair
+
+
+def _validate_runtime_records(
+    store: CompactRuntimeStore,
+    *,
+    entry: RulePlanEntry,
+    graph_snapshot_hash: str,
+    source_queries: tuple[str, ...],
+    factory: RulePairFactory,
+) -> dict[str, int]:
+    ordinals: set[int] = set()
+    by_hash: dict[str, int] = {}
+    required_keys = set(PairRuntimeRecord.__dataclass_fields__)
+    stage1_pairs = 3
+    for record in store.records:
+        ordinal = record.get("source_query_ordinal")
+        pair_hash = record.get("pair_hash")
+        try:
+            if (
+                set(record) != required_keys
+                or type(ordinal) is not int
+                or ordinal in ordinals
+                or not isinstance(pair_hash, str)
+                or record.get("rule_id") != entry.rule_id
+                or record.get("family") != entry.family
+                or record.get("stream") != entry.stream.value
+                or record.get("phase") != entry.phase.value
+                or record.get("graph_scale") != entry.graph_scale
+                or record.get("shard_seed") != entry.shard_seed
+                or record.get("proof_version") != entry.proof_version
+                or record.get("protocol_version") != entry.measurement_protocol_id
+                or record.get("screen_stage") != "stage1"
+                or record.get("lifecycle_status") != "stage1_recorded"
+                or record.get("equivalence_summary") != "complete_typed_equivalent"
+                or record.get("graph_fingerprint") != graph_snapshot_hash
+            ):
+                raise ValueError("runtime record identity differs from the entry")
+            pair = _rebuild_pending_pair(factory, entry, source_queries, ordinal, pair_hash)
+            certificate_hash = canonical_hash(to_jsonable(asdict(pair.certificate)))
+            if (
+                record.get("query_a_hash") != _query_hash(pair.query_a)
+                or record.get("query_b_hash") != _query_hash(pair.query_b)
+                or record.get("site_class") != pair.certificate.site_class
+                or record.get("safety_certificate_hash") != certificate_hash
+            ):
+                raise ValueError("runtime record hashes do not bind the rebuilt pair")
+            samples = record.get("samples_us")
+            if (
+                not isinstance(samples, list)
+                or len(samples) != stage1_pairs
+                or any(
+                    not isinstance(sample, list)
+                    or len(sample) != 3
+                    or sample[0] not in {"AB", "BA"}
+                    or any(value is not None and type(value) is not int for value in sample[1:])
+                    for sample in samples
+                )
+            ):
+                raise ValueError("runtime record samples violate the fixed Stage-1 protocol")
+        except (TypeError, ValueError) as exc:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "pair_runtime record is not bound to this RulePlanEntry",
+            ) from exc
+        ordinals.add(ordinal)
+        by_hash[pair_hash] = ordinal
+    return by_hash
+
+
+def _load_or_calibrate_entry_noise(
+    entry_dir: Path,
+    *,
+    entry: RulePlanEntry,
+    adapter: Any,
+    factory: RulePairFactory,
+    queries: tuple[str, ...],
+    pending: list[dict[str, object]],
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+) -> tuple[NoiseCalibration, str]:
+    path = entry_dir / "noise_calibration.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        payload = None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "noise calibration artifact is unreadable",
+        ) from exc
+    if payload is not None:
+        if not isinstance(payload, dict):
+            raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration is not an object")
+        body = {key: value for key, value in payload.items() if key != "content_hash"}
+        if (
+            payload.get("content_hash") != canonical_hash(body)
+            or body.get("entry_id") != entry.entry_id
+            or body.get("graph_snapshot_hash") != graph_snapshot_hash
+            or body.get("dbms_fingerprint") != dbms_fingerprint
+            or body.get("probe_queries") != 20
+            or body.get("pairs_per_query") != 10
+            or body.get("minimum_complete_samples") != 200
+            or body.get("order_bias_rule") != "median_order_bias_ms<=p95_delta_ms"
+            or body.get("long_tail_ratio_max") != 5.0
+        ):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "noise calibration identity or immutable protocol changed",
+            )
+        calibration = body.get("calibration")
+        if not isinstance(calibration, dict):
+            raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration payload is missing")
+        try:
+            expected_calibration_keys = {
+                "long_tail_ratio",
+                "median_order_bias_ms",
+                "p95_delta_ms",
+                "p99_delta_ms",
+                "reason_codes",
+                "sample_count",
+                "valid",
+            }
+            numeric_values = (
+                calibration["p95_delta_ms"],
+                calibration["p99_delta_ms"],
+                calibration["median_order_bias_ms"],
+                calibration["long_tail_ratio"],
+            )
+            if (
+                set(calibration) != expected_calibration_keys
+                or type(calibration["valid"]) is not bool
+                or type(calibration["sample_count"]) is not int
+                or calibration["sample_count"] < 0
+                or not isinstance(calibration["reason_codes"], list)
+                or any(not isinstance(code, str) or not code for code in calibration["reason_codes"])
+                or any(
+                    value is not None
+                    and (
+                        isinstance(value, bool)
+                        or not isinstance(value, int | float)
+                        or not math.isfinite(value)
+                        or value < 0
+                    )
+                    for value in numeric_values
+                )
+            ):
+                raise ValueError("invalid noise calibration field")
+            noise = NoiseCalibration(
+                valid=calibration["valid"],
+                sample_count=calibration["sample_count"],
+                p95_delta_ms=calibration["p95_delta_ms"],
+                p99_delta_ms=calibration["p99_delta_ms"],
+                median_order_bias_ms=calibration["median_order_bias_ms"],
+                long_tail_ratio=calibration["long_tail_ratio"],
+                reason_codes=tuple(calibration["reason_codes"]),
+            )
+            if noise.valid and (
+                noise.sample_count < 200
+                or noise.p95_delta_ms is None
+                or noise.p99_delta_ms is None
+                or noise.median_order_bias_ms is None
+                or noise.long_tail_ratio is None
+                or noise.median_order_bias_ms > noise.p95_delta_ms
+                or noise.long_tail_ratio > 5.0
+                or noise.reason_codes
+            ):
+                raise ValueError("valid noise calibration violates the fixed protocol")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration shape is invalid") from exc
+        return noise, str(payload["content_hash"])
+
+    if not pending:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "durable runtime records exist without their noise calibration",
+        )
+    ordered = sorted(
+        pending,
+        key=lambda value: (int(value["acceptance_a_us"]), str(value["pair_hash"])),
+    )
+    probes = []
+    probe_hashes = []
+    for index in range(20):
+        selected = ordered[round(index * (len(ordered) - 1) / 19)]
+        pair = _rebuild_pending_pair(
+            factory,
+            entry,
+            queries,
+            int(selected["source_query_ordinal"]),
+            str(selected["pair_hash"]),
+        )
+        probes.append(pair.query_a)
+        probe_hashes.append(pair.pair_hash)
+    noise = calibrate_aa_noise(
+        RuntimeHarness(),
+        adapter,
+        tuple(probes),
+        pairs_per_query=10,
+    )
+    body = {
+        "calibration": to_jsonable(asdict(noise)),
+        "dbms_fingerprint": dbms_fingerprint,
+        "entry_id": entry.entry_id,
+        "graph_snapshot_hash": graph_snapshot_hash,
+        "long_tail_ratio_max": 5.0,
+        "minimum_complete_samples": 200,
+        "order_bias_rule": "median_order_bias_ms<=p95_delta_ms",
+        "pairs_per_query": 10,
+        "probe_pair_hashes": probe_hashes,
+        "probe_queries": 20,
+        "protocol_version": "aa-noise-20x10-v1",
+    }
+    content_hash = canonical_hash(body)
+    _atomic_write_json(path, {**body, "content_hash": content_hash})
+    return noise, content_hash
+
+
+def _stage1_seed(entry: RulePlanEntry, pair_hash: str) -> int:
+    digest = hashlib.sha256(
+        f"{entry.shard_seed}:{entry.entry_id}:{pair_hash}:stage1".encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
+
+
+def _path_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _unlink_fsync(path: Path) -> None:
+    path.unlink()
+    _fsync_directory(path.parent)
+
+
 def _validated_entry_accepted_hashes(
     path: Path,
     *,
@@ -2397,13 +2812,16 @@ def _require_unique_entry_query_asts(queries: tuple[str, ...]) -> None:
 
 def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, object]:
     default: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "entry_id": entry.entry_id,
         "elapsed_seconds": 0.0,
         "last_query_ordinal": 0,
         "attempted_query_records": 0,
         "reject_counts": {},
         "accepted_pair_hashes": [],
+        "pending_acceptances": [],
+        "legacy_migration_sha256": None,
+        "_loaded_schema_version": 2,
     }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -2414,11 +2832,14 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     if not isinstance(payload, dict):
         raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "acceptance progress is not an object")
     body = {key: value for key, value in payload.items() if key != "content_hash"}
+    schema_version = body.get("schema_version")
     elapsed = body.get("elapsed_seconds")
     last_ordinal = body.get("last_query_ordinal")
     attempted = body.get("attempted_query_records")
     rejects = body.get("reject_counts")
     accepted = body.get("accepted_pair_hashes")
+    pending = body.get("pending_acceptances", [])
+    legacy_migration_sha256 = body.get("legacy_migration_sha256")
     valid_rejects = isinstance(rejects, dict) and all(
         isinstance(key, str)
         and key
@@ -2429,8 +2850,37 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     valid_accepted = isinstance(accepted, list) and all(
         isinstance(value, str) and len(value) == 64 for value in accepted
     ) and len(set(accepted)) == len(accepted)
+    valid_pending = isinstance(pending, list) and all(
+        isinstance(value, dict)
+        and set(value) == {
+            "acceptance_a_us",
+            "acceptance_b_us",
+            "pair_hash",
+            "source_query_ordinal",
+        }
+        and isinstance(value["pair_hash"], str)
+        and len(value["pair_hash"]) == 64
+        and type(value["source_query_ordinal"]) is int
+        and 1 <= value["source_query_ordinal"] <= entry.max_generated_seed_budget
+        and type(value["acceptance_a_us"]) is int
+        and value["acceptance_a_us"] >= 0
+        and type(value["acceptance_b_us"]) is int
+        and value["acceptance_b_us"] >= 0
+        for value in pending
+    )
+    pending_hashes = [value["pair_hash"] for value in pending] if valid_pending else []
+    pending_ordinals = [value["source_query_ordinal"] for value in pending] if valid_pending else []
+    valid_pending = bool(
+        valid_pending
+        and len(set(pending_hashes)) == len(pending_hashes)
+        and len(set(pending_ordinals)) == len(pending_ordinals)
+        and not set(pending_hashes).intersection(accepted if isinstance(accepted, list) else ())
+    )
+    valid_migration = legacy_migration_sha256 is None or (
+        isinstance(legacy_migration_sha256, str) and len(legacy_migration_sha256) == 64
+    )
     if (
-        body.get("schema_version") != 1
+        schema_version not in {1, 2}
         or body.get("entry_id") != entry.entry_id
         or payload.get("content_hash") != canonical_hash(body)
         or type(elapsed) not in {int, float}
@@ -2443,11 +2893,17 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         or attempted != last_ordinal
         or not valid_rejects
         or not valid_accepted
+        or (schema_version == 2 and (not valid_pending or not valid_migration))
+        or (schema_version == 1 and ("pending_acceptances" in body or "legacy_migration_sha256" in body))
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
             "acceptance progress identity, hash, or counters are invalid",
         )
+    if schema_version == 1:
+        body["pending_acceptances"] = []
+        body["legacy_migration_sha256"] = None
+    body["_loaded_schema_version"] = schema_version
     return body
 
 
@@ -2461,16 +2917,23 @@ def _persist_entry_progress(
     last_query_ordinal: int,
     rejects: Mapping[str, int],
     accepted_hashes: tuple[str, ...],
+    pending_acceptances: tuple[Mapping[str, object], ...] = (),
+    legacy_migration_sha256: object | None = None,
 ) -> None:
     elapsed = prior_elapsed + max(0.0, now - attempt_started)
     body = {
-        "schema_version": 1,
+        "schema_version": 2,
         "entry_id": entry.entry_id,
         "elapsed_seconds": elapsed,
         "last_query_ordinal": last_query_ordinal,
         "attempted_query_records": last_query_ordinal,
         "reject_counts": dict(sorted(rejects.items())),
         "accepted_pair_hashes": list(sorted(accepted_hashes)),
+        "pending_acceptances": sorted(
+            (dict(value) for value in pending_acceptances),
+            key=lambda value: int(value["source_query_ordinal"]),
+        ),
+        "legacy_migration_sha256": legacy_migration_sha256,
     }
     _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
 

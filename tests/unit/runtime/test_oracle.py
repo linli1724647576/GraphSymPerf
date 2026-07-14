@@ -73,6 +73,10 @@ def test_noise_preflight_requires_two_hundred_deltas_and_runtime_uses_its_p99() 
 
     assert noise.valid
     assert noise.sample_count == 200
+    assert noise.p95_delta_ms == 0.0
+    assert noise.p99_delta_ms == 0.0
+    assert noise.median_order_bias_ms == 0.0
+    assert noise.long_tail_ratio == 0.0
     assert verdict.verdict is RuntimeVerdict.PASS
 
 
@@ -120,8 +124,36 @@ def test_noise_preflight_rejects_consistent_first_second_execution_bias() -> Non
 
     assert not noise.valid
     assert noise.sample_count == 200
-    assert noise.p99_delta_ms is None
+    assert noise.p95_delta_ms == 10.0
+    assert noise.p99_delta_ms == 10.0
+    assert noise.median_order_bias_ms == 20.0
     assert noise.reason_codes == ("aa_order_bias",)
+
+
+def test_noise_preflight_rejects_a_long_tail_above_five_times_p95() -> None:
+    class LongTailFake:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, query: str, parameters, **_kwargs) -> float:
+            self.calls += 1
+            # Exactly four of 200 pairs have a large second observation. That
+            # keeps p95 near 1ms while moving the interpolated p99 above 5x.
+            pair_index = (self.calls - 1) // 2
+            is_second = self.calls % 2 == 0
+            return 100.0 if is_second and pair_index in {0, 50, 100, 150} else (11.0 if is_second else 10.0)
+
+    noise = calibrate_aa_noise(
+        RuntimeHarness(),
+        LongTailFake(),
+        tuple(f"probe-{index}" for index in range(20)),
+        pairs_per_query=10,
+    )
+
+    assert not noise.valid
+    assert noise.long_tail_ratio is not None
+    assert noise.long_tail_ratio > 5.0
+    assert "aa_long_tail" in noise.reason_codes
 
 
 def test_runtime_gate_rejects_evidence_without_a_stable_majority_direction() -> None:

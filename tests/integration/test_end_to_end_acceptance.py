@@ -216,11 +216,12 @@ def test_bool_and_sym_rule_entries_keep_independent_quota_and_statistics(tmp_pat
 
     assert [result["accepted_pairs"] for result in results] == [1, 1]
     assert [result["terminal_state"] for result in results] == [
-        "building_accepted_pairs",
-        "building_accepted_pairs",
+        "stage1_complete",
+        "stage1_complete",
     ]
     assert [result["rule_stats"]["accepted"] for result in results] == [
         {"null_partition_tautology": 1},
         {"pattern_order_symmetry": 1},
     ]
-    assert len(tuple((tmp_path / "entries").glob("*/accepted_pairs.jsonl"))) == 2
+    assert len(tuple((tmp_path / "entries").glob("*/pair_runtime.jsonl"))) == 2
+    assert not tuple((tmp_path / "entries").glob("*/accepted_pairs.jsonl"))

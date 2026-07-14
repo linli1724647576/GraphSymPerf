@@ -1,5 +1,6 @@
 import json
 from contextlib import contextmanager
+from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +9,7 @@ import graph_sym_perf.experiment.worker as worker_module
 
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
-from graph_sym_perf.core import ExecutionResult, QueryExecutionError, TargetSystem
+from graph_sym_perf.core import ExecutionResult, QueryExecutionError, QueryTimeoutError, TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream, ShardTask
 from graph_sym_perf.experiment.evidence_validation import candidate_artifact_hashes, canonical_hash
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -1133,13 +1134,117 @@ def test_worker_builds_each_rule_plan_entry_with_its_own_certified_rule(
 
     assert result["accepted_pairs"] == 1
     assert result["acceptance_status"] == "complete"
-    assert result["terminal_state"] == "building_accepted_pairs"
+    assert result["terminal_state"] == "stage1_complete"
     assert result["rule_id"] == entry.rule_id
     assert result["stream"] == "discovery"
     assert result["rule_stats"] == {
         "accepted": {entry.rule_id: 1},
         "not_applicable": {},
     }
+    entry_dir = next(tmp_path.glob("entries/*"))
+    records = [
+        json.loads(line)
+        for line in (entry_dir / "pair_runtime.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["pair_hash"] == result["accepted_pair_hashes"][0]
+    assert not (entry_dir / "accepted_pairs.jsonl").exists()
+    assert "query_a" not in records[0] and "query_b" not in records[0]
+
+
+def test_rule_entry_stage1_timeout_is_durably_counted_without_query_text(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+
+    class Stage1TimeoutAdapter(_Adapter):
+        def execute(self, query, parameters, query_kind, **kwargs):
+            if query_kind == "runtime" and "IS NULL" in query:
+                raise QueryTimeoutError("stage1 timeout")
+            return super().execute(query, parameters, query_kind, **kwargs)
+
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: Stage1TimeoutAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    record = json.loads(next(tmp_path.glob("entries/*/pair_runtime.jsonl")).read_text())
+    assert result["accepted_pairs"] == 1
+    assert result["terminal_state"] == "stage1_complete"
+    assert record["timeout_state"] == "b_timeout"
+    assert record["samples_us"]
+    assert "query_a" not in record and "query_b" not in record
+
+
+def test_runtime_artifact_failure_never_advances_accepted_count(tmp_path, monkeypatch) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    monkeypatch.setattr(
+        "graph_sym_perf.runtime.records.CompactRuntimeStore._write_line",
+        lambda _self, _line: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["accepted_pairs"] == 0
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["infrastructure_error_kind"] == ErrorKind.INFRASTRUCTURE_ERROR.value
+
+
+def test_invalid_stage1_measurement_never_becomes_an_accepted_record(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+
+    class InvalidStage1Adapter(_Adapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.runtime_calls = 0
+
+        def execute(self, query, parameters, query_kind, **kwargs):
+            result = super().execute(query, parameters, query_kind, **kwargs)
+            if query_kind != "runtime":
+                return result
+            self.runtime_calls += 1
+            if self.runtime_calls <= 400:  # fixed 20 probes x 10 A/A pairs x 2 executions
+                return result
+            return ExecutionResult(
+                system=result.system,
+                query_kind=result.query_kind,
+                rows=result.rows,
+                elapsed_ms=float("nan"),
+                summary=result.summary,
+            )
+
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: InvalidStage1Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["accepted_pairs"] == 0
+    assert not tuple(tmp_path.glob("entries/*/pair_runtime.jsonl"))
 
 
 def test_worker_never_transfers_an_underfilled_rule_budget(tmp_path) -> None:
@@ -1360,8 +1465,10 @@ def test_early_lifecycle_failure_summary_preserves_durable_progress(tmp_path, fa
     )
     first.bind_run_dir(tmp_path)
     first_result = first(entry)
-    assert first_result["accepted_pairs"] == 1
+    assert first_result["accepted_pairs"] == 0
     assert first_result["acceptance_generated_seeds"] == 1
+    first_progress = json.loads(next(tmp_path.glob("entries/*/acceptance_progress.json")).read_text())
+    assert len(first_progress["pending_acceptances"]) == 1
 
     if failure_site == "generation":
         next(tmp_path.glob("entries/*/generation_corpus.json")).unlink()
@@ -1382,10 +1489,12 @@ def test_early_lifecycle_failure_summary_preserves_durable_progress(tmp_path, fa
     result = retry(entry)
 
     assert result["terminal_state"] == "infrastructure_failed"
-    assert result["accepted_pairs"] == 1
+    assert result["accepted_pairs"] == 0
     assert result["acceptance_generated_seeds"] == 1
     assert result["reject_reasons"] == {}
-    assert result["rule_stats"]["accepted"] == {entry.rule_id: 1}
+    assert result["rule_stats"]["accepted"] == {}
+    retry_progress = json.loads(next(tmp_path.glob("entries/*/acceptance_progress.json")).read_text())
+    assert retry_progress["pending_acceptances"] == first_progress["pending_acceptances"]
 
 
 @pytest.mark.parametrize("adapter_type", (_FinalFingerprintDriftAdapter, _FinalGraphDriftAdapter))
@@ -1428,15 +1537,117 @@ def test_rule_entry_retry_resumes_durable_accepted_pairs_without_double_counting
         result = worker(entry)
         assert result["accepted_pairs"] == 1
         assert result["acceptance_status"] == "complete"
-        assert result["terminal_state"] == "building_accepted_pairs"
+        assert result["terminal_state"] == "stage1_complete"
 
-    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    records_path = next(tmp_path.glob("entries/*/pair_runtime.jsonl"))
     records = [json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 1
-    assert records[0]["query_a"] and records[0]["query_b"]
-    assert records[0]["parameters"] == {}
-    assert records[0]["certificate"]["canonical_rule_id"] == entry.rule_id
-    assert records[0]["transform_metadata"]["semantic_proof_sha256"]
+    assert records[0]["rule_id"] == entry.rule_id
+    assert records[0]["source_query_ordinal"] == 1
+    assert "query_a" not in records[0] and "query_b" not in records[0]
+    assert not tuple(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+
+
+def test_task5_legacy_evidence_migrates_crash_safely_to_pair_runtime(tmp_path, monkeypatch) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    query = "MATCH (n) WHERE n.id = 1 RETURN n"
+    statements = ("CREATE (n:Node {id: 1})",)
+    generated = GeneratedShard(
+        graph_statements=statements,
+        query_texts=(query,),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    built = worker_module.RulePairFactory(worker_module.RuleRegistry.default()).build(
+        query,
+        entry,
+        entry.target,
+    )
+    assert built.pair is not None
+    pair = built.pair
+    entry_dir = tmp_path / "entries" / worker_module._entry_directory_name(entry.entry_id)
+    entry_dir.mkdir(parents=True)
+    legacy_record = {
+        "certificate": worker_module.to_jsonable(asdict(pair.certificate)),
+        "dbms_fingerprint": "a" * 64,
+        "entry_id": entry.entry_id,
+        "equivalence": "complete_typed_equivalent",
+        "family": entry.family,
+        "graph_snapshot_hash": _graph_snapshot_hash(statements),
+        "pair_hash": pair.pair_hash,
+        "parameters": worker_module.to_jsonable(pair.parameters),
+        "proof_version": pair.certificate.proof_version,
+        "query_a": pair.query_a,
+        "query_b": pair.query_b,
+        "query_hash": worker_module.portable_ast_hash(pair.query_a),
+        "rule_id": entry.rule_id,
+        "semantic_proof_sha256": pair.transform_metadata["semantic_proof_sha256"],
+        "site": pair.certificate.site_class,
+        "source_query_ordinal": 1,
+        "stream": entry.stream.value,
+        "tier": entry.tier,
+        "transform_metadata": worker_module.to_jsonable(pair.transform_metadata),
+    }
+    (entry_dir / "accepted_pairs.jsonl").write_text(
+        json.dumps(legacy_record, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    progress_body = {
+        "schema_version": 1,
+        "entry_id": entry.entry_id,
+        "elapsed_seconds": 0.0,
+        "last_query_ordinal": 1,
+        "attempted_query_records": 1,
+        "reject_counts": {},
+        "accepted_pair_hashes": [pair.pair_hash],
+    }
+    (entry_dir / "acceptance_progress.json").write_text(
+        json.dumps(
+            {**progress_body, "content_hash": canonical_hash(progress_body)},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    class SimulatedMigrationCrash(BaseException):
+        pass
+
+    real_unlink = worker_module._unlink_fsync
+    monkeypatch.setattr(
+        worker_module,
+        "_unlink_fsync",
+        lambda _path: (_ for _ in ()).throw(SimulatedMigrationCrash()),
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    with pytest.raises(SimulatedMigrationCrash):
+        first(entry)
+
+    migration_progress = json.loads((entry_dir / "acceptance_progress.json").read_text())
+    assert migration_progress["schema_version"] == 2
+    assert migration_progress["legacy_migration_sha256"]
+    assert len(migration_progress["pending_acceptances"]) == 1
+    assert (entry_dir / "accepted_pairs.jsonl").exists()
+
+    monkeypatch.setattr(worker_module, "_unlink_fsync", real_unlink)
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    result = retry(entry)
+
+    assert result["terminal_state"] == "stage1_complete"
+    assert result["accepted_pairs"] == 1
+    assert not (entry_dir / "accepted_pairs.jsonl").exists()
+    compact = json.loads((entry_dir / "pair_runtime.jsonl").read_text())
+    assert compact["pair_hash"] == pair.pair_hash
+    assert "query_a" not in compact and "query_b" not in compact
 
 
 def test_rule_entry_retry_keeps_reject_progress_and_does_not_repeat_completed_seed(tmp_path) -> None:
@@ -1587,10 +1798,14 @@ def test_retry_recovers_only_the_validated_single_record_crash_window(tmp_path, 
     with pytest.raises(SimulatedProcessCrash):
         first(entry)
 
-    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    records_path = next(tmp_path.glob("entries/*/pair_runtime.jsonl"))
     record = json.loads(records_path.read_text(encoding="utf-8"))
     assert record["source_query_ordinal"] == 1
-    assert not next(tmp_path.glob("entries/*")).joinpath("acceptance_progress.json").exists()
+    crashed_progress = json.loads(
+        next(tmp_path.glob("entries/*/acceptance_progress.json")).read_text(encoding="utf-8")
+    )
+    assert crashed_progress["accepted_pair_hashes"] == []
+    assert crashed_progress["pending_acceptances"][0]["pair_hash"] == record["pair_hash"]
 
     monkeypatch.setattr(worker_module, "_persist_entry_progress", real_persist)
     retry_adapter = _Adapter()
@@ -1610,6 +1825,7 @@ def test_retry_recovers_only_the_validated_single_record_crash_window(tmp_path, 
     )
     assert progress["last_query_ordinal"] == 1
     assert progress["accepted_pair_hashes"] == [record["pair_hash"]]
+    assert progress["pending_acceptances"] == []
 
 
 @pytest.mark.parametrize("corruption", ("progress_ahead", "non_contiguous", "multi_step"))
@@ -1637,7 +1853,7 @@ def test_retry_rejects_non_single_step_accepted_progress_divergence(tmp_path, co
     )
     first.bind_run_dir(tmp_path)
     first(entry)
-    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    records_path = next(tmp_path.glob("entries/*/pair_runtime.jsonl"))
     progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
     if corruption == "progress_ahead":
         records_path.write_text("", encoding="utf-8")
@@ -1682,7 +1898,7 @@ def test_retry_rejects_durable_ordinal_ahead_of_matching_progress_hash_set(tmp_p
     )
     first.bind_run_dir(tmp_path)
     first(entry)
-    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    records_path = next(tmp_path.glob("entries/*/pair_runtime.jsonl"))
     progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
     if probe == "source_query_ordinal_ahead":
         record = json.loads(records_path.read_text(encoding="utf-8"))
@@ -1757,8 +1973,10 @@ def test_quota_two_retry_rejects_duplicate_sealed_corpus_ordinal_rebinding(tmp_p
     )
     first.bind_run_dir(tmp_path)
     result = first(entry)
-    assert result["accepted_pairs"] == 1
+    assert result["accepted_pairs"] == 0
     assert result["acceptance_generated_seeds"] == 2
+    progress = json.loads(next(tmp_path.glob("entries/*/acceptance_progress.json")).read_text())
+    assert len(progress["pending_acceptances"]) == 1
 
     generation_path = next(tmp_path.glob("entries/*/generation_corpus.json"))
     sealed = json.loads(generation_path.read_text(encoding="utf-8"))
@@ -1768,11 +1986,6 @@ def test_quota_two_retry_rejects_duplicate_sealed_corpus_ordinal_rebinding(tmp_p
         json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
         encoding="utf-8",
     )
-    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
-    record = json.loads(records_path.read_text(encoding="utf-8"))
-    record["source_query_ordinal"] = 2
-    records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
-
     retry = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
         generation_runner=lambda *_args: pytest.fail("retry must load the sealed corpus"),
@@ -1801,7 +2014,7 @@ def test_retry_treats_malformed_accepted_jsonl_as_evidence_integrity_failure(tmp
     )
     first.bind_run_dir(tmp_path)
     first(entry)
-    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    records_path = next(tmp_path.glob("entries/*/pair_runtime.jsonl"))
     if corruption == "truncated":
         records_path.write_text(
             records_path.read_text(encoding="utf-8")[:-7],
@@ -1826,22 +2039,19 @@ def test_retry_treats_malformed_accepted_jsonl_as_evidence_integrity_failure(tmp
 @pytest.mark.parametrize(
     "tamper",
     (
-        "query_b",
-        "certificate_hash",
-        "proof_theorem",
         "pair_hash",
-        "query_hash",
-        "entry_id",
+        "query_a_hash",
+        "safety_certificate_hash",
         "family",
-        "tier",
         "stream",
-        "site",
-        "parameters",
-        "extra_metadata",
+        "site_class",
+        "graph_fingerprint",
+        "samples_us",
+        "extra_field",
         "source_query_ordinal",
     ),
 )
-def test_rule_entry_retry_recomputes_every_accepted_record_binding(tmp_path, tamper) -> None:
+def test_rule_entry_retry_recomputes_every_compact_runtime_binding(tmp_path, tamper) -> None:
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     generated = GeneratedShard(
         graph_statements=("CREATE (n:Node {id: 1})",),
@@ -1855,20 +2065,14 @@ def test_rule_entry_retry_recomputes_every_accepted_record_binding(tmp_path, tam
     )
     first.bind_run_dir(tmp_path)
     first(entry)
-    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    records_path = next(tmp_path.glob("entries/*/pair_runtime.jsonl"))
     record = json.loads(records_path.read_text(encoding="utf-8"))
-    if tamper == "query_b":
-        record["query_b"] += " "
-    elif tamper == "certificate_hash":
-        record["certificate"]["semantic_proof_hash"] = "0" * 64
-    elif tamper == "proof_theorem":
-        record["transform_metadata"]["semantic_proof"]["theorem"] = "Forged"
-    elif tamper in {"pair_hash", "query_hash"}:
+    if tamper in {"pair_hash", "query_a_hash", "safety_certificate_hash", "graph_fingerprint"}:
         record[tamper] = "0" * 64
-    elif tamper == "parameters":
-        record["parameters"]["forged"] = 1
-    elif tamper == "extra_metadata":
-        record["transform_metadata"]["forged"] = "metadata"
+    elif tamper == "samples_us":
+        record["samples_us"] = []
+    elif tamper == "extra_field":
+        record["forged"] = "metadata"
     else:
         record[tamper] = "forged"
     records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")

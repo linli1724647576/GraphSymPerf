@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from graph_sym_perf.core import AdapterError
 from graph_sym_perf.runtime import models as runtime_models
 from graph_sym_perf.runtime.measurement import RuntimeHarness, paired_schedule
 from graph_sym_perf.runtime.models import RuntimePolicy, RuntimeVerdict
@@ -114,6 +115,34 @@ def test_discovery_fixes_slow_fast_direction_instead_of_assuming_b_is_slow() -> 
     assert evidence.median_delta_ms == 40.0
     assert evidence.direction_consistency == 1.0
     assert evidence.slow_query == "a"
+    assert evidence.slower_side == "a"
+    assert evidence.median_a_ms == 50.0
+    assert evidence.median_b_ms == 10.0
+    assert evidence.ci_delta_low_ms == 40.0
+    assert evidence.ci_delta_high_ms == 40.0
+
+
+def test_discovery_uses_side_medians_to_freeze_direction_symmetrically() -> None:
+    class SequenceFake:
+        def __init__(self) -> None:
+            self.values = {
+                "A": iter((50.0, 51.0, 49.0)),
+                "B": iter((10.0, 11.0, 9.0)),
+            }
+
+        def execute(self, query: str, parameters, **_kwargs) -> float:
+            return next(self.values[query])
+
+    evidence = RuntimeHarness().measure_pair(
+        SequenceFake(),
+        "A",
+        "B",
+        policy=RuntimePolicy(warmups=0, pairs=3, seed=4),
+    )
+
+    assert evidence.slower_side == "a"
+    assert evidence.median_delta_ms == 40.0
+    assert evidence.median_ratio > 4.0
 
 
 def test_validation_keeps_discovery_direction_when_runtime_order_reverses() -> None:
@@ -159,6 +188,20 @@ def test_execution_failure_is_invalid_not_runtime_evidence() -> None:
 
     assert evidence.verdict is RuntimeVerdict.INVALID
     assert evidence.reason_codes == ("execution_error:RuntimeError",)
+
+
+def test_typed_adapter_failure_is_not_downgraded_to_query_evidence() -> None:
+    class DisconnectedFake:
+        def execute(self, query: str, parameters, **_kwargs) -> float:
+            raise AdapterError("connection lost")
+
+    with pytest.raises(AdapterError, match="connection lost"):
+        RuntimeHarness().measure_pair(
+            DisconnectedFake(),
+            "A",
+            "B",
+            policy=RuntimePolicy(warmups=0, pairs=5, seed=4),
+        )
 
 
 @pytest.mark.parametrize("error_type", [TypeError, AssertionError])

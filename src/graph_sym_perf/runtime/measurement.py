@@ -9,10 +9,10 @@ from dataclasses import replace
 from statistics import median
 from typing import Any, Mapping, Protocol
 
-from graph_sym_perf.core import QueryTimeoutError
+from graph_sym_perf.core import AdapterError, QueryTimeoutError
 from graph_sym_perf.runtime.models import EquivalentQueryPair, PairedSample, RuntimeEvidence, RuntimePolicy, RuntimeVerdict
 from graph_sym_perf.runtime.oracle import evaluate_runtime
-from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci, relative_mad
+from graph_sym_perf.runtime.statistics import bootstrap_delta_ci, bootstrap_ratio_ci, relative_mad
 
 
 class ExecuteOnly(Protocol):
@@ -150,6 +150,8 @@ class RuntimeHarness:
             result = executor.execute(query, parameters, query_kind="runtime", timeout_seconds=(policy.timeout_ms / 1000 if policy.timeout_ms else None))
         except (QueryTimeoutError, TimeoutError):
             return None, True
+        except (AdapterError, MemoryError, OSError):
+            raise
         except (AssertionError, AttributeError, TypeError):
             raise
         except Exception as exc:
@@ -221,16 +223,27 @@ def _evidence(
         )
     if not complete:
         return RuntimeEvidence(RuntimeVerdict.INCONCLUSIVE, _hash(query_a), _hash(query_b), samples, None, None, None, None, 0.0, None, ("no_complete_samples",))
-    direction_delta = float(median(b - a for a, b in complete))
-    observed_slow_query = "b" if direction_delta > 0 else "a" if direction_delta < 0 else None
-    slow_query = expected_slow_query or observed_slow_query
+    median_a_ms = float(median(a for a, _b in complete))
+    median_b_ms = float(median(b for _a, b in complete))
+    observed_slow_query = "a" if median_a_ms > median_b_ms else "b" if median_b_ms > median_a_ms else None
+    slower_side = expected_slow_query or observed_slow_query
     if expected_slow_query is not None and observed_slow_query != expected_slow_query:
         reason_codes.append("direction_mismatch")
-    oriented = tuple((a, b) if slow_query != "a" else (b, a) for a, b in complete)
+    # A tie has no observed direction. Use B only to keep the numeric summary
+    # defined; direction_consistency remains zero because strict inequalities
+    # below do not count tied pairs.
+    oriented_side = slower_side or "b"
+    oriented = tuple((b, a) if oriented_side == "a" else (a, b) for a, b in complete)
     ratios = [slow / fast for fast, slow in oriented if fast > 0]
     if not ratios:
         return RuntimeEvidence(RuntimeVerdict.INVALID, _hash(query_a), _hash(query_b), samples, None, None, None, None, 0.0, None, ("nonpositive_baseline",))
     ci = bootstrap_ratio_ci(oriented, resamples=policy.bootstrap_resamples, seed=policy.seed)
+    delta_ci = bootstrap_delta_ci(
+        complete,
+        slower_side=oriented_side,
+        resamples=policy.bootstrap_resamples,
+        seed=policy.seed,
+    )
     return RuntimeEvidence(
         RuntimeVerdict.PASS,
         _hash(query_a),
@@ -243,7 +256,12 @@ def _evidence(
         sum(value > 1.0 for value in ratios) / len(ratios),
         relative_mad(ratios),
         tuple(reason_codes),
-        slow_query=slow_query,
+        slow_query=slower_side,
+        median_a_ms=median_a_ms,
+        median_b_ms=median_b_ms,
+        slower_side=slower_side,
+        ci_delta_low_ms=delta_ci.low,
+        ci_delta_high_ms=delta_ci.high,
     )
 
 
