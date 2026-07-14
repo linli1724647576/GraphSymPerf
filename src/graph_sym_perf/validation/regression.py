@@ -1157,6 +1157,8 @@ def load_verified_regression_report(
         "manifest_sha256": case.manifest_sha256,
         "graph_file_sha256": case.graph_file_sha256,
         "graph_snapshot_sha256": case.graph_snapshot.content_hash,
+        "fast_query_sha256": hashlib.sha256(case.fast_query.encode("utf-8")).hexdigest(),
+        "slow_query_sha256": hashlib.sha256(case.slow_query.encode("utf-8")).hexdigest(),
         "expected_slow_query": case.expected_slow_query,
         "expected_index_names": case.index_names,
         "observed_version": current_identity.observed_version,

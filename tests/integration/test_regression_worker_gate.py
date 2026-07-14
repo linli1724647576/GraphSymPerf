@@ -12,7 +12,7 @@ import yaml
 import graph_sym_perf.experiment.worker as worker_module
 import graph_sym_perf.validation.regression as regression_module
 
-from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.core import AdapterError, TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RuleStream
 from graph_sym_perf.experiment.planner import build_rule_plan
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -288,6 +288,63 @@ def test_current_provenance_drift_blocks_a_valid_landed_gate_before_generation(
 
     assert summary["terminal_state"] == "infrastructure_failed"
     assert "identity" in str(summary["infrastructure_reason"])
+
+
+@pytest.mark.parametrize(
+    "live_failure",
+    (
+        regression_module.RegressionVersionMismatch(
+            "2026.04.0 community", "2026.04.1 community"
+        ),
+        regression_module.RegressionGraphStateError(),
+        RuntimeError("driver-secret-must-not-leak"),
+        AdapterError("adapter-secret-must-not-leak"),
+    ),
+)
+def test_live_probe_failures_are_wrapped_and_terminal_without_message_leakage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    live_failure: Exception,
+) -> None:
+    _install_offline_production_gate(monkeypatch)
+    artifact_root = tmp_path / "campaign-artifacts"
+    spec, p0_entry = _entry(CampaignPhase.P0)
+    p0 = RuntimeFirstShardWorker(
+        spec,
+        environment=_environment(),
+        generation_runner=_must_not_generate,
+    )
+    p0.bind_run_dir(tmp_path / "p0")
+    p0.bind_regression_artifact_root(artifact_root)
+    assert p0(p0_entry)["terminal_state"] == "completed"
+
+    def fail_live_probe(*_args, **_kwargs):
+        raise live_failure
+
+    monkeypatch.setattr(
+        regression_module,
+        "_read_environment_identity",
+        fail_live_probe,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "probe_current_regression_environment_identity",
+        regression_module.probe_current_regression_environment_identity,
+    )
+    p1_spec, p1_entry = _entry(CampaignPhase.P1)
+    p1 = RuntimeFirstShardWorker(
+        p1_spec,
+        environment=_environment(),
+        generation_runner=_must_not_generate,
+    )
+    p1.bind_run_dir(tmp_path / "p1")
+    p1.bind_regression_artifact_root(artifact_root)
+
+    summary = p1(p1_entry)
+
+    assert summary["terminal_state"] == "infrastructure_failed"
+    assert summary["infrastructure_reason"] == "regression_current_environment_probe_failed"
+    assert "must-not-leak" not in repr(summary)
 
 
 def test_failed_p0_runner_report_is_preserved_and_terminally_blocks(

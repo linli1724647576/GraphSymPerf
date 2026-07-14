@@ -707,6 +707,29 @@ def test_landed_report_rejects_coherently_rehashed_validation_identity_forgery(
         )
 
 
+@pytest.mark.parametrize("field", ("fast_query_sha256", "slow_query_sha256"))
+def test_landed_report_rejects_coherently_rehashed_query_summary_drift(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    case = _case()
+    report_path = tmp_path / "report.json"
+    _runner(case, report_path).run(case, campaign_identity_hash=_campaign(case))
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload[field] = "0" * 64
+    body = {name: value for name, value in payload.items() if name != "content_hash"}
+    payload["content_hash"] = canonical_content_hash(body)
+    report_path.write_bytes(_canonical_json_bytes(payload))
+
+    with pytest.raises(RegressionArtifactError, match="identity"):
+        load_verified_regression_report(
+            report_path,
+            case=case,
+            campaign_identity_hash=_campaign(case),
+            current_identity=_identity(case),
+        )
+
+
 @pytest.mark.parametrize(
     "tamper",
     ("missing", "symlink", "unknown_key", "content_hash", "file_sha"),
