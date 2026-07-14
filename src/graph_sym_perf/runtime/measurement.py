@@ -159,11 +159,15 @@ class RuntimeHarness:
         elapsed = getattr(result, "elapsed_ms", result)
         if isinstance(elapsed, bool) or not isinstance(elapsed, int | float):
             raise _InvalidMeasurement("invalid_elapsed")
-        if not math.isfinite(elapsed):
+        try:
+            elapsed_value = float(elapsed)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise _InvalidMeasurement("invalid_elapsed") from exc
+        if not math.isfinite(elapsed_value):
             raise _InvalidMeasurement("non_finite_elapsed")
-        if elapsed < 0:
+        if elapsed_value < 0:
             raise _InvalidMeasurement("invalid_elapsed")
-        return float(elapsed), False
+        return elapsed_value, False
 
 
 def _evidence(

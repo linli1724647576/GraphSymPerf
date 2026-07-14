@@ -1348,7 +1348,10 @@ def test_live_acceptance_runtime_is_bounded_before_pending_progress(
     assert not (entry_dir / "pair_runtime.jsonl").exists()
 
 
-@pytest.mark.parametrize("sample_case", ("at_bound", "above_bound", "huge_float"))
+@pytest.mark.parametrize(
+    "sample_case",
+    ("at_bound", "above_bound", "huge_float", "huge_integer"),
+)
 def test_live_stage1_runtime_conversion_failure_is_controlled_infrastructure(
     tmp_path,
     monkeypatch,
@@ -1360,6 +1363,7 @@ def test_live_stage1_runtime_conversion_failure_is_controlled_infrastructure(
         "at_bound": 30_000.0,
         "above_bound": 30_000.001,
         "huge_float": 1e307,
+        "huge_integer": 10**1000,
     }[sample_case]
 
     class Stage1RuntimeAdapter(_Adapter):
