@@ -53,6 +53,17 @@ class ArtifactChainWriter:
                 "validation_protocol": report.validation_protocol,
                 "equivalence": asdict(report.equivalence),
                 "validated_ratio": report.validated_ratio,
+                "pooled_delta_ms": report.pooled_delta_ms,
+                "pooled_ratio_ci_low": report.pooled_ratio_ci_low,
+                "pooled_delta_ci_low_ms": report.pooled_delta_ci_low_ms,
+                "submission_path": (
+                    report.submission_path.value
+                    if report.submission_path is not None
+                    else None
+                ),
+                "noise_floor_ms": report.validation_policy.noise_floor_ms,
+                "timer_resolution_ms": report.validation_policy.timer_resolution_ms,
+                "metadata": dict(report.metadata),
                 "reason_codes": report.reason_codes,
             }
         )
@@ -178,6 +189,17 @@ def _require_report_binding(record: ArtifactRecord, report: IssueValidationRepor
         "sessions": tuple(_session_payload(session, index) for index, session in enumerate(report.sessions)),
         "dbms_fingerprint": report.manifest.pair.dbms_fingerprint,
         "validated_ratio": report.validated_ratio,
+        "pooled_delta_ms": report.pooled_delta_ms,
+        "pooled_ratio_ci_low": report.pooled_ratio_ci_low,
+        "pooled_delta_ci_low_ms": report.pooled_delta_ci_low_ms,
+        "submission_path": (
+            report.submission_path.value
+            if report.submission_path is not None
+            else None
+        ),
+        "noise_floor_ms": report.validation_policy.noise_floor_ms,
+        "timer_resolution_ms": report.validation_policy.timer_resolution_ms,
+        "metadata": dict(report.metadata),
         "reason_codes": report.reason_codes,
     }
     for name, value in expected.items():

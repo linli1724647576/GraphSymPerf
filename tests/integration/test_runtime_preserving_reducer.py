@@ -10,6 +10,7 @@ import pytest
 from graph_sym_perf.reducer.models import ReductionBundle, ReductionStatus, RuleWitness
 from graph_sym_perf.reducer.reducer import CandidateReducer, evaluate_reduction_candidate
 from graph_sym_perf.runtime.models import EquivalentQueryPair, PairedSample, RuntimeEvidence, RuntimeVerdict
+from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.models import (
     CandidateBundle,
@@ -38,7 +39,18 @@ def _pair() -> EquivalentQueryPair:
 
 
 def _certificate() -> SafetyCertificate:
-    return SafetyCertificate("predicate_order_symmetry", "core", "kleene_conjunction_commutativity_v1", "where_boolean")
+    rule = RuleRegistry.default().get("predicate_order_symmetry")
+    return SafetyCertificate(
+        rule.rule_id,
+        "clauses[0].where",
+        (),
+        "boolean",
+        "three_valued",
+        "where",
+        rule.purity_requirements,
+        rule.proof_id,
+        "capability-hash",
+    )
 
 
 def _candidate(pair: EquivalentQueryPair | None = None) -> CandidateBundle:

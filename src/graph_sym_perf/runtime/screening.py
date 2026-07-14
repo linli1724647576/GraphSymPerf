@@ -150,6 +150,34 @@ class Stage2Candidate:
             raise ValueError("Stage-2 noise-normalized score must be finite")
 
 
+def select_control_validation_pairs(
+    candidates: tuple[Stage2Candidate, ...],
+) -> tuple[Stage2Candidate, ...]:
+    """Choose deterministic CONTROL diagnostics without promoting controls.
+
+    Final-gate hits take precedence and are capped at two.  When no CONTROL
+    pair reaches either Stage-2 gate, one highest noise-normalized diagnostic
+    is retained.  Pair hash is the stable final tie-break.
+    """
+
+    if not isinstance(candidates, tuple) or any(
+        not isinstance(candidate, Stage2Candidate) for candidate in candidates
+    ):
+        raise TypeError("CONTROL validation selection requires Stage2Candidate tuple")
+    ordered = tuple(
+        sorted(
+            candidates,
+            key=lambda candidate: (
+                -int(candidate.decision.promote),
+                -candidate.noise_normalized_score,
+                candidate.pair_hash,
+            ),
+        )
+    )
+    hits = tuple(candidate for candidate in ordered if candidate.decision.promote)
+    return hits[:2] if hits else ordered[:1]
+
+
 @dataclass(frozen=True)
 class TimeoutQueueRecord:
     entry_id: str
@@ -806,6 +834,7 @@ __all__ = [
     "DEFAULT_SCREENING_POLICY",
     "ScreeningPolicy",
     "Stage2Candidate",
+    "select_control_validation_pairs",
     "Stage2Decision",
     "DurableTimeoutQueue",
     "TimeoutQueueRecord",

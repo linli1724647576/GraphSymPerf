@@ -10,7 +10,7 @@ from typing import Mapping
 
 from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.validation.models import canonical_content_hash
-from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci, percentile
+from graph_sym_perf.runtime.statistics import bootstrap_delta_ci, bootstrap_ratio_ci, percentile
 from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 
 
@@ -96,7 +96,19 @@ class ArtifactRecord:
                 "environment", "dbms_fingerprint", "stage", "validation_protocol",
                 "equivalence",
             }
-            allowed = required | {"validated_ratio", "validated_delta_ms", "reason_codes", "environment_ref"}
+            allowed = required | {
+                "validated_ratio",
+                "validated_delta_ms",
+                "pooled_delta_ms",
+                "pooled_ratio_ci_low",
+                "pooled_delta_ci_low_ms",
+                "submission_path",
+                "noise_floor_ms",
+                "timer_resolution_ms",
+                "metadata",
+                "reason_codes",
+                "environment_ref",
+            }
             _require_fields(normalized, required, level)
             _reject_unknown_fields(normalized, allowed, level)
             sessions = normalized["sessions"]
@@ -285,6 +297,7 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
     session_directions: list[str] = []
     combined_samples: list[tuple[float, float]] = []
     control_deltas: list[float] = []
+    session_summaries: list[tuple[float, float]] = []
     incomplete_sessions = 0
     for index, session in enumerate(sessions):
         if not isinstance(session, Mapping):
@@ -408,9 +421,75 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
             raise ValueError("validation combined sample set is incomplete")
         ratio = float(median(slow / fast for fast, slow in combined_samples))
         delta = float(median(slow - fast for fast, slow in combined_samples))
-        ci = bootstrap_ratio_ci(tuple(combined_samples))
+        bootstrap_seed = int.from_bytes(
+            hashlib.sha256(
+                (
+                    f"{payload['candidate_hash']}:"
+                    "pooled-validation-bootstrap-v1"
+                ).encode("utf-8")
+            ).digest()[:8],
+            "big",
+        )
+        ci = bootstrap_ratio_ci(
+            tuple(combined_samples),
+            resamples=10_000,
+            seed=bootstrap_seed,
+        )
+        delta_ci = bootstrap_delta_ci(
+            tuple(combined_samples),
+            slower_side="b",
+            resamples=10_000,
+            seed=bootstrap_seed,
+        )
         control_p99 = percentile(tuple(control_deltas), 0.99) if control_deltas else 0.0
-        if ratio < 3.0 or ci.low < 2.0 or delta <= max(control_p99, 0.01):
+        noise_floor_ms = payload.get("noise_floor_ms")
+        timer_resolution_ms = payload.get("timer_resolution_ms")
+        if any(
+            not isinstance(value, int | float)
+            or isinstance(value, bool)
+            or value < 0
+            for value in (noise_floor_ms, timer_resolution_ms)
+        ):
+            raise ValueError("validation pooled gate is missing its noise policy")
+        effective_noise = max(
+            float(noise_floor_ms),
+            control_p99,
+            10.0 * float(timer_resolution_ms),
+        )
+        for session in sessions:
+            oriented = tuple(
+                (sample["a_ms"], sample["b_ms"])
+                if slow_query == "b"
+                else (sample["b_ms"], sample["a_ms"])
+                for sample in session["paired_timing"]
+            )
+            session_summaries.append(
+                (
+                    float(median(slow / fast for fast, slow in oriented)),
+                    float(median(slow - fast for fast, slow in oriented)),
+                )
+            )
+        relative_pass = bool(
+            all(session_ratio >= 2.0 for session_ratio, _ in session_summaries)
+            and ratio >= 3.0
+            and ci.low >= 2.0
+            and delta > effective_noise
+        )
+        absolute_pass = bool(
+            all(session_delta > 0.0 for _, session_delta in session_summaries)
+            and delta >= max(5.0 * effective_noise, 50.0)
+            and delta_ci.low > effective_noise
+            and ratio >= 1.5
+            and ci.low >= 1.2
+        )
+        submission_path = payload.get("submission_path")
+        if not (
+            submission_path == "relative"
+            and relative_pass
+            or submission_path == "absolute"
+            and absolute_pass
+            and not relative_pass
+        ):
             raise ValueError("validation raw samples do not satisfy the runtime promotion gate")
         recorded_ratio = payload.get("validated_ratio")
         if not isinstance(recorded_ratio, int | float) or abs(float(recorded_ratio) - ratio) > 1e-12:
@@ -422,6 +501,23 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
             or abs(float(recorded_delta) - delta) > 1e-12
         ):
             raise ValueError("validation validated_delta_ms does not match raw samples")
+        pooled_values = (
+            ("pooled_delta_ms", delta),
+            ("pooled_ratio_ci_low", ci.low),
+            ("pooled_delta_ci_low_ms", delta_ci.low),
+        )
+        if any(
+            not isinstance(payload.get(name), int | float)
+            or isinstance(payload.get(name), bool)
+            or abs(float(payload[name]) - expected) > 1e-12
+            for name, expected in pooled_values
+        ):
+            raise ValueError("validation pooled summary differs from raw samples")
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, Mapping) or bool(
+            metadata.get("absolute_also_passed", False)
+        ) != (relative_pass and absolute_pass):
+            raise ValueError("validation submission-path metadata is inconsistent")
 
 
 def _validate_paired_timing(value: object, field: str) -> None:
@@ -447,13 +543,19 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     if not isinstance(payload["dbms_version"], str) or not payload["dbms_version"].strip():
         raise ValueError("issue artifact DBMS version is unavailable")
     certificate = payload["certificate"]
-    if (
-        not isinstance(certificate, Mapping)
-        or set(certificate) != {"rule_id", "tier", "proof_version", "site_class"}
-        or certificate.get("tier") != "core"
-        or any(not isinstance(certificate.get(key), str) or not certificate.get(key) for key in certificate)
-    ):
+    if not isinstance(certificate, Mapping):
         raise ValueError("issue artifact CORE SafetyCertificate is incomplete")
+    try:
+        from graph_sym_perf.transforms.safety_points import SafetyCertificate
+
+        certificate_payload = dict(certificate)
+        for tuple_field in ("variables_in_scope", "preconditions"):
+            value = certificate_payload.get(tuple_field)
+            if isinstance(value, list):
+                certificate_payload[tuple_field] = tuple(value)
+        rebuilt_certificate = SafetyCertificate(**certificate_payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("issue artifact CORE SafetyCertificate is incomplete") from exc
     try:
         rule = RuleRegistry.default().get(str(certificate["rule_id"]))
     except KeyError as exc:
@@ -461,7 +563,10 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     if (
         rule.tier is not SafetyTier.CORE
         or not rule.submit_eligible
-        or certificate["proof_version"] != rule.proof_id
+        or rebuilt_certificate.tier != "core"
+        or not rebuilt_certificate.submit_eligible
+        or rebuilt_certificate.proof_id != rule.proof_id
+        or rebuilt_certificate.proof_version != rule.proof_version
         or certificate["site_class"] not in rule.site_classes
         or (payload.get("rule_id") is not None and payload.get("rule_id") != certificate["rule_id"])
     ):

@@ -7,6 +7,7 @@ from graph_sym_perf.reducer.models import (
     RuleWitness,
 )
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimeEvidence, RuntimeVerdict
+from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.validation.models import SafetyCertificate
 
 
@@ -20,8 +21,19 @@ def _pair() -> EquivalentQueryPair:
     )
 
 
-def _certificate() -> SafetyCertificate:
-    return SafetyCertificate("predicate_order_symmetry", "core", "kleene_conjunction_commutativity_v1", "where_boolean")
+def _certificate(rule_id: str = "predicate_order_symmetry") -> SafetyCertificate:
+    rule = RuleRegistry.default().get(rule_id)
+    return SafetyCertificate(
+        rule.rule_id,
+        "clauses[0].where",
+        (),
+        "boolean",
+        "three_valued",
+        "where",
+        rule.purity_requirements,
+        rule.proof_id,
+        "capability-hash",
+    )
 
 
 def test_rule_witness_binds_relation_fragments_scope_and_output_schema() -> None:
@@ -66,7 +78,7 @@ def test_rule_witness_fails_closed_when_relation_or_output_is_deleted() -> None:
 
     assert not witness.verify(missing_relation, _certificate())
     assert not witness.verify(changed_output, _certificate())
-    assert not witness.verify(_pair(), SafetyCertificate("other", "core", "unknown", "where_boolean"))
+    assert not witness.verify(_pair(), _certificate("constant_true_disjunction"))
 
 
 def test_partial_manual_review_is_hash_bound_audit_only() -> None:

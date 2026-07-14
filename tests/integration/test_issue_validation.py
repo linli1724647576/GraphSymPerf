@@ -6,17 +6,35 @@ import pytest
 
 from graph_sym_perf.runtime.models import PairedSample, RuntimeEvidence, RuntimeVerdict
 from graph_sym_perf.sampling.yield_store import ValidatedYieldStore
+from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.models import (
     CandidateBundle,
     EquivalentQueryPair,
     EquivalenceEvidence,
     SessionLifecycle,
+    SubmissionPath,
     ValidationPolicy,
     ValidationSession,
     SafetyCertificate,
 )
 from graph_sym_perf.validation.validator import IssueValidator
+from graph_sym_perf.validation.evidence import issue_validation_report_is_complete
+
+
+def _certificate() -> SafetyCertificate:
+    rule = RuleRegistry.default().get("pattern_order_symmetry")
+    return SafetyCertificate(
+        rule.rule_id,
+        "clauses[0].pattern.components[0]",
+        (),
+        "graph_pattern",
+        "pattern_defined",
+        "match",
+        rule.purity_requirements,
+        rule.proof_id,
+        "capability-hash",
+    )
 
 
 def _bundle(*, discovery_slow_query: str = "b", noise_floor_ms: float = 0.0) -> CandidateBundle:
@@ -36,7 +54,7 @@ def _bundle(*, discovery_slow_query: str = "b", noise_floor_ms: float = 0.0) -> 
         discovery_slow_query=discovery_slow_query,
         discovery_ratio=5.0,
         validation_policy=ValidationPolicy(noise_floor_ms=noise_floor_ms),
-        certificate=SafetyCertificate("pattern_order_symmetry", "core", "graph_pattern_product_commutativity_v1", "match_pattern_component"),
+        certificate=_certificate(),
     )
 
 
@@ -89,6 +107,169 @@ class FakeIndependentRunner:
             controls,
             lifecycle=_lifecycle(session_number),
         )
+
+
+class FixedSessionRunner(FakeIndependentRunner):
+    def __init__(self, sessions: tuple[tuple[float, float], tuple[float, float]]) -> None:
+        self.sessions = sessions
+
+    def run_session(self, candidate, session_number, **kwargs):
+        equivalence, session = super().run_session(candidate, session_number, **kwargs)
+        a_ms, b_ms = self.sessions[session_number - 1]
+        samples = tuple(
+            PairedSample("AB" if index % 2 == 0 else "BA", a_ms, b_ms)
+            for index in range(20)
+        )
+        ratio = max(a_ms, b_ms) / min(a_ms, b_ms)
+        delta = abs(b_ms - a_ms)
+        evidence = replace(
+            session.evidence,
+            paired_samples=samples,
+            median_ratio=ratio,
+            median_delta_ms=delta,
+            ci_ratio_low=ratio,
+            ci_ratio_high=ratio,
+            ci_delta_low_ms=delta,
+            ci_delta_high_ms=delta,
+            slow_query="b",
+            slower_side="b",
+            measurement_source="ordinary_execute",
+            measurement_protocol="ordinary-execute-20-pair-v1",
+        )
+        return equivalence, replace(session, evidence=evidence)
+
+
+def test_relative_submission_path_requires_both_sessions_and_pooled_ci() -> None:
+    report = IssueValidator().validate(
+        _bundle(noise_floor_ms=5.0),
+        FixedSessionRunner(((25.0, 80.0), (25.0, 77.5))),
+    )
+
+    assert report.stage.value == "validation_passed"
+    assert report.submission_path is SubmissionPath.RELATIVE
+    assert report.pooled_ratio_ci_low is not None
+    assert report.pooled_ratio_ci_low >= 2.0
+
+
+def test_absolute_submission_path_accepts_stable_large_delta() -> None:
+    report = IssueValidator().validate(
+        _bundle(noise_floor_ms=10.0),
+        FixedSessionRunner(((100.0, 180.0), (100.0, 170.0))),
+    )
+
+    assert report.stage.value == "validation_passed"
+    assert report.submission_path is SubmissionPath.ABSOLUTE
+    assert report.pooled_delta_ci_low_ms is not None
+    assert report.pooled_delta_ci_low_ms > 10.0
+
+
+def test_both_submission_gates_deterministically_choose_relative() -> None:
+    report = IssueValidator().validate(
+        _bundle(noise_floor_ms=5.0),
+        FixedSessionRunner(((20.0, 80.0), (20.0, 80.0))),
+    )
+
+    assert report.submission_path is SubmissionPath.RELATIVE
+    assert report.metadata["absolute_also_passed"] is True
+
+
+def test_validator_rejects_same_process_sessions() -> None:
+    class SameProcessRunner(FakeIndependentRunner):
+        def run_session(self, *args, **kwargs):
+            equivalence, session = super().run_session(*args, **kwargs)
+            return equivalence, replace(session, process_id=17)
+
+    report = IssueValidator().validate(_bundle(), SameProcessRunner())
+
+    assert report.stage.value == "rejected"
+    assert "sessions_not_independent" in report.reason_codes
+
+
+class TimeoutSessionRunner(FakeIndependentRunner):
+    def __init__(self, mode: str = "confirmed") -> None:
+        self.mode = mode
+
+    def run_session(self, candidate, session_number, **kwargs):
+        equivalence, session = super().run_session(candidate, session_number, **kwargs)
+        timeout_side = "a" if self.mode == "side_mismatch" and session_number == 2 else "b"
+        samples = tuple(
+            PairedSample(
+                "AB" if index % 2 == 0 else "BA",
+                None if timeout_side == "a" else 10.0,
+                None if timeout_side == "b" else 10.0,
+                a_timeout=timeout_side == "a",
+                b_timeout=timeout_side == "b",
+            )
+            for index in range(20)
+        )
+        if self.mode == "both_timeout":
+            samples = tuple(
+                PairedSample(sample.order, None, None, True, True)
+                for sample in samples
+            )
+        if self.mode == "partial_timeout":
+            samples = (
+                samples[0],
+                *tuple(
+                    PairedSample(sample.order, 10.0, 10.0)
+                    for sample in samples[1:]
+                ),
+            )
+        if self.mode == "other_incomplete":
+            samples = tuple(
+                PairedSample(sample.order, None, sample.b_ms, False, sample.b_timeout)
+                for sample in samples
+            )
+        evidence = replace(
+            session.evidence,
+            verdict=RuntimeVerdict.INCONCLUSIVE,
+            paired_samples=samples,
+            median_ratio=None,
+            median_delta_ms=None,
+            ci_ratio_low=None,
+            ci_ratio_high=None,
+            reason_codes=(
+                "both_timeout" if self.mode == "both_timeout" else "one_sided_timeout",
+            ),
+            slow_query=timeout_side,
+            slower_side=timeout_side,
+        )
+        if self.mode == "health" and session_number == 2:
+            session = replace(session, health_event="dbms_restart")
+        if self.mode == "graph_mismatch" and session_number == 2:
+            session = replace(session, graph_fingerprint="different-graph")
+        return equivalence, replace(session, evidence=evidence)
+
+
+def test_same_side_timeout_confirmation_stays_diagnostic_inconclusive() -> None:
+    report = IssueValidator().validate(_bundle(), TimeoutSessionRunner())
+
+    assert report.stage.value == "inconclusive"
+    assert report.submission_path is None
+    assert report.metadata["timeout_validation_confirmed"] is True
+    assert "timeout_validation_confirmed" in report.reason_codes
+    assert not issue_validation_report_is_complete(report)
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "side_mismatch",
+        "both_timeout",
+        "partial_timeout",
+        "other_incomplete",
+        "health",
+        "graph_mismatch",
+    ),
+)
+def test_timeout_confirmation_fails_closed_on_direction_or_identity_health_mismatch(
+    mode: str,
+) -> None:
+    report = IssueValidator().validate(_bundle(), TimeoutSessionRunner(mode))
+
+    assert report.submission_path is None
+    assert report.metadata.get("timeout_validation_confirmed", False) is False
+    assert not issue_validation_report_is_complete(report)
 
 
 def test_two_fresh_sessions_are_required_for_validation_passed() -> None:
@@ -236,7 +417,7 @@ def test_validation_requires_distinct_os_processes_and_driver_connections() -> N
 
     report = IssueValidator().validate(_bundle(), ReusedConnectionRunner())
 
-    assert report.stage.value == "invalid"
+    assert report.stage.value == "rejected"
     assert "sessions_not_independent" in report.reason_codes
 
 

@@ -1,4 +1,5 @@
 import json
+import hashlib
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 from types import SimpleNamespace
@@ -37,8 +38,19 @@ from graph_sym_perf.runtime.models import (
     RuntimeEvidence,
     RuntimeVerdict,
 )
-from graph_sym_perf.runtime.screening import DurableTimeoutQueue, TimeoutQueueRecord
+from graph_sym_perf.runtime.screening import (
+    DurableTimeoutQueue,
+    Stage2Candidate,
+    Stage2Decision,
+    TimeoutQueueRecord,
+    select_control_validation_pairs,
+)
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
+from graph_sym_perf.validation.models import (
+    EquivalenceEvidence,
+    SessionLifecycle,
+    ValidationSession,
+)
 
 
 class _Adapter:
@@ -2146,6 +2158,335 @@ def test_p2_stage2_selection_caps_validation_at_five_candidates(
     assert result["validation_selected_pairs"] == 5
     assert selection["validation_limit"] == 5
     assert len(selection["selected_pair_hashes"]) == 5
+
+
+def _control_candidate(
+    ordinal: int,
+    *,
+    gate_hit: bool,
+    score: float,
+) -> Stage2Candidate:
+    evidence = RuntimeEvidence(
+        RuntimeVerdict.PASS,
+        "a" * 64,
+        "b" * 64,
+        (),
+        2.0,
+        score,
+        1.5,
+        2.5,
+        1.0,
+        0.0,
+        (),
+    )
+    return Stage2Candidate(
+        f"{ordinal:064x}",
+        Stage2Decision(gate_hit, False, ()),
+        score,
+        evidence,
+    )
+
+
+def test_control_selection_validates_gate_hits_or_one_top_score() -> None:
+    candidates = (
+        _control_candidate(1, gate_hit=True, score=2.0),
+        _control_candidate(2, gate_hit=False, score=100.0),
+        _control_candidate(3, gate_hit=True, score=3.0),
+        _control_candidate(4, gate_hit=True, score=1.0),
+    )
+
+    assert select_control_validation_pairs(candidates) == (candidates[2], candidates[0])
+
+    no_hits = tuple(
+        _control_candidate(index, gate_hit=False, score=score)
+        for index, score in ((1, 1.0), (2, 5.0), (3, 3.0))
+    )
+    assert select_control_validation_pairs(no_hits) == (no_hits[1],)
+
+
+class _IndependentValidationRunner:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def run_session(
+        self,
+        candidate,
+        session_number,
+        *,
+        expected_slow_query,
+        noise_floor_ms,
+        timer_resolution_ms,
+    ):
+        self.calls.append((candidate, session_number))
+        a_ms, b_ms = (
+            (40.0, 10.0) if expected_slow_query == "a" else (10.0, 40.0)
+        )
+        samples = tuple(
+            PairedSample("AB" if index % 2 == 0 else "BA", a_ms, b_ms)
+            for index in range(20)
+        )
+        evidence = RuntimeEvidence(
+            RuntimeVerdict.PASS,
+            hashlib.sha256(candidate.pair.query_a.encode("utf-8")).hexdigest(),
+            hashlib.sha256(candidate.pair.query_b.encode("utf-8")).hexdigest(),
+            samples,
+            4.0,
+            30.0,
+            4.0,
+            4.0,
+            1.0,
+            0.0,
+            (),
+            slow_query=expected_slow_query,
+            graph_snapshot_hash=candidate.pair.graph_snapshot_hash,
+            dbms_fingerprint=candidate.pair.dbms_fingerprint,
+            measurement_source="ordinary_execute",
+            measurement_protocol="ordinary-execute-20-pair-v1",
+            slower_side=expected_slow_query,
+            ci_delta_low_ms=30.0,
+            ci_delta_high_ms=30.0,
+        )
+        control_samples = tuple(
+            PairedSample("AB" if index % 2 == 0 else "BA", 10.0, 10.0)
+            for index in range(20)
+        )
+        control = RuntimeEvidence(
+            RuntimeVerdict.PASS,
+            "c" * 64,
+            "c" * 64,
+            control_samples,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            0.5,
+            0.0,
+            (),
+        )
+        return EquivalenceEvidence(True, True, ()), ValidationSession(
+            f"session-{session_number}",
+            10_000 + session_number,
+            candidate.pair.graph_snapshot_hash,
+            candidate.pair.dbms_fingerprint,
+            evidence,
+            (control, control),
+            lifecycle=SessionLifecycle(
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+                True,
+                f"validation-connection-{session_number}",
+            ),
+        )
+
+
+class _ControlRuntimeGapAdapter(_Adapter):
+    def execute(self, query, parameters, query_kind, **kwargs):
+        result = super().execute(query, parameters, query_kind, **kwargs)
+        if query_kind != "runtime":
+            return result
+        return ExecutionResult(
+            system=result.system,
+            query_kind=result.query_kind,
+            rows=result.rows,
+            elapsed_ms=31.0 if "<-" in query else 1.0,
+            summary=result.summary,
+        )
+
+
+def test_worker_validates_discovery_promotions_through_injected_runner(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    runner = _IndependentValidationRunner()
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        validation_runner_factory=lambda _entry: runner,
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["stage2_promoted_pairs"] == 1
+    assert result["validation_selected_pairs"] == 1
+    assert result["validation_passed_pairs"] == 1
+    assert len(runner.calls) == 2
+    evidence = json.loads(next(tmp_path.glob("entries/*/validation/*.json")).read_text(encoding="utf-8"))
+    assert evidence["submission_path"] == "relative"
+    assert evidence["pooled_ratio_ci_low"] >= 2.0
+    assert "control_gate_hit" not in evidence
+
+    class _MustNotRunValidation:
+        def run_session(self, *_args, **_kwargs):
+            raise AssertionError("resume must reuse the identity-bound validation artifact")
+
+    resumed = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        validation_runner_factory=lambda _entry: _MustNotRunValidation(),
+    )
+    resumed.bind_run_dir(tmp_path)
+
+    resumed_result = resumed(entry)
+
+    assert resumed_result["validation_passed_pairs"] == 1
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "content_hash",
+        "candidate_hash",
+        "stage2_evidence_digest",
+        "stream",
+        "entry_identity",
+    ),
+)
+def test_worker_validation_resume_rejects_tampered_identity_bound_artifact(
+    tmp_path,
+    monkeypatch,
+    tamper,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        validation_runner_factory=lambda _entry: _IndependentValidationRunner(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["validation_passed_pairs"] == 1
+
+    path = next(tmp_path.glob("entries/*/validation/*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    if tamper == "content_hash":
+        payload["content_hash"] = "0" * 64
+    elif tamper == "entry_identity":
+        body["entry_identity"]["entry_id"] = "foreign-entry"
+        payload = {**body, "content_hash": canonical_hash(body)}
+    else:
+        body[tamper] = "0" * 64 if tamper != "stream" else "control"
+        payload = {**body, "content_hash": canonical_hash(body)}
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+    class _MustNotRunValidation:
+        def run_session(self, *_args, **_kwargs):
+            raise AssertionError("tampered validation evidence must fail before replay")
+
+    resumed = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        validation_runner_factory=lambda _entry: _MustNotRunValidation(),
+    )
+    resumed.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        resumed(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert "validation outcome identity" in str(captured.value)
+
+
+def test_worker_control_validation_is_diagnostic_and_never_promotes_or_ranks(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    monkeypatch.setattr(
+        "graph_sym_perf.validation.promotion.promote",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("CONTROL validation must never call promotion")
+        ),
+    )
+    runner = _IndependentValidationRunner()
+    entry = replace(
+        _rule_plan_entry(rule_id="edge_notation_symmetry", family="sym"),
+        entry_id="p1:neo4j:control:edge_notation_symmetry:256:0",
+        stream=RuleStream.CONTROL,
+        tier="control",
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=(
+                "CREATE (a:Node {id: 1}), (b:Node {id: 2}), (a)-[:R]->(b)",
+            ),
+            query_texts=("MATCH (n)-[:R]->(m) RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _ControlRuntimeGapAdapter(),
+        validation_runner_factory=lambda _entry: runner,
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["stage2_promoted_pairs"] == 0
+    assert result["control_gate_hit"] is True
+    assert result["control_validation_pass"] is True
+    assert result.get("submit_ready_issues", 0) == 0
+    assert "candidate_ranking" not in result
+    assert len(runner.calls) == 2
+    evidence = json.loads(next(tmp_path.glob("entries/*/validation/*.json")).read_text(encoding="utf-8"))
+    assert evidence["control_gate_hit"] is True
+    assert evidence["control_validation_pass"] is True
+    assert "submission_candidate_rank" not in evidence
+
+
+def test_worker_validation_runner_failure_is_terminal_infrastructure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+
+    class _FailingRunner:
+        def run_session(self, *_args, **_kwargs):
+            raise RuntimeError("VALIDATION_SESSION_FAILED: empty result queue")
+
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        validation_runner_factory=lambda _entry: _FailingRunner(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    assert result["infrastructure_error_kind"] == ErrorKind.INFRASTRUCTURE_ERROR.value
+    assert "independent validation process failed" in result["infrastructure_reason"]
+    assert not tuple(tmp_path.glob("entries/*/validation/*.json"))
 
 
 def test_corrupt_timeout_queue_fails_closed_on_resume(tmp_path, monkeypatch) -> None:
@@ -4709,7 +5050,8 @@ def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) ->
     assert records[0]["discovery_slow_query"] == "b"
     assert records[0]["parameters"] == {}
     assert records[0]["rule_id"] == "constant_true_disjunction"
-    assert records[0]["safety_certificate"]["proof_version"] == "kleene_or_true_v1"
+    assert records[0]["safety_certificate"]["proof_id"] == "kleene_or_true_v1"
+    assert records[0]["safety_certificate"]["proof_version"] == "1"
     assert records[0]["graph_snapshot_hash"]
     assert records[0]["dbms_fingerprint"] == "a" * 64
     assert records[0]["graph_snapshot_ref"]["content_hash"] == records[0]["graph_snapshot_hash"]

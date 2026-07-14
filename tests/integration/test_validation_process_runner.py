@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -6,8 +7,13 @@ import pytest
 from graph_sym_perf.adapters.base import DBMSFingerprint
 from graph_sym_perf.core import ExecutionResult, QueryTimeoutError, TargetSystem
 from graph_sym_perf.runtime.models import EquivalentQueryPair
+from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
-from graph_sym_perf.validation.models import CandidateBundle, SafetyCertificate
+from graph_sym_perf.validation.models import CandidateBundle, SafetyCertificate, ValidationPolicy
+from graph_sym_perf.validation.session_runner import (
+    SpawnedValidationSessionRunner,
+    validation_schedule_seed,
+)
 from graph_sym_perf.validation.validator import IssueValidator, SubprocessSessionRunner
 
 
@@ -18,6 +24,8 @@ class LifecycleAdapter:
         self._graph_fingerprint = ""
 
     def connectivity_check(self):
+        if self.candidate.resolved_config.get("mode") == "hang":
+            time.sleep(1.0)
         self._event("connect")
         return True, "connected"
 
@@ -73,7 +81,35 @@ def _adapter_factory(candidate: CandidateBundle):
     return LifecycleAdapter(candidate)
 
 
-def _bundle(event_log: Path, *, mode: str | None = None) -> CandidateBundle:
+def _crashing_adapter_factory(_candidate: CandidateBundle):
+    os._exit(17)
+
+
+def _raising_adapter_factory(_candidate: CandidateBundle):
+    raise RuntimeError("adapter factory exploded")
+
+
+def _certificate() -> SafetyCertificate:
+    rule = RuleRegistry.default().get("pattern_order_symmetry")
+    return SafetyCertificate(
+        rule.rule_id,
+        "clauses[0].pattern.components[0]",
+        (),
+        "graph_pattern",
+        "pattern_defined",
+        "match",
+        rule.purity_requirements,
+        rule.proof_id,
+        "capability-hash",
+    )
+
+
+def _bundle(
+    event_log: Path,
+    *,
+    mode: str | None = None,
+    session_timeout_seconds: float = 300.0,
+) -> CandidateBundle:
     snapshot = GraphSnapshot.from_statements(("CREATE (n:Person {id: 1})",))
     pair = EquivalentQueryPair(
         "MATCH (n) RETURN n.id AS value ORDER BY value",
@@ -89,7 +125,10 @@ def _bundle(event_log: Path, *, mode: str | None = None) -> CandidateBundle:
         resolved_config={"event_log": str(event_log), "mode": mode},
         discovery_slow_query="b",
         discovery_ratio=4.0,
-        certificate=SafetyCertificate("pattern_order_symmetry", "core", "graph_pattern_product_commutativity_v1", "match_pattern_component"),
+        certificate=_certificate(),
+        validation_policy=ValidationPolicy(
+            session_timeout_seconds=session_timeout_seconds,
+        ),
     )
 
 
@@ -127,6 +166,97 @@ def test_subprocess_runner_performs_real_fresh_process_session_lifecycle(tmp_pat
     events = (tmp_path / "events.log").read_text(encoding="utf-8")
     for event in ("connect", "validation_reset", "load", "validation_graph_nodes", "validation_graph_relationships", "close"):
         assert f":{event}\n" in events
+    events_by_pid = {
+        pid: tuple(
+            line.split(":", 1)[1]
+            for line in events.splitlines()
+            if line.startswith(f"{pid}:")
+        )
+        for pid in (str(first.process_id), str(second.process_id))
+    }
+    assert str(os.getpid()) not in {line.split(":", 1)[0] for line in events.splitlines()}
+    for process_events in events_by_pid.values():
+        assert process_events.count("validation_reset") == 1
+        assert process_events.count("load") == 1
+        assert process_events.count("runtime") == 130
+
+
+def test_spawned_runner_derives_distinct_schedule_seeds_from_candidate_hash(tmp_path: Path) -> None:
+    candidate = _bundle(tmp_path / "seed-events.log")
+    runner = SpawnedValidationSessionRunner(_adapter_factory)
+
+    _, first = runner.run_session(
+        candidate,
+        1,
+        expected_slow_query="b",
+        noise_floor_ms=0.0,
+        timer_resolution_ms=0.001,
+    )
+    _, second = runner.run_session(
+        candidate,
+        2,
+        expected_slow_query="b",
+        noise_floor_ms=0.0,
+        timer_resolution_ms=0.001,
+    )
+
+    assert first.schedule_seed == validation_schedule_seed(candidate.candidate_hash, 1)
+    assert second.schedule_seed == validation_schedule_seed(candidate.candidate_hash, 2)
+    assert first.schedule_seed != second.schedule_seed
+    assert first.schedule_seed not in {1, 2}
+    assert second.schedule_seed not in {1, 2}
+
+
+def test_spawned_runner_hard_timeout_fails_closed(tmp_path: Path) -> None:
+    candidate = _bundle(
+        tmp_path / "timeout-events.log",
+        mode="hang",
+        session_timeout_seconds=0.05,
+    )
+
+    with pytest.raises(RuntimeError, match="VALIDATION_SESSION_TIMEOUT"):
+        SpawnedValidationSessionRunner(_adapter_factory).run_session(
+            candidate,
+            1,
+            expected_slow_query="b",
+            noise_floor_ms=0.0,
+            timer_resolution_ms=0.001,
+        )
+
+
+@pytest.mark.parametrize(
+    "adapter_factory",
+    (_crashing_adapter_factory, _raising_adapter_factory),
+)
+def test_spawned_runner_empty_queue_or_child_failure_fails_closed(
+    tmp_path: Path,
+    adapter_factory,
+) -> None:
+    candidate = _bundle(tmp_path / "failed-child-events.log")
+
+    with pytest.raises(RuntimeError, match="VALIDATION_SESSION_FAILED"):
+        SpawnedValidationSessionRunner(adapter_factory).run_session(
+            candidate,
+            1,
+            expected_slow_query="b",
+            noise_floor_ms=0.0,
+            timer_resolution_ms=0.001,
+        )
+
+
+def test_spawned_runner_closes_adapter_when_session_work_fails(tmp_path: Path) -> None:
+    event_log = tmp_path / "failed-work-events.log"
+    candidate = _bundle(event_log, mode="execution_error")
+
+    SpawnedValidationSessionRunner(_adapter_factory).run_session(
+        candidate,
+        1,
+        expected_slow_query="b",
+        noise_floor_ms=0.0,
+        timer_resolution_ms=0.001,
+    )
+
+    assert f"{event_log.read_text(encoding='utf-8').split(':', 1)[0]}:close\n" in event_log.read_text(encoding="utf-8")
 
 
 def test_subprocess_runner_prefers_database_level_reset_when_supported(tmp_path: Path) -> None:
@@ -181,6 +311,15 @@ def test_target_timeout_is_inconclusive_not_a_runtime_pass(tmp_path: Path) -> No
     report = IssueValidator().validate(candidate, SubprocessSessionRunner(_adapter_factory))
 
     assert report.stage.value == "inconclusive"
+    assert report.submission_path is None
+    assert report.metadata["timeout_validation_confirmed"] is True
+    assert report.sessions[0].process_id != report.sessions[1].process_id
+    assert all(
+        session.graph_fingerprint == candidate.pair.graph_snapshot_hash
+        and session.dbms_fingerprint == candidate.pair.dbms_fingerprint
+        and session.health_event is None
+        for session in report.sessions
+    )
 
 
 def test_health_event_rejects_otherwise_strong_runtime_evidence(tmp_path: Path) -> None:

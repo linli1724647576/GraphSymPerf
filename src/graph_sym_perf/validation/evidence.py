@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 from statistics import median
 
 from graph_sym_perf.runtime.models import RuntimeEvidence, RuntimeVerdict
-from graph_sym_perf.runtime.statistics import bootstrap_ratio_ci, percentile, relative_mad
-from graph_sym_perf.validation.models import IssueValidationReport, PipelineStage
+from graph_sym_perf.runtime.statistics import (
+    bootstrap_delta_ci,
+    bootstrap_ratio_ci,
+    percentile,
+    relative_mad,
+)
+from graph_sym_perf.validation.models import (
+    IssueValidationReport,
+    PipelineStage,
+    SubmissionPath,
+)
 
 
 def issue_validation_report_is_complete(report: object) -> bool:
@@ -19,7 +29,10 @@ def issue_validation_report_is_complete(report: object) -> bool:
         or not report.equivalence.complete_result
         or report.reason_codes
         or report.validated_ratio is None
-        or report.validated_ratio < 3.0
+        or report.pooled_delta_ms is None
+        or report.pooled_ratio_ci_low is None
+        or report.pooled_delta_ci_low_ms is None
+        or report.submission_path not in {SubmissionPath.RELATIVE, SubmissionPath.ABSOLUTE}
         or report.magnitude_stability not in {"stable", "shrunk_but_real"}
         or len(report.sessions) != 2
         or not report.candidate_hash
@@ -89,7 +102,19 @@ def issue_validation_report_is_complete(report: object) -> bool:
         return False
     ratio = float(median(slow / fast for fast, slow in combined if fast > 0))
     delta = float(median(slow - fast for fast, slow in combined))
-    ci = bootstrap_ratio_ci(combined)
+    bootstrap_seed = int.from_bytes(
+        hashlib.sha256(
+            f"{report.candidate_hash}:pooled-validation-bootstrap-v1".encode("utf-8")
+        ).digest()[:8],
+        "big",
+    )
+    ci = bootstrap_ratio_ci(combined, resamples=10_000, seed=bootstrap_seed)
+    delta_ci = bootstrap_delta_ci(
+        combined,
+        slower_side="b",
+        resamples=10_000,
+        seed=bootstrap_seed,
+    )
     control_deltas = tuple(
         abs(sample.b_ms - sample.a_ms)
         for session in report.sessions
@@ -101,11 +126,65 @@ def issue_validation_report_is_complete(report: object) -> bool:
         and not sample.b_timeout
     )
     control_p99 = percentile(control_deltas, 0.99) if control_deltas else 0.0
-    return bool(
-        ratio >= 3.0
+    effective_noise = max(
+        report.validation_policy.noise_floor_ms,
+        control_p99,
+        10 * report.validation_policy.timer_resolution_ms,
+    )
+    session_summaries = tuple(
+        (
+            float(
+                median(
+                    (sample.b_ms / sample.a_ms)
+                    if slow_query == "b"
+                    else (sample.a_ms / sample.b_ms)
+                    for sample in session.evidence.paired_samples
+                    if sample.a_ms is not None
+                    and sample.b_ms is not None
+                    and sample.a_ms > 0
+                    and sample.b_ms > 0
+                )
+            ),
+            float(
+                median(
+                    (sample.b_ms - sample.a_ms)
+                    if slow_query == "b"
+                    else (sample.a_ms - sample.b_ms)
+                    for sample in session.evidence.paired_samples
+                    if sample.a_ms is not None and sample.b_ms is not None
+                )
+            ),
+        )
+        for session in report.sessions
+    )
+    relative_pass = bool(
+        all(session_ratio >= 2.0 for session_ratio, _ in session_summaries)
+        and ratio >= 3.0
         and ci.low >= 2.0
-        and delta > max(control_p99, 0.01)
+        and delta > effective_noise
+    )
+    absolute_pass = bool(
+        all(session_delta > 0.0 for _, session_delta in session_summaries)
+        and delta >= max(5.0 * effective_noise, 50.0)
+        and delta_ci.low > effective_noise
+        and ratio >= 1.5
+        and ci.low >= 1.2
+    )
+    path_valid = (
+        report.submission_path is SubmissionPath.RELATIVE
+        and relative_pass
+        or report.submission_path is SubmissionPath.ABSOLUTE
+        and absolute_pass
+        and not relative_pass
+    )
+    return bool(
+        path_valid
+        and bool(report.metadata.get("absolute_also_passed", False))
+        == (relative_pass and absolute_pass)
         and abs(report.validated_ratio - ratio) <= 1e-12
+        and abs(report.pooled_delta_ms - delta) <= 1e-12
+        and abs(report.pooled_ratio_ci_low - ci.low) <= 1e-12
+        and abs(report.pooled_delta_ci_low_ms - delta_ci.low) <= 1e-12
     )
 
 
@@ -134,7 +213,19 @@ def combined_runtime_evidence(report: object) -> RuntimeEvidence | None:
     if len(oriented) != 40 or any(fast <= 0 for fast, _slow in oriented):
         return None
     ratios = tuple(slow / fast for fast, slow in oriented)
-    ci = bootstrap_ratio_ci(oriented)
+    bootstrap_seed = int.from_bytes(
+        hashlib.sha256(
+            f"{report.candidate_hash}:pooled-validation-bootstrap-v1".encode("utf-8")
+        ).digest()[:8],
+        "big",
+    )
+    ci = bootstrap_ratio_ci(oriented, resamples=10_000, seed=bootstrap_seed)
+    delta_ci = bootstrap_delta_ci(
+        oriented,
+        slower_side="b",
+        resamples=10_000,
+        seed=bootstrap_seed,
+    )
     sources = {session.evidence.measurement_source for session in report.sessions}
     protocols = {session.evidence.measurement_protocol for session in report.sessions}
     source = "ordinary_execute" if sources == {"ordinary_execute"} else None
@@ -157,6 +248,9 @@ def combined_runtime_evidence(report: object) -> RuntimeEvidence | None:
         relative_mad=relative_mad(ratios),
         reason_codes=(),
         slow_query=slow_query,
+        slower_side=slow_query,
+        ci_delta_low_ms=delta_ci.low,
+        ci_delta_high_ms=delta_ci.high,
         graph_snapshot_hash=first.graph_fingerprint,
         dbms_fingerprint=first.dbms_fingerprint,
         measurement_source=source,

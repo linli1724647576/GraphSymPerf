@@ -48,7 +48,7 @@ def _candidate() -> CandidateBundle:
         resolved_config={"target": "neo4j"},
         discovery_slow_query="b",
         discovery_ratio=5.0,
-        certificate=SafetyCertificate(rule.rule_id, "core", rule.proof_id, "where_boolean"),
+        certificate=source_certificate,
     )
 
 

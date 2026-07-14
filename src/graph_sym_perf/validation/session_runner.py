@@ -5,15 +5,21 @@ from __future__ import annotations
 import hashlib
 import multiprocessing
 import os
+import queue as queue_module
 import re
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from graph_sym_perf.adapters.lifecycle import reset_graph_state
 from graph_sym_perf.equivalence.checker import compare_execution_results
 from graph_sym_perf.runtime.measurement import RuntimeHarness
-from graph_sym_perf.runtime.models import RuntimeEvidence, RuntimePolicy, RuntimeVerdict
+from graph_sym_perf.runtime.models import (
+    EquivalentQueryPair,
+    RuntimeEvidence,
+    RuntimePolicy,
+    RuntimeVerdict,
+)
 from graph_sym_perf.validation.models import (
     CandidateBundle,
     EquivalenceEvidence,
@@ -23,14 +29,65 @@ from graph_sym_perf.validation.models import (
 from graph_sym_perf.validation.graph_snapshot import verify_graph_snapshot
 
 
-class SubprocessSessionRunner:
+@dataclass(frozen=True)
+class ValidationSessionRequest:
+    target: str
+    graph_statements: tuple[str, ...]
+    pair: EquivalentQueryPair
+    policy: RuntimePolicy
+    expected_graph_fingerprint: str
+    expected_dbms_fingerprint: str
+
+
+def validation_schedule_seed(candidate_hash: str, session_number: int) -> int:
+    if not isinstance(candidate_hash, str) or len(candidate_hash) != 64:
+        raise ValueError("candidate_hash must be a SHA-256 hex digest")
+    if session_number not in {1, 2}:
+        raise ValueError("validation session number must be 1 or 2")
+    digest = hashlib.sha256(
+        (
+            f"{candidate_hash}:validation-session:{session_number}:"
+            "balanced-schedule-v1"
+        ).encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
+
+
+class SpawnedValidationSessionRunner:
     """Run one validation session in a fresh OS process and adapter instance."""
 
     def __init__(
         self,
         adapter_factory: Callable[[CandidateBundle], Any],
+        *,
+        hard_timeout_seconds: float | None = None,
     ) -> None:
         self._adapter_factory = adapter_factory
+        self.hard_timeout_seconds = hard_timeout_seconds
+
+    def _request(
+        self,
+        candidate: CandidateBundle,
+        session_number: int,
+    ) -> ValidationSessionRequest:
+        return ValidationSessionRequest(
+            target=str(candidate.resolved_config.get("target", "unknown")),
+            graph_statements=candidate.graph_snapshot.statements,
+            pair=candidate.pair,
+            policy=RuntimePolicy(
+                warmups=5,
+                pairs=20,
+                seed=validation_schedule_seed(
+                    candidate.candidate_hash,
+                    session_number,
+                ),
+                require_exact_balance=True,
+                timeout_ms=candidate.validation_policy.query_timeout_seconds * 1000,
+                bootstrap_resamples=10_000,
+            ),
+            expected_graph_fingerprint=candidate.pair.graph_snapshot_hash,
+            expected_dbms_fingerprint=candidate.pair.dbms_fingerprint,
+        )
 
     def run_session(
         self,
@@ -47,13 +104,15 @@ class SubprocessSessionRunner:
             or noise_floor_ms != policy.noise_floor_ms
             or timer_resolution_ms != policy.timer_resolution_ms
         ):
-            return _failed_process_result(candidate, session_number, -1, "validation_policy_mismatch")
+            raise RuntimeError("VALIDATION_SESSION_FAILED: validation_policy_mismatch")
+        request = self._request(candidate, session_number)
         context = multiprocessing.get_context("spawn")
-        receive, send = context.Pipe(duplex=False)
+        queue = context.Queue()
         process = context.Process(
-            target=_run_validation_session,
+            target=_validation_session_entry,
             args=(
-                send,
+                request,
+                queue,
                 self._adapter_factory,
                 candidate,
                 session_number,
@@ -65,32 +124,43 @@ class SubprocessSessionRunner:
             ),
         )
         process.start()
-        process_id = process.pid or -1
-        send.close()
-        if not receive.poll(candidate.validation_policy.session_timeout_seconds):
-            receive.close()
-            _terminate_process(process)
-            return _failed_process_result(candidate, session_number, process_id, "session_process_timeout")
-        try:
-            equivalence, session = receive.recv()
-        except EOFError:
-            _terminate_process(process)
-            return _failed_process_result(candidate, session_number, process_id, "session_process_crashed")
-        finally:
-            receive.close()
-        process.join(timeout=5.0)
-        exited = not process.is_alive() and process.exitcode == 0
+        timeout = (
+            self.hard_timeout_seconds
+            if self.hard_timeout_seconds is not None
+            else candidate.validation_policy.session_timeout_seconds
+        )
+        process.join(timeout)
         if process.is_alive():
             _terminate_process(process)
-        else:
+            queue.close()
+            queue.cancel_join_thread()
+            raise RuntimeError("VALIDATION_SESSION_TIMEOUT")
+        exitcode = process.exitcode
+        try:
+            status, payload = queue.get(timeout=1.0)
+        except queue_module.Empty as exc:
+            raise RuntimeError(
+                f"VALIDATION_SESSION_FAILED: empty result queue (exitcode={process.exitcode})"
+            ) from exc
+        finally:
+            queue.close()
+            queue.cancel_join_thread()
             process.close()
+        if status != "ok":
+            raise RuntimeError(f"VALIDATION_SESSION_FAILED: {payload}")
+        equivalence, session = payload
+        exited = exitcode == 0
         if session.lifecycle is not None:
             session = replace(session, lifecycle=replace(session.lifecycle, process_exited=exited))
         return equivalence, session
 
 
-def _run_validation_session(
-    send: Any,
+SubprocessSessionRunner = SpawnedValidationSessionRunner
+
+
+def _validation_session_entry(
+    request: ValidationSessionRequest,
+    queue: Any,
     adapter_factory: Callable[[CandidateBundle], Any],
     candidate: CandidateBundle,
     session_number: int,
@@ -100,7 +170,46 @@ def _run_validation_session(
     query_timeout_seconds: float,
     max_result_rows: int,
 ) -> None:
-    adapter = None
+    try:
+        payload = _run_validation_session(
+            request,
+            adapter_factory,
+            candidate,
+            session_number,
+            expected_slow_query,
+            noise_floor_ms,
+            timer_resolution_ms,
+            query_timeout_seconds,
+            max_result_rows,
+        )
+    except BaseException as exc:
+        queue.put(("error", f"{type(exc).__name__}: {exc}"))
+    else:
+        queue.put(("ok", payload))
+    finally:
+        queue.close()
+
+
+def _run_validation_session(
+    request: ValidationSessionRequest,
+    adapter_factory: Callable[[CandidateBundle], Any],
+    candidate: CandidateBundle,
+    session_number: int,
+    expected_slow_query: str,
+    noise_floor_ms: float,
+    timer_resolution_ms: float,
+    query_timeout_seconds: float,
+    max_result_rows: int,
+) -> tuple[EquivalenceEvidence, ValidationSession]:
+    if (
+        request.graph_statements != candidate.graph_snapshot.statements
+        or request.pair != candidate.pair
+        or request.expected_graph_fingerprint
+        != candidate.pair.graph_snapshot_hash
+        or request.expected_dbms_fingerprint != candidate.pair.dbms_fingerprint
+    ):
+        raise ValueError("validation session request identity mismatch")
+    adapter = adapter_factory(candidate)
     lifecycle = {
         "process_started": True,
         "adapter_created": False,
@@ -119,7 +228,6 @@ def _run_validation_session(
     controls: tuple[RuntimeEvidence, ...] = ()
     health_event: str | None = None
     try:
-        adapter = adapter_factory(candidate)
         lifecycle["adapter_created"] = True
         connected = adapter.connectivity_check()
         if not isinstance(connected, tuple) or not connected or connected[0] is not True:
@@ -201,7 +309,7 @@ def _run_validation_session(
         control_policy = RuntimePolicy(
             warmups=0,
             pairs=20,
-            seed=session_number,
+            seed=request.policy.seed ^ 0x5A5A5A5A,
             require_exact_balance=True,
             timeout_ms=query_timeout_seconds * 1000,
         )
@@ -218,19 +326,13 @@ def _run_validation_session(
                 candidate.pair.query_b,
                 candidate.pair.query_b,
                 parameters=candidate.pair.parameters,
-                policy=replace(control_policy, seed=session_number + 10_000),
+                policy=replace(control_policy, seed=request.policy.seed ^ 0xA5A5A5A5),
             ),
         )
         evidence = harness.measure_validation(
             adapter,
             candidate.pair,
-            policy=RuntimePolicy(
-                warmups=5,
-                pairs=20,
-                seed=session_number,
-                require_exact_balance=True,
-                timeout_ms=query_timeout_seconds * 1000,
-            ),
+            policy=request.policy,
             expected_slow_query=expected_slow_query,
             noise_floor_ms=noise_floor_ms,
             timer_resolution_ms=timer_resolution_ms,
@@ -258,11 +360,9 @@ def _run_validation_session(
             negative_controls=controls,
             health_event=health_event,
             lifecycle=SessionLifecycle(**lifecycle),
+            schedule_seed=request.policy.seed,
         )
-        try:
-            send.send((equivalence, session))
-        finally:
-            send.close()
+    return equivalence, session
 
 
 def _connection_identity(adapter: Any) -> str:
@@ -297,36 +397,11 @@ def _invalid_runtime_evidence(candidate: CandidateBundle, reason: str) -> Runtim
     )
 
 
-def _failed_process_result(
-    candidate: CandidateBundle,
-    session_number: int,
-    process_id: int,
-    reason: str,
-) -> tuple[EquivalenceEvidence, ValidationSession]:
-    lifecycle = SessionLifecycle(True, False, False, False, False, False, False, True, "")
-    return (
-        EquivalenceEvidence(False, False, (reason,)),
-        ValidationSession(
-            f"validation-{session_number}-failed",
-            process_id,
-            "",
-            "",
-            _invalid_runtime_evidence(candidate, reason),
-            (),
-            health_event=reason,
-            lifecycle=lifecycle,
-        ),
-    )
-
-
 def _has_order_by(query: str) -> bool:
     return re.search(r"\bORDER\s+BY\b", query, re.IGNORECASE) is not None
 
 
 def _terminate_process(process: multiprocessing.Process) -> None:
-    if process.is_alive():
-        process.terminate()
-        process.join(timeout=2.0)
     if process.is_alive():
         process.kill()
         process.join(timeout=2.0)

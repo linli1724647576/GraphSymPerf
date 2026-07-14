@@ -91,7 +91,7 @@ def _reduction_gate_complete(
         and original_validation.certificate_hash == reduction.certificate_hash
         and reduction.certificate_hash == certificate_hash
         and final_validation.rule_id == certificate.rule_id == original_validation.rule_id
-        and final_validation.proof_version == certificate.proof_version == original_validation.proof_version
+        and final_validation.proof_version == certificate.proof_id == original_validation.proof_version
         and evidence.verdict is RuntimeVerdict.PASS
         and len(evidence.paired_samples) == 40
         and sum(sample.order == "AB" for sample in evidence.paired_samples) == 20
@@ -104,11 +104,13 @@ def _reduction_gate_complete(
             for sample in evidence.paired_samples
         )
         and evidence.median_ratio is not None
-        and evidence.median_ratio >= 3.0
         and evidence.ci_ratio_low is not None
-        and evidence.ci_ratio_low >= 2.0
         and evidence.median_delta_ms is not None
-        and evidence.median_delta_ms > 0
+        and evidence.ci_delta_low_ms is not None
+        and evidence.median_ratio == final_validation.validated_ratio
+        and evidence.median_delta_ms == final_validation.pooled_delta_ms
+        and evidence.ci_ratio_low == final_validation.pooled_ratio_ci_low
+        and evidence.ci_delta_low_ms == final_validation.pooled_delta_ci_low_ms
         and evidence.slow_query in {"a", "b"}
         and evidence.graph_snapshot_hash == reduction.reduced_pair.graph_snapshot_hash
         and evidence.dbms_fingerprint == reduction.reduced_pair.dbms_fingerprint
@@ -133,8 +135,10 @@ def _certificate_complete(certificate: SafetyCertificate | None) -> bool:
     return bool(
         rule.tier is SafetyTier.CORE
         and rule.submit_eligible
-        and certificate.proof_version == rule.proof_id
-        and certificate.site_class in rule.site_classes
+        and certificate.submit_eligible
+        and certificate.proof_id == rule.proof_id
+        and certificate.proof_version == rule.proof_version
+        and certificate.site_class in rule.allowed_site_classes
     )
 
 

@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
@@ -10,10 +10,38 @@ from graph_sym_perf.validation.models import (
     IssueValidationReport,
     PipelineStage,
     SafetyCertificate,
+    safety_certificate_hash,
+)
+from graph_sym_perf.transforms.rule_models import RuleRegistry
+from graph_sym_perf.transforms.safety_points import (
+    SafetyCertificate as TransformSafetyCertificate,
 )
 
 
+def test_validation_uses_the_single_canonical_safety_certificate_type() -> None:
+    assert SafetyCertificate is TransformSafetyCertificate
+    assert SafetyCertificate.__module__ == "graph_sym_perf.transforms.safety_points"
+
+    rule = RuleRegistry.default().get("pattern_order_symmetry")
+    certificate = SafetyCertificate(
+        rule.rule_id,
+        "clauses[0].pattern.components[0]",
+        (),
+        "graph_pattern",
+        "pattern_defined",
+        "match",
+        rule.purity_requirements,
+        rule.proof_id,
+        "capability-hash",
+    )
+    payload = asdict(certificate)
+
+    assert TransformSafetyCertificate(**payload) == certificate
+    assert safety_certificate_hash(TransformSafetyCertificate(**payload)) == safety_certificate_hash(certificate)
+
+
 def _bundle() -> CandidateBundle:
+    rule = RuleRegistry.default().get("pattern_order_symmetry")
     snapshot = GraphSnapshot.from_statements(("CREATE (n:Person {id: 1})",))
     pair = EquivalentQueryPair(
         "MATCH (n) RETURN n.id ORDER BY n.id",
@@ -29,7 +57,17 @@ def _bundle() -> CandidateBundle:
         resolved_config={"runtime": {"pairs": 20}, "system": "neo4j"},
         discovery_slow_query="b",
         discovery_ratio=8.0,
-        certificate=SafetyCertificate("pattern_order_symmetry", "core", "graph_pattern_product_commutativity_v1", "match_pattern_component"),
+        certificate=SafetyCertificate(
+            rule.rule_id,
+            "clauses[0].pattern.components[0]",
+            (),
+            "graph_pattern",
+            "pattern_defined",
+            "match",
+            rule.purity_requirements,
+            rule.proof_id,
+            "capability-hash",
+        ),
     )
 
 

@@ -81,7 +81,7 @@ class RuleWitness:
 
         if (
             getattr(certificate, "rule_id", None) != self.rule_id
-            or getattr(certificate, "proof_version", None) != self.proof_version
+            or getattr(certificate, "proof_id", None) != self.proof_version
             or not self.relation.strip()
             or any(fragment not in pair.query_a for fragment in self.required_fragments_a)
             or any(fragment not in pair.query_b for fragment in self.required_fragments_b)

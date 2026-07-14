@@ -1,9 +1,29 @@
 import pytest
 import hashlib
+from dataclasses import asdict
 
 from graph_sym_perf.artifacts.policy import ArtifactLevel, ArtifactPolicy
 from graph_sym_perf.artifacts.schema import ArtifactRecord, ArtifactReference
 from graph_sym_perf.validation.models import candidate_hash_from_content_hashes, canonical_content_hash
+from graph_sym_perf.transforms.rule_models import RuleRegistry
+from graph_sym_perf.transforms.safety_points import SafetyCertificate
+
+
+def _certificate_payload() -> dict[str, object]:
+    rule = RuleRegistry.default().get("constant_true_disjunction")
+    return asdict(
+        SafetyCertificate(
+            rule.rule_id,
+            "clauses[0].where",
+            (),
+            "boolean",
+            "three_valued",
+            "where",
+            rule.purity_requirements,
+            rule.proof_id,
+            "capability-hash",
+        )
+    )
 
 
 def _reference() -> dict[str, object]:
@@ -19,12 +39,7 @@ def _reference() -> dict[str, object]:
 def _candidate_payload() -> dict[str, object]:
     query_a = "MATCH (n) RETURN n"
     query_b = "MATCH (n) WHERE true RETURN n"
-    certificate = {
-        "rule_id": "constant_true_disjunction",
-        "tier": "core",
-        "proof_version": "kleene_or_true_v1",
-        "site_class": "where_boolean",
-    }
+    certificate = _certificate_payload()
     content_hashes = {
         "query_a": hashlib.sha256(query_a.encode()).hexdigest(),
         "query_b": hashlib.sha256(query_b.encode()).hexdigest(),
@@ -117,6 +132,13 @@ def _validation_payload() -> dict[str, object]:
         },
         "dbms_fingerprint": "c" * 64,
         "validated_ratio": 4.0,
+        "pooled_delta_ms": 3.0,
+        "pooled_ratio_ci_low": 4.0,
+        "pooled_delta_ci_low_ms": 3.0,
+        "submission_path": "relative",
+        "noise_floor_ms": 0.0,
+        "timer_resolution_ms": 0.001,
+        "metadata": {"absolute_also_passed": False},
     }
 
 
@@ -135,12 +157,7 @@ def _issue_payload() -> dict[str, object]:
         "issue_id": "issue-1",
         "stage": "submit_ready",
         "reduction_status": "reduced_valid",
-        "certificate": {
-            "rule_id": "constant_true_disjunction",
-            "tier": "core",
-            "proof_version": "kleene_or_true_v1",
-            "site_class": "where_boolean",
-        },
+        "certificate": _certificate_payload(),
         "duplicate_clearance": {
             "issue_id": "issue-1",
             "possible_duplicate": False,

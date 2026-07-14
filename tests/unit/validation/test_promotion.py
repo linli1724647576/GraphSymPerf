@@ -18,6 +18,7 @@ from graph_sym_perf.reducer.models import (
 )
 from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.runtime.models import EquivalentQueryPair, PairedSample, RuntimeEvidence, RuntimeVerdict
+from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.validation.models import (
     DeveloperStatus,
     CandidateBundle,
@@ -25,6 +26,7 @@ from graph_sym_perf.validation.models import (
     EquivalenceEvidence,
     IssueValidationReport,
     PipelineStage,
+    SubmissionPath,
     SafetyCertificate,
     SessionLifecycle,
     SubmitReadyIssue,
@@ -125,16 +127,35 @@ def _report(
     *,
     pair: EquivalentQueryPair | None = None,
     stage: PipelineStage = PipelineStage.VALIDATION_PASSED,
+    submission_path: SubmissionPath = SubmissionPath.RELATIVE,
     metadata=None,
 ) -> IssueValidationReport:
     pair = pair or _original_pair()
+    evidence = _evidence(pair=pair)
+    validated_ratio = 4.0
+    pooled_delta = 30.0
+    if submission_path is SubmissionPath.ABSOLUTE:
+        absolute_samples = tuple(
+            PairedSample("AB" if index % 2 == 0 else "BA", 100.0, 180.0)
+            for index in range(20)
+        )
+        evidence = replace(
+            evidence,
+            paired_samples=absolute_samples,
+            median_ratio=1.8,
+            median_delta_ms=80.0,
+            ci_ratio_low=1.8,
+            ci_ratio_high=1.8,
+        )
+        validated_ratio = 1.8
+        pooled_delta = 80.0
     sessions = tuple(
         ValidationSession(
             f"session-{index}",
             os.getpid() + index + 100,
             pair.graph_snapshot_hash,
             pair.dbms_fingerprint,
-            _evidence(pair=pair),
+            evidence,
             (_control(), _control()),
             lifecycle=_lifecycle(index),
         )
@@ -156,7 +177,11 @@ def _report(
         equivalence=EquivalenceEvidence(True, True, ()),
         sessions=sessions,
         discovery_ratio=8.0,
-        validated_ratio=4.0,
+        validated_ratio=validated_ratio,
+        pooled_delta_ms=pooled_delta,
+        pooled_ratio_ci_low=validated_ratio,
+        pooled_delta_ci_low_ms=pooled_delta,
+        submission_path=submission_path,
         magnitude_stability="stable",
         reason_codes=(),
         candidate=candidate,
@@ -165,10 +190,15 @@ def _report(
     )
 
 
-def _reduction(*, status: ReductionStatus = ReductionStatus.REDUCED_VALID, verdict: RuntimeVerdict = RuntimeVerdict.PASS) -> ReductionReport:
+def _reduction(
+    *,
+    status: ReductionStatus = ReductionStatus.REDUCED_VALID,
+    verdict: RuntimeVerdict = RuntimeVerdict.PASS,
+    submission_path: SubmissionPath = SubmissionPath.RELATIVE,
+) -> ReductionReport:
     original_pair = _original_pair()
     reduced_pair = _reduced_pair()
-    final_validation = _report(pair=reduced_pair)
+    final_validation = _report(pair=reduced_pair, submission_path=submission_path)
     universe = MinimalityUniverse.recompute(reduced_pair)
     final_evidence = combined_runtime_evidence(final_validation)
     assert final_evidence is not None
@@ -211,32 +241,53 @@ def _tamper_manifest_hash(report: IssueValidationReport, name: str, value: str) 
 
 
 def _certificate(**changes) -> SafetyCertificate:
-    values = {
-        "rule_id": "pattern_order_symmetry",
-        "tier": "core",
-        "proof_version": "graph_pattern_product_commutativity_v1",
-        "site_class": "match_pattern_component",
+    certificate = _canonical_certificate("pattern_order_symmetry")
+    if not changes:
+        return certificate
+    forged = copy.copy(certificate)
+    for name, value in changes.items():
+        object.__setattr__(forged, name, value)
+    return forged
+
+
+def _canonical_certificate(rule_id: str) -> SafetyCertificate:
+    rule = RuleRegistry.default().get(rule_id)
+    site_class = rule.allowed_site_classes[0]
+    facts = {
+        "where_boolean": ("clauses[0].where", "boolean", "three_valued", "where"),
+        "match_pattern_component": (
+            "clauses[0].pattern.components[0]",
+            "graph_pattern",
+            "pattern_defined",
+            "match",
+        ),
+        "bound_variable": (
+            "clauses[0].variables[n]",
+            "bound_variable",
+            "scope_bound",
+            "match",
+        ),
     }
-    values.update(changes)
-    return SafetyCertificate(**values)
+    ast_path, expression_type, nullability, clause_context = facts[site_class]
+    return SafetyCertificate(
+        rule.rule_id,
+        ast_path,
+        (),
+        expression_type,
+        nullability,
+        clause_context,
+        rule.purity_requirements,
+        rule.proof_id,
+        "capability-hash",
+    )
 
 
 def test_control_and_experimental_rules_cannot_masquerade_as_submit_eligible_core() -> None:
     assert not _certificate_complete(
-        SafetyCertificate(
-            "edge_notation_symmetry",
-            "core",
-            "edge_parser_normalization_v1",
-            "match_pattern_component",
-        )
+        _canonical_certificate("edge_notation_symmetry")
     )
     assert not _certificate_complete(
-        SafetyCertificate(
-            "pattern_decomposition_symmetry",
-            "core",
-            "relationship_uniqueness_pending",
-            "match_pattern_component",
-        )
+        _canonical_certificate("pattern_decomposition_symmetry")
     )
 
 
@@ -295,9 +346,28 @@ def test_only_validation_passed_reduced_core_certificate_becomes_submit_ready() 
     assert issue.issue_id == _expected_issue_id(report, reduction)
 
 
-def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(tmp_path) -> None:
-    report = _report()
-    reduction = _reduction()
+def test_promotion_requires_an_explicit_relative_or_absolute_submission_path() -> None:
+    kwargs = {
+        "reduction_report": _reduction(),
+        "certificate": _certificate(),
+        "duplicate_clearance": _duplicate_clearance(),
+    }
+
+    assert promote(_report(submission_path=SubmissionPath.RELATIVE), **kwargs) is not None
+    assert promote(_report(submission_path=SubmissionPath.ABSOLUTE), **kwargs) is not None
+    assert promote(_tamper_report(_report(), submission_path=None), **kwargs) is None
+
+
+@pytest.mark.parametrize(
+    "submission_path",
+    (SubmissionPath.RELATIVE, SubmissionPath.ABSOLUTE),
+)
+def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(
+    tmp_path,
+    submission_path,
+) -> None:
+    report = _report(submission_path=submission_path)
+    reduction = _reduction(submission_path=submission_path)
     issue = promote(
         report,
         reduction_report=reduction,
@@ -347,6 +417,8 @@ def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(tmp_
         candidate_ref=candidate_reference(report),
         environment=environment,
     )
+    assert original_validation.record.payload["submission_path"] == submission_path.value
+    assert original_validation.record.payload["pooled_delta_ms"] == report.pooled_delta_ms
     with pytest.raises(ValueError, match="candidate artifact"):
         writer.persist_validation(
             report,
@@ -358,6 +430,8 @@ def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(tmp_
         candidate_ref=candidate_reference(reduction.final_validation),
         environment=environment,
     )
+    if submission_path is SubmissionPath.ABSOLUTE:
+        return
     reproducer = store.put("reproducer", b"CREATE (n:Person {id: 1})")
 
     stored_issue = writer.persist_issue(

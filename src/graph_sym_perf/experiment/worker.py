@@ -59,6 +59,7 @@ from graph_sym_perf.experiment.plan_models import (
     CampaignPhase,
     ExperimentSpec,
     RulePlanEntry,
+    RuleStream,
     ShardTask,
     ValidatedYieldExperimentSpec,
 )
@@ -106,6 +107,7 @@ from graph_sym_perf.runtime.screening import (
     Stage2Decision,
     TimeoutQueueRecord,
     evaluate_stage2,
+    select_control_validation_pairs,
     stage1_top_k,
 )
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
@@ -118,9 +120,11 @@ from graph_sym_perf.transforms.safety_points import (
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.models import (
     CandidateBundle,
-    SafetyCertificate as ValidationSafetyCertificate,
+    PipelineStage,
     ValidationPolicy,
 )
+from graph_sym_perf.validation.session_runner import SpawnedValidationSessionRunner
+from graph_sym_perf.validation.validator import IssueValidator
 from graph_sym_perf.workload.acceptance import AcceptedPairBuilder
 from graph_sym_perf.workload.models import (
     AcceptanceStatus,
@@ -159,6 +163,22 @@ class _GenerationRunner(Protocol):
 
 class _CandidatePipeline(Protocol):
     def process(self, candidate: CandidateBundle, **context: object) -> Mapping[str, object]: ...
+
+
+@dataclass(frozen=True)
+class _EntryValidationAdapterFactory:
+    spec: ValidatedYieldExperimentSpec
+    environment: Mapping[str, str]
+    entry: RulePlanEntry
+
+    def __call__(self, _candidate: CandidateBundle) -> Any:
+        run_config = _entry_run_config(self.spec, self.entry)
+        return create_adapter(
+            run_config.systems[0],
+            run_config,
+            self.environment,
+            allow_create=True,
+        )
 
 
 class WorkerFailure(RuntimeError):
@@ -351,6 +371,7 @@ class RuntimeFirstShardWorker:
         generation_runner: _GenerationRunner | None = None,
         adapter_factory: _AdapterFactory | None = None,
         candidate_pipeline: _CandidatePipeline | None = None,
+        validation_runner_factory: Callable[[RulePlanEntry], Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.spec = spec
@@ -358,6 +379,7 @@ class RuntimeFirstShardWorker:
         self._generation_runner = generation_runner or self._generate_with_gdsmith
         self._adapter_factory = adapter_factory or self._create_adapter
         self._candidate_pipeline = candidate_pipeline
+        self._validation_runner_factory = validation_runner_factory
         self._clock = clock
         self._run_dir: Path | None = None
         self._attempt_dir: Path | None = None
@@ -666,10 +688,12 @@ class RuntimeFirstShardWorker:
                     generated.query_texts,
                     entry_dir,
                     graph_manifest=graph_manifest,
+                    graph_statements=generated.graph_statements,
                     graph_snapshot_hash=(
                         graph_manifest.graph_fingerprint if graph_manifest is not None else graph_hash
                     ),
                     dbms_fingerprint=fingerprint.value,
+                    dbms_version=fingerprint.server_version or "version-unavailable",
                     dbms_health_epoch=health_epoch.value,
                     deadline=deadline,
                     progress_path=progress_path,
@@ -897,6 +921,13 @@ class RuntimeFirstShardWorker:
             validation_selected_pairs=int(
                 outcome.get("validation_selected_pairs", 0)
             ),
+            validation_passed_pairs=int(
+                outcome.get("validation_passed_pairs", 0)
+            ),
+            control_gate_hit=bool(outcome.get("control_gate_hit", False)),
+            control_validation_pass=bool(
+                outcome.get("control_validation_pass", False)
+            ),
             infrastructure_error_kind=outcome.get("infrastructure_error_kind"),
             infrastructure_reason=outcome.get("infrastructure_reason"),
         )
@@ -910,7 +941,9 @@ class RuntimeFirstShardWorker:
         *,
         graph_snapshot_hash: str,
         graph_manifest: GraphManifest | None,
+        graph_statements: tuple[str, ...],
         dbms_fingerprint: str,
+        dbms_version: str,
         dbms_health_epoch: str,
         deadline: float,
         progress_path: Path,
@@ -1568,6 +1601,9 @@ class RuntimeFirstShardWorker:
         stage2_measured_pairs = 0
         stage2_promoted_pairs = 0
         validation_selected_pairs = 0
+        validation_passed_pairs = 0
+        control_gate_hit = False
+        control_validation_pass = False
         timeout_records: tuple[TimeoutQueueRecord, ...] = ()
         if state is EntryState.STAGE1_COMPLETE:
             if noise.p99_delta_ms is None:
@@ -1583,8 +1619,10 @@ class RuntimeFirstShardWorker:
                 factory=factory,
                 records=store.records,
                 graph_manifest=graph_manifest,
+                graph_statements=graph_statements,
                 graph_snapshot_hash=graph_snapshot_hash,
                 dbms_fingerprint=dbms_fingerprint,
+                dbms_version=dbms_version,
                 dbms_health_epoch=dbms_health_epoch,
                 noise_floor_id=str(noise_floor_id),
                 noise_p99_ms=float(noise.p99_delta_ms),
@@ -1596,6 +1634,13 @@ class RuntimeFirstShardWorker:
             stage2_promoted_pairs = int(stage2_outcome["stage2_promoted_pairs"])
             validation_selected_pairs = int(
                 stage2_outcome["validation_selected_pairs"]
+            )
+            validation_passed_pairs = int(
+                stage2_outcome.get("validation_passed_pairs", 0)
+            )
+            control_gate_hit = bool(stage2_outcome.get("control_gate_hit", False))
+            control_validation_pass = bool(
+                stage2_outcome.get("control_validation_pass", False)
             )
             timeout_records = tuple(stage2_outcome["timeout_records"])
             if stage2_outcome.get("infrastructure_reason") is not None:
@@ -1626,6 +1671,9 @@ class RuntimeFirstShardWorker:
             "stage2_measured_pairs": stage2_measured_pairs,
             "stage2_promoted_pairs": stage2_promoted_pairs,
             "validation_selected_pairs": validation_selected_pairs,
+            "validation_passed_pairs": validation_passed_pairs,
+            "control_gate_hit": control_gate_hit,
+            "control_validation_pass": control_validation_pass,
             "timeout_records": timeout_records,
             "terminal_state": state,
         }
@@ -1644,8 +1692,10 @@ class RuntimeFirstShardWorker:
         factory: RulePairFactory,
         records: tuple[dict[str, Any], ...],
         graph_manifest: GraphManifest | None,
+        graph_statements: tuple[str, ...],
         graph_snapshot_hash: str,
         dbms_fingerprint: str,
+        dbms_version: str,
         dbms_health_epoch: str,
         noise_floor_id: str,
         noise_p99_ms: float,
@@ -1764,10 +1814,12 @@ class RuntimeFirstShardWorker:
                 )
 
         measured: list[tuple[Stage2Candidate, str]] = []
+        pairs_by_hash: dict[str, object] = {}
         for selected_index, pair_hash in enumerate(selected_hashes):
             stage1_record = records_by_hash[pair_hash]
             ordinal = int(stage1_record["source_query_ordinal"])
             pair = _rebuild_pending_pair(factory, entry, queries, ordinal, pair_hash)
+            pairs_by_hash[pair_hash] = pair
             expected_direction = stage1_record.get("runtime_direction")
             if expected_direction not in {"a", "b"}:
                 raise WorkerFailure(
@@ -1957,13 +2009,29 @@ class RuntimeFirstShardWorker:
                 )
 
         promoted = [candidate for candidate, _digest in measured if candidate.decision.promote]
-        validation_limit = 5 if entry.phase is CampaignPhase.P2 else 2
+        if entry.stream is RuleStream.CONTROL:
+            selected_candidates = select_control_validation_pairs(
+                tuple(candidate for candidate, _digest in measured)
+            )
+            validation_limit = 2 if promoted else 1
+        else:
+            validation_limit = 5 if entry.phase is CampaignPhase.P2 else 2
+            selected_candidates = tuple(
+                sorted(promoted, key=_stage2_candidate_rank_key)[:validation_limit]
+            )
         selected_for_validation = tuple(
-            candidate.pair_hash
-            for candidate in sorted(
-                promoted,
-                key=_stage2_candidate_rank_key,
-            )[:validation_limit]
+            candidate.pair_hash for candidate in selected_candidates
+        )
+        validation_outcomes = self._validate_stage2_pairs(
+            entry,
+            entry_dir,
+            selected_candidates=selected_candidates,
+            pairs_by_hash=pairs_by_hash,
+            graph_statements=graph_statements,
+            graph_snapshot_hash=graph_snapshot_hash,
+            dbms_fingerprint=dbms_fingerprint,
+            dbms_version=dbms_version,
+            noise_p99_ms=noise_p99_ms,
         )
         _persist_stage2_selection(
             selection_path,
@@ -1982,10 +2050,161 @@ class RuntimeFirstShardWorker:
             "terminal_state": EntryState.STAGE2_COMPLETE,
             "stage1_selected_pairs": len(selected_hashes),
             "stage2_measured_pairs": len(measured),
-            "stage2_promoted_pairs": len(promoted),
+            "stage2_promoted_pairs": (
+                0 if entry.stream is RuleStream.CONTROL else len(promoted)
+            ),
             "validation_selected_pairs": len(selected_for_validation),
+            "validation_passed_pairs": (
+                0
+                if entry.stream is RuleStream.CONTROL
+                else sum(
+                    outcome["stage"] == PipelineStage.VALIDATION_PASSED.value
+                    for outcome in validation_outcomes
+                )
+            ),
+            "control_gate_hit": bool(
+                entry.stream is RuleStream.CONTROL
+                and any(outcome.get("control_gate_hit") for outcome in validation_outcomes)
+            ),
+            "control_validation_pass": bool(
+                entry.stream is RuleStream.CONTROL
+                and any(
+                    outcome.get("control_validation_pass")
+                    for outcome in validation_outcomes
+                )
+            ),
             "timeout_records": tuple(timeout_records),
         }
+
+    def _validate_stage2_pairs(
+        self,
+        entry: RulePlanEntry,
+        entry_dir: Path,
+        *,
+        selected_candidates: tuple[Stage2Candidate, ...],
+        pairs_by_hash: Mapping[str, object],
+        graph_statements: tuple[str, ...],
+        graph_snapshot_hash: str,
+        dbms_fingerprint: str,
+        dbms_version: str,
+        noise_p99_ms: float,
+    ) -> tuple[dict[str, object], ...]:
+        if not selected_candidates:
+            return ()
+        runner = None
+        snapshot = GraphSnapshot.from_statements(graph_statements)
+        if snapshot.content_hash != graph_snapshot_hash:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "validation graph statements do not match the Stage-2 fingerprint",
+            )
+        outcomes: list[dict[str, object]] = []
+        for stage2_candidate in selected_candidates:
+            certified_pair = pairs_by_hash[stage2_candidate.pair_hash]
+            pair = EquivalentQueryPair(
+                certified_pair.query_a,
+                certified_pair.query_b,
+                certified_pair.parameters,
+                graph_snapshot_hash,
+                dbms_fingerprint,
+                entry.rule_id,
+                certified_pair.certificate,
+            )
+            candidate = CandidateBundle.create(
+                pair,
+                graph_snapshot=snapshot,
+                dbms_version=dbms_version,
+                resolved_config={
+                    "entry_id": entry.entry_id,
+                    "stream": entry.stream.value,
+                    "target": entry.target.value,
+                    "validation": dict(self.spec.validation),
+                },
+                discovery_slow_query=str(stage2_candidate.evidence.slow_query),
+                discovery_ratio=stage2_candidate.evidence.median_ratio,
+                certificate=_validation_certificate(pair),
+                validation_policy=ValidationPolicy(
+                    noise_floor_ms=noise_p99_ms,
+                    timer_resolution_ms=0.001,
+                    max_result_rows=int(self.spec.validation["max_result_rows"]),
+                    query_timeout_seconds=float(entry.query_timeout_seconds),
+                    session_timeout_seconds=max(
+                        300.0,
+                        float(entry.query_timeout_seconds) * 10.0,
+                    ),
+                ),
+            )
+            validation_path = (
+                entry_dir / "validation" / f"{stage2_candidate.pair_hash}.json"
+            )
+            expected_identity = {
+                "candidate_hash": candidate.candidate_hash,
+                "dbms_fingerprint": dbms_fingerprint,
+                "entry_identity": _stage2_entry_identity(entry),
+                "graph_snapshot_hash": graph_snapshot_hash,
+                "pair_hash": stage2_candidate.pair_hash,
+                "stage2_evidence_digest": canonical_hash(
+                    to_jsonable(asdict(stage2_candidate.evidence))
+                ),
+                "stream": entry.stream.value,
+            }
+            existing_outcome = _load_stage2_validation_outcome(
+                validation_path,
+                expected_identity=expected_identity,
+            )
+            if existing_outcome is not None:
+                outcomes.append(existing_outcome)
+                continue
+            if runner is None:
+                if self._validation_runner_factory is not None:
+                    runner = self._validation_runner_factory(entry)
+                else:
+                    assert isinstance(self.spec, ValidatedYieldExperimentSpec)
+                    runner = SpawnedValidationSessionRunner(
+                        _EntryValidationAdapterFactory(
+                            self.spec,
+                            self.environment,
+                            entry,
+                        )
+                    )
+            try:
+                report = IssueValidator().validate(candidate, runner)
+            except RuntimeError as exc:
+                raise WorkerFailure(
+                    ErrorKind.INFRASTRUCTURE_ERROR,
+                    f"independent validation process failed: {exc}",
+                ) from exc
+            outcome: dict[str, object] = {
+                "schema_version": 1,
+                **expected_identity,
+                "stage": report.stage.value,
+                "reason_codes": list(report.reason_codes),
+                "validated_ratio": report.validated_ratio,
+                "pooled_delta_ms": report.pooled_delta_ms,
+                "pooled_ratio_ci_low": report.pooled_ratio_ci_low,
+                "pooled_delta_ci_low_ms": report.pooled_delta_ci_low_ms,
+                "submission_path": (
+                    report.submission_path.value
+                    if report.submission_path is not None
+                    else None
+                ),
+                "sessions": to_jsonable(asdict(report)["sessions"]),
+            }
+            if entry.stream is RuleStream.CONTROL:
+                outcome.update(
+                    {
+                        "control_gate_hit": stage2_candidate.decision.promote,
+                        "control_validation_pass": (
+                            report.stage is PipelineStage.VALIDATION_PASSED
+                        ),
+                    }
+                )
+            _persist_stage2_validation_outcome(
+                validation_path,
+                outcome,
+            )
+            outcomes.append(outcome)
+        return tuple(outcomes)
 
     def _finish_entry(
         self,
@@ -2007,6 +2226,9 @@ class RuntimeFirstShardWorker:
         stage2_measured_pairs: int = 0,
         stage2_promoted_pairs: int = 0,
         validation_selected_pairs: int = 0,
+        validation_passed_pairs: int = 0,
+        control_gate_hit: bool = False,
+        control_validation_pass: bool = False,
     ) -> dict[str, object]:
         state = terminal_state if isinstance(terminal_state, EntryState) else EntryState(str(terminal_state))
         acceptance_complete = (
@@ -2052,6 +2274,10 @@ class RuntimeFirstShardWorker:
             "stage2_measured_pairs": stage2_measured_pairs,
             "stage2_promoted_pairs": stage2_promoted_pairs,
             "validation_selected_pairs": validation_selected_pairs,
+            "validation_passed_pairs": validation_passed_pairs,
+            "control_gate_hit": control_gate_hit,
+            "control_validation_pass": control_validation_pass,
+            "submit_ready_issues": 0,
             "target": entry.target.value,
             "terminal_state": state.value,
         }
@@ -4375,6 +4601,79 @@ def _persist_stage2_selection(
         )
 
 
+def _persist_stage2_validation_outcome(
+    path: Path,
+    outcome: Mapping[str, object],
+) -> None:
+    body = to_jsonable(dict(outcome))
+    payload = {**body, "content_hash": canonical_hash(body)}
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _fsync_directory(path.parent.parent)
+        _atomic_write_json(path, payload)
+        return
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "validation outcome artifact is unreadable",
+        ) from exc
+    if existing != payload:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "validation outcome differs from the sealed pooled evidence",
+        )
+
+
+def _load_stage2_validation_outcome(
+    path: Path,
+    *,
+    expected_identity: Mapping[str, object],
+) -> dict[str, object] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "validation outcome artifact is unreadable",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "validation outcome artifact is not an object",
+        )
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    terminal_stages = {
+        PipelineStage.VALIDATION_PASSED.value,
+        PipelineStage.REJECTED.value,
+        PipelineStage.INCONCLUSIVE.value,
+        PipelineStage.INVALID.value,
+    }
+    if (
+        payload.get("content_hash") != canonical_hash(body)
+        or body.get("schema_version") != 1
+        or body.get("stage") not in terminal_stages
+        or any(body.get(key) != to_jsonable(value) for key, value in expected_identity.items())
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "validation outcome identity or pooled evidence hash differs",
+        )
+    if body.get("stage") == PipelineStage.VALIDATION_PASSED.value and (
+        body.get("submission_path") not in {"relative", "absolute"}
+        or body.get("pooled_ratio_ci_low") is None
+        or body.get("pooled_delta_ci_low_ms") is None
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "validation pass is missing its pooled submission evidence",
+        )
+    return body
+
+
 def _stage2_entry_identity(entry: RulePlanEntry) -> dict[str, object]:
     return {
         "entry_id": entry.entry_id,
@@ -4688,11 +4987,16 @@ def _certificate_payload(certificate: object | None) -> dict[str, object] | None
     return asdict(certificate)
 
 
-def _validation_certificate(pair: EquivalentQueryPair) -> ValidationSafetyCertificate:
+def _validation_certificate(pair: EquivalentQueryPair) -> TransformSafetyCertificate:
     if not pair.rule_id or pair.safety_certificate is None:
         raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "screen candidate lacks a safety certificate")
     rule = RuleRegistry.default().get(pair.rule_id)
-    proof_id = getattr(pair.safety_certificate, "proof_id", None)
+    if not isinstance(pair.safety_certificate, TransformSafetyCertificate):
+        raise WorkerFailure(
+            ErrorKind.INFRASTRUCTURE_ERROR,
+            "screen candidate certificate is not the canonical certificate type",
+        )
+    proof_id = pair.safety_certificate.proof_id
     ast_path = str(getattr(pair.safety_certificate, "ast_path", ""))
     if proof_id != rule.proof_id or not ast_path:
         raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "screen candidate certificate does not match rule registry")
@@ -4701,12 +5005,17 @@ def _validation_certificate(pair: EquivalentQueryPair) -> ValidationSafetyCertif
         site_class = rule.site_classes[0]
     if site_class is None:
         raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "screen candidate site class is ambiguous")
-    return ValidationSafetyCertificate(
-        rule_id=rule.rule_id,
-        tier=rule.tier.value,
-        proof_version=rule.proof_id,
-        site_class=site_class,
-    )
+    if (
+        pair.safety_certificate.rule_id != rule.rule_id
+        or pair.safety_certificate.tier != rule.tier.value
+        or pair.safety_certificate.proof_version != rule.proof_version
+        or pair.safety_certificate.site_class != site_class
+    ):
+        raise WorkerFailure(
+            ErrorKind.INFRASTRUCTURE_ERROR,
+            "screen candidate canonical certificate facts drifted",
+        )
+    return pair.safety_certificate
 
 
 def _site_matches_path(site_class: str, ast_path: str) -> bool:

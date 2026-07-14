@@ -22,6 +22,8 @@ from graph_sym_perf.issues.commands import IssueCommands
 from graph_sym_perf.issues.registry import IssueRegistry, canonical_reduced_pair_hash
 from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
 from graph_sym_perf.runtime.models import EquivalentQueryPair
+from graph_sym_perf.transforms.rule_models import RuleRegistry
+from graph_sym_perf.transforms.safety_points import SafetyCertificate
 from graph_sym_perf.validation.models import (
     DeveloperStatus,
     FrozenMapping,
@@ -30,6 +32,23 @@ from graph_sym_perf.validation.models import (
     candidate_hash_from_content_hashes,
     canonical_content_hash,
 )
+
+
+def _canonical_test_certificate() -> dict[str, object]:
+    rule = RuleRegistry.default().get("constant_true_disjunction")
+    return asdict(
+        SafetyCertificate(
+            rule.rule_id,
+            "clauses[0].where",
+            (),
+            "boolean",
+            "three_valued",
+            "where",
+            rule.purity_requirements,
+            rule.proof_id,
+            "capability-hash",
+        )
+    )
 
 
 def test_store_deduplicates_content_and_enforces_per_shard_budget(tmp_path) -> None:
@@ -149,12 +168,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     graph_ref = asdict(store.put("graph", b"CREATE ();"))
 
     def candidate(query_a: str, query_b: str) -> tuple[str, dict[str, object]]:
-        certificate = {
-            "rule_id": "constant_true_disjunction",
-            "tier": "core",
-            "proof_version": "kleene_or_true_v1",
-            "site_class": "where_boolean",
-        }
+        certificate = _canonical_test_certificate()
         hashes = {
             "query_a": hashlib.sha256(query_a.encode()).hexdigest(),
             "query_b": hashlib.sha256(query_b.encode()).hexdigest(),
@@ -233,6 +247,13 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 },
                 "dbms_fingerprint": "c" * 64,
                 "validated_ratio": 4.0,
+                "pooled_delta_ms": 3.0,
+                "pooled_ratio_ci_low": 4.0,
+                "pooled_delta_ci_low_ms": 3.0,
+                "submission_path": "relative",
+                "noise_floor_ms": 0.0,
+                "timer_resolution_ms": 0.001,
+                "metadata": {"absolute_also_passed": False},
             }
         )
 
@@ -331,12 +352,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
             for deletion in universe.deletions
         ),
     )
-    certificate = {
-        "rule_id": "constant_true_disjunction",
-        "tier": "core",
-        "proof_version": "kleene_or_true_v1",
-        "site_class": "where_boolean",
-    }
+    certificate = _canonical_test_certificate()
     reduction_ref = asdict(
         store.put_json(
             "reduction",
@@ -411,12 +427,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
             "issue_id": "issue-1",
             "stage": "submit_ready",
             "reduction_status": "reduced_valid",
-            "certificate": {
-                "rule_id": "constant_true_disjunction",
-                "tier": "core",
-                "proof_version": "kleene_or_true_v1",
-                "site_class": "where_boolean",
-            },
+            "certificate": _canonical_test_certificate(),
             "duplicate_clearance": {
                 "issue_id": "issue-1",
                 "possible_duplicate": clearance.possible_duplicate,

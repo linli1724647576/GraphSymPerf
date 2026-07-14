@@ -8,6 +8,7 @@ from enum import Enum
 from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.reducer.models import ReductionReport
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimeEvidence
+from graph_sym_perf.transforms.safety_points import SafetyCertificate
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 
 
@@ -21,6 +22,11 @@ class PipelineStage(str, Enum):
     REJECTED = "rejected"
     INCONCLUSIVE = "inconclusive"
     INVALID = "invalid"
+
+
+class SubmissionPath(str, Enum):
+    RELATIVE = "relative"
+    ABSOLUTE = "absolute"
 
 
 class DeveloperStatus(str, Enum):
@@ -66,14 +72,6 @@ class ValidationPolicy:
     max_result_rows: int = 100_000
     query_timeout_seconds: float = 30.0
     session_timeout_seconds: float = 300.0
-
-
-@dataclass(frozen=True)
-class SafetyCertificate:
-    rule_id: str
-    tier: str
-    proof_version: str
-    site_class: str
 
 
 @dataclass(frozen=True)
@@ -187,7 +185,11 @@ class CandidateBundle:
             reasons.append("resolved_config_unavailable")
         if self.discovery_slow_query not in {"a", "b"}:
             reasons.append("invalid_discovery_slow_query")
-        if not self.certificate.rule_id.strip() or not self.certificate.proof_version.strip():
+        if (
+            not self.certificate.rule_id.strip()
+            or not self.certificate.proof_id.strip()
+            or not self.certificate.proof_version.strip()
+        ):
             reasons.append("certificate_identity_unavailable")
         return tuple(reasons)
 
@@ -393,6 +395,7 @@ class ValidationSession:
     negative_controls: tuple[RuntimeEvidence, ...]
     health_event: str | None = None
     lifecycle: SessionLifecycle | None = None
+    schedule_seed: int | None = None
 
 
 _VALIDATION_REPORT_TOKEN = object()
@@ -405,6 +408,10 @@ class IssueValidationReport:
     sessions: tuple[ValidationSession, ...]
     discovery_ratio: float | None
     validated_ratio: float | None
+    pooled_delta_ms: float | None
+    pooled_ratio_ci_low: float | None
+    pooled_delta_ci_low_ms: float | None
+    submission_path: SubmissionPath | None
     magnitude_stability: str
     reason_codes: tuple[str, ...]
     manifest: CandidateManifest
@@ -424,6 +431,10 @@ class IssueValidationReport:
         sessions: tuple[ValidationSession, ...],
         discovery_ratio: float | None,
         validated_ratio: float | None,
+        pooled_delta_ms: float | None = None,
+        pooled_ratio_ci_low: float | None = None,
+        pooled_delta_ci_low_ms: float | None = None,
+        submission_path: SubmissionPath | None = None,
         magnitude_stability: str,
         reason_codes: tuple[str, ...],
         candidate: CandidateBundle,
@@ -439,6 +450,10 @@ class IssueValidationReport:
             "sessions": tuple(sessions),
             "discovery_ratio": discovery_ratio,
             "validated_ratio": validated_ratio,
+            "pooled_delta_ms": pooled_delta_ms,
+            "pooled_ratio_ci_low": pooled_ratio_ci_low,
+            "pooled_delta_ci_low_ms": pooled_delta_ci_low_ms,
+            "submission_path": submission_path,
             "magnitude_stability": magnitude_stability,
             "reason_codes": tuple(reason_codes),
             "manifest": CandidateManifest.from_candidate(candidate),
@@ -476,7 +491,7 @@ class IssueValidationReport:
 
     @property
     def proof_version(self) -> str:
-        return self.manifest.certificate.proof_version
+        return self.manifest.certificate.proof_id
 
     def verify_integrity(self) -> tuple[str, ...]:
         return self.manifest.verify_integrity(self.validation_policy)
