@@ -14,6 +14,10 @@ import yaml
 from graph_sym_perf.cli.__main__ import main as cli_main
 from graph_sym_perf.core import ConfigError, TargetSystem
 from graph_sym_perf.experiment import migrate_legacy_config_to_v2
+from graph_sym_perf.experiment.plan_models import (
+    ExperimentSpec,
+    ValidatedYieldExperimentSpec,
+)
 from graph_sym_perf.experiment.spec import load_experiment_spec
 
 
@@ -80,6 +84,51 @@ def test_runtime_first_experiment_spec_is_the_exact_seven_by_sixteen_matrix() ->
     assert spec.generation.backend == "gdsmith"
     assert spec.generation.expected_commit == "b2166f1b70cfa9b5816fe707327dd6aed2a22a45"
     assert spec.total_accepted_pair_budget == 112_000
+
+
+def test_validated_yield_config_freezes_the_approved_budget() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    assert isinstance(spec, ValidatedYieldExperimentSpec)
+    assert not isinstance(spec, ExperimentSpec)
+    assert spec.schema_version == 3
+    assert spec.matrix.graph_scales == (128, 256, 512)
+    assert spec.campaign.p0.accepted_pairs == 50
+    assert spec.campaign.p1.accepted_pairs == 200
+    assert spec.campaign.p2.accepted_pairs == 1000
+    assert spec.campaign.p2.shards == 3
+    assert spec.campaign.p2.max_rule_scale_cells == 6
+    assert spec.rules.discovery_rule_ids[0] == "constant_true_disjunction"
+    assert "and_excluded_middle_or_null" not in spec.rules.discovery_rule_ids
+    assert spec.generation.algorithm == "COMPARED3"
+    assert spec.generation.expected_commit == "b2166f1b70cfa9b5816fe707327dd6aed2a22a45"
+    assert spec.regression["manifest"] == (
+        Path("tests/fixtures/regressions/neo4j_bug001/manifest.yaml").resolve()
+    )
+    assert spec.systems[TargetSystem.NEO4J].rule_capabilities == (
+        "multi_label_intersection",
+    )
+
+
+def test_schema_v3_config_cannot_override_registry_safety_facts(tmp_path: Path) -> None:
+    raw = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    raw["rules"]["tier"] = "experimental"
+    path = tmp_path / "bad.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="unknown field.*rules"):
+        load_experiment_spec(path)
+
+
+def test_schema_v3_resolved_policies_are_deeply_immutable() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    with pytest.raises(TypeError):
+        spec.runtime["stage1"]["pairs"] = 99  # type: ignore[index]
+    with pytest.raises(TypeError):
+        spec.regression["manifest"] = Path("elsewhere")  # type: ignore[index]
 
 
 def test_schema_v2_rejects_unknown_nested_policy_field(tmp_path: Path) -> None:

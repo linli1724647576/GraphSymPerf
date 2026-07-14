@@ -1,4 +1,4 @@
-"""Strict loader for the one formal runtime-first experiment schema."""
+"""Strict loaders for historical schema-v2 and validated-yield schema-v3."""
 
 from __future__ import annotations
 
@@ -11,11 +11,16 @@ import yaml
 
 from graph_sym_perf.core import ConfigError, TargetSystem
 from graph_sym_perf.experiment.plan_models import (
+    CampaignBudgetSpec,
+    CampaignMatrixSpec,
     ExperimentSpec,
     FrozenMapping,
     GenerationSpec,
     MatrixSpec,
+    PhaseBudgetSpec,
+    RuleSelectionSpec,
     SystemDefinition,
+    ValidatedYieldExperimentSpec,
     WorkloadSpec,
     freeze_value,
 )
@@ -72,10 +77,47 @@ _POLICY_SCHEMAS: Mapping[str, Mapping[str, object | None]] = {
     },
 }
 
+_V3_POLICY_SCHEMAS: Mapping[str, Mapping[str, object | None]] = {
+    "runtime": {
+        "noise": {"probe_queries": None, "aa_pairs_per_query": None, "absolute_delta_quantile": None},
+        "stage1": {"warmups": None, "pairs": None, "top_fraction": None, "min_top_k": None, "max_top_k": None},
+        "stage2": {
+            "warmups": None,
+            "pairs": None,
+            "relative_ratio": None,
+            "relative_ci_low": None,
+            "absolute_delta_ms": None,
+            "direction_consistency": None,
+        },
+    },
+    "validation": {
+        "sessions": None,
+        "warmups_per_session": None,
+        "pairs_per_session": None,
+        "bootstrap_resamples": None,
+        "relative": {"session_ratio": None, "pooled_ratio": None, "ratio_ci_low": None},
+        "absolute": {"noise_multiplier": None, "delta_ms": None, "pooled_ratio": None, "ratio_ci_low": None},
+        "max_result_rows": None,
+    },
+    "reducer": {
+        "enabled": None,
+        "max_attempts": None,
+        "max_seconds": None,
+        "require_reduced_validation": None,
+    },
+    "artifacts": {"entry_budget_mb": None},
+}
 
-def load_experiment_spec(path: str | Path) -> ExperimentSpec:
+
+def load_experiment_spec(path: str | Path) -> ExperimentSpec | ValidatedYieldExperimentSpec:
     source_path = Path(path)
     raw = _load_yaml(source_path, "experiment configuration")
+    if raw.get("schema_version") == 3:
+        return _load_schema_v3(source_path, raw)
+    return _load_schema_v2(source_path, raw)
+
+
+def _load_schema_v2(source_path: Path, raw: Mapping[str, Any]) -> ExperimentSpec:
     _only_keys(
         raw,
         {
@@ -85,7 +127,7 @@ def load_experiment_spec(path: str | Path) -> ExperimentSpec:
         "root",
     )
     if raw.get("schema_version") != 2:
-        raise ConfigError("formal experiment configuration must use schema_version: 2")
+        raise ConfigError("formal experiment configuration must use schema_version: 2 or 3")
 
     experiment = _mapping(raw.get("experiment"), "experiment")
     _only_keys(experiment, {"name", "seed", "feedback_observation_days"}, "experiment")
@@ -186,6 +228,226 @@ def load_experiment_spec(path: str | Path) -> ExperimentSpec:
     )
 
 
+def _load_schema_v3(
+    source_path: Path,
+    raw: Mapping[str, Any],
+) -> ValidatedYieldExperimentSpec:
+    _exact_keys(
+        raw,
+        {
+            "schema_version",
+            "experiment",
+            "targets",
+            "matrix",
+            "campaign",
+            "rules",
+            "generation",
+            "runtime",
+            "validation",
+            "reducer",
+            "regression",
+            "artifacts",
+        },
+        "root",
+    )
+
+    experiment = _mapping(raw["experiment"], "experiment")
+    _exact_keys(experiment, {"name", "seed"}, "experiment")
+    name = _nonempty_string(experiment["name"], "experiment.name")
+    seed = _positive_int(experiment["seed"], "experiment.seed", allow_zero=True)
+
+    targets_raw = raw["targets"]
+    if not isinstance(targets_raw, list) or not targets_raw:
+        raise ConfigError("targets must be a non-empty list")
+    try:
+        targets = tuple(TargetSystem.parse(str(item)) for item in targets_raw)
+    except ValueError as exc:
+        raise ConfigError(f"unknown target: {exc}") from exc
+    if len(set(targets)) != len(targets):
+        raise ConfigError("targets must not contain duplicates")
+
+    matrix_raw = _mapping(raw["matrix"], "matrix")
+    _exact_keys(matrix_raw, {"graph_scales"}, "matrix")
+    scales_raw = matrix_raw["graph_scales"]
+    if not isinstance(scales_raw, list) or not scales_raw:
+        raise ConfigError("matrix.graph_scales must be a non-empty list")
+    graph_scales = tuple(
+        _positive_int(item, f"matrix.graph_scales[{index}]")
+        for index, item in enumerate(scales_raw)
+    )
+    if len(set(graph_scales)) != len(graph_scales):
+        raise ConfigError("matrix.graph_scales must not contain duplicates")
+    matrix = CampaignMatrixSpec(graph_scales=graph_scales)
+
+    campaign_raw = _mapping(raw["campaign"], "campaign")
+    _exact_keys(campaign_raw, {"p0", "p1", "p2", "generated_seed_multiplier"}, "campaign")
+    campaign = CampaignBudgetSpec(
+        p0=_phase_budget(campaign_raw["p0"], "campaign.p0", allow_cell_limit=False),
+        p1=_phase_budget(campaign_raw["p1"], "campaign.p1", allow_cell_limit=False),
+        p2=_phase_budget(campaign_raw["p2"], "campaign.p2", allow_cell_limit=True),
+        generated_seed_multiplier=_positive_int(
+            campaign_raw["generated_seed_multiplier"],
+            "campaign.generated_seed_multiplier",
+        ),
+    )
+
+    generation_raw = _mapping(raw["generation"], "generation")
+    _exact_keys(
+        generation_raw,
+        {
+            "backend",
+            "source",
+            "algorithm",
+            "commit_source",
+            "expected_commit",
+            "checkout",
+            "required_env",
+        },
+        "generation",
+    )
+    backend = _nonempty_string(generation_raw["backend"], "generation.backend")
+    if backend != "gdsmith" or generation_raw["source"] != "gdsmith":
+        raise ConfigError("generation.backend/source must be gdsmith; alternate generators are unsupported")
+    algorithm = _enum(generation_raw["algorithm"], {"COMPARED3"}, "generation.algorithm")
+    commit_source = _enum(
+        generation_raw["commit_source"],
+        {"vendored_checkout"},
+        "generation.commit_source",
+    )
+    expected_commit = _git_commit(generation_raw["expected_commit"], "generation.expected_commit")
+    checkout = Path(_nonempty_string(generation_raw["checkout"], "generation.checkout"))
+    if not checkout.is_absolute():
+        checkout = (source_path.parent / checkout).resolve()
+    generation = GenerationSpec(
+        backend=backend,
+        commit_source=commit_source,
+        expected_commit=expected_commit,
+        checkout=checkout,
+        required_env=_environment_names(generation_raw["required_env"], "generation.required_env"),
+        algorithm=algorithm,
+    )
+
+    policies = {
+        policy_name: _strict_v3_policy(raw[policy_name], policy_name)
+        for policy_name in ("runtime", "validation", "reducer", "artifacts")
+    }
+
+    regression_raw = _mapping(raw["regression"], "regression")
+    _exact_keys(regression_raw, {"manifest"}, "regression")
+    regression_manifest = Path(
+        _nonempty_string(regression_raw["manifest"], "regression.manifest")
+    )
+    if not regression_manifest.is_absolute():
+        regression_manifest = (source_path.parent.parent / regression_manifest).resolve()
+    regression = FrozenMapping({"manifest": regression_manifest})
+
+    rules_raw = _mapping(raw["rules"], "rules")
+    _exact_keys(rules_raw, {"discovery_rule_ids", "control_rule_ids"}, "rules")
+    systems = _load_systems(source_path.parent / "systems.yaml", targets)
+    rules_path = source_path.parent / "rules.yaml"
+    rules_catalog, rules_schema_sha256 = _load_rules(rules_path)
+    registry = RuleRegistry.default()
+    discovery_rule_ids = _canonical_rule_ids(
+        rules_raw["discovery_rule_ids"],
+        "rules.discovery_rule_ids",
+        registry,
+    )
+    control_rule_ids = _canonical_rule_ids(
+        rules_raw["control_rule_ids"],
+        "rules.control_rule_ids",
+        registry,
+    )
+    for target in targets:
+        definition = systems[target]
+        active_core = {
+            item.rule_id
+            for item in registry.rules_for(
+                target.value,
+                SafetyTier.CORE,
+                frozenset(definition.rule_capabilities),
+            )
+        }
+        active_control = {
+            item.rule_id
+            for item in registry.rules_for(
+                target.value,
+                SafetyTier.CONTROL,
+                frozenset(definition.rule_capabilities),
+            )
+        }
+        if set(discovery_rule_ids) != active_core:
+            missing = sorted(active_core - set(discovery_rule_ids))
+            inactive = sorted(set(discovery_rule_ids) - active_core)
+            raise ConfigError(
+                f"rules.discovery_rule_ids must equal active CORE rules for {target.value}; "
+                f"missing={missing}, inactive={inactive}"
+            )
+        invalid_controls = sorted(set(control_rule_ids) - active_control)
+        if invalid_controls:
+            raise ConfigError(
+                f"rules.control_rule_ids contains inactive CONTROL rules for {target.value}: "
+                f"{invalid_controls}"
+            )
+
+    return ValidatedYieldExperimentSpec(
+        schema_version=3,
+        name=name,
+        seed=seed,
+        targets=targets,
+        matrix=matrix,
+        campaign=campaign,
+        rules=RuleSelectionSpec(
+            discovery_rule_ids=discovery_rule_ids,
+            control_rule_ids=control_rule_ids,
+        ),
+        generation=generation,
+        runtime=policies["runtime"],
+        validation=policies["validation"],
+        reducer=policies["reducer"],
+        regression=regression,
+        artifacts=policies["artifacts"],
+        systems=systems,
+        rules_catalog=rules_catalog,
+        rules_schema_sha256=rules_schema_sha256,
+        rules_source_path=rules_path.resolve(),
+        source_path=source_path.resolve(),
+    )
+
+
+def _phase_budget(value: Any, label: str, *, allow_cell_limit: bool) -> PhaseBudgetSpec:
+    raw = _mapping(value, label)
+    expected = {"accepted_pairs", "shards", "max_entry_runtime_seconds"}
+    if allow_cell_limit:
+        expected.add("max_rule_scale_cells")
+    _exact_keys(raw, expected, label)
+    return PhaseBudgetSpec(
+        accepted_pairs=_positive_int(raw["accepted_pairs"], f"{label}.accepted_pairs"),
+        shards=_positive_int(raw["shards"], f"{label}.shards"),
+        max_entry_runtime_seconds=_positive_int(
+            raw["max_entry_runtime_seconds"],
+            f"{label}.max_entry_runtime_seconds",
+        ),
+        max_rule_scale_cells=(
+            _positive_int(raw["max_rule_scale_cells"], f"{label}.max_rule_scale_cells")
+            if allow_cell_limit
+            else None
+        ),
+    )
+
+
+def _canonical_rule_ids(value: Any, label: str, registry: RuleRegistry) -> tuple[str, ...]:
+    raw_ids = _string_names(value, label)
+    resolved: list[str] = []
+    for rule_id in raw_ids:
+        try:
+            resolved.append(registry.resolve_id(rule_id))
+        except KeyError as exc:
+            raise ConfigError(f"{label} contains unknown rule: {rule_id}") from exc
+    if len(set(resolved)) != len(resolved):
+        raise ConfigError(f"{label} contains duplicate canonical rules")
+    return tuple(resolved)
+
+
 def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[TargetSystem, SystemDefinition]:
     raw = _load_yaml(path, "systems configuration")
     _only_keys(raw, {"schema_version", "systems"}, "systems root")
@@ -199,7 +461,21 @@ def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[Targ
         except ValueError as exc:
             raise ConfigError(f"unknown system definition: {name}") from exc
         item = _mapping(raw_item, f"systems.{target.value}")
-        _exact_keys(item, {"required_env", "generation_required_env", "generation_backend", "capabilities", "dialect", "graph_isolation", "default_timeout_seconds"}, f"systems.{target.value}")
+        required_fields = {
+            "required_env",
+            "generation_required_env",
+            "generation_backend",
+            "capabilities",
+            "dialect",
+            "graph_isolation",
+            "default_timeout_seconds",
+        }
+        _only_keys(item, required_fields | {"rule_capabilities"}, f"systems.{target.value}")
+        missing_fields = required_fields - set(item)
+        if missing_fields:
+            raise ConfigError(
+                f"missing field(s) in systems.{target.value}: {', '.join(sorted(missing_fields))}"
+            )
         env = _environment_names(item.get("required_env"), f"systems.{target.value}.required_env")
         generation_env = _environment_names(item.get("generation_required_env"), f"systems.{target.value}.generation_required_env")
         available[target] = SystemDefinition(
@@ -211,6 +487,11 @@ def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[Targ
             dialect=_nonempty_string(item.get("dialect"), f"systems.{target.value}.dialect"),
             graph_isolation=_nonempty_string(item.get("graph_isolation"), f"systems.{target.value}.graph_isolation"),
             default_timeout_seconds=_positive_int(item.get("default_timeout_seconds"), f"systems.{target.value}.default_timeout_seconds"),
+            rule_capabilities=(
+                _string_names(item["rule_capabilities"], f"systems.{target.value}.rule_capabilities")
+                if "rule_capabilities" in item
+                else ()
+            ),
         )
     missing = [target.value for target in targets if target not in available]
     if missing:
@@ -287,6 +568,15 @@ def _strict_policy(raw: Any, name: str) -> Mapping[str, object]:
         raise ConfigError(f"{name} must not be empty")
     _validate_policy(value, _POLICY_SCHEMAS[name], name)
     _validate_policy_values(name, value)
+    return freeze_value(value)
+
+
+def _strict_v3_policy(raw: Any, name: str) -> Mapping[str, object]:
+    value = _mapping(raw, name)
+    if not value:
+        raise ConfigError(f"{name} must not be empty")
+    _validate_policy(value, _V3_POLICY_SCHEMAS[name], name)
+    _validate_v3_policy_values(name, value)
     return freeze_value(value)
 
 
@@ -371,6 +661,61 @@ def _validate_policy_values(name: str, value: Mapping[str, Any]) -> None:
     _positive_int(value["shard_budget_mb"], "artifacts.shard_budget_mb")
 
 
+def _validate_v3_policy_values(name: str, value: Mapping[str, Any]) -> None:
+    if name == "runtime":
+        noise = _mapping(value["noise"], "runtime.noise")
+        _positive_int(noise["probe_queries"], "runtime.noise.probe_queries")
+        _positive_int(noise["aa_pairs_per_query"], "runtime.noise.aa_pairs_per_query")
+        quantile = _positive_number(
+            noise["absolute_delta_quantile"],
+            "runtime.noise.absolute_delta_quantile",
+        )
+        if quantile > 1:
+            raise ConfigError("runtime.noise.absolute_delta_quantile must not exceed 1")
+        stage1 = _mapping(value["stage1"], "runtime.stage1")
+        _positive_int(stage1["warmups"], "runtime.stage1.warmups", allow_zero=True)
+        _positive_int(stage1["pairs"], "runtime.stage1.pairs")
+        top_fraction = _positive_number(stage1["top_fraction"], "runtime.stage1.top_fraction")
+        if top_fraction > 1:
+            raise ConfigError("runtime.stage1.top_fraction must not exceed 1")
+        minimum_top_k = _positive_int(stage1["min_top_k"], "runtime.stage1.min_top_k")
+        maximum_top_k = _positive_int(stage1["max_top_k"], "runtime.stage1.max_top_k")
+        if minimum_top_k > maximum_top_k:
+            raise ConfigError("runtime.stage1.min_top_k must not exceed max_top_k")
+        stage2 = _mapping(value["stage2"], "runtime.stage2")
+        _positive_int(stage2["warmups"], "runtime.stage2.warmups", allow_zero=True)
+        _positive_int(stage2["pairs"], "runtime.stage2.pairs")
+        for key in ("relative_ratio", "relative_ci_low"):
+            if _positive_number(stage2[key], f"runtime.stage2.{key}") <= 1:
+                raise ConfigError(f"runtime.stage2.{key} must exceed 1")
+        _positive_number(stage2["absolute_delta_ms"], "runtime.stage2.absolute_delta_ms")
+        consistency = _positive_number(
+            stage2["direction_consistency"],
+            "runtime.stage2.direction_consistency",
+        )
+        if consistency > 1:
+            raise ConfigError("runtime.stage2.direction_consistency must not exceed 1")
+        return
+    if name == "validation":
+        for key in ("sessions", "pairs_per_session", "bootstrap_resamples", "max_result_rows"):
+            _positive_int(value[key], f"validation.{key}")
+        _positive_int(value["warmups_per_session"], "validation.warmups_per_session", allow_zero=True)
+        for group_name in ("relative", "absolute"):
+            group = _mapping(value[group_name], f"validation.{group_name}")
+            for key, item in group.items():
+                threshold = _positive_number(item, f"validation.{group_name}.{key}")
+                if "ratio" in key and threshold <= 1:
+                    raise ConfigError(f"validation.{group_name}.{key} must exceed 1")
+        return
+    if name == "reducer":
+        _bool(value["enabled"], "reducer.enabled")
+        _positive_int(value["max_attempts"], "reducer.max_attempts")
+        _positive_int(value["max_seconds"], "reducer.max_seconds")
+        _bool(value["require_reduced_validation"], "reducer.require_reduced_validation")
+        return
+    _positive_int(value["entry_budget_mb"], "artifacts.entry_budget_mb")
+
+
 def _load_yaml(path: Path, label: str) -> Mapping[str, Any]:
     if not path.exists():
         raise ConfigError(f"{label} does not exist: {path}")
@@ -404,6 +749,13 @@ def _nonempty_string(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"{label} must be a non-empty string")
     return value
+
+
+def _git_commit(value: Any, label: str) -> str:
+    commit = _nonempty_string(value, label)
+    if len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit):
+        raise ConfigError(f"{label} must be a full lowercase 40-hex Git commit")
+    return commit
 
 
 def _positive_int(value: Any, label: str, *, allow_zero: bool = False) -> int:

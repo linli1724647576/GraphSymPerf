@@ -1,6 +1,6 @@
 schema_version: 1
 systems:
-  neo4j: {required_env: [GRAPHSYMPERF_NEO4J_URI, GRAPHSYMPERF_NEO4J_USER, GRAPHSYMPERF_NEO4J_PASSWORD], generation_required_env: [], generation_backend: neo4j, capabilities: [multiple_node_labels, native_parameters], dialect: cypher, graph_isolation: database, default_timeout_seconds: 60}
+  neo4j: {required_env: [GRAPHSYMPERF_NEO4J_URI, GRAPHSYMPERF_NEO4J_USER, GRAPHSYMPERF_NEO4J_PASSWORD], generation_required_env: [], generation_backend: neo4j, capabilities: [multiple_node_labels, native_parameters], rule_capabilities: [multi_label_intersection], dialect: cypher, graph_isolation: database, default_timeout_seconds: 60}
   memgraph: {required_env: [GRAPHSYMPERF_MEMGRAPH_HOST], generation_required_env: [], generation_backend: memgraph, capabilities: [multiple_node_labels, native_parameters], dialect: cypher, graph_isolation: database, default_timeout_seconds: 60}
   falkordb: {required_env: [GRAPHSYMPERF_FALKORDB_HOST], generation_required_env: [], generation_backend: redisgraph, capabilities: [multiple_node_labels, native_parameters], dialect: cypher, graph_isolation: graph_key, default_timeout_seconds: 60}
   agensgraph: {required_env: [GRAPHSYMPERF_AGENSGRAPH_URI], generation_required_env: [], generation_backend: agensgraph, capabilities: [single_node_label, graph_path, low_yield_generation], dialect: agensgraph, graph_isolation: graph_name, default_timeout_seconds: 60}

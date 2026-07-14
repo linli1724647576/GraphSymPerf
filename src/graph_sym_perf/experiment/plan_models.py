@@ -1,9 +1,10 @@
-"""Immutable contracts for schema-v2 experiment planning."""
+"""Immutable contracts for schema-v2 and schema-v3 experiment planning."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -71,6 +72,7 @@ class GenerationSpec:
     expected_commit: str
     checkout: Path
     required_env: tuple[str, ...]
+    algorithm: str = "unspecified"
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,46 @@ class SystemDefinition:
     dialect: str
     graph_isolation: str
     default_timeout_seconds: int
+    rule_capabilities: tuple[str, ...] = ()
+
+
+class CampaignPhase(str, Enum):
+    P0 = "p0"
+    P1 = "p1"
+    P2 = "p2"
+
+
+class RuleStream(str, Enum):
+    DISCOVERY = "discovery"
+    CONTROL = "control"
+    REGRESSION = "regression"
+
+
+@dataclass(frozen=True)
+class PhaseBudgetSpec:
+    accepted_pairs: int
+    shards: int
+    max_entry_runtime_seconds: int
+    max_rule_scale_cells: int | None = None
+
+
+@dataclass(frozen=True)
+class CampaignBudgetSpec:
+    p0: PhaseBudgetSpec
+    p1: PhaseBudgetSpec
+    p2: PhaseBudgetSpec
+    generated_seed_multiplier: int
+
+
+@dataclass(frozen=True)
+class RuleSelectionSpec:
+    discovery_rule_ids: tuple[str, ...]
+    control_rule_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CampaignMatrixSpec:
+    graph_scales: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -110,6 +152,28 @@ class ExperimentSpec:
     @property
     def total_accepted_pair_budget(self) -> int:
         return len(self.targets) * self.matrix.shards_per_system * self.workload.accepted_query_pairs_per_shard
+
+
+@dataclass(frozen=True)
+class ValidatedYieldExperimentSpec:
+    schema_version: int
+    name: str
+    seed: int
+    targets: tuple[TargetSystem, ...]
+    matrix: CampaignMatrixSpec
+    campaign: CampaignBudgetSpec
+    rules: RuleSelectionSpec
+    generation: GenerationSpec
+    runtime: Mapping[str, object]
+    validation: Mapping[str, object]
+    reducer: Mapping[str, object]
+    regression: Mapping[str, object]
+    artifacts: Mapping[str, object]
+    systems: Mapping[TargetSystem, SystemDefinition]
+    rules_catalog: Mapping[str, object]
+    rules_schema_sha256: str
+    rules_source_path: Path
+    source_path: Path
 
 
 @dataclass(frozen=True)
@@ -144,6 +208,38 @@ class SourceRevision:
             and bool(self.gdsmith_jar_sha256)
             and bool(self.gdsmith_build_manifest_sha256)
         )
+
+
+@dataclass(frozen=True)
+class RulePlanEntry:
+    entry_id: str
+    phase: CampaignPhase
+    target: TargetSystem
+    rule_id: str
+    family: str
+    tier: str
+    graph_scale: int
+    shard_index: int
+    shard_seed: int
+    accepted_pair_quota: int
+    max_generated_seed_budget: int
+    max_variants_per_seed: int
+    proof_version: str
+    query_timeout_seconds: int
+    max_entry_runtime_seconds: int
+    measurement_protocol_id: str
+    stream: RuleStream
+
+
+@dataclass(frozen=True)
+class RulePlan:
+    spec_name: str
+    schema_version: int
+    phase: CampaignPhase
+    entries: tuple[RulePlanEntry, ...]
+    discovery_accepted_pair_budget: int
+    control_accepted_pair_budget: int
+    source_revision: SourceRevision
 
 
 @dataclass(frozen=True)

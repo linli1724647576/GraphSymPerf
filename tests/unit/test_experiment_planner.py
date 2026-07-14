@@ -11,8 +11,17 @@ import pytest
 import yaml
 
 from graph_sym_perf.core import ConfigError, TargetSystem
-from graph_sym_perf.experiment.plan_models import FrozenMapping, SourceRevision
-from graph_sym_perf.experiment.planner import build_run_plan, write_resolved_manifest
+from graph_sym_perf.experiment.plan_models import (
+    CampaignPhase,
+    FrozenMapping,
+    RuleStream,
+    SourceRevision,
+)
+from graph_sym_perf.experiment.planner import (
+    build_rule_plan,
+    build_run_plan,
+    write_resolved_manifest,
+)
 from graph_sym_perf.experiment.spec import load_experiment_spec
 
 
@@ -59,6 +68,119 @@ def test_planner_resolves_repository_commit_from_config_parent_by_default() -> N
     plan = build_run_plan(spec)
 
     assert plan.source_revision.repository_commit == expected
+
+
+def test_p1_rule_plan_has_independent_rule_scale_budgets() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    plan = build_rule_plan(spec, CampaignPhase.P1)
+
+    discovery = [entry for entry in plan.entries if entry.stream is RuleStream.DISCOVERY]
+    control = [entry for entry in plan.entries if entry.stream is RuleStream.CONTROL]
+    assert len(discovery) == 9 * 3
+    assert len(control) == 2 * 3
+    assert all(entry.accepted_pair_quota == 200 for entry in discovery)
+    assert all(entry.accepted_pair_quota == 50 for entry in control)
+    assert all(
+        entry.max_generated_seed_budget == entry.accepted_pair_quota * 10
+        for entry in plan.entries
+    )
+    assert all(entry.max_variants_per_seed == 2 for entry in plan.entries)
+    assert all(entry.query_timeout_seconds == 60 for entry in plan.entries)
+    assert all(entry.measurement_protocol_id == "validated-yield-v1" for entry in plan.entries)
+    assert len({entry.shard_seed for entry in plan.entries}) == len(plan.entries)
+    assert plan.discovery_accepted_pair_budget == 5400
+    assert plan.control_accepted_pair_budget == 300
+
+    by_rule = {entry.rule_id: entry for entry in discovery}
+    assert by_rule["constant_true_disjunction"].family == "bool"
+    assert by_rule["constant_true_disjunction"].tier == "core"
+    assert by_rule["constant_true_disjunction"].proof_version == "1"
+    assert by_rule["label_order_symmetry"].family == "sym"
+
+
+def test_p2_requires_bounded_explicit_rule_scale_cells() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    with pytest.raises(ConfigError, match="selected_cells"):
+        build_rule_plan(spec, CampaignPhase.P2)
+    with pytest.raises(ConfigError, match="at most 6"):
+        build_rule_plan(
+            spec,
+            CampaignPhase.P2,
+            selected_cells=tuple(
+                (rule_id, scale)
+                for rule_id in spec.rules.discovery_rule_ids[:3]
+                for scale in spec.matrix.graph_scales
+            )[:7],
+        )
+
+    plan = build_rule_plan(
+        spec,
+        CampaignPhase.P2,
+        selected_cells=(
+            ("constant_true_disjunction", 128),
+            ("pattern_order_symmetry", 512),
+        ),
+    )
+    p1 = build_rule_plan(spec, CampaignPhase.P1)
+
+    assert len(plan.entries) == 2 * 3
+    assert all(entry.stream is RuleStream.DISCOVERY for entry in plan.entries)
+    assert all(entry.accepted_pair_quota == 1000 for entry in plan.entries)
+    assert {(entry.rule_id, entry.graph_scale) for entry in plan.entries} == {
+        ("constant_true_disjunction", 128),
+        ("pattern_order_symmetry", 512),
+    }
+    assert {entry.shard_index for entry in plan.entries} == {0, 1, 2}
+    assert plan.discovery_accepted_pair_budget == 6000
+    assert plan.control_accepted_pair_budget == 0
+    assert not ({entry.shard_seed for entry in plan.entries} & {entry.shard_seed for entry in p1.entries})
+
+
+def test_p0_fails_closed_when_configured_regression_manifest_is_missing(tmp_path: Path) -> None:
+    raw = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    raw["regression"]["manifest"] = str(tmp_path / "missing-regression.yaml")
+    path = tmp_path / "campaign.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    for name in ("systems.yaml", "rules.yaml"):
+        (tmp_path / name).write_bytes((Path("config") / name).read_bytes())
+    spec = load_experiment_spec(path)
+
+    with pytest.raises(ConfigError, match="regression manifest not found"):
+        build_rule_plan(spec, CampaignPhase.P0)
+
+
+def test_rule_plan_resolved_manifest_is_atomic_immutable_and_auditable(tmp_path: Path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    plan = build_rule_plan(spec, CampaignPhase.P1)
+    path = tmp_path / "p1-rule-plan.json"
+
+    write_resolved_manifest(plan, path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 3
+    assert payload["phase"] == "p1"
+    assert len(payload["entries"]) == 33
+    assert payload["discovery_accepted_pair_budget"] == 5400
+    assert payload["control_accepted_pair_budget"] == 300
+    assert payload["source_revision"]["repository_commit"]
+    assert payload["source_revision"]["gdsmith_commit"] == spec.generation.expected_commit
+    assert payload["source_revision"]["rules_schema_sha256"] == hashlib.sha256(
+        Path("config/rules.yaml").read_bytes()
+    ).hexdigest()
+    assert {
+        "rule_id",
+        "graph_scale",
+        "accepted_pair_quota",
+        "shard_seed",
+        "proof_version",
+        "query_timeout_seconds",
+    } <= set(payload["entries"][0])
+    with pytest.raises(FileExistsError):
+        write_resolved_manifest(plan, path)
 
 
 def test_planner_records_exact_gdsmith_commit_and_clean_or_dirty_state(tmp_path: Path) -> None:
