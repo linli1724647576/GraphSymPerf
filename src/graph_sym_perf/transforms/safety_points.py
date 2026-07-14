@@ -98,64 +98,129 @@ class SafetyCertificate:
         self.__post_init__()
 
     def __post_init__(self) -> None:
-        canonical_rule_id = self.canonical_rule_id or self.rule_id
-        if self.rule_id and self.rule_id != canonical_rule_id:
-            raise ValueError("legacy and canonical rule ids must agree")
+        registry = RuleRegistry.default()
+        supplied_ids = tuple(
+            rule_id for rule_id in (self.canonical_rule_id, self.rule_id) if rule_id
+        )
+        if not supplied_ids:
+            raise ValueError("certificate rule id is required")
+        try:
+            resolved_ids = tuple(registry.resolve_id(rule_id) for rule_id in supplied_ids)
+        except KeyError as exc:
+            raise ValueError(f"unknown canonical rule: {exc.args[0]}") from exc
+        if len(set(resolved_ids)) != 1:
+            raise ValueError("legacy and canonical rule ids must resolve to the same rule")
+        canonical_rule_id = resolved_ids[0]
         object.__setattr__(self, "canonical_rule_id", canonical_rule_id)
         object.__setattr__(self, "rule_id", canonical_rule_id)
-        try:
-            rule = RuleRegistry.default().get(canonical_rule_id)
-        except KeyError:
-            rule = None
-        if rule is not None:
-            site_class = self.site_class or _legacy_site_class(self.clause_context)
-            if site_class not in rule.allowed_site_classes:
-                raise ValueError("certificate site class is not allowed by the canonical rule")
-            expected = {
-                "family": rule.family.value,
-                "tier": rule.tier.value,
-                "submit_eligible": rule.submit_eligible,
-                "proof_id": rule.proof_id,
-                "proof_version": rule.proof_version,
-                "site_class": site_class,
-                "semantic_proof_hash": _semantic_proof_hash(rule, site_class),
-                "preconditions": rule.purity_requirements,
-            }
-            for name, value in expected.items():
-                current = getattr(self, name)
-                if not self._legacy_input and current not in ("", None, ()) and current != value:
-                    raise ValueError(f"certificate {name} cannot override canonical rule facts")
-                object.__setattr__(self, name, value)
+        rule = registry.get(canonical_rule_id)
+        if self._legacy_input:
+            self._validate_legacy(rule)
         else:
-            object.__setattr__(self, "family", self.family or "unknown")
-            object.__setattr__(self, "tier", self.tier or "unknown")
-            object.__setattr__(self, "submit_eligible", bool(self.submit_eligible))
-            object.__setattr__(self, "proof_version", self.proof_version or "legacy")
-            object.__setattr__(self, "site_class", self.site_class or _legacy_site_class(self.clause_context))
-            if not self.semantic_proof_hash:
-                legacy_facts = (canonical_rule_id, self.proof_id, self.proof_version, self.site_class)
-                object.__setattr__(self, "semantic_proof_hash", sha256(repr(legacy_facts).encode()).hexdigest())
+            self._validate_canonical(rule)
+
+    def _validate_canonical(self, rule: RuleSpec) -> None:
+        required = {
+            "family": self.family,
+            "tier": self.tier,
+            "submit_eligible": self.submit_eligible,
+            "proof_id": self.proof_id,
+            "proof_version": self.proof_version,
+            "site_class": self.site_class,
+            "ast_path": self.ast_path,
+            "capability_hash": self.capability_hash,
+            "semantic_proof_hash": self.semantic_proof_hash,
+        }
+        missing = sorted(
+            name
+            for name, value in required.items()
+            if value is None or (isinstance(value, str) and not value)
+        )
+        if missing:
+            raise ValueError(f"canonical certificate fields are required: {missing}")
+        self._validate_site(rule, self.site_class)
+        expected = {
+            "family": rule.family.value,
+            "tier": rule.tier.value,
+            "submit_eligible": rule.submit_eligible,
+            "proof_id": rule.proof_id,
+            "proof_version": rule.proof_version,
+            "semantic_proof_hash": _semantic_proof_hash(rule, self.site_class),
+        }
+        for name, value in expected.items():
+            if getattr(self, name) != value:
+                raise ValueError(f"certificate {name} does not match canonical rule facts")
+        if self.preconditions and self.preconditions != rule.purity_requirements:
+            raise ValueError("certificate preconditions do not match canonical rule facts")
+
+    def _validate_legacy(self, rule: RuleSpec) -> None:
         if not all(
             (
-                self.canonical_rule_id,
-                self.family,
-                self.tier,
-                self.proof_id,
-                self.proof_version,
-                self.site_class,
                 self.ast_path,
+                self.expression_type,
+                self.nullability,
+                self.clause_context,
+                self.preconditions,
+                self.proof_id,
                 self.capability_hash,
-                self.semantic_proof_hash,
             )
         ):
-            raise ValueError("safety certificate fields must be complete")
+            raise ValueError("legacy certificate fields must be complete")
+        site_class = _legacy_site_class(self.ast_path)
+        self._validate_site(rule, site_class)
+        expected_site_facts = _LEGACY_SITE_FACTS[site_class]
+        actual_site_facts = (self.expression_type, self.nullability, self.clause_context)
+        if actual_site_facts != expected_site_facts:
+            raise ValueError("legacy certificate site facts do not match the AST path")
+        if self.proof_id != rule.proof_id:
+            raise ValueError("legacy certificate proof_id does not match the canonical rule")
+        if self.preconditions != rule.purity_requirements:
+            raise ValueError("legacy certificate preconditions do not match the canonical rule")
+        expected_new_facts = {
+            "family": rule.family.value,
+            "tier": rule.tier.value,
+            "submit_eligible": rule.submit_eligible,
+            "proof_version": rule.proof_version,
+            "site_class": site_class,
+            "semantic_proof_hash": _semantic_proof_hash(rule, site_class),
+        }
+        for name, value in expected_new_facts.items():
+            current = getattr(self, name)
+            if current is not None and current != "" and current != value:
+                raise ValueError(f"legacy certificate {name} conflicts with the canonical rule")
+            object.__setattr__(self, name, value)
+
+    def _validate_site(self, rule: RuleSpec, site_class: str) -> None:
+        if site_class not in rule.allowed_site_classes:
+            raise ValueError("certificate site class is not allowed by the canonical rule")
+        if not _valid_ast_path(site_class, self.ast_path):
+            raise ValueError("certificate AST path does not identify the declared site class")
 
 
-def _legacy_site_class(clause_context: str) -> str:
-    return {
-        "where": "where_boolean",
-        "match": "match_pattern_component",
-    }.get(clause_context, clause_context or "unknown")
+_LEGACY_SITE_FACTS = {
+    "where_boolean": ("boolean", "three_valued", "where"),
+    "match_pattern_component": ("graph_pattern", "pattern_defined", "match"),
+    "mandatory_match_clause": ("graph_pattern", "non_null_introducing", "match"),
+    "bound_variable": ("bound_variable", "scope_bound", "match"),
+}
+
+
+def _legacy_site_class(ast_path: str) -> str:
+    for site_class in _LEGACY_SITE_FACTS:
+        if _valid_ast_path(site_class, ast_path):
+            return site_class
+    raise ValueError("legacy certificate AST path does not identify a supported site class")
+
+
+def _valid_ast_path(site_class: str, ast_path: str) -> bool:
+    patterns = {
+        "where_boolean": r"clauses\[\d+\]\.where(?:\.(?:and|or)\[\d+\])*",
+        "match_pattern_component": r"clauses\[\d+\]\.pattern\.components\[\d+\]",
+        "mandatory_match_clause": r"clauses\[\d+\]\.mandatory_match",
+        "bound_variable": r"clauses\[\d+\]\.variables\[[^\]]+\]",
+    }
+    pattern = patterns.get(site_class)
+    return pattern is not None and re.fullmatch(pattern, ast_path) is not None
 
 
 def enumerate_safety_points(

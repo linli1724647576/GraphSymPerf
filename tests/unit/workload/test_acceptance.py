@@ -8,18 +8,36 @@ from graph_sym_perf.workload.models import (
     PairProposal,
     PairValidation,
 )
+from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.transforms.safety_points import SafetyCertificate
+
+
+_ACCEPTANCE_FIXTURE_RULE_ID = "duplicate_predicate_control"
+
+
+def _legacy_certificate(rule_id: str) -> SafetyCertificate:
+    """Build a valid legacy certificate for acceptance-builder isolation tests."""
+
+    rule = RuleRegistry.default().get(rule_id)
+    return SafetyCertificate(
+        rule.rule_id,
+        "clauses[0].where",
+        (),
+        "boolean",
+        "three_valued",
+        "where",
+        rule.purity_requirements,
+        rule.proof_id,
+        "cap",
+    )
 
 
 def _proposal(context, suffix: str = "") -> PairProposal:
     return PairProposal(
         query_a=PortableQuery(f"MATCH (n:L{context.ordinal}{suffix}) RETURN n"),
         query_b=PortableQuery(f"MATCH (n:L{context.ordinal}{suffix}) WHERE true RETURN n"),
-        rule_id="fake_core_rule",
-        safety_certificate=SafetyCertificate(
-            "fake_core_rule", "clauses[0].where", (), "boolean", "three_valued", "where",
-            ("pure",), "fake-proof", "cap",
-        ),
+        rule_id=_ACCEPTANCE_FIXTURE_RULE_ID,
+        safety_certificate=_legacy_certificate(_ACCEPTANCE_FIXTURE_RULE_ID),
         seed=context.seed,
     )
 
@@ -141,20 +159,14 @@ def test_builder_accepts_two_certified_variants_from_one_generated_seed() -> Non
                     source,
                     PortableQuery("MATCH (n:L1) WHERE (n.x = 1 AND n.y = 2) OR true RETURN n"),
                     "constant_true_disjunction",
-                    SafetyCertificate(
-                        "constant_true_disjunction", "clauses[0].where", (), "boolean",
-                        "three_valued", "where", ("pure",), "proof-1", "cap",
-                    ),
+                    _legacy_certificate("constant_true_disjunction"),
                     context.seed,
                 ),
                 PairProposal(
                     source,
                     PortableQuery("MATCH (n:L1) WHERE n.y = 2 AND n.x = 1 RETURN n"),
                     "predicate_order_symmetry",
-                    SafetyCertificate(
-                        "predicate_order_symmetry", "clauses[0].where", (), "boolean",
-                        "three_valued", "where", ("pure",), "proof-2", "cap",
-                    ),
+                    _legacy_certificate("predicate_order_symmetry"),
                     context.seed,
                 ),
             )

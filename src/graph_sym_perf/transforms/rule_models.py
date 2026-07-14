@@ -132,9 +132,7 @@ class RuleRegistry:
         tier: SafetyTier,
         capabilities: frozenset[str],
     ) -> tuple[RuleSpec, ...]:
-        active_capabilities = set(capabilities)
-        if "multiple_node_labels" in active_capabilities:
-            active_capabilities.add("multi_label_intersection")
+        active_capabilities = _normalized_capabilities(capabilities)
         return tuple(
             rule
             for rule in self.rules
@@ -150,7 +148,13 @@ class RuleRegistry:
         capabilities: frozenset[str] | None = None,
     ) -> tuple[RuleSpec, ...]:
         dialect, profile_capabilities = _profile(dbms)
-        active_capabilities = frozenset(profile_capabilities if capabilities is None else capabilities)
+        normalized_profile = _normalized_capabilities(profile_capabilities)
+        declared_capabilities = (
+            normalized_profile
+            if capabilities is None
+            else _normalized_capabilities(capabilities)
+        )
+        active_capabilities = frozenset(normalized_profile & declared_capabilities)
         return self.active_rules(
             dialect=dialect,
             tier=tier,
@@ -176,6 +180,13 @@ _BOOL_IMPLEMENTATIONS = {
     "null_contradiction": "or_expr_null_contradiction",
     "null_complete_excluded_middle": "and_excluded_middle_or_null",
 }
+
+
+def _normalized_capabilities(capabilities: frozenset[str] | set[str]) -> set[str]:
+    normalized = set(capabilities)
+    if "multiple_node_labels" in normalized:
+        normalized.add("multi_label_intersection")
+    return normalized
 
 
 def _family(rule_id: str) -> RuleFamily:

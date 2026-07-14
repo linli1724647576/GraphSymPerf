@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from graph_sym_perf.core import ConfigError, TargetSystem
-from graph_sym_perf.experiment.plan_models import SourceRevision
+from graph_sym_perf.experiment.plan_models import FrozenMapping, SourceRevision
 from graph_sym_perf.experiment.planner import build_run_plan, write_resolved_manifest
 from graph_sym_perf.experiment.spec import load_experiment_spec
 
@@ -131,6 +131,29 @@ def test_planner_rejects_when_core_exploration_floor_cannot_fit_shard_budget(tmp
 
     with pytest.raises(ConfigError, match="CORE exploration floor"):
         build_run_plan(spec, repository_root=tmp_path)
+
+
+def test_planner_intersects_declared_capabilities_with_target_profiles(tmp_path: Path) -> None:
+    spec = load_experiment_spec("config/experiment.yaml")
+    systems = dict(spec.systems)
+    for target in (TargetSystem.AGENSGRAPH, TargetSystem.ARCADEDB):
+        systems[target] = replace(
+            systems[target],
+            capabilities=(*systems[target].capabilities, "multi_label_intersection"),
+        )
+    systems[TargetSystem.NEO4J] = replace(
+        systems[TargetSystem.NEO4J],
+        capabilities=("native_parameters",),
+    )
+
+    plan = build_run_plan(
+        replace(spec, systems=FrozenMapping(systems)),
+        repository_root=tmp_path,
+    )
+
+    assert "label_order_symmetry" not in plan.rule_yield_snapshot["agensgraph"]
+    assert "label_order_symmetry" not in plan.rule_yield_snapshot["arcadedb"]
+    assert "label_order_symmetry" not in plan.rule_yield_snapshot["neo4j"]
 
 
 def test_resolved_manifest_is_a_secret_free_auditable_plan(tmp_path) -> None:

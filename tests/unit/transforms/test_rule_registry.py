@@ -44,6 +44,28 @@ def test_label_order_is_fail_closed_without_declared_capability() -> None:
     assert "label_order_symmetry" not in {rule.canonical_rule_id for rule in active}
 
 
+@pytest.mark.parametrize("dbms", ("agensgraph", "arcadedb"))
+def test_configured_capabilities_cannot_expand_the_target_profile(dbms: str) -> None:
+    active = RuleRegistry.default().rules_for(
+        dbms,
+        SafetyTier.CORE,
+        frozenset({"multi_label_intersection"}),
+    )
+    assert "label_order_symmetry" not in {rule.canonical_rule_id for rule in active}
+
+
+def test_neo4j_label_order_requires_a_declared_profile_capability() -> None:
+    registry = RuleRegistry.default()
+    without_declaration = registry.rules_for("neo4j", SafetyTier.CORE, frozenset())
+    with_declaration = registry.rules_for(
+        "neo4j",
+        SafetyTier.CORE,
+        frozenset({"multi_label_intersection"}),
+    )
+    assert "label_order_symmetry" not in {rule.canonical_rule_id for rule in without_declaration}
+    assert "label_order_symmetry" in {rule.canonical_rule_id for rule in with_declaration}
+
+
 def test_rule_specs_expose_canonical_metadata_and_bind_their_family_factory() -> None:
     registry = RuleRegistry.default()
     for rule in registry.rules:
