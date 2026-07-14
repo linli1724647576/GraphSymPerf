@@ -216,7 +216,7 @@ def test_cli_execute_refuses_unverified_evidence_boundary(tmp_path, monkeypatch)
         audit_cleanup.main(["--root", str(tmp_path), "--execute-approved"])
 
 
-def test_historical_evidence_inventory_is_verified_but_not_promoted_to_regressions() -> None:
+def test_historical_inventory_stays_excluded_while_explicit_bug001_is_isolated() -> None:
     inventory = json.loads(Path("issues/evidence_inventory.json").read_text(encoding="utf-8"))
     assert inventory["schema_version"] == 3
     assert len(inventory["packages"]) == 11
@@ -227,7 +227,7 @@ def test_historical_evidence_inventory_is_verified_but_not_promoted_to_regressio
     assert all(record["reproducer_status"] == "AVAILABLE_HISTORICAL" for record in inventory["packages"])
 
     regressions = yaml.safe_load(Path("tests/fixtures/regressions/manifest.yaml").read_text(encoding="utf-8"))
-    assert regressions["cases"] == []
+    assert regressions["cases"] == ["neo4j_bug001/manifest.yaml"]
     assert len(regressions["excluded_evidence_packages"]) == 11
     assert {
         item["reason"] for item in regressions["excluded_evidence_packages"]

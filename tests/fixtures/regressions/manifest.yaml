@@ -1,6 +1,7 @@
 schema_version: 1
 description: Minimal regression fixtures executable under the runtime-first validator.
-cases: []
+cases:
+  - neo4j_bug001/manifest.yaml
 excluded_evidence_packages:
   - id: apache-age-2428
     reason: historical_evidence_not_v3_executable

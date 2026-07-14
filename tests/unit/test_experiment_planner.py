@@ -210,6 +210,35 @@ def test_p0_fails_closed_when_configured_regression_manifest_is_missing(tmp_path
         build_rule_plan(spec, CampaignPhase.P0)
 
 
+def test_p0_has_one_zero_quota_regression_entry_outside_campaign_budgets() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    plan = build_rule_plan(spec, CampaignPhase.P0)
+
+    regression = [entry for entry in plan.entries if entry.stream is RuleStream.REGRESSION]
+    assert len(regression) == 1
+    assert regression[0].regression_case_id == "neo4j_bug001_pattern_order"
+    assert regression[0].accepted_pair_quota == 0
+    assert regression[0].max_generated_seed_budget == 0
+    assert regression[0].rule_id == "pattern_order_symmetry"
+    assert plan.discovery_accepted_pair_budget == 450
+    assert plan.control_accepted_pair_budget == 100
+
+
+def test_p1_and_p2_do_not_repeat_the_regression_entry() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    p1 = build_rule_plan(spec, CampaignPhase.P1)
+    p2 = build_rule_plan(
+        spec,
+        CampaignPhase.P2,
+        selected_cells=(("pattern_order_symmetry", 128),),
+    )
+
+    assert all(entry.stream is not RuleStream.REGRESSION for entry in (*p1.entries, *p2.entries))
+    assert all(entry.regression_case_id is None for entry in (*p1.entries, *p2.entries))
+
+
 def test_rule_plan_resolved_manifest_is_atomic_immutable_and_auditable(tmp_path: Path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
     plan = build_rule_plan(spec, CampaignPhase.P1)

@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
+import yaml
+
 from graph_sym_perf.core import ConfigError, GdsmithConfig, TargetSystem, to_jsonable
 from graph_sym_perf.gdsmith.runner import check_gdsmith_tooling
 from graph_sym_perf.experiment.plan_models import (
@@ -121,16 +123,21 @@ def build_rule_plan(
             )
         )
 
-    if len({entry.shard_seed for entry in entries}) != len(entries):
-        raise ConfigError("deterministic RulePlan seed collision")
-
     if phase is CampaignPhase.P0:
         regression_manifest = spec.regression["manifest"]
         if not isinstance(regression_manifest, Path) or not regression_manifest.is_file():
             raise ConfigError(f"regression manifest not found: {regression_manifest}")
-        raise ConfigError(
-            "regression manifest entries are not available until the regression fixture task"
+        entries.append(
+            _p0_regression_entry(
+                spec,
+                regression_manifest,
+                registry,
+                max_entry_runtime_seconds=phase_budget.max_entry_runtime_seconds,
+            )
         )
+
+    if len({entry.shard_seed for entry in entries}) != len(entries):
+        raise ConfigError("deterministic RulePlan seed collision")
 
     source_revision = _rule_plan_source_revision(spec)
     resolved_entries = tuple(entries)
@@ -150,6 +157,67 @@ def build_rule_plan(
             if entry.stream is RuleStream.CONTROL
         ),
         source_revision=source_revision,
+    )
+
+
+def _p0_regression_entry(
+    spec: ValidatedYieldExperimentSpec,
+    manifest_path: Path,
+    registry: RuleRegistry,
+    *,
+    max_entry_runtime_seconds: int,
+) -> RulePlanEntry:
+    try:
+        raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise ConfigError("regression manifest is not readable YAML") from exc
+    if not isinstance(raw, Mapping) or raw.get("schema_version") != 1:
+        raise ConfigError("regression manifest schema_version must be 1")
+    case_id = raw.get("case_id")
+    dbms = raw.get("dbms")
+    rule_id = raw.get("canonical_rule_id")
+    graph_nodes = raw.get("expected_graph_nodes")
+    if not isinstance(case_id, str) or not case_id.strip():
+        raise ConfigError("regression manifest case_id must be a non-empty string")
+    if dbms != TargetSystem.NEO4J.value or TargetSystem.NEO4J not in spec.targets:
+        raise ConfigError("P0 regression manifest target must be configured Neo4j")
+    if not isinstance(rule_id, str):
+        raise ConfigError("regression manifest canonical_rule_id must be a string")
+    try:
+        rule = registry.get(rule_id)
+    except KeyError as exc:
+        raise ConfigError(f"regression manifest contains unknown rule: {rule_id}") from exc
+    if rule.rule_id not in spec.rules.discovery_rule_ids:
+        raise ConfigError("regression manifest rule must be an approved discovery rule")
+    if not isinstance(graph_nodes, int) or isinstance(graph_nodes, bool) or graph_nodes <= 0:
+        raise ConfigError("regression manifest expected_graph_nodes must be positive")
+    seed = _entry_seed(
+        spec.seed,
+        CampaignPhase.P0,
+        RuleStream.REGRESSION,
+        case_id,
+        graph_nodes,
+        0,
+    )
+    return RulePlanEntry(
+        entry_id=f"p0:neo4j:regression:{case_id}",
+        phase=CampaignPhase.P0,
+        target=TargetSystem.NEO4J,
+        rule_id=rule.rule_id,
+        family=rule.family.value,
+        tier=rule.tier.value,
+        graph_scale=graph_nodes,
+        shard_index=0,
+        shard_seed=seed,
+        accepted_pair_quota=0,
+        max_generated_seed_budget=0,
+        max_variants_per_seed=0,
+        proof_version=rule.proof_version,
+        query_timeout_seconds=spec.systems[TargetSystem.NEO4J].default_timeout_seconds,
+        max_entry_runtime_seconds=max_entry_runtime_seconds,
+        measurement_protocol_id="known-regression-gate-v1",
+        stream=RuleStream.REGRESSION,
+        regression_case_id=case_id,
     )
 
 

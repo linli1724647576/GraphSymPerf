@@ -229,6 +229,7 @@ class RulePlanEntry:
     max_entry_runtime_seconds: int
     measurement_protocol_id: str
     stream: RuleStream
+    regression_case_id: str | None = None
 
 
 @dataclass(frozen=True)
