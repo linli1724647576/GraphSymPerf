@@ -389,10 +389,19 @@ class RuntimeFirstShardWorker:
             with generation_lease:
                 task_identity = canonical_hash(to_jsonable(entry))
                 generation_path = entry_dir / "generation_corpus.json"
-                generated = _load_generation_corpus(generation_path, task_identity=task_identity)
+                generated = _load_generation_corpus(
+                    generation_path,
+                    task_identity=task_identity,
+                    require_unique_query_asts=True,
+                )
                 if generated is None:
                     generated = self._generation_runner(entry, attempt_dir / "gdsmith_raw")
-                    _seal_generation_corpus(generation_path, task_identity=task_identity, generated=generated)
+                    _seal_generation_corpus(
+                        generation_path,
+                        task_identity=task_identity,
+                        generated=generated,
+                        require_unique_query_asts=True,
+                    )
         except WorkerFailure as exc:
             if _entry_infrastructure_error_kind(exc) is None:
                 raise
@@ -678,6 +687,7 @@ class RuntimeFirstShardWorker:
         attempt_started: float,
         prior_elapsed: float,
     ) -> dict[str, object]:
+        _require_unique_entry_query_asts(queries)
         factory = RulePairFactory(RuleRegistry.default())
         dialect = _dialect_for(entry.target)
         replayable = getattr(adapter, "gdsmith_query_is_replayable", gdsmith_read_query_is_replayable)
@@ -2307,7 +2317,10 @@ def _seal_generation_corpus(
     *,
     task_identity: str,
     generated: GeneratedShard,
+    require_unique_query_asts: bool = False,
 ) -> None:
+    if require_unique_query_asts:
+        _require_unique_entry_query_asts(generated.query_texts)
     body = {
         "schema_version": 1,
         "task_identity": task_identity,
@@ -2316,14 +2329,23 @@ def _seal_generation_corpus(
         "generator_metadata": to_jsonable(generated.generator_metadata),
     }
     if path.exists():
-        existing = _load_generation_corpus(path, task_identity=task_identity)
+        existing = _load_generation_corpus(
+            path,
+            task_identity=task_identity,
+            require_unique_query_asts=require_unique_query_asts,
+        )
         if existing != generated:
             raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "sealed generation corpus changed")
         return
     _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
 
 
-def _load_generation_corpus(path: Path, *, task_identity: str) -> GeneratedShard | None:
+def _load_generation_corpus(
+    path: Path,
+    *,
+    task_identity: str,
+    require_unique_query_asts: bool = False,
+) -> GeneratedShard | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -2349,7 +2371,28 @@ def _load_generation_corpus(path: Path, *, task_identity: str) -> GeneratedShard
         or not isinstance(metadata, dict)
     ):
         raise WorkerFailure(ErrorKind.INFRASTRUCTURE_ERROR, "generation corpus identity or hash is invalid")
-    return GeneratedShard(tuple(graph), tuple(queries), metadata)
+    generated = GeneratedShard(tuple(graph), tuple(queries), metadata)
+    if require_unique_query_asts:
+        _require_unique_entry_query_asts(generated.query_texts)
+    return generated
+
+
+def _require_unique_entry_query_asts(queries: tuple[str, ...]) -> None:
+    seen: set[str] = set()
+    for query in queries:
+        try:
+            ast_hash = portable_ast_hash(query)
+        except (TypeError, ValueError) as exc:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "rule entry query corpus contains an invalid portable AST",
+            ) from exc
+        if ast_hash in seen:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "rule entry query corpus contains a duplicate portable AST",
+            )
+        seen.add(ast_hash)
 
 
 def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, object]:

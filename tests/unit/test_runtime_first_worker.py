@@ -1617,11 +1617,7 @@ def test_retry_rejects_non_single_step_accepted_progress_divergence(tmp_path, co
     quota = 2 if corruption == "multi_step" else 1
     queries = (
         "MATCH (n) WHERE n.id = 1 RETURN n",
-        (
-            "MATCH (n) WHERE n.id = 2 RETURN n"
-            if corruption == "multi_step"
-            else "MATCH (n) WHERE n.id = 1 RETURN n"
-        ),
+        "MATCH (n) WHERE n.id = 2 RETURN n",
     )
     entry = _rule_plan_entry(
         rule_id="null_partition_tautology",
@@ -1665,7 +1661,7 @@ def test_retry_rejects_non_single_step_accepted_progress_divergence(tmp_path, co
     assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
-@pytest.mark.parametrize("probe", ("duplicate_query_ordinal_ahead", "rehashed_progress_behind"))
+@pytest.mark.parametrize("probe", ("source_query_ordinal_ahead", "rehashed_progress_behind"))
 def test_retry_rejects_durable_ordinal_ahead_of_matching_progress_hash_set(tmp_path, probe) -> None:
     entry = _rule_plan_entry(
         rule_id="null_partition_tautology",
@@ -1673,10 +1669,10 @@ def test_retry_rejects_durable_ordinal_ahead_of_matching_progress_hash_set(tmp_p
         accepted_pair_quota=1,
         max_generated_seed_budget=2,
     )
-    duplicate_query = "MATCH (n) WHERE n.id = 1 RETURN n"
+    first_query = "MATCH (n) WHERE n.id = 1 RETURN n"
     generated = GeneratedShard(
         graph_statements=("CREATE (n:Node {id: 1})",),
-        query_texts=(duplicate_query, duplicate_query),
+        query_texts=(first_query, "MATCH (n) WHERE n.id = 2 RETURN n"),
         generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
     )
     first = RuntimeFirstShardWorker(
@@ -1688,7 +1684,7 @@ def test_retry_rejects_durable_ordinal_ahead_of_matching_progress_hash_set(tmp_p
     first(entry)
     records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
     progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
-    if probe == "duplicate_query_ordinal_ahead":
+    if probe == "source_query_ordinal_ahead":
         record = json.loads(records_path.read_text(encoding="utf-8"))
         record["source_query_ordinal"] = 2
         records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
@@ -1705,6 +1701,81 @@ def test_retry_rejects_durable_ordinal_ahead_of_matching_progress_hash_set(tmp_p
     retry = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
         generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+def test_rule_entry_rejects_duplicate_ast_corpus_before_initial_seal(tmp_path) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=2,
+        max_generated_seed_budget=2,
+    )
+    query = "MATCH (n) WHERE n.id = 1 RETURN n"
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=(query, query),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        worker(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert not tuple(tmp_path.glob("entries/*/generation_corpus.json"))
+
+
+def test_quota_two_retry_rejects_duplicate_sealed_corpus_ordinal_rebinding(tmp_path) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=2,
+        max_generated_seed_budget=2,
+    )
+    accepted_query = "MATCH (n) WHERE n.id = 1 RETURN n"
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=(accepted_query, "MATCH (n) RETURN n"),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    result = first(entry)
+    assert result["accepted_pairs"] == 1
+    assert result["acceptance_generated_seeds"] == 2
+
+    generation_path = next(tmp_path.glob("entries/*/generation_corpus.json"))
+    sealed = json.loads(generation_path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in sealed.items() if key != "content_hash"}
+    body["query_texts"][1] = body["query_texts"][0]
+    generation_path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+    records_path = next(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
+    record = json.loads(records_path.read_text(encoding="utf-8"))
+    record["source_query_ordinal"] = 2
+    records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("retry must load the sealed corpus"),
         adapter_factory=lambda _entry: _Adapter(),
     )
     retry.bind_run_dir(tmp_path)
