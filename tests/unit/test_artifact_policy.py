@@ -153,8 +153,13 @@ def test_validation_session_requires_runtime_verdict_and_reason_codes() -> None:
 def _issue_payload() -> dict[str, object]:
     query_a = "MATCH (n) RETURN n"
     query_b = "MATCH (n) WHERE true RETURN n"
+    family_id = "8" * 64
+    family_version_hash = "9" * 64
+    family_decision_hash = "a" * 64
+    exact_signature = "e" * 64
     return {
         "issue_id": "issue-1",
+        "family_id": family_id,
         "stage": "submit_ready",
         "reduction_status": "reduced_valid",
         "certificate": _certificate_payload(),
@@ -165,7 +170,29 @@ def _issue_payload() -> dict[str, object]:
             "cluster_version_hash": "a" * 64,
             "evidence_url": None,
             "registry_signature": "c" * 64,
+            "family_id": family_id,
+            "family_version_hash": family_version_hash,
+            "family_decision_hash": family_decision_hash,
         },
+        "family_decision": {
+            "issue_id": "issue-1",
+            "family_id": family_id,
+            "fingerprint": {
+                "exact": exact_signature,
+                "structural": None,
+                "fingerprint_hash": "f" * 64,
+            },
+            "match_kind": "fresh",
+            "matched_issue_id": None,
+            "known_regression_match": False,
+            "known_regression_case_id": None,
+            "is_new_family": True,
+            "family_members": (("issue-1", exact_signature),),
+            "family_version_hash": family_version_hash,
+            "decision_hash": family_decision_hash,
+        },
+        "original_validation_hash": "1" * 64,
+        "reduced_validation_hash": "2" * 64,
         "validated_ratio": 4.0,
         "dbms_version": "dbms/1",
         "candidate_hash": "b" * 64,

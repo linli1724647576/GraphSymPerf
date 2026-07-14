@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from typing import TYPE_CHECKING
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -10,6 +11,9 @@ from graph_sym_perf.reducer.models import ReductionReport
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimeEvidence
 from graph_sym_perf.transforms.safety_points import SafetyCertificate
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
+
+if TYPE_CHECKING:
+    from graph_sym_perf.issues.dedup import IssueFamilyDecision
 
 
 class PipelineStage(str, Enum):
@@ -288,6 +292,9 @@ class DuplicateClearance:
     cluster_version_hash: str
     evidence_url: str | None
     registry_signature: str
+    family_id: str | None
+    family_version_hash: str
+    family_decision_hash: str
     _active: bool
 
     def __init__(self, *args: object, **kwargs: object) -> None:
@@ -302,6 +309,9 @@ class DuplicateClearance:
         cluster_members: tuple[str, ...],
         cluster_version_hash: str,
         evidence_url: str | None,
+        family_id: str | None = None,
+        family_version_hash: str = "",
+        family_decision_hash: str = "",
         token: object,
     ) -> "DuplicateClearance":
         if token is not _DUPLICATE_CLEARANCE_TOKEN:
@@ -313,6 +323,9 @@ class DuplicateClearance:
             "cluster_members": tuple(sorted(cluster_members)),
             "cluster_version_hash": cluster_version_hash,
             "evidence_url": evidence_url,
+            "family_id": family_id,
+            "family_version_hash": family_version_hash,
+            "family_decision_hash": family_decision_hash,
         }
         for name, value in fields.items():
             object.__setattr__(instance, name, value)
@@ -327,12 +340,18 @@ class DuplicateClearance:
             "cluster_members": self.cluster_members,
             "cluster_version_hash": self.cluster_version_hash,
             "evidence_url": self.evidence_url,
+            "family_id": self.family_id,
+            "family_version_hash": self.family_version_hash,
+            "family_decision_hash": self.family_decision_hash,
         }
+        family_fields = (self.family_id, self.family_version_hash, self.family_decision_hash)
+        family_binding_complete = all(family_fields) or not any(family_fields)
         return bool(
             self._active
             and self.issue_id in self.cluster_members
             and self.cluster_version_hash
             and self.registry_signature == _duplicate_signature(fields)
+            and family_binding_complete
             and (
                 not self.possible_duplicate
                 or bool(self.evidence_url and self.evidence_url.strip())
@@ -503,12 +522,14 @@ _PROMOTION_TOKEN = object()
 @dataclass(frozen=True, init=False)
 class SubmitReadyIssue:
     issue_id: str
+    family_id: str
     stage: PipelineStage
     developer_status: DeveloperStatus
     validation: IssueValidationReport
     reduction: ReductionReport
     certificate: SafetyCertificate
     duplicate_clearance: DuplicateClearance
+    family_decision: IssueFamilyDecision
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError("SubmitReadyIssue can only be constructed by promote()")
@@ -520,6 +541,7 @@ class SubmitReadyIssue:
         reduction: ReductionReport,
         certificate: SafetyCertificate,
         duplicate_clearance: DuplicateClearance,
+        family_decision: IssueFamilyDecision,
         *,
         issue_id: str,
         token: object,
@@ -528,12 +550,14 @@ class SubmitReadyIssue:
             raise TypeError("SubmitReadyIssue can only be constructed by promote()")
         instance = object.__new__(cls)
         object.__setattr__(instance, "issue_id", issue_id)
+        object.__setattr__(instance, "family_id", getattr(family_decision, "family_id"))
         object.__setattr__(instance, "stage", PipelineStage.SUBMIT_READY)
         object.__setattr__(instance, "developer_status", DeveloperStatus.WAITING_REPLY)
         object.__setattr__(instance, "validation", validation)
         object.__setattr__(instance, "reduction", reduction)
         object.__setattr__(instance, "certificate", certificate)
         object.__setattr__(instance, "duplicate_clearance", duplicate_clearance)
+        object.__setattr__(instance, "family_decision", family_decision)
         return instance
 
 
@@ -559,6 +583,16 @@ class VersionedIssueRecord:
     reduced_query_a: str | None = None
     reduced_query_b: str | None = None
     submitted_at: str | None = None
+    dbms_fingerprint: str = ""
+    family_id: str = ""
+    family_version_hash: str = ""
+    family_decision_hash: str = ""
+    exact_signature: str = ""
+    structural_signature: str | None = None
+    fingerprint_hash: str = ""
+    submission_path: str = ""
+    reduced_phenotype: str = ""
+    known_regression_match: bool = False
 
 
 @dataclass(frozen=True)

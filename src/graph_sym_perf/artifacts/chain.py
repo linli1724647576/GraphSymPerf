@@ -103,6 +103,8 @@ class ArtifactChainWriter:
             "final_evidence": asdict(issue.reduction.final_evidence),
             "validation_policy_hash": issue.reduction.validation_policy_hash,
             "certificate_hash": issue.reduction.certificate_hash,
+            "original_validation_hash": issue.reduction.original_validation_hash,
+            "reduced_validation_hash": issue.reduction.reduced_validation_hash,
         }
         reduction_ref = self.store.put_json(
             f"reduction-{issue.reduction.reduced_candidate_hash}.json",
@@ -110,6 +112,7 @@ class ArtifactChainWriter:
         )
         payload: dict[str, object] = {
             "issue_id": issue.issue_id,
+            "family_id": issue.family_id,
             "rule_id": issue.certificate.rule_id,
             "stage": issue.stage.value,
             "reduction_status": issue.reduction.status.value,
@@ -121,6 +124,22 @@ class ArtifactChainWriter:
                 "cluster_version_hash": issue.duplicate_clearance.cluster_version_hash,
                 "evidence_url": issue.duplicate_clearance.evidence_url,
                 "registry_signature": issue.duplicate_clearance.registry_signature,
+                "family_id": issue.duplicate_clearance.family_id,
+                "family_version_hash": issue.duplicate_clearance.family_version_hash,
+                "family_decision_hash": issue.duplicate_clearance.family_decision_hash,
+            },
+            "family_decision": {
+                "issue_id": issue.family_decision.issue_id,
+                "family_id": issue.family_decision.family_id,
+                "fingerprint": asdict(issue.family_decision.fingerprint),
+                "match_kind": issue.family_decision.match_kind.value,
+                "matched_issue_id": issue.family_decision.matched_issue_id,
+                "known_regression_match": issue.family_decision.known_regression_match,
+                "known_regression_case_id": issue.family_decision.known_regression_case_id,
+                "is_new_family": issue.family_decision.is_new_family,
+                "family_members": issue.family_decision.family_members,
+                "family_version_hash": issue.family_decision.family_version_hash,
+                "decision_hash": issue.family_decision.decision_hash,
             },
             "validated_ratio": issue.reduction.final_validation.validated_ratio,
             "dbms_version": issue.validation.manifest.dbms_version,
@@ -132,6 +151,8 @@ class ArtifactChainWriter:
             "reproducer_ref": _reference_payload(reproducer_ref),
             "original_validation_ref": _reference_payload(original_validation_ref),
             "final_validation_ref": _reference_payload(final_validation_ref),
+            "original_validation_hash": issue.reduction.original_validation_hash,
+            "reduced_validation_hash": issue.reduction.reduced_validation_hash,
             "reduction_ref": asdict(reduction_ref),
         }
         if explanation_ref is not None:

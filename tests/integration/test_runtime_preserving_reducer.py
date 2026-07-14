@@ -20,6 +20,7 @@ from graph_sym_perf.validation.models import (
     ValidationPolicy,
     ValidationSession,
 )
+from graph_sym_perf.validation.models import canonical_content_hash
 from graph_sym_perf.validation.validator import IssueValidator
 
 
@@ -276,6 +277,9 @@ def test_reducer_reaches_paired_one_minimal_then_runs_independent_validation(tmp
     assert any(step.layer == "pattern_atom" for step in report.accepted_steps)
     assert report.minimality_proof is not None and report.minimality_proof.verify(report.reduced_pair)
     assert report.final_validation is not None and report.final_validation.candidate_hash == report.reduced_candidate_hash
+    assert report.reduced_validation is report.final_validation
+    assert report.original_validation_hash == canonical_content_hash(bundle.original_validation)
+    assert report.reduced_validation_hash == canonical_content_hash(report.final_validation)
     assert final.candidates == [final.candidates[0]]
     assert final.candidates[0].pair == report.reduced_pair
     assert report.original_char_count > report.reduced_char_count

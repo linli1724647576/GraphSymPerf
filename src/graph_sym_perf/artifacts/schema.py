@@ -131,7 +131,8 @@ class ArtifactRecord:
                 "reduced_query_b", "reduced_content_hashes", "reproducer_ref",
                 "original_validation_ref", "final_validation_ref", "reduction_ref", "issue_hash",
                 "stage", "reduction_status", "certificate", "duplicate_clearance",
-                "validated_ratio", "dbms_version",
+                "validated_ratio", "dbms_version", "family_id", "family_decision",
+                "original_validation_hash", "reduced_validation_hash",
             }
             allowed = required | {"explanation_ref", "issue_id", "rule_id"}
             _require_fields(normalized, required, level)
@@ -574,7 +575,8 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     clearance = payload["duplicate_clearance"]
     required_clearance = {
         "issue_id", "possible_duplicate", "cluster_members", "cluster_version_hash",
-        "evidence_url", "registry_signature",
+        "evidence_url", "registry_signature", "family_id", "family_version_hash",
+        "family_decision_hash",
     }
     if not isinstance(clearance, Mapping) or set(clearance) != required_clearance:
         raise ValueError("issue artifact duplicate clearance is incomplete")
@@ -587,8 +589,53 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
         raise ValueError("issue artifact duplicate cluster is invalid")
     _validate_hash(clearance.get("cluster_version_hash"), "duplicate_clearance.cluster_version_hash")
     _validate_hash(clearance.get("registry_signature"), "duplicate_clearance.registry_signature")
+    _validate_hash(clearance.get("family_id"), "duplicate_clearance.family_id")
+    _validate_hash(
+        clearance.get("family_version_hash"),
+        "duplicate_clearance.family_version_hash",
+    )
+    _validate_hash(
+        clearance.get("family_decision_hash"),
+        "duplicate_clearance.family_decision_hash",
+    )
     if clearance.get("possible_duplicate") and not clearance.get("evidence_url"):
         raise ValueError("possible duplicate issue requires distinctness evidence")
+    _validate_hash(payload.get("family_id"), "family_id")
+    _validate_hash(payload.get("original_validation_hash"), "original_validation_hash")
+    _validate_hash(payload.get("reduced_validation_hash"), "reduced_validation_hash")
+    family = payload.get("family_decision")
+    required_family = {
+        "issue_id", "family_id", "fingerprint", "match_kind", "matched_issue_id",
+        "known_regression_match", "known_regression_case_id", "is_new_family",
+        "family_members", "family_version_hash", "decision_hash",
+    }
+    if not isinstance(family, Mapping) or set(family) != required_family:
+        raise ValueError("issue artifact family decision is incomplete")
+    if (
+        family.get("issue_id") != payload.get("issue_id")
+        or family.get("family_id") != payload.get("family_id")
+        or family.get("match_kind") != "fresh"
+        or family.get("known_regression_match") is not False
+        or family.get("known_regression_case_id") is not None
+        or family.get("is_new_family") is not True
+    ):
+        raise ValueError("issue artifact family decision is not submit eligible")
+    _validate_hash(family.get("family_version_hash"), "family_decision.family_version_hash")
+    _validate_hash(family.get("decision_hash"), "family_decision.decision_hash")
+    fingerprint = family.get("fingerprint")
+    if not isinstance(fingerprint, Mapping):
+        raise ValueError("issue artifact family fingerprint is incomplete")
+    for name in ("exact", "fingerprint_hash"):
+        _validate_hash(fingerprint.get(name), f"family_decision.fingerprint.{name}")
+    structural = fingerprint.get("structural")
+    if structural is not None:
+        _validate_hash(structural, "family_decision.fingerprint.structural")
+    if (
+        clearance.get("family_id") != family.get("family_id")
+        or clearance.get("family_version_hash") != family.get("family_version_hash")
+        or clearance.get("family_decision_hash") != family.get("decision_hash")
+    ):
+        raise ValueError("issue artifact duplicate clearance is stale for its family decision")
     hashes = payload["reduced_content_hashes"]
     if not isinstance(hashes, Mapping) or set(hashes) != {"query_a", "query_b"}:
         raise ValueError("issue reduced_content_hashes must bind both reduced queries")

@@ -22,6 +22,7 @@ def export_issue(issue: SubmitReadyIssue, destination: str | Path) -> Path:
         json.dumps(
             {
                 "issue_id": issue.issue_id,
+                "family_id": issue.family_id,
                 "stage": issue.stage.value,
                 "dbms_version": issue.validation.manifest.dbms_version,
                 "rule_id": issue.certificate.rule_id,
@@ -29,6 +30,16 @@ def export_issue(issue: SubmitReadyIssue, destination: str | Path) -> Path:
                 "reduction_status": issue.reduction.status.value,
                 "reduced_original": issue.reduction.reduced_pair.query_a,
                 "reduced_transformed": issue.reduction.reduced_pair.query_b,
+                "exact_signature": issue.family_decision.fingerprint.exact,
+                "structural_signature": issue.family_decision.fingerprint.structural,
+                "submission_path": issue.family_decision.fingerprint.submission_path,
+                "reduced_validation_phenotype": (
+                    issue.family_decision.fingerprint.reduced_validation_phenotype
+                ),
+                "family_version_hash": issue.family_decision.family_version_hash,
+                "family_decision_hash": issue.family_decision.decision_hash,
+                "original_validation_hash": issue.reduction.original_validation_hash,
+                "reduced_validation_hash": issue.reduction.reduced_validation_hash,
             },
             indent=2,
         )

@@ -86,8 +86,6 @@ class IssueCommands:
             fcntl.flock(registry_lock.fileno(), fcntl.LOCK_SH)
             if _revoked(run_dir / "issues" / "revocations.jsonl", str(index["issue_id"])):
                 raise ValueError("submit-ready issue was revoked by a later possible-duplicate cluster")
-            if _has_current_possible_duplicate(run_dir / "issues", str(index["issue_id"])):
-                raise ValueError("submit-ready issue is in the current possible-duplicate cluster")
             _verify_registry_commit(run_dir / "issues", index)
             store_path = _within(run_dir, str(index["artifact_store"]))
             export_path = _within(run_dir, str(index["export_path"]))
@@ -103,6 +101,12 @@ class IssueCommands:
                 raise ValueError("referenced record is not an issue")
             if record.payload.get("issue_id") != index["issue_id"]:
                 raise ValueError("issue index identity does not match the sealed issue")
+            clearance = record.payload.get("duplicate_clearance")
+            formal_family = isinstance(clearance, Mapping) and bool(clearance.get("family_id"))
+            if not formal_family and _has_current_possible_duplicate(
+                run_dir / "issues", str(index["issue_id"])
+            ):
+                raise ValueError("submit-ready issue is in the current possible-duplicate cluster")
             _verify_current_duplicate_clearance(run_dir / "issues", record.payload)
             verify_issue_hash_chain(store, record)
             payload = export_path.read_bytes()
@@ -242,6 +246,14 @@ def _verify_current_duplicate_clearance(root: Path, issue_payload: object) -> No
         raise ValueError("sealed issue payload is unavailable")
     issue_id = str(issue_payload.get("issue_id"))
     stored = issue_payload.get("duplicate_clearance")
+    if isinstance(stored, Mapping) and stored.get("family_id"):
+        from graph_sym_perf.issues.durable_registry import (
+            _durable_family_payload_is_current_unlocked,
+        )
+
+        if not _durable_family_payload_is_current_unlocked(root, issue_payload):
+            raise ValueError("sealed family decision is stale for the durable registry")
+        return
     registry = _current_issue_registry(root)
     current = registry.duplicate_clearance(issue_id)
     if current is None or not isinstance(stored, Mapping):

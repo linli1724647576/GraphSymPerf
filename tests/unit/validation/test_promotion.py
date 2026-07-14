@@ -1,6 +1,7 @@
 import os
 import hashlib
 import copy
+from pathlib import Path
 from dataclasses import asdict, replace
 
 import pytest
@@ -15,6 +16,12 @@ from graph_sym_perf.reducer.models import (
     ReductionReport,
     ReductionStatus,
     reduction_pair_hash,
+)
+from graph_sym_perf.issues.dedup import (
+    FingerprintSubject,
+    IssueFamilyIndex,
+    fingerprint_issue,
+    known_regression_signature_from_manifest,
 )
 from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.runtime.models import EquivalentQueryPair, PairedSample, RuntimeEvidence, RuntimeVerdict
@@ -33,6 +40,7 @@ from graph_sym_perf.validation.models import (
     ValidationSession,
     ValidationPolicy,
     FrozenMapping,
+    canonical_content_hash,
     safety_certificate_hash,
     _DUPLICATE_CLEARANCE_TOKEN,
     _VALIDATION_REPORT_TOKEN,
@@ -166,7 +174,7 @@ def _report(
         pair,
         graph_snapshot=snapshot,
         dbms_version="dbms-version",
-        resolved_config={"runtime": {"validation_pairs": 20}},
+        resolved_config={"target": "neo4j", "runtime": {"validation_pairs": 20}},
         discovery_slow_query="b",
         discovery_ratio=8.0,
         certificate=_certificate(),
@@ -219,6 +227,8 @@ def _reduction(
             ),
         ),
         final_validation=final_validation,
+        original_validation_hash=canonical_content_hash(_report(pair=original_pair, submission_path=submission_path)),
+        reduced_validation_hash=canonical_content_hash(final_validation),
         reduced_candidate_hash=final_validation.candidate_hash,
         validation_policy_hash=final_validation.policy_hash,
         certificate_hash=safety_certificate_hash(_certificate()),
@@ -312,9 +322,19 @@ def _duplicate_clearance(
     possible: bool = False,
     resolved: bool = False,
     issue_id: str | None = None,
+    family_decision=None,
 ) -> DuplicateClearance:
     issue_id = issue_id or _expected_issue_id()
     members = (issue_id, "possible-other") if possible else (issue_id,)
+    family_fields = (
+        {
+            "family_id": family_decision.family_id,
+            "family_version_hash": family_decision.family_version_hash,
+            "family_decision_hash": family_decision.decision_hash,
+        }
+        if family_decision is not None
+        else {}
+    )
     return DuplicateClearance._from_registry(
         issue_id=issue_id,
         possible_duplicate=possible,
@@ -322,7 +342,151 @@ def _duplicate_clearance(
         cluster_version_hash="f" * 64,
         evidence_url="https://example.test/dedup" if resolved else None,
         token=_DUPLICATE_CLEARANCE_TOKEN,
+        **family_fields,
     )
+
+
+def _family_decision(
+    report: IssueValidationReport | None = None,
+    reduction: ReductionReport | None = None,
+    *,
+    index: IssueFamilyIndex | None = None,
+):
+    report = report or _report()
+    reduction = reduction or _reduction()
+    final_validation = reduction.final_validation
+    assert isinstance(final_validation, IssueValidationReport)
+    assert final_validation.submission_path is not None
+    fingerprint = fingerprint_issue(
+        FingerprintSubject(
+            dbms="neo4j",
+            dbms_version=report.manifest.dbms_version,
+            dbms_fingerprint=report.manifest.pair.dbms_fingerprint,
+            canonical_rule_id=_certificate().rule_id,
+            reduced_query_a=reduction.reduced_pair.query_a,
+            reduced_query_b=reduction.reduced_pair.query_b,
+            runtime_direction=reduction.final_evidence.slow_query or "",
+            site_class=_certificate().site_class,
+            submission_path=final_validation.submission_path.value,
+            reduced_validation_phenotype=(
+                f"{final_validation.submission_path.value}:"
+                f"{final_validation.magnitude_stability}:"
+                f"{reduction.final_evidence.slow_query}"
+            ),
+        )
+    )
+    return (index or IssueFamilyIndex()).add(
+        fingerprint,
+        issue_id=_expected_issue_id(report, reduction),
+    )
+
+
+def test_promotion_requires_a_current_content_bound_family_decision() -> None:
+    report = _report()
+    reduction = _reduction()
+    clearance = _duplicate_clearance()
+
+    assert promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=clearance,
+    ) is None
+
+    decision = _family_decision(report, reduction)
+    bound_clearance = _duplicate_clearance(family_decision=decision)
+    issue = promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=bound_clearance,
+        family_decision=decision,
+    )
+    assert issue is not None
+    assert issue.family_id == decision.family_id
+    assert issue.family_decision is decision
+
+    forged = copy.copy(decision)
+    object.__setattr__(forged, "family_version_hash", "0" * 64)
+    assert promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=bound_clearance,
+        family_decision=forged,
+    ) is None
+
+
+def test_family_decision_and_duplicate_clearance_must_share_current_family_version() -> None:
+    report = _report()
+    reduction = _reduction()
+    decision = _family_decision(report, reduction)
+
+    assert promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=_duplicate_clearance(),
+        family_decision=decision,
+    ) is None
+
+    wrong = _duplicate_clearance(family_decision=decision)
+    object.__setattr__(wrong, "family_version_hash", "0" * 64)
+    assert promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=wrong,
+        family_decision=decision,
+    ) is None
+
+
+def test_adding_a_family_member_makes_the_previous_decision_unpromotable() -> None:
+    report = _report()
+    reduction = _reduction()
+    index = IssueFamilyIndex()
+    decision = _family_decision(report, reduction, index=index)
+    index.add(decision.fingerprint, issue_id="later-family-member")
+
+    assert not decision.verify()
+    assert promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=_duplicate_clearance(),
+        family_decision=decision,
+    ) is None
+
+
+def test_known_regression_family_decision_cannot_promote_a_fresh_candidate() -> None:
+    fixture = Path(__file__).parents[2] / "fixtures" / "regressions" / "neo4j_bug001"
+    known = known_regression_signature_from_manifest(fixture / "manifest.yaml")
+    decision = IssueFamilyIndex(known_regressions=(known,)).add(
+        fingerprint_issue(
+            FingerprintSubject(
+                dbms="neo4j",
+                dbms_version="current-version",
+                dbms_fingerprint="c" * 64,
+                canonical_rule_id="pattern_order_symmetry",
+                reduced_query_a=(fixture / "fast_query.cypher").read_text(encoding="utf-8").strip(),
+                reduced_query_b=(fixture / "slow_query.cypher").read_text(encoding="utf-8").strip(),
+                runtime_direction="b",
+                site_class="match_pattern_component",
+                submission_path="relative",
+                reduced_validation_phenotype="relative:stable:b",
+            )
+        ),
+        issue_id=_expected_issue_id(),
+    )
+    assert decision.known_regression_match
+
+    assert promote(
+        _report(),
+        reduction_report=_reduction(),
+        certificate=_certificate(),
+        duplicate_clearance=_duplicate_clearance(),
+        family_decision=decision,
+    ) is None
 
 
 def test_profile_or_plan_like_metadata_cannot_promote_without_validation() -> None:
@@ -337,7 +501,14 @@ def test_profile_or_plan_like_metadata_cannot_promote_without_validation() -> No
 def test_only_validation_passed_reduced_core_certificate_becomes_submit_ready() -> None:
     report = _report()
     reduction = _reduction()
-    issue = promote(report, reduction_report=reduction, certificate=_certificate(), duplicate_clearance=_duplicate_clearance())
+    decision = _family_decision(report, reduction)
+    issue = promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=_duplicate_clearance(family_decision=decision),
+        family_decision=decision,
+    )
 
     assert issue is not None
     assert issue.stage is PipelineStage.SUBMIT_READY
@@ -347,15 +518,28 @@ def test_only_validation_passed_reduced_core_certificate_becomes_submit_ready() 
 
 
 def test_promotion_requires_an_explicit_relative_or_absolute_submission_path() -> None:
-    kwargs = {
-        "reduction_report": _reduction(),
-        "certificate": _certificate(),
-        "duplicate_clearance": _duplicate_clearance(),
-    }
+    for path in (SubmissionPath.RELATIVE, SubmissionPath.ABSOLUTE):
+        report = _report(submission_path=path)
+        reduction = _reduction(submission_path=path)
+        decision = _family_decision(report, reduction)
+        assert promote(
+            report,
+            reduction_report=reduction,
+            certificate=_certificate(),
+            duplicate_clearance=_duplicate_clearance(family_decision=decision),
+            family_decision=decision,
+        ) is not None
 
-    assert promote(_report(submission_path=SubmissionPath.RELATIVE), **kwargs) is not None
-    assert promote(_report(submission_path=SubmissionPath.ABSOLUTE), **kwargs) is not None
-    assert promote(_tamper_report(_report(), submission_path=None), **kwargs) is None
+    report = _report()
+    reduction = _reduction()
+    decision = _family_decision(report, reduction)
+    assert promote(
+        _tamper_report(report, submission_path=None),
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=_duplicate_clearance(family_decision=decision),
+        family_decision=decision,
+    ) is None
 
 
 @pytest.mark.parametrize(
@@ -368,11 +552,13 @@ def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(
 ) -> None:
     report = _report(submission_path=submission_path)
     reduction = _reduction(submission_path=submission_path)
+    decision = _family_decision(report, reduction)
     issue = promote(
         report,
         reduction_report=reduction,
         certificate=_certificate(),
-        duplicate_clearance=_duplicate_clearance(),
+        duplicate_clearance=_duplicate_clearance(family_decision=decision),
+        family_decision=decision,
     )
     assert issue is not None and reduction.final_validation is not None
     store = ContentAddressedStore(tmp_path / "artifacts", budget_bytes=1024 * 1024)
@@ -441,7 +627,12 @@ def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(
         reproducer_ref=reproducer,
     )
 
-    assert load_artifact_record(store, stored_issue.reference).payload["issue_hash"] == stored_issue.record.payload["issue_hash"]
+    loaded_payload = load_artifact_record(store, stored_issue.reference).payload
+    assert loaded_payload["issue_hash"] == stored_issue.record.payload["issue_hash"]
+    assert loaded_payload["family_id"] == issue.family_id
+    assert loaded_payload["family_decision"]["decision_hash"] == issue.family_decision.decision_hash
+    assert loaded_payload["original_validation_hash"] == issue.reduction.original_validation_hash
+    assert loaded_payload["reduced_validation_hash"] == issue.reduction.reduced_validation_hash
 
 
 def test_unchanged_pair_cannot_promote_as_reduced_valid() -> None:
@@ -487,11 +678,22 @@ def test_promotion_rejects_clearance_for_a_different_deterministic_issue_id() ->
 
 
 def test_manually_resolved_possible_duplicate_can_promote_with_evidence() -> None:
+    report = _report()
+    reduction = replace(
+        _reduction(),
+        original_validation_hash=canonical_content_hash(report),
+    )
+    decision = _family_decision(report, reduction)
     issue = promote(
-        _report(),
-        reduction_report=_reduction(),
+        report,
+        reduction_report=reduction,
         certificate=_certificate(),
-        duplicate_clearance=_duplicate_clearance(possible=True, resolved=True),
+        duplicate_clearance=_duplicate_clearance(
+            possible=True,
+            resolved=True,
+            family_decision=decision,
+        ),
+        family_decision=decision,
     )
 
     assert issue is not None
@@ -671,10 +873,16 @@ def test_promotion_uses_combined_samples_not_single_session_ci_or_oriented_delta
         ),
     )
     report = _tamper_report(report, sessions=(aggregate_only, report.sessions[1]))
+    reduction = replace(
+        _reduction(),
+        original_validation_hash=canonical_content_hash(report),
+    )
+    decision = _family_decision(report, reduction)
 
     assert promote(
         report,
-        reduction_report=_reduction(),
+        reduction_report=reduction,
         certificate=_certificate(),
-        duplicate_clearance=_duplicate_clearance(),
+        duplicate_clearance=_duplicate_clearance(family_decision=decision),
+        family_decision=decision,
     ) is not None

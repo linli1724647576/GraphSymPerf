@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import date
+from collections.abc import Iterable
 
 from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.cypher.parser import alpha_normalize_query
@@ -47,9 +48,51 @@ class IssueRegistry:
 
     def exact_duplicate(self, candidate: VersionedIssueRecord) -> VersionedIssueRecord | None:
         for record in self.records.values():
+            if record.exact_signature and candidate.exact_signature:
+                if record.exact_signature == candidate.exact_signature:
+                    return record
+                continue
             if (record.dbms, record.dbms_version, record.pair_hash, record.direction) == (candidate.dbms, candidate.dbms_version, candidate.pair_hash, candidate.direction):
                 return record
         return None
+
+    def duplicate_clearance_for_family(
+        self,
+        decision: object,
+        records: Iterable[VersionedIssueRecord],
+    ) -> DuplicateClearance:
+        """Sign a clearance only for the current parser-proven family snapshot."""
+
+        from graph_sym_perf.issues.dedup import FamilyMatchKind, IssueFamilyDecision
+
+        if (
+            not isinstance(decision, IssueFamilyDecision)
+            or not decision.verify()
+            or not decision.is_new_family
+            or decision.match_kind is not FamilyMatchKind.FRESH
+            or decision.family_id is None
+        ):
+            raise ValueError("family clearance requires a current family-owner decision")
+        by_id = {record.issue_id: record for record in records}
+        expected_members = dict(decision.family_members)
+        if set(by_id) != set(expected_members):
+            raise ValueError("family clearance records do not match current family members")
+        for issue_id, exact in expected_members.items():
+            record = by_id[issue_id]
+            if record.exact_signature != exact or record.family_id != decision.family_id:
+                raise ValueError("family clearance record fingerprint mismatch")
+        members = tuple(sorted(expected_members))
+        return DuplicateClearance._from_registry(
+            issue_id=decision.issue_id,
+            possible_duplicate=False,
+            cluster_members=members,
+            cluster_version_hash=decision.family_version_hash,
+            evidence_url=None,
+            family_id=decision.family_id,
+            family_version_hash=decision.family_version_hash,
+            family_decision_hash=decision.decision_hash,
+            token=_DUPLICATE_CLEARANCE_TOKEN,
+        )
 
     def update_developer_status(self, issue_id: str, status: DeveloperStatus, evidence_url: str) -> None:
         if not evidence_url.strip():
@@ -178,6 +221,15 @@ class IssueRegistry:
 
     @staticmethod
     def _possible_cluster_key(record: VersionedIssueRecord) -> tuple[str, str, str, str, str, str]:
+        if record.family_id:
+            return (
+                record.dbms,
+                record.dbms_version,
+                record.rule_id,
+                record.site_class,
+                record.family_id,
+                record.family_id,
+            )
         return (
             record.dbms,
             record.dbms_version,
@@ -228,7 +280,30 @@ class IssueRegistry:
         missing = tuple(name for name, value in required.items() if not str(value).strip())
         if missing:
             raise ValueError(f"missing issue provenance field(s): {', '.join(missing)}")
-        expected_hash = canonical_reduced_pair_hash(record.reduced_query_a or "", record.reduced_query_b or "")
+        formal_fields = {
+            "dbms_fingerprint": record.dbms_fingerprint,
+            "family_id": record.family_id,
+            "family_version_hash": record.family_version_hash,
+            "family_decision_hash": record.family_decision_hash,
+            "exact_signature": record.exact_signature,
+            "fingerprint_hash": record.fingerprint_hash,
+            "submission_path": record.submission_path,
+            "reduced_phenotype": record.reduced_phenotype,
+        }
+        if any(formal_fields.values()):
+            missing_formal = tuple(
+                name for name, value in formal_fields.items() if not str(value).strip()
+            )
+            if missing_formal or record.known_regression_match:
+                raise ValueError(
+                    "incomplete formal issue family provenance: "
+                    + ", ".join(missing_formal or ("known_regression_match",))
+                )
+            expected_hash = record.exact_signature
+        else:
+            expected_hash = canonical_reduced_pair_hash(
+                record.reduced_query_a or "", record.reduced_query_b or ""
+            )
         if record.pair_hash != expected_hash:
             raise ValueError("pair_hash does not match normalized reduced query pair")
 

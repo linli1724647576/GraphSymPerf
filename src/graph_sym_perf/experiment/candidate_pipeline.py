@@ -342,6 +342,7 @@ class ProductionCandidatePipeline:
             reduction=reduction,
             certificate=original_candidate.certificate,
             dbms=task.target.value,
+            known_regression_manifest=_required_regression_manifest(self.spec),
             materialize=materialize,
         )
         if issue is None:
@@ -512,6 +513,14 @@ def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
         _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _required_regression_manifest(spec: object) -> Path:
+    regression = getattr(spec, "regression", None)
+    manifest = regression.get("manifest") if isinstance(regression, Mapping) else None
+    if not isinstance(manifest, Path):
+        raise ValueError("formal issue promotion requires the strict regression manifest")
+    return manifest
 
 
 def _has_order_by(query: str) -> bool:

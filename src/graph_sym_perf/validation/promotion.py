@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+from typing import TYPE_CHECKING
+
 from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.reducer.models import ReductionReport, ReductionStatus, reduction_pair_hash
 from graph_sym_perf.runtime.models import RuntimeVerdict
@@ -13,8 +15,12 @@ from graph_sym_perf.validation.models import (
     SubmitReadyIssue,
     _PROMOTION_TOKEN,
     safety_certificate_hash,
+    canonical_content_hash,
 )
 from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
+
+if TYPE_CHECKING:
+    from graph_sym_perf.issues.dedup import IssueFamilyDecision
 
 
 def promote(
@@ -23,19 +29,29 @@ def promote(
     reduction_report: ReductionReport,
     certificate: SafetyCertificate | None,
     duplicate_clearance: DuplicateClearance,
+    family_decision: IssueFamilyDecision | None = None,
 ) -> SubmitReadyIssue | None:
     if not issue_validation_report_is_complete(report) or not _certificate_complete(certificate):
         return None
     if not _reduction_gate_complete(reduction_report, report, certificate) or not _direction_preserved(report, reduction_report):
         return None
     issue_id = deterministic_issue_id(report, reduction_report)
+    if not _family_decision_complete(family_decision, report, reduction_report, certificate, issue_id):
+        return None
     if not duplicate_clearance.verify() or duplicate_clearance.issue_id != issue_id:
+        return None
+    if (
+        duplicate_clearance.family_id != family_decision.family_id
+        or duplicate_clearance.family_version_hash != family_decision.family_version_hash
+        or duplicate_clearance.family_decision_hash != family_decision.decision_hash
+    ):
         return None
     return SubmitReadyIssue._from_promotion(
         report,
         reduction_report,
         certificate,
         duplicate_clearance,
+        family_decision,
         issue_id=issue_id,
         token=_PROMOTION_TOKEN,
     )
@@ -47,12 +63,61 @@ def submit_ready_issue_is_valid(issue: SubmitReadyIssue) -> bool:
         and issue.stage is PipelineStage.SUBMIT_READY
         and issue.issue_id == deterministic_issue_id(issue.validation, issue.reduction)
         and issue.duplicate_clearance.issue_id == issue.issue_id
+        and issue.family_id == issue.family_decision.family_id
         and issue_validation_report_is_complete(issue.validation)
         and _reduction_gate_complete(issue.reduction, issue.validation, issue.certificate)
         and _direction_preserved(issue.validation, issue.reduction)
         and _certificate_complete(issue.certificate)
         and issue.duplicate_clearance.verify()
+        and issue.duplicate_clearance.family_id == issue.family_decision.family_id
+        and issue.duplicate_clearance.family_version_hash == issue.family_decision.family_version_hash
+        and issue.duplicate_clearance.family_decision_hash == issue.family_decision.decision_hash
+        and _family_decision_complete(
+            issue.family_decision,
+            issue.validation,
+            issue.reduction,
+            issue.certificate,
+            issue.issue_id,
+        )
     )
+
+
+def _family_decision_complete(
+    decision: IssueFamilyDecision | None,
+    original_validation: IssueValidationReport,
+    reduction: ReductionReport,
+    certificate: SafetyCertificate,
+    issue_id: str,
+) -> bool:
+    from graph_sym_perf.issues.dedup import (
+        FamilyMatchKind,
+        IssueFamilyDecision,
+        fingerprint_validated_reduction,
+    )
+
+    final_validation = reduction.final_validation
+    target = original_validation.manifest.resolved_config.get("target")
+    if (
+        not isinstance(decision, IssueFamilyDecision)
+        or not decision.verify()
+        or decision.issue_id != issue_id
+        or not decision.is_new_family
+        or decision.match_kind is not FamilyMatchKind.FRESH
+        or decision.known_regression_match
+        or decision.family_id is None
+        or not isinstance(final_validation, IssueValidationReport)
+        or final_validation.submission_path is None
+        or not isinstance(target, str)
+        or not target.strip()
+    ):
+        return False
+    expected = fingerprint_validated_reduction(
+        original_validation,
+        reduction,
+        certificate,
+        dbms=target,
+    )
+    return decision.fingerprint == expected
 
 
 def _reduction_gate_complete(
@@ -75,6 +140,8 @@ def _reduction_gate_complete(
         and reduction.minimality_proof.verify(reduction.reduced_pair)
         and isinstance(final_validation, IssueValidationReport)
         and issue_validation_report_is_complete(final_validation)
+        and reduction.original_validation_hash == canonical_content_hash(original_validation)
+        and reduction.reduced_validation_hash == canonical_content_hash(final_validation)
         and original_validation.query_a_hash == original_a_hash
         and original_validation.query_b_hash == original_b_hash
         and evidence.query_a_hash == reduced_a_hash

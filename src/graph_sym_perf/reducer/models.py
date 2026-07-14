@@ -5,10 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from collections.abc import Mapping
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimeEvidence
 from graph_sym_perf.core import stable_json_dumps
+
+if TYPE_CHECKING:
+    from graph_sym_perf.validation.models import IssueValidationReport
 
 
 class ReductionStatus(str, Enum):
@@ -433,7 +436,9 @@ class ReductionReport:
     final_evidence: RuntimeEvidence
     screen_evidence: RuntimeEvidence | None = None
     minimality_proof: MinimalityProof | None = None
-    final_validation: object | None = None
+    final_validation: IssueValidationReport | None = None
+    original_validation_hash: str = ""
+    reduced_validation_hash: str = ""
     reduced_candidate_hash: str = ""
     validation_policy_hash: str = ""
     certificate_hash: str = ""
@@ -447,6 +452,12 @@ class ReductionReport:
     stop_reason: str = ""
     bundle_hash: str = ""
     rule_witness_hash: str = ""
+
+    @property
+    def reduced_validation(self) -> IssueValidationReport | None:
+        """Typed Task-10 name for the stronger pre-existing final validation."""
+
+        return self.final_validation
 
 
 @dataclass(frozen=True)

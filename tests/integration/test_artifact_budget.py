@@ -1,7 +1,9 @@
 import json
 import hashlib
+import multiprocessing
 from dataclasses import asdict
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -19,7 +21,8 @@ from graph_sym_perf.experiment.plan_models import ShardTask
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
 from graph_sym_perf.issues.commands import IssueCommands
-from graph_sym_perf.issues.registry import IssueRegistry, canonical_reduced_pair_hash
+from graph_sym_perf.issues.dedup import FingerprintSubject, IssueFamilyIndex, fingerprint_issue
+from graph_sym_perf.issues.registry import IssueRegistry
 from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.transforms.rule_models import RuleRegistry
@@ -32,6 +35,31 @@ from graph_sym_perf.validation.models import (
     candidate_hash_from_content_hashes,
     canonical_content_hash,
 )
+
+
+def _run_issue_export(index: str, output: str, queue) -> None:
+    try:
+        exported = IssueCommands().export(issue=index, output=output)
+        queue.put(("ok", str(exported)))
+    except Exception as exc:  # pragma: no cover - marshalled to the parent assertion
+        queue.put(("error", f"{type(exc).__name__}: {exc}"))
+
+
+def _issue_export_with_timeout(index, output) -> tuple[str, str]:
+    context = multiprocessing.get_context("fork")
+    queue = context.Queue()
+    process = context.Process(
+        target=_run_issue_export,
+        args=(str(index), str(output), queue),
+    )
+    process.start()
+    process.join(timeout=10)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=2)
+        pytest.fail("IssueCommands.export deadlocked while validating a formal family")
+    assert process.exitcode == 0
+    return queue.get(timeout=2)
 
 
 def _canonical_test_certificate() -> dict[str, object]:
@@ -353,6 +381,8 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         ),
     )
     certificate = _canonical_test_certificate()
+    original_validation_hash = original.payload["validation_hash"]
+    reduced_validation_hash = final.payload["validation_hash"]
     reduction_ref = asdict(
         store.put_json(
             "reduction",
@@ -384,47 +414,73 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 },
                 "validation_policy_hash": "3" * 64,
                 "certificate_hash": canonical_content_hash(certificate),
+                "original_validation_hash": original_validation_hash,
+                "reduced_validation_hash": reduced_validation_hash,
             },
         )
     )
     reproducer_ref = asdict(store.put("reproducer", b"CREATE ();"))
-    registry_record = {
-        "issue_id": "issue-1",
-        "stage": "submit_ready",
-        "developer_status": "waiting_reply",
-        "dbms": "neo4j",
-        "dbms_version": "dbms/1",
-        "pair_hash": canonical_reduced_pair_hash(query_a, query_b),
-        "direction": "b",
-        "rule_id": "constant_true_disjunction",
-        "detector_version": "runtime-first-v3",
-        "validator_version": "independent-two-session-v1",
-        "reducer_version": "paired-ast-ddmin-v1",
-        "status_evidence_url": None,
-        "rule_version": "kleene_or_true_v1",
-        "discovered_at": "2026-07-11T00:00:00+00:00",
-        "site_class": "where_boolean",
-        "normalized_pattern": query_a,
-        "normalized_predicate": query_b,
-        "reduced_query_a": query_a,
-        "reduced_query_b": query_b,
-        "submitted_at": None,
-    }
-    registry = IssueRegistry()
-    registry.record(
-        VersionedIssueRecord(
-            **{
-                **registry_record,
-                "stage": PipelineStage.SUBMIT_READY,
-                "developer_status": DeveloperStatus.WAITING_REPLY,
-            }
+    fingerprint = fingerprint_issue(
+        FingerprintSubject(
+            dbms="neo4j",
+            dbms_version="dbms/1",
+            dbms_fingerprint="c" * 64,
+            canonical_rule_id="constant_true_disjunction",
+            reduced_query_a=query_a,
+            reduced_query_b=query_b,
+            runtime_direction="b",
+            site_class="where_boolean",
+            submission_path="relative",
+            reduced_validation_phenotype="relative:stable:b",
         )
     )
-    clearance = registry.duplicate_clearance("issue-1")
-    assert clearance is not None
+    family_decision = IssueFamilyIndex().add(fingerprint, issue_id="issue-1")
+    assert family_decision.family_id is not None
+    typed_registry_record = VersionedIssueRecord(
+        issue_id="issue-1",
+        stage=PipelineStage.SUBMIT_READY,
+        developer_status=DeveloperStatus.WAITING_REPLY,
+        dbms="neo4j",
+        dbms_version="dbms/1",
+        pair_hash=fingerprint.exact,
+        direction="b",
+        rule_id="constant_true_disjunction",
+        detector_version="runtime-first-v3",
+        validator_version="independent-two-session-v1",
+        reducer_version="paired-ast-ddmin-v1",
+        status_evidence_url=None,
+        rule_version="kleene_or_true_v1",
+        discovered_at="2026-07-11T00:00:00+00:00",
+        site_class="where_boolean",
+        normalized_pattern=(fingerprint.normalized_pair or (query_a, query_b))[0],
+        normalized_predicate=(fingerprint.normalized_pair or (query_a, query_b))[1],
+        reduced_query_a=query_a,
+        reduced_query_b=query_b,
+        submitted_at=None,
+        dbms_fingerprint=fingerprint.dbms_fingerprint,
+        family_id=family_decision.family_id,
+        family_version_hash=family_decision.family_version_hash,
+        family_decision_hash=family_decision.decision_hash,
+        exact_signature=fingerprint.exact,
+        structural_signature=fingerprint.structural,
+        fingerprint_hash=fingerprint.fingerprint_hash,
+        submission_path=fingerprint.submission_path,
+        reduced_phenotype=fingerprint.reduced_validation_phenotype,
+        known_regression_match=False,
+    )
+    registry = IssueRegistry()
+    registry.record(typed_registry_record)
+    clearance = registry.duplicate_clearance_for_family(
+        family_decision,
+        (typed_registry_record,),
+    )
+    registry_record = asdict(typed_registry_record)
+    registry_record["stage"] = typed_registry_record.stage.value
+    registry_record["developer_status"] = typed_registry_record.developer_status.value
     issue = ArtifactRecord.seal_issue(
         {
             "issue_id": "issue-1",
+            "family_id": family_decision.family_id,
             "stage": "submit_ready",
             "reduction_status": "reduced_valid",
             "certificate": _canonical_test_certificate(),
@@ -435,7 +491,25 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 "cluster_version_hash": clearance.cluster_version_hash,
                 "evidence_url": clearance.evidence_url,
                 "registry_signature": clearance.registry_signature,
+                "family_id": clearance.family_id,
+                "family_version_hash": clearance.family_version_hash,
+                "family_decision_hash": clearance.family_decision_hash,
             },
+            "family_decision": {
+                "issue_id": family_decision.issue_id,
+                "family_id": family_decision.family_id,
+                "fingerprint": asdict(family_decision.fingerprint),
+                "match_kind": family_decision.match_kind.value,
+                "matched_issue_id": family_decision.matched_issue_id,
+                "known_regression_match": family_decision.known_regression_match,
+                "known_regression_case_id": family_decision.known_regression_case_id,
+                "is_new_family": family_decision.is_new_family,
+                "family_members": family_decision.family_members,
+                "family_version_hash": family_decision.family_version_hash,
+                "decision_hash": family_decision.decision_hash,
+            },
+            "original_validation_hash": original_validation_hash,
+            "reduced_validation_hash": reduced_validation_hash,
             "validated_ratio": 4.0,
             "dbms_version": "dbms/1",
             "candidate_hash": original_candidate_hash,
@@ -582,8 +656,114 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         ),
         encoding="utf-8",
     )
-    exported = IssueCommands().export(issue=index_path, output=tmp_path / "developer.json")
+    export_status, export_result = _issue_export_with_timeout(
+        index_path,
+        tmp_path / "developer.json",
+    )
+    assert export_status == "ok", export_result
+    exported = Path(export_result)
     assert json.loads(exported.read_text(encoding="utf-8"))["reduction_status"] == "reduced_valid"
+
+    replayed_index = IssueFamilyIndex()
+    replayed_index.add(fingerprint, issue_id="issue-1")
+    duplicate_decision = replayed_index.add(fingerprint, issue_id="issue-2")
+    current_owner_decision = replayed_index.reissue_owner(
+        fingerprint,
+        issue_id="issue-1",
+    )
+    duplicate_record = replace(
+        typed_registry_record,
+        issue_id="issue-2",
+        stage=PipelineStage.REDUCED_VALID,
+        family_version_hash=duplicate_decision.family_version_hash,
+        family_decision_hash=duplicate_decision.decision_hash,
+    )
+    duplicate_payload = asdict(duplicate_record)
+    duplicate_payload["stage"] = duplicate_record.stage.value
+    duplicate_payload["developer_status"] = duplicate_record.developer_status.value
+    (run_dir / "issues" / "dedup_review.jsonl").write_text(
+        json.dumps(duplicate_payload) + "\n",
+        encoding="utf-8",
+    )
+
+    stale_status, stale_result = _issue_export_with_timeout(
+        index_path,
+        tmp_path / "stale-developer.json",
+    )
+    assert stale_status == "error"
+    assert "IssueGateError" in stale_result
+
+    current_owner_record = replace(
+        typed_registry_record,
+        family_version_hash=current_owner_decision.family_version_hash,
+        family_decision_hash=current_owner_decision.decision_hash,
+    )
+    current_clearance = IssueRegistry().duplicate_clearance_for_family(
+        current_owner_decision,
+        (current_owner_record, duplicate_record),
+    )
+    current_registry_payload = asdict(current_owner_record)
+    current_registry_payload["stage"] = current_owner_record.stage.value
+    current_registry_payload["developer_status"] = current_owner_record.developer_status.value
+    (run_dir / "issues" / "registry.jsonl").write_text(
+        json.dumps(current_registry_payload) + "\n",
+        encoding="utf-8",
+    )
+    repaired_issue = ArtifactRecord.seal_issue(
+        {
+            **issue_body,
+            "duplicate_clearance": {
+                "issue_id": current_clearance.issue_id,
+                "possible_duplicate": current_clearance.possible_duplicate,
+                "cluster_members": current_clearance.cluster_members,
+                "cluster_version_hash": current_clearance.cluster_version_hash,
+                "evidence_url": current_clearance.evidence_url,
+                "registry_signature": current_clearance.registry_signature,
+                "family_id": current_clearance.family_id,
+                "family_version_hash": current_clearance.family_version_hash,
+                "family_decision_hash": current_clearance.family_decision_hash,
+            },
+            "family_decision": {
+                "issue_id": current_owner_decision.issue_id,
+                "family_id": current_owner_decision.family_id,
+                "fingerprint": asdict(current_owner_decision.fingerprint),
+                "match_kind": current_owner_decision.match_kind.value,
+                "matched_issue_id": current_owner_decision.matched_issue_id,
+                "known_regression_match": current_owner_decision.known_regression_match,
+                "known_regression_case_id": current_owner_decision.known_regression_case_id,
+                "is_new_family": current_owner_decision.is_new_family,
+                "family_members": current_owner_decision.family_members,
+                "family_version_hash": current_owner_decision.family_version_hash,
+                "decision_hash": current_owner_decision.decision_hash,
+            },
+        }
+    )
+    repaired_issue_ref = asdict(
+        store.put_json("issue-1-repaired", repaired_issue.to_dict())
+    )
+    repaired_receipt = {**receipt, "issue_ref": repaired_issue_ref}
+    index_path.write_text(json.dumps(repaired_receipt), encoding="utf-8")
+    commit_path.write_text(
+        json.dumps(
+            {
+                **repaired_receipt,
+                "registry_record_hash": hashlib.sha256(
+                    json.dumps(
+                        current_registry_payload,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    repaired_status, repaired_result = _issue_export_with_timeout(
+        index_path,
+        tmp_path / "repaired-developer.json",
+    )
+    assert repaired_status == "ok", repaired_result
+    assert Path(repaired_result).is_file()
 
     forged_body = {key: value for key, value in issue.payload.items() if key != "issue_hash"}
     forged = ArtifactRecord.seal_issue({**forged_body, "final_validation_ref": original_ref})

@@ -1,142 +1,340 @@
-from graph_sym_perf.issues.registry import IssueRegistry, canonical_reduced_pair_hash
-from graph_sym_perf.validation.models import DeveloperStatus, PipelineStage, VersionedIssueRecord
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+
+import pytest
+
+from graph_sym_perf.issues.dedup import (
+    FamilyMatchKind,
+    FingerprintSubject,
+    IssueFamilyIndex,
+    KnownRegressionSignature,
+    fingerprint_issue,
+    known_regression_signature_from_manifest,
+)
 
 
-def _record(issue_id: str, query_a: str, query_b: str, **changes) -> VersionedIssueRecord:
-    values = {
-        "issue_id": issue_id,
-        "stage": PipelineStage.SUBMIT_READY,
-        "developer_status": DeveloperStatus.WAITING_REPLY,
+FIXTURES = Path(__file__).parents[2] / "fixtures" / "regressions" / "neo4j_bug001"
+
+
+def _subject(**changes: object) -> FingerprintSubject:
+    values: dict[str, object] = {
         "dbms": "neo4j",
-        "dbms_version": "2026.07",
-        "pair_hash": canonical_reduced_pair_hash(query_a, query_b),
-        "direction": "b",
-        "rule_id": "pattern_order_symmetry",
-        "detector_version": "d1",
-        "validator_version": "v3",
-        "reducer_version": "r2",
-        "rule_version": "rules-v4",
-        "discovered_at": "2026-07-10",
-        "site_class": "match",
-        "normalized_pattern": "two-node-pattern",
-        "normalized_predicate": "property-range",
-        "reduced_query_a": query_a,
-        "reduced_query_b": query_b,
+        "dbms_version": "2026.07.0-community",
+        "dbms_fingerprint": "c" * 64,
+        "canonical_rule_id": "pattern_order_symmetry",
+        "reduced_query_a": "MATCH (a:Person {age: 10}), (b:City) RETURN a, b",
+        "reduced_query_b": "MATCH (b:City), (a:Person {age: 10}) RETURN a, b",
+        "runtime_direction": "b",
+        "site_class": "match_pattern_component",
+        "submission_path": "relative",
+        "reduced_validation_phenotype": "stable-relative",
     }
     values.update(changes)
-    return VersionedIssueRecord(**values)
+    return FingerprintSubject(**values)
 
 
-def test_exact_pair_hash_normalizes_variables_but_preserves_constants_and_labels() -> None:
-    first = (
-        "MATCH (n:Person) WHERE n.age > 10 RETURN n",
-        "MATCH (n:Person) WHERE true AND n.age > 10 RETURN n",
-    )
-    renamed = (
-        "MATCH (person:Customer) WHERE person.age > 99 RETURN person",
-        "MATCH (person:Customer) WHERE true AND person.age > 99 RETURN person",
+def _structurally_equivalent_subject(**changes: object) -> FingerprintSubject:
+    return _subject(
+        reduced_query_a="MATCH (left:Customer {score: 99}), (right:Place) RETURN left, right",
+        reduced_query_b="MATCH (right:Place), (left:Customer {score: 99}) RETURN left, right",
+        **changes,
     )
 
-    variable_only = (
-        "MATCH (person:Person) WHERE person.age > 10 RETURN person",
-        "MATCH (person:Person) WHERE true AND person.age > 10 RETURN person",
+
+def test_exact_signature_binds_dbms_version_rule_raw_pair_order_and_direction() -> None:
+    baseline = fingerprint_issue(_subject())
+
+    mutations = (
+        _subject(dbms="memgraph"),
+        _subject(dbms_version="2026.08.0-community"),
+        _subject(dbms_fingerprint="d" * 64),
+        _subject(canonical_rule_id="predicate_order_symmetry"),
+        _subject(runtime_direction="a"),
+        _subject(
+            reduced_query_a=_subject().reduced_query_b,
+            reduced_query_b=_subject().reduced_query_a,
+        ),
     )
 
-    assert canonical_reduced_pair_hash(*first) == canonical_reduced_pair_hash(*variable_only)
-    assert canonical_reduced_pair_hash(*first) != canonical_reduced_pair_hash(*renamed)
+    assert baseline.verify()
+    assert all(fingerprint_issue(value).exact != baseline.exact for value in mutations)
 
 
-def test_exact_pair_hash_alpha_renames_path_node_and_relationship_variables() -> None:
-    first = (
-        "MATCH p=(n:Person)-[r:KNOWS]->(m:Person) RETURN p, r, n, m",
-        "MATCH p=(n:Person)-[r:KNOWS]->(m:Person) WHERE true RETURN p, r, n, m",
+def test_structural_signature_requires_complete_project_parser_coverage() -> None:
+    complete = fingerprint_issue(_subject())
+    parse_failure = fingerprint_issue(
+        _subject(reduced_query_a="OPTIONAL MATCH (a:Person) RETURN a")
     )
-    renamed = (
-        "MATCH route=(left:Person)-[edge:KNOWS]->(right:Person) RETURN route, edge, left, right",
-        "MATCH route=(left:Person)-[edge:KNOWS]->(right:Person) WHERE true RETURN route, edge, left, right",
-    )
-    changed_type = (
-        "MATCH route=(left:Person)-[edge:LIKES]->(right:Person) RETURN route, edge, left, right",
-        "MATCH route=(left:Person)-[edge:LIKES]->(right:Person) WHERE true RETURN route, edge, left, right",
+    partial_parse = fingerprint_issue(
+        _subject(reduced_query_b="MATCH (a:Person) CALL { RETURN a } RETURN a")
     )
 
-    assert canonical_reduced_pair_hash(*first) == canonical_reduced_pair_hash(*renamed)
-    assert canonical_reduced_pair_hash(*first) != canonical_reduced_pair_hash(*changed_type)
+    assert complete.structural is not None
+    assert parse_failure.structural is None
+    assert partial_parse.structural is None
 
 
-def test_same_normalized_pair_is_one_report_within_a_dbms_but_not_across_dbms() -> None:
-    first = _record("one", "MATCH (n:A) RETURN n", "MATCH (n:A) WHERE true RETURN n")
-    renamed = _record("two", "MATCH (x:A) RETURN x", "MATCH (x:A) WHERE true RETURN x")
-    other_dbms = _record(
-        "three",
-        "MATCH (x:B) RETURN x",
-        "MATCH (x:B) WHERE true RETURN x",
-        dbms="memgraph",
-    )
-    registry = IssueRegistry()
-    registry.record(first)
-
-    assert registry.exact_duplicate(renamed) == first
-    assert registry.exact_duplicate(other_dbms) is None
-
-
-def test_possible_duplicate_cluster_requires_manual_resolution_before_submission() -> None:
-    first = _record("one", "MATCH (n:A) RETURN n", "MATCH (n:A) WHERE true RETURN n")
-    similar = _record(
-        "two",
-        "MATCH (n:A)-[:R]->(m) RETURN n",
-        "MATCH (n:A)-[:R]->(m) WHERE true RETURN n",
-    )
-    registry = IssueRegistry()
-    registry.record(first)
-    registry.record(similar)
-
-    assert registry.possible_duplicate_ids("two") == ("one",)
-    assert registry.possible_duplicate_ids("one") == ("two",)
-    assert not registry.can_submit("one", None)
-    assert not registry.can_submit("two", None)
-
-    registry.resolve_possible_duplicate("two", distinct=True, evidence_url="https://example.test/review/2")
-
-    clearance = registry.duplicate_clearance("two")
-    assert clearance is not None
-    assert registry.can_submit("two", clearance)
-
-
-def test_adding_a_cluster_member_invalidates_previously_issued_clearance() -> None:
-    registry = IssueRegistry()
-    registry.record(_record("one", "MATCH (n:A) RETURN n", "MATCH (n:A) WHERE true RETURN n"))
-    registry.record(
-        _record(
-            "two",
-            "MATCH (n:A)-[:R]->(m) RETURN n",
-            "MATCH (n:A)-[:R]->(m) WHERE true RETURN n",
-        )
-    )
-    registry.resolve_possible_duplicate("two", distinct=True, evidence_url="https://example.test/review/2")
-    clearance = registry.duplicate_clearance("two")
-    assert clearance is not None and registry.can_submit("two", clearance)
-
-    registry.record(
-        _record(
-            "three",
-            "MATCH (n:A)-[:S]->(m) RETURN n",
-            "MATCH (n:A)-[:S]->(m) WHERE true RETURN n",
+@pytest.mark.parametrize(
+    "unsupported_relationship",
+    (
+        "[r:KNOWS nonsense]",
+        "[r:KNOWS {weight: 10} trailing]",
+        "[r:KNOWS*1..3 nonsense]",
+        "[r:KNOWS*]",
+    ),
+)
+def test_structural_signature_rejects_partially_parsed_relationship_text(
+    unsupported_relationship: str,
+) -> None:
+    candidate = fingerprint_issue(
+        _subject(
+            reduced_query_a=(
+                f"MATCH (a:Person)-{unsupported_relationship}->(b:Person) RETURN a, b"
+            )
         )
     )
 
-    assert not clearance.verify()
-    assert not registry.can_submit("two", clearance)
-    assert registry.duplicate_clearance("two") is None
+    assert candidate.structural is None
+    assert candidate.normalized_pair is None
 
 
-def test_bug_family_key_groups_cross_dbms_reports_without_collapsing_them() -> None:
-    neo4j = _record("one", "MATCH (n:A) RETURN n", "MATCH (n:A) WHERE true RETURN n")
-    memgraph = _record(
-        "two",
-        "MATCH (n:A) RETURN n",
-        "MATCH (n:A) WHERE true RETURN n",
-        dbms="memgraph",
+@pytest.mark.parametrize(
+    "relationship",
+    (
+        "[r:KNOWS {weight: 10}]",
+        "[:KNOWS*1..3]",
+    ),
+)
+def test_structural_signature_accepts_only_fully_covered_relationship_forms(
+    relationship: str,
+) -> None:
+    query = f"MATCH (a:Person)-{relationship}-(b:Person) RETURN a, b"
+
+    candidate = fingerprint_issue(
+        _subject(reduced_query_a=query, reduced_query_b=query)
     )
 
-    assert IssueRegistry.bug_family_key(neo4j) == IssueRegistry.bug_family_key(memgraph)
+    assert candidate.structural is not None
+    assert candidate.normalized_pair is not None
+
+
+def test_structural_normalization_abstracts_names_and_literals_only_after_parse() -> None:
+    first = fingerprint_issue(_subject())
+    changed_names_and_literal = fingerprint_issue(_structurally_equivalent_subject())
+
+    assert first.exact != changed_names_and_literal.exact
+    assert first.structural == changed_names_and_literal.structural
+    assert first.normalized_pair is not None
+    assert "PERSON" not in first.normalized_pair[0]
+    assert "AGE" not in first.normalized_pair[0]
+    assert "10" not in first.normalized_pair[0]
+
+
+def test_structural_property_value_variable_survives_alpha_renaming() -> None:
+    first_query = (
+        "MATCH (b), (c) MATCH (a:Person {peer: b}) RETURN a, b, c"
+    )
+    renamed_query = (
+        "MATCH (left), (right) "
+        "MATCH (person:Customer {link: left}) RETURN person, left, right"
+    )
+
+    first = fingerprint_issue(
+        _subject(reduced_query_a=first_query, reduced_query_b=first_query)
+    )
+    renamed = fingerprint_issue(
+        _subject(reduced_query_a=renamed_query, reduced_query_b=renamed_query)
+    )
+
+    assert first.structural is not None
+    assert first.structural == renamed.structural
+
+
+def test_structural_property_value_variable_keeps_its_bound_role() -> None:
+    first_query = (
+        "MATCH (b), (c) MATCH (a:Person {peer: b}) RETURN a, b, c"
+    )
+    different_binding = (
+        "MATCH (b), (c) MATCH (a:Person {peer: c}) RETURN a, b, c"
+    )
+
+    first = fingerprint_issue(
+        _subject(reduced_query_a=first_query, reduced_query_b=first_query)
+    )
+    changed = fingerprint_issue(
+        _subject(reduced_query_a=different_binding, reduced_query_b=different_binding)
+    )
+
+    assert first.structural is not None
+    assert first.structural != changed.structural
+
+
+def test_query_pair_reversal_is_not_a_structural_merge() -> None:
+    first = fingerprint_issue(_subject())
+    reversed_pair = fingerprint_issue(
+        _subject(
+            reduced_query_a=_subject().reduced_query_b,
+            reduced_query_b=_subject().reduced_query_a,
+        )
+    )
+
+    assert first.structural != reversed_pair.structural
+
+
+def test_exact_and_structural_matches_share_only_one_family() -> None:
+    index = IssueFamilyIndex()
+    first = index.add(fingerprint_issue(_subject()), issue_id="issue-1")
+    exact = index.add(fingerprint_issue(_subject()), issue_id="issue-2")
+    structural = index.add(
+        fingerprint_issue(_structurally_equivalent_subject()), issue_id="issue-3"
+    )
+
+    assert first.is_new_family
+    assert first.match_kind is FamilyMatchKind.FRESH
+    assert exact.family_id == first.family_id
+    assert exact.match_kind is FamilyMatchKind.EXACT
+    assert not exact.is_new_family
+    assert structural.family_id == first.family_id
+    assert structural.match_kind is FamilyMatchKind.STRUCTURAL
+    assert not structural.is_new_family
+
+
+def test_structural_merge_requires_every_conservative_dimension_to_match() -> None:
+    baseline = fingerprint_issue(_subject())
+    changes = (
+        {"canonical_rule_id": "predicate_order_symmetry"},
+        {"site_class": "where_boolean"},
+        {"runtime_direction": "a"},
+        {"submission_path": "absolute"},
+        {"reduced_validation_phenotype": "stable-absolute"},
+        {"dbms_version": "2026.08.0-community"},
+    )
+
+    for index_number, change in enumerate(changes):
+        index = IssueFamilyIndex()
+        first = index.add(baseline, issue_id=f"first-{index_number}")
+        second = index.add(
+            fingerprint_issue(_structurally_equivalent_subject(**change)),
+            issue_id=f"second-{index_number}",
+        )
+        assert first.family_id != second.family_id
+        assert second.is_new_family
+
+
+def test_missing_structural_signature_never_auto_merges() -> None:
+    index = IssueFamilyIndex()
+    first = index.add(
+        fingerprint_issue(_subject(reduced_query_a="OPTIONAL MATCH (a) RETURN a")),
+        issue_id="issue-1",
+    )
+    second = index.add(
+        fingerprint_issue(
+            _subject(
+                reduced_query_a="OPTIONAL MATCH (renamed) RETURN renamed",
+                reduced_query_b=_subject().reduced_query_b,
+            )
+        ),
+        issue_id="issue-2",
+    )
+
+    assert first.family_id != second.family_id
+    assert second.is_new_family
+
+
+def test_family_decision_is_content_bound_and_old_decision_becomes_stale() -> None:
+    index = IssueFamilyIndex()
+    first = index.add(fingerprint_issue(_subject()), issue_id="issue-1")
+    assert first.verify()
+
+    forged = copy.copy(first)
+    object.__setattr__(forged, "family_id", "f" * 64)
+    assert not forged.verify()
+
+    second = index.add(
+        fingerprint_issue(_structurally_equivalent_subject()), issue_id="issue-2"
+    )
+    assert not first.verify()
+    assert second.verify()
+    assert first.family_version_hash != second.family_version_hash
+
+
+def test_replaying_the_original_family_owner_reissues_current_decision() -> None:
+    index = IssueFamilyIndex()
+    original = index.add(fingerprint_issue(_subject()), issue_id="owner")
+    index.add(
+        fingerprint_issue(_structurally_equivalent_subject()), issue_id="duplicate"
+    )
+
+    replayed = index.reissue_owner(fingerprint_issue(_subject()), issue_id="owner")
+
+    assert not original.verify()
+    assert replayed.verify()
+    assert replayed.is_new_family
+    assert replayed.match_kind is FamilyMatchKind.FRESH
+    assert replayed.family_members == (
+        ("duplicate", fingerprint_issue(_structurally_equivalent_subject()).exact),
+        ("owner", fingerprint_issue(_subject()).exact),
+    )
+
+
+def test_known_bug001_signature_comes_from_strict_task9_manifest_and_is_excluded() -> None:
+    known = known_regression_signature_from_manifest(FIXTURES / "manifest.yaml")
+    candidate = fingerprint_issue(
+        _subject(
+            reduced_query_a=(FIXTURES / "fast_query.cypher").read_text(encoding="utf-8").strip(),
+            reduced_query_b=(FIXTURES / "slow_query.cypher").read_text(encoding="utf-8").strip(),
+            dbms_version="a-current-version-that-may-still-reproduce",
+        )
+    )
+    decision = IssueFamilyIndex(known_regressions=(known,)).add(
+        candidate, issue_id="rediscovery"
+    )
+
+    assert known.verify()
+    assert decision.verify()
+    assert decision.known_regression_match
+    assert decision.match_kind is FamilyMatchKind.KNOWN_REGRESSION
+    assert decision.family_id is None
+    assert not decision.is_new_family
+
+
+def test_known_regression_does_not_match_arbitrary_rule_direction_or_rewritten_pair() -> None:
+    known = known_regression_signature_from_manifest(FIXTURES / "manifest.yaml")
+    fast = (FIXTURES / "fast_query.cypher").read_text(encoding="utf-8").strip()
+    slow = (FIXTURES / "slow_query.cypher").read_text(encoding="utf-8").strip()
+
+    for index_number, candidate in enumerate(
+        (
+            _subject(reduced_query_a=fast, reduced_query_b=slow, canonical_rule_id="node_order_symmetry"),
+            _subject(reduced_query_a=fast, reduced_query_b=slow, runtime_direction="a"),
+            _subject(reduced_query_a=fast + " ", reduced_query_b=slow),
+        )
+    ):
+        decision = IssueFamilyIndex(known_regressions=(known,)).add(
+            fingerprint_issue(candidate), issue_id=f"fresh-{index_number}"
+        )
+        assert not decision.known_regression_match
+        assert decision.is_new_family
+
+
+def test_known_regression_signature_cannot_be_publicly_forged_or_tampered() -> None:
+    with pytest.raises(TypeError, match="strict Task-9 manifest"):
+        KnownRegressionSignature(
+            case_id="neo4j_bug001_pattern_order",
+            manifest_sha256="a" * 64,
+            dbms="neo4j",
+            canonical_rule_id="pattern_order_symmetry",
+            query_a_hash="b" * 64,
+            query_b_hash="c" * 64,
+            runtime_direction="b",
+            signature_hash="d" * 64,
+        )
+
+    issued = known_regression_signature_from_manifest(FIXTURES / "manifest.yaml")
+    tampered = copy.copy(issued)
+    object.__setattr__(tampered, "query_a_hash", "0" * 64)
+    assert not tampered.verify()
+    with pytest.raises(ValueError, match="known regression signature"):
+        IssueFamilyIndex(known_regressions=(tampered,))

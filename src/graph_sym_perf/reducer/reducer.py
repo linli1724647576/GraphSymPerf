@@ -538,6 +538,10 @@ def _report(
         screen_evidence=screen_evidence,
         minimality_proof=minimality_proof,
         final_validation=final_validation,
+        original_validation_hash=_evidence_hash(bundle.original_validation),
+        reduced_validation_hash=(
+            _evidence_hash(final_validation) if final_validation is not None else ""
+        ),
         reduced_candidate_hash=reduced_candidate_hash,
         validation_policy_hash=bundle.content_hash("validation_policy"),
         certificate_hash=bundle.content_hash("certificate"),

@@ -8,11 +8,26 @@ from graph_sym_perf.explanation.collector import collect_explanation
 from graph_sym_perf.explanation.models import ExplanationEvidence
 from graph_sym_perf.validation.models import PipelineStage, SubmitReadyIssue
 from graph_sym_perf.validation.promotion import promote
-from tests.unit.validation.test_promotion import _certificate, _duplicate_clearance, _reduction, _report
+from tests.unit.validation.test_promotion import (
+    _certificate,
+    _duplicate_clearance,
+    _family_decision,
+    _reduction,
+    _report,
+)
 
 
 def _issue() -> SubmitReadyIssue:
-    issue = promote(_report(), reduction_report=_reduction(), certificate=_certificate(), duplicate_clearance=_duplicate_clearance())
+    report = _report()
+    reduction = _reduction()
+    decision = _family_decision(report, reduction)
+    issue = promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=_duplicate_clearance(family_decision=decision),
+        family_decision=decision,
+    )
     assert issue is not None
     return issue
 
