@@ -2327,6 +2327,24 @@ def test_worker_validates_discovery_promotions_through_injected_runner(
     assert evidence["submission_path"] == "relative"
     assert evidence["pooled_ratio_ci_low"] >= 2.0
     assert "control_gate_hit" not in evidence
+    assert len(evidence["stage2_candidate_digest"]) == 64
+    sealed_report = evidence["report"]
+    assert sealed_report["validation_protocol"] == "independent-two-session-v1"
+    assert sealed_report["validation_policy"] == worker_module.to_jsonable(
+        asdict(runner.calls[0][0].validation_policy)
+    )
+    assert sealed_report["equivalence"] == {
+        "complete_result": True,
+        "equivalent": True,
+        "reason_codes": [],
+    }
+    assert len(sealed_report["sessions"]) == 2
+    assert all(
+        len(session["evidence"]["paired_samples"]) == 20
+        and len(session["negative_controls"]) == 2
+        and session["lifecycle"]["connection_id"]
+        for session in sealed_report["sessions"]
+    )
 
     class _MustNotRunValidation:
         def run_session(self, *_args, **_kwargs):
@@ -2355,8 +2373,23 @@ def test_worker_validates_discovery_promotions_through_injected_runner(
         "content_hash",
         "candidate_hash",
         "stage2_evidence_digest",
+        "stage2_candidate_digest",
         "stream",
         "entry_identity",
+        "report_equivalence",
+        "report_process_identity",
+        "report_negative_control_invalid",
+        "report_negative_control_empty",
+        "report_negative_control_schedule",
+        "report_validation_policy",
+        "report_validation_protocol",
+        "report_metadata",
+        "report_missing_equivalence",
+        "report_non_finite",
+        "report_runtime_enum",
+        "report_process_type",
+        "legacy_schema",
+        "raw_samples_and_summary",
     ),
 )
 def test_worker_validation_resume_rejects_tampered_identity_bound_artifact(
@@ -2383,10 +2416,91 @@ def test_worker_validation_resume_rejects_tampered_identity_bound_artifact(
     path = next(tmp_path.glob("entries/*/validation/*.json"))
     payload = json.loads(path.read_text(encoding="utf-8"))
     body = {key: value for key, value in payload.items() if key != "content_hash"}
+    report = body["report"]
     if tamper == "content_hash":
         payload["content_hash"] = "0" * 64
     elif tamper == "entry_identity":
         body["entry_identity"]["entry_id"] = "foreign-entry"
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "report_equivalence":
+        report["equivalence"]["equivalent"] = False
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "report_process_identity":
+        for sessions in (body["sessions"], report["sessions"]):
+            sessions[1]["process_id"] = sessions[0]["process_id"]
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper.startswith("report_negative_control_"):
+        control_index = 0 if tamper.endswith("invalid") else 1
+        for sessions in (body["sessions"], report["sessions"]):
+            control = sessions[0]["negative_controls"][control_index]
+            if tamper.endswith("invalid"):
+                control["verdict"] = "invalid"
+            elif tamper.endswith("empty"):
+                control["paired_samples"] = []
+            else:
+                control["paired_samples"][10]["order"] = "BA"
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "report_validation_policy":
+        report["validation_policy"]["noise_floor_ms"] = 999.0
+        report["validation_policy"]["timer_resolution_ms"] = 999.0
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "report_validation_protocol":
+        report["validation_protocol"] = "forged-validation-protocol"
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "report_metadata":
+        report["metadata"]["absolute_also_passed"] = True
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "report_missing_equivalence":
+        report.pop("equivalence")
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "report_non_finite":
+        for sessions in (body["sessions"], report["sessions"]):
+            sessions[0]["evidence"]["paired_samples"][0]["a_ms"] = float("nan")
+        payload = {**body, "content_hash": "0" * 64}
+    elif tamper == "report_runtime_enum":
+        for sessions in (body["sessions"], report["sessions"]):
+            sessions[0]["evidence"]["verdict"] = 1
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "report_process_type":
+        for sessions in (body["sessions"], report["sessions"]):
+            sessions[0]["process_id"] = "10001"
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "legacy_schema":
+        body["schema_version"] = 1
+        payload = {**body, "content_hash": canonical_hash(body)}
+    elif tamper == "raw_samples_and_summary":
+        for sessions in (body["sessions"], report["sessions"]):
+            for session in sessions:
+                for sample in session["evidence"]["paired_samples"]:
+                    sample["b_ms"] = 400.0
+                session["evidence"].update(
+                    {
+                        "median_ratio": 40.0,
+                        "median_delta_ms": 390.0,
+                        "ci_ratio_low": 40.0,
+                        "ci_ratio_high": 40.0,
+                        "ci_delta_low_ms": 390.0,
+                        "ci_delta_high_ms": 390.0,
+                    }
+                )
+        report.update(
+            {
+                "validated_ratio": 40.0,
+                "pooled_delta_ms": 390.0,
+                "pooled_ratio_ci_low": 40.0,
+                "pooled_delta_ci_low_ms": 390.0,
+                "magnitude_stability": "stable",
+            }
+        )
+        report["metadata"]["absolute_also_passed"] = True
+        body.update(
+            {
+                "validated_ratio": 40.0,
+                "pooled_delta_ms": 390.0,
+                "pooled_ratio_ci_low": 40.0,
+                "pooled_delta_ci_low_ms": 390.0,
+            }
+        )
         payload = {**body, "content_hash": canonical_hash(body)}
     else:
         body[tamper] = "0" * 64 if tamper != "stream" else "control"
@@ -2409,7 +2523,64 @@ def test_worker_validation_resume_rejects_tampered_identity_bound_artifact(
         resumed(entry)
 
     assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
-    assert "validation outcome identity" in str(captured.value)
+    assert "validation" in str(captured.value)
+
+
+def test_worker_validation_resume_rejects_rehashed_forged_pass_without_sessions(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        validation_runner_factory=lambda _entry: _IndependentValidationRunner(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["validation_passed_pairs"] == 1
+
+    path = next(tmp_path.glob("entries/*/validation/*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    body.pop("sessions")
+    body.update(
+        {
+            "stage": "validation_passed",
+            "submission_path": "relative",
+            "validated_ratio": 999.0,
+            "pooled_delta_ms": 999.0,
+            "pooled_ratio_ci_low": 999.0,
+            "pooled_delta_ci_low_ms": 999.0,
+        }
+    )
+    path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    class _MustNotRunValidation:
+        def run_session(self, *_args, **_kwargs):
+            raise AssertionError("forged validation evidence must fail before replay")
+
+    resumed = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        validation_runner_factory=lambda _entry: _MustNotRunValidation(),
+    )
+    resumed.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        resumed(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
 def test_worker_control_validation_is_diagnostic_and_never_promotes_or_ranks(

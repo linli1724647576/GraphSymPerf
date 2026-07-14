@@ -6,6 +6,9 @@ import pytest
 
 from graph_sym_perf.adapters.base import DBMSFingerprint
 from graph_sym_perf.core import ExecutionResult, QueryTimeoutError, TargetSystem
+from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream
+from graph_sym_perf.experiment.spec import load_experiment_spec
+from graph_sym_perf.experiment.worker import _EntryValidationAdapterFactory
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
@@ -22,6 +25,7 @@ class LifecycleAdapter:
         self.candidate = candidate
         self.connection_identity = f"driver-{os.getpid()}"
         self._graph_fingerprint = ""
+        self._runtime_calls = 0
 
     def connectivity_check(self):
         if self.candidate.resolved_config.get("mode") == "hang":
@@ -31,6 +35,8 @@ class LifecycleAdapter:
 
     def execute(self, query, parameters, query_kind, *, max_rows=None, timeout_seconds=None):
         self._event(query_kind)
+        if query_kind == "runtime":
+            self._runtime_calls += 1
         mode = self.candidate.resolved_config.get("mode")
         if query_kind == "validation_graph_nodes":
             properties = {"id": 2 if mode == "graph_mismatch" else 1}
@@ -45,7 +51,12 @@ class LifecycleAdapter:
             raise RuntimeError("forced execution error")
         if mode == "equivalence_timeout" and is_b and query_kind == "validation_equivalence_b":
             raise QueryTimeoutError("forced equivalence timeout")
-        if mode == "target_timeout" and is_b and query_kind == "runtime":
+        if (
+            mode == "target_timeout"
+            and is_b
+            and query_kind == "runtime"
+            and self._runtime_calls > 80
+        ):
             raise QueryTimeoutError("forced runtime timeout")
         elapsed = 40.0 if query == self.candidate.pair.query_b and query_kind == "runtime" else 10.0
         rows = () if query_kind == "validation_reset" else ({"value": 2 if mode == "typed_mismatch" and is_b else 1},)
@@ -87,6 +98,89 @@ def _crashing_adapter_factory(_candidate: CandidateBundle):
 
 def _raising_adapter_factory(_candidate: CandidateBundle):
     raise RuntimeError("adapter factory exploded")
+
+
+class ProductionFactoryContractAdapter:
+    def __init__(self, event_log: str) -> None:
+        self.event_log = Path(event_log)
+        self.connection_identity = f"production-factory-{os.getpid()}"
+
+    def connectivity_check(self):
+        return True, "connected"
+
+    def reset_graph(self, *, timeout_seconds=None) -> bool:
+        return False
+
+    def load_gdsmith_graph(self, statements):
+        self._event("load")
+
+    def execute(self, query, parameters, query_kind, *, max_rows=None, timeout_seconds=None):
+        if query_kind == "validation_graph_nodes":
+            rows = ({"node_id": 1, "labels": ["Person"], "properties": {"id": 1}},)
+        elif query_kind == "validation_graph_relationships":
+            rows = ()
+        elif query_kind == "validation_reset":
+            rows = ()
+        else:
+            rows = ({"value": 1},)
+        elapsed = 40.0 if "WHERE true" in query and query_kind == "runtime" else 10.0
+        return ExecutionResult(
+            TargetSystem.NEO4J,
+            query_kind,
+            rows,
+            elapsed,
+            {"truncated": False},
+        )
+
+    def dbms_fingerprint(self):
+        return DBMSFingerprint("versioned-dbms-fingerprint")
+
+    def health_event(self):
+        return None
+
+    def close(self):
+        self._event("close")
+
+    def _event(self, value: str) -> None:
+        with self.event_log.open("a", encoding="utf-8") as handle:
+            handle.write(f"adapter:{os.getpid()}:{value}\n")
+
+
+def _contract_create_adapter(system, run_config, environment, *, allow_create):
+    event_log = str(environment["CONTRACT_EVENT_LOG"])
+    with Path(event_log).open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"factory:{os.getpid()}:{system.target.value}:"
+            f"{allow_create}:{run_config.dataset.seed}\n"
+        )
+    return ProductionFactoryContractAdapter(event_log)
+
+
+def _contract_failing_create_adapter(system, run_config, environment, *, allow_create):
+    del system, run_config, environment, allow_create
+    raise RuntimeError("production adapter creation failed")
+
+
+def _contract_entry() -> RulePlanEntry:
+    return RulePlanEntry(
+        entry_id="p1:neo4j:discovery:constant_true_disjunction:256:0",
+        phase=CampaignPhase.P1,
+        target=TargetSystem.NEO4J,
+        rule_id="constant_true_disjunction",
+        family="bool",
+        tier="core",
+        graph_scale=256,
+        shard_index=0,
+        shard_seed=7,
+        accepted_pair_quota=1,
+        max_generated_seed_budget=2,
+        max_variants_per_seed=1,
+        proof_version="1",
+        query_timeout_seconds=30,
+        max_entry_runtime_seconds=600,
+        measurement_protocol_id="paired-runtime-v1",
+        stream=RuleStream.DISCOVERY,
+    )
 
 
 def _certificate() -> SafetyCertificate:
@@ -257,6 +351,52 @@ def test_spawned_runner_closes_adapter_when_session_work_fails(tmp_path: Path) -
     )
 
     assert f"{event_log.read_text(encoding='utf-8').split(':', 1)[0]}:close\n" in event_log.read_text(encoding="utf-8")
+
+
+def test_production_entry_factory_is_picklable_and_wires_spawned_validation(
+    tmp_path: Path,
+) -> None:
+    event_log = tmp_path / "production-factory.log"
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    factory = _EntryValidationAdapterFactory(
+        spec,
+        {"CONTRACT_EVENT_LOG": str(event_log)},
+        _contract_entry(),
+        adapter_creator=_contract_create_adapter,
+    )
+
+    report = IssueValidator().validate(
+        _bundle(tmp_path / "unused.log"),
+        SpawnedValidationSessionRunner(factory),
+    )
+
+    assert report.stage.value == "validation_passed"
+    lines = event_log.read_text(encoding="utf-8").splitlines()
+    factory_lines = [line for line in lines if line.startswith("factory:")]
+    assert len(factory_lines) == 2
+    assert len({line.split(":")[1] for line in factory_lines}) == 2
+    assert all(line.endswith(":neo4j:True:7") for line in factory_lines)
+
+
+def test_production_entry_factory_child_creation_failure_fails_closed(
+    tmp_path: Path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    factory = _EntryValidationAdapterFactory(
+        spec,
+        {},
+        _contract_entry(),
+        adapter_creator=_contract_failing_create_adapter,
+    )
+
+    with pytest.raises(RuntimeError, match="VALIDATION_SESSION_FAILED.*production adapter creation failed"):
+        SpawnedValidationSessionRunner(factory).run_session(
+            _bundle(tmp_path / "unused.log"),
+            1,
+            expected_slow_query="b",
+            noise_floor_ms=0.0,
+            timer_resolution_ms=0.001,
+        )
 
 
 def test_subprocess_runner_prefers_database_level_reset_when_supported(tmp_path: Path) -> None:

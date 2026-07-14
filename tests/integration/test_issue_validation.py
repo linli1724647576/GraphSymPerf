@@ -220,6 +220,11 @@ class TimeoutSessionRunner(FakeIndependentRunner):
                 PairedSample(sample.order, None, sample.b_ms, False, sample.b_timeout)
                 for sample in samples
             )
+        if self.mode == "target_schedule":
+            samples = (
+                replace(samples[0], order="BA"),
+                *samples[1:],
+            )
         evidence = replace(
             session.evidence,
             verdict=RuntimeVerdict.INCONCLUSIVE,
@@ -238,7 +243,28 @@ class TimeoutSessionRunner(FakeIndependentRunner):
             session = replace(session, health_event="dbms_restart")
         if self.mode == "graph_mismatch" and session_number == 2:
             session = replace(session, graph_fingerprint="different-graph")
-        return equivalence, replace(session, evidence=evidence)
+        controls = session.negative_controls
+        if self.mode == "control_invalid":
+            controls = (replace(controls[0], verdict=RuntimeVerdict.INVALID), controls[1])
+        elif self.mode == "control_empty":
+            controls = (controls[0], replace(controls[1], paired_samples=()))
+        elif self.mode == "control_short":
+            controls = (
+                controls[0],
+                replace(controls[1], paired_samples=controls[1].paired_samples[:-1]),
+            )
+        elif self.mode == "control_schedule":
+            controls = (
+                controls[0],
+                replace(
+                    controls[1],
+                    paired_samples=(
+                        replace(controls[1].paired_samples[0], order="BA"),
+                        *controls[1].paired_samples[1:],
+                    ),
+                ),
+            )
+        return equivalence, replace(session, evidence=evidence, negative_controls=controls)
 
 
 def test_same_side_timeout_confirmation_stays_diagnostic_inconclusive() -> None:
@@ -258,6 +284,11 @@ def test_same_side_timeout_confirmation_stays_diagnostic_inconclusive() -> None:
         "both_timeout",
         "partial_timeout",
         "other_incomplete",
+        "target_schedule",
+        "control_invalid",
+        "control_empty",
+        "control_short",
+        "control_schedule",
         "health",
         "graph_mismatch",
     ),
@@ -270,6 +301,17 @@ def test_timeout_confirmation_fails_closed_on_direction_or_identity_health_misma
     assert report.submission_path is None
     assert report.metadata.get("timeout_validation_confirmed", False) is False
     assert not issue_validation_report_is_complete(report)
+
+
+def test_timeout_confirmation_requires_the_frozen_discovery_direction() -> None:
+    report = IssueValidator().validate(
+        _bundle(discovery_slow_query="a"),
+        TimeoutSessionRunner(),
+    )
+
+    assert report.stage.value == "inconclusive"
+    assert report.submission_path is None
+    assert report.metadata["timeout_validation_confirmed"] is False
 
 
 def test_two_fresh_sessions_are_required_for_validation_passed() -> None:

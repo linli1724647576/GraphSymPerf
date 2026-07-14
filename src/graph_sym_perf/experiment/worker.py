@@ -120,9 +120,13 @@ from graph_sym_perf.transforms.safety_points import (
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.models import (
     CandidateBundle,
+    EquivalenceEvidence,
     PipelineStage,
+    SessionLifecycle,
+    ValidationSession,
     ValidationPolicy,
 )
+from graph_sym_perf.validation.evidence import issue_validation_report_is_complete
 from graph_sym_perf.validation.session_runner import SpawnedValidationSessionRunner
 from graph_sym_perf.validation.validator import IssueValidator
 from graph_sym_perf.workload.acceptance import AcceptedPairBuilder
@@ -170,10 +174,11 @@ class _EntryValidationAdapterFactory:
     spec: ValidatedYieldExperimentSpec
     environment: Mapping[str, str]
     entry: RulePlanEntry
+    adapter_creator: Callable[..., Any] = create_adapter
 
     def __call__(self, _candidate: CandidateBundle) -> Any:
         run_config = _entry_run_config(self.spec, self.entry)
-        return create_adapter(
+        return self.adapter_creator(
             run_config.systems[0],
             run_config,
             self.environment,
@@ -2146,11 +2151,15 @@ class RuntimeFirstShardWorker:
                 "stage2_evidence_digest": canonical_hash(
                     to_jsonable(asdict(stage2_candidate.evidence))
                 ),
+                "stage2_candidate_digest": canonical_hash(
+                    to_jsonable(asdict(stage2_candidate))
+                ),
                 "stream": entry.stream.value,
             }
             existing_outcome = _load_stage2_validation_outcome(
                 validation_path,
                 expected_identity=expected_identity,
+                candidate=candidate,
             )
             if existing_outcome is not None:
                 outcomes.append(existing_outcome)
@@ -2175,7 +2184,7 @@ class RuntimeFirstShardWorker:
                     f"independent validation process failed: {exc}",
                 ) from exc
             outcome: dict[str, object] = {
-                "schema_version": 1,
+                "schema_version": 2,
                 **expected_identity,
                 "stage": report.stage.value,
                 "reason_codes": list(report.reason_codes),
@@ -2189,6 +2198,7 @@ class RuntimeFirstShardWorker:
                     else None
                 ),
                 "sessions": to_jsonable(asdict(report)["sessions"]),
+                "report": to_jsonable(asdict(report)),
             }
             if entry.stream is RuleStream.CONTROL:
                 outcome.update(
@@ -4535,6 +4545,14 @@ def _runtime_evidence_from_payload(payload: object) -> RuntimeEvidence:
         RuntimeEvidence.__dataclass_fields__
     ):
         raise ValueError("RuntimeEvidence shape differs")
+    verdict = payload["verdict"]
+    if not isinstance(verdict, str):
+        raise ValueError("RuntimeEvidence verdict must be a string enum value")
+    reasons = payload["reason_codes"]
+    if not isinstance(reasons, list) or any(
+        not isinstance(reason, str) for reason in reasons
+    ):
+        raise ValueError("RuntimeEvidence reasons are malformed")
     samples = payload["paired_samples"]
     if not isinstance(samples, list) or any(
         not isinstance(sample, dict)
@@ -4542,12 +4560,64 @@ def _runtime_evidence_from_payload(payload: object) -> RuntimeEvidence:
         for sample in samples
     ):
         raise ValueError("paired samples are malformed")
+    for sample in samples:
+        if sample["order"] not in {"AB", "BA"}:
+            raise ValueError("paired sample order is malformed")
+        if type(sample["a_timeout"]) is not bool or type(sample["b_timeout"]) is not bool:
+            raise ValueError("paired sample timeout flags must be booleans")
+        for field in ("a_ms", "b_ms"):
+            value = sample[field]
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError("paired sample timings must be finite non-negative numbers")
+    optional_numeric_fields = {
+        "median_ratio",
+        "median_delta_ms",
+        "ci_ratio_low",
+        "ci_ratio_high",
+        "relative_mad",
+        "timeout_lower_bound_ratio",
+        "median_a_ms",
+        "median_b_ms",
+        "ci_delta_low_ms",
+        "ci_delta_high_ms",
+    }
+    for field in optional_numeric_fields | {"direction_consistency"}:
+        value = payload[field]
+        if value is None and field in optional_numeric_fields:
+            continue
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"RuntimeEvidence {field} must be finite")
+    for field in (
+        "query_a_hash",
+        "query_b_hash",
+    ):
+        if not isinstance(payload[field], str):
+            raise ValueError(f"RuntimeEvidence {field} must be a string")
+    for field in (
+        "slow_query",
+        "graph_snapshot_hash",
+        "dbms_fingerprint",
+        "measurement_source",
+        "measurement_protocol",
+        "slower_side",
+    ):
+        if payload[field] is not None and not isinstance(payload[field], str):
+            raise ValueError(f"RuntimeEvidence {field} must be a string or null")
     return RuntimeEvidence(
         **{
             **payload,
-            "verdict": RuntimeVerdict(str(payload["verdict"])),
+            "verdict": RuntimeVerdict(verdict),
             "paired_samples": tuple(PairedSample(**sample) for sample in samples),
-            "reason_codes": tuple(payload["reason_codes"]),
+            "reason_codes": tuple(reasons),
         }
     )
 
@@ -4630,6 +4700,7 @@ def _load_stage2_validation_outcome(
     path: Path,
     *,
     expected_identity: Mapping[str, object],
+    candidate: CandidateBundle,
 ) -> dict[str, object] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -4652,26 +4723,182 @@ def _load_stage2_validation_outcome(
         PipelineStage.INCONCLUSIVE.value,
         PipelineStage.INVALID.value,
     }
+    report_payload = body.get("report")
+    required = {
+        *expected_identity,
+        "pooled_delta_ci_low_ms",
+        "pooled_delta_ms",
+        "pooled_ratio_ci_low",
+        "reason_codes",
+        "report",
+        "schema_version",
+        "sessions",
+        "stage",
+        "submission_path",
+        "validated_ratio",
+    }
+    control_fields = {"control_gate_hit", "control_validation_pass"}
+    try:
+        content_hash_matches = payload.get("content_hash") == canonical_hash(body)
+    except (TypeError, ValueError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "validation outcome contains non-canonical evidence",
+        ) from exc
     if (
-        payload.get("content_hash") != canonical_hash(body)
-        or body.get("schema_version") != 1
+        not content_hash_matches
+        or body.get("schema_version") != 2
         or body.get("stage") not in terminal_stages
+        or not isinstance(report_payload, dict)
+        or not isinstance(body.get("sessions"), list)
+        or not required <= set(body) <= required | control_fields
+        or report_payload.get("sessions") != body["sessions"]
         or any(body.get(key) != to_jsonable(value) for key, value in expected_identity.items())
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
             "validation outcome identity or pooled evidence hash differs",
         )
-    if body.get("stage") == PipelineStage.VALIDATION_PASSED.value and (
-        body.get("submission_path") not in {"relative", "absolute"}
-        or body.get("pooled_ratio_ci_low") is None
-        or body.get("pooled_delta_ci_low_ms") is None
+    duplicate_fields = {
+        "stage": "stage",
+        "reason_codes": "reason_codes",
+        "validated_ratio": "validated_ratio",
+        "pooled_delta_ms": "pooled_delta_ms",
+        "pooled_ratio_ci_low": "pooled_ratio_ci_low",
+        "pooled_delta_ci_low_ms": "pooled_delta_ci_low_ms",
+        "submission_path": "submission_path",
+    }
+    if any(
+        body.get(outcome_key) != report_payload.get(report_key)
+        for outcome_key, report_key in duplicate_fields.items()
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-            "validation pass is missing its pooled submission evidence",
+            "validation outcome summary differs from its sealed typed report",
+        )
+    try:
+        equivalence = _equivalence_evidence_from_payload(
+            report_payload.get("equivalence")
+        )
+        sessions = _validation_sessions_from_payload(report_payload.get("sessions"))
+        recomputed = IssueValidator().validate(
+            candidate,
+            _SealedValidationReplayRunner(equivalence, sessions),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "validation typed report cannot be reconstructed",
+        ) from exc
+    if to_jsonable(asdict(recomputed)) != report_payload or (
+        recomputed.stage is PipelineStage.VALIDATION_PASSED
+        and not issue_validation_report_is_complete(recomputed)
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "validation typed report differs from canonical raw-session replay",
         )
     return body
+
+
+@dataclass(frozen=True)
+class _SealedValidationReplayRunner:
+    equivalence: EquivalenceEvidence
+    sessions: tuple[ValidationSession, ValidationSession]
+
+    def run_session(
+        self,
+        candidate: CandidateBundle,
+        session_number: int,
+        *,
+        expected_slow_query: str,
+        noise_floor_ms: float,
+        timer_resolution_ms: float,
+    ) -> tuple[EquivalenceEvidence, ValidationSession]:
+        if (
+            expected_slow_query != candidate.discovery_slow_query
+            or noise_floor_ms != candidate.validation_policy.noise_floor_ms
+            or timer_resolution_ms != candidate.validation_policy.timer_resolution_ms
+            or session_number not in {1, 2}
+        ):
+            raise ValueError("sealed validation replay policy differs")
+        return self.equivalence, self.sessions[session_number - 1]
+
+
+def _equivalence_evidence_from_payload(payload: object) -> EquivalenceEvidence:
+    if not isinstance(payload, dict) or set(payload) != set(
+        EquivalenceEvidence.__dataclass_fields__
+    ):
+        raise ValueError("EquivalenceEvidence shape differs")
+    if type(payload["equivalent"]) is not bool or type(payload["complete_result"]) is not bool:
+        raise ValueError("EquivalenceEvidence flags must be booleans")
+    reasons = payload["reason_codes"]
+    if not isinstance(reasons, list) or any(not isinstance(reason, str) for reason in reasons):
+        raise ValueError("EquivalenceEvidence reasons are malformed")
+    return EquivalenceEvidence(
+        payload["equivalent"],
+        payload["complete_result"],
+        tuple(reasons),
+    )
+
+
+def _validation_sessions_from_payload(
+    payload: object,
+) -> tuple[ValidationSession, ValidationSession]:
+    if not isinstance(payload, list) or len(payload) != 2:
+        raise ValueError("validation report requires exactly two sessions")
+    sessions = tuple(_validation_session_from_payload(value) for value in payload)
+    return sessions[0], sessions[1]
+
+
+def _validation_session_from_payload(payload: object) -> ValidationSession:
+    if not isinstance(payload, dict) or set(payload) != set(
+        ValidationSession.__dataclass_fields__
+    ):
+        raise ValueError("ValidationSession shape differs")
+    controls = payload["negative_controls"]
+    if not isinstance(controls, list):
+        raise ValueError("ValidationSession negative controls are malformed")
+    lifecycle_payload = payload["lifecycle"]
+    if not isinstance(lifecycle_payload, dict) or set(lifecycle_payload) != set(
+        SessionLifecycle.__dataclass_fields__
+    ):
+        raise ValueError("ValidationSession lifecycle is malformed")
+    if (
+        not isinstance(payload["session_id"], str)
+        or not payload["session_id"]
+        or type(payload["process_id"]) is not int
+        or payload["process_id"] <= 0
+        or not isinstance(payload["graph_fingerprint"], str)
+        or not isinstance(payload["dbms_fingerprint"], str)
+        or (
+            payload["health_event"] is not None
+            and not isinstance(payload["health_event"], str)
+        )
+        or (
+            payload["schedule_seed"] is not None
+            and type(payload["schedule_seed"]) is not int
+        )
+    ):
+        raise ValueError("ValidationSession scalar fields are malformed")
+    lifecycle_flags = set(SessionLifecycle.__dataclass_fields__) - {"connection_id"}
+    if any(type(lifecycle_payload[field]) is not bool for field in lifecycle_flags) or not isinstance(
+        lifecycle_payload["connection_id"], str
+    ):
+        raise ValueError("ValidationSession lifecycle field types are malformed")
+    return ValidationSession(
+        session_id=payload["session_id"],
+        process_id=payload["process_id"],
+        graph_fingerprint=payload["graph_fingerprint"],
+        dbms_fingerprint=payload["dbms_fingerprint"],
+        evidence=_runtime_evidence_from_payload(payload["evidence"]),
+        negative_controls=tuple(
+            _runtime_evidence_from_payload(control) for control in controls
+        ),
+        health_event=payload["health_event"],
+        lifecycle=SessionLifecycle(**lifecycle_payload),
+        schedule_seed=payload["schedule_seed"],
+    )
 
 
 def _stage2_entry_identity(entry: RulePlanEntry) -> dict[str, object]:

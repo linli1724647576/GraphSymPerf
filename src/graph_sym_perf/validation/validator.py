@@ -132,7 +132,7 @@ class IssueValidator:
             return _bound_report(candidate, PipelineStage.REJECTED, EquivalenceEvidence(False, False, ("session_fingerprint_or_health_failure",)), sessions, discovery_ratio, None, "unvalidated", ("session_fingerprint_or_health_failure",))
         evidences = tuple(session.evidence for session in sessions)
         if any(not _eligible_for_combined_gate(evidence) for evidence in evidences):
-            timeout_confirmed = _timeout_validation_confirmed(sessions)
+            timeout_confirmed = _timeout_validation_confirmed(candidate, sessions)
             return _bound_report(
                 candidate,
                 PipelineStage.INCONCLUSIVE,
@@ -296,7 +296,10 @@ def _session_summary(session: ValidationSession, slow_query: str) -> tuple[float
     )
 
 
-def _timeout_validation_confirmed(sessions: tuple[ValidationSession, ...]) -> bool:
+def _timeout_validation_confirmed(
+    candidate: CandidateBundle,
+    sessions: tuple[ValidationSession, ...],
+) -> bool:
     if len(sessions) != 2:
         return False
     timeout_sides: list[str] = []
@@ -311,7 +314,7 @@ def _timeout_validation_confirmed(sessions: tuple[ValidationSession, ...]) -> bo
             len(samples) != 20
             or sum(sample.order == "AB" for sample in samples) != 10
             or sum(sample.order == "BA" for sample in samples) != 10
-            or len(session.negative_controls) != 2
+            or not _timeout_negative_controls_complete(session)
         ):
             return False
         a_only = all(
@@ -331,7 +334,30 @@ def _timeout_validation_confirmed(sessions: tuple[ValidationSession, ...]) -> bo
         if a_only == b_only:
             return False
         timeout_sides.append("a" if a_only else "b")
-    return timeout_sides[0] == timeout_sides[1]
+    return (
+        timeout_sides[0]
+        == timeout_sides[1]
+        == candidate.discovery_slow_query
+    )
+
+
+def _timeout_negative_controls_complete(session: ValidationSession) -> bool:
+    if len(session.negative_controls) != 2:
+        return False
+    return all(
+        control.verdict is RuntimeVerdict.PASS
+        and len(control.paired_samples) == 20
+        and sum(sample.order == "AB" for sample in control.paired_samples) == 10
+        and sum(sample.order == "BA" for sample in control.paired_samples) == 10
+        and all(
+            sample.a_ms is not None
+            and sample.b_ms is not None
+            and not sample.a_timeout
+            and not sample.b_timeout
+            for sample in control.paired_samples
+        )
+        for control in session.negative_controls
+    )
 
 
 def _valid_session_protocol(session: ValidationSession) -> bool:

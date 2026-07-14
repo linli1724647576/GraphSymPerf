@@ -66,7 +66,9 @@ def issue_validation_report_is_complete(report: object) -> bool:
         or len(session.negative_controls) != 2
         or any(
             control.verdict is not RuntimeVerdict.PASS
-            or not control.paired_samples
+            or len(control.paired_samples) != 20
+            or sum(sample.order == "AB" for sample in control.paired_samples) != 10
+            or sum(sample.order == "BA" for sample in control.paired_samples) != 10
             or any(
                 sample.a_ms is None
                 or sample.b_ms is None
