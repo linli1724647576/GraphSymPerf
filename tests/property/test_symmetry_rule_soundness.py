@@ -26,3 +26,21 @@ def test_core_pattern_order_does_not_cross_scope_boundaries(query: str) -> None:
         _case(query), TransformConfig(enabled_rules=("pattern_order_symmetry",))
     )
     assert not family.variants
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_reason"),
+    (
+        ("MATCH (a:L0), (b:L1) RETURN rand()", "RULE_NOT_APPLICABLE"),
+        ("MATCH (a:L0) RETURN a", "NO_REORDERABLE_PATTERN_LIST"),
+    ),
+)
+def test_core_pattern_order_skip_reason_preserves_gate_failures(
+    query: str,
+    expected_reason: str,
+) -> None:
+    family = generate_symmetry_family(
+        _case(query), TransformConfig(enabled_rules=("pattern_order_symmetry",))
+    )
+    assert not family.variants
+    assert family.skipped_variants[0].skip_reason == expected_reason

@@ -40,6 +40,8 @@ def test_pattern_order_symmetry_reorders_one_comma_pattern_list() -> None:
     assert len(family.variants) == 1
     assert family.variants[0].query.startswith("MATCH (b:L1), (a:L0)")
     assert family.variants[0].metadata["semantic_proof"]["theorem"] == "MatchPatternConjunctionCommutativity"
+    assert family.variants[0].metadata["pattern_count"] == 2
+    assert family.variants[0].metadata["site_class"] == "ordinary_match_comma_pattern_list"
 
 
 def test_core_pattern_order_never_swaps_match_clauses() -> None:
