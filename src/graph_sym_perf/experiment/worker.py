@@ -445,6 +445,8 @@ class RuntimeFirstShardWorker:
                 accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
                 noise_floor_id=progress["noise_floor_id"],
                 noise_intent=progress["noise_intent"],
+                noise_failure_id=progress["noise_failure_id"],
+                noise_failure_intent=progress["noise_failure_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -472,6 +474,8 @@ class RuntimeFirstShardWorker:
                 accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
                 noise_floor_id=progress["noise_floor_id"],
                 noise_intent=progress["noise_intent"],
+                noise_failure_id=progress["noise_failure_id"],
+                noise_failure_intent=progress["noise_failure_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -501,6 +505,8 @@ class RuntimeFirstShardWorker:
                 accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
                 noise_floor_id=progress["noise_floor_id"],
                 noise_intent=progress["noise_intent"],
+                noise_failure_id=progress["noise_failure_id"],
+                noise_failure_intent=progress["noise_failure_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -532,6 +538,8 @@ class RuntimeFirstShardWorker:
                 accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
                 noise_floor_id=progress["noise_floor_id"],
                 noise_intent=progress["noise_intent"],
+                noise_failure_id=progress["noise_failure_id"],
+                noise_failure_intent=progress["noise_failure_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -559,6 +567,8 @@ class RuntimeFirstShardWorker:
                 accepted_record_ledger=tuple(progress["accepted_record_ledger"]),
                 noise_floor_id=progress["noise_floor_id"],
                 noise_intent=progress["noise_intent"],
+                noise_failure_id=progress["noise_failure_id"],
+                noise_failure_intent=progress["noise_failure_intent"],
             )
             return self._finish_entry(
                 entry,
@@ -747,6 +757,12 @@ class RuntimeFirstShardWorker:
             ),
             noise_floor_id=outcome.get("noise_floor_id", progress["noise_floor_id"]),
             noise_intent=outcome.get("noise_intent", progress["noise_intent"]),
+            noise_failure_id=outcome.get(
+                "noise_failure_id", progress["noise_failure_id"]
+            ),
+            noise_failure_intent=outcome.get(
+                "noise_failure_intent", progress["noise_failure_intent"]
+            ),
         )
 
         return self._finish_entry(
@@ -827,6 +843,12 @@ class RuntimeFirstShardWorker:
             if progress["noise_intent"] is not None
             else None
         )
+        noise_failure_id = progress["noise_failure_id"]
+        noise_failure_intent = (
+            dict(progress["noise_failure_intent"])
+            if progress["noise_failure_intent"] is not None
+            else None
+        )
         pending = [dict(value) for value in progress["pending_acceptances"]]
         pending_by_hash = {str(value["pair_hash"]): value for value in pending}
         records_path = entry_dir / "pair_runtime.jsonl"
@@ -857,6 +879,46 @@ class RuntimeFirstShardWorker:
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "schema-v3 accepted evidence has no ordered digest ledger or raw noise anchor",
             )
+        if (
+            loaded_schema == 4
+            and (entry_dir / "noise_calibration_failure.json").exists()
+        ):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "schema-v4 progress cannot bind an existing noise failure artifact",
+            )
+        durable_noise_failure = _load_entry_noise_failure(
+            entry_dir / "noise_calibration_failure.json",
+            entry=entry,
+            graph_snapshot_hash=graph_snapshot_hash,
+            dbms_fingerprint=dbms_fingerprint,
+            dbms_health_epoch=dbms_health_epoch,
+        )
+        if durable_noise_failure is None and (
+            noise_failure_id is not None or noise_failure_intent is not None
+        ):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "noise failure progress exists without its durable artifact",
+            )
+        if durable_noise_failure is not None:
+            durable_failure_id = str(durable_noise_failure["content_hash"])
+            if noise_failure_id is not None:
+                failure_binding_matches = (
+                    noise_failure_id == durable_failure_id
+                    and noise_failure_intent is None
+                )
+            else:
+                failure_binding_matches = (
+                    noise_failure_intent is not None
+                    and noise_failure_intent.get("noise_failure_id")
+                    == durable_failure_id
+                )
+            if not failure_binding_matches:
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "noise failure artifact has no exact progress binding",
+                )
         acceptance_records = accepted_record_ledger + pending
         expected_probe_hashes = tuple(
             str(value["pair_hash"])
@@ -897,7 +959,7 @@ class RuntimeFirstShardWorker:
         )
         accepted_hashes = (
             set(progress["accepted_pair_hashes"])
-            if loaded_schema == 4
+            if loaded_schema in {4, 5}
             else set()
         )
         (
@@ -932,6 +994,8 @@ class RuntimeFirstShardWorker:
                 accepted_record_ledger=tuple(accepted_record_ledger),
                 noise_floor_id=noise_floor_id,
                 noise_intent=noise_intent,
+                noise_failure_id=noise_failure_id,
+                noise_failure_intent=noise_failure_intent,
             )
 
         def complete_query_record(ordinal: int) -> None:
@@ -1017,7 +1081,13 @@ class RuntimeFirstShardWorker:
                         ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                         "legacy accepted-pair migration failed typed equivalence revalidation",
                     )
-                migrated = _pending_acceptance(pair_hash, ordinal, left, right)
+                migrated = _pending_acceptance(
+                    pair_hash,
+                    ordinal,
+                    left,
+                    right,
+                    max_sample_us=_entry_sample_upper_bound_us(entry),
+                )
                 pending.append(migrated)
                 pending_by_hash[pair_hash] = migrated
             legacy_migration_sha256 = legacy_sha256
@@ -1161,7 +1231,20 @@ class RuntimeFirstShardWorker:
                 rejects["TYPED_EQUIVALENCE_FAILED"] += 1
                 complete_query_record(ordinal)
                 continue
-            pending_record = _pending_acceptance(pair.pair_hash, ordinal, left, right)
+            try:
+                pending_record = _pending_acceptance(
+                    pair.pair_hash,
+                    ordinal,
+                    left,
+                    right,
+                    max_sample_us=_entry_sample_upper_bound_us(entry),
+                )
+            except WorkerFailure as exc:
+                state = EntryState.INFRASTRUCTURE_FAILED
+                infrastructure_error_kind = exc.kind
+                infrastructure_reason = str(exc)
+                persist_progress()
+                break
             pending.append(pending_record)
             pending_by_hash[pair.pair_hash] = pending_record
             complete_query_record(ordinal)
@@ -1184,6 +1267,11 @@ class RuntimeFirstShardWorker:
                 }
                 persist_progress()
 
+            def persist_noise_failure_intent(artifact_id: str) -> None:
+                nonlocal noise_failure_intent
+                noise_failure_intent = {"noise_failure_id": artifact_id}
+                persist_progress()
+
             noise, calibrated_noise_floor_id = _load_or_calibrate_entry_noise(
                 entry_dir,
                 entry=entry,
@@ -1197,9 +1285,44 @@ class RuntimeFirstShardWorker:
                 anchored_noise_floor_id=noise_floor_id,
                 pending_noise_intent=noise_intent,
                 persist_intent=persist_noise_intent,
+                anchored_noise_failure_id=noise_failure_id,
+                pending_noise_failure_intent=noise_failure_intent,
+                persist_failure_intent=persist_noise_failure_intent,
             )
+            failure = _load_entry_noise_failure(
+                entry_dir / "noise_calibration_failure.json",
+                entry=entry,
+                graph_snapshot_hash=graph_snapshot_hash,
+                dbms_fingerprint=dbms_fingerprint,
+                dbms_health_epoch=dbms_health_epoch,
+            )
+            if failure is not None:
+                failure_id = str(failure["content_hash"])
+                if noise_failure_id is not None and noise_failure_id != failure_id:
+                    raise WorkerFailure(
+                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                        "noise failure identity differs from progress",
+                    )
+                if (
+                    noise_failure_id is None
+                    and (
+                        noise_failure_intent is None
+                        or noise_failure_intent.get("noise_failure_id") != failure_id
+                    )
+                ):
+                    raise WorkerFailure(
+                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                        "noise failure artifact was not preceded by its durable intent",
+                    )
+                noise_failure_id = failure_id
+                noise_failure_intent = None
+                persist_progress()
+                state = EntryState.INFRASTRUCTURE_FAILED
+                infrastructure_error_kind = ErrorKind(str(failure["error_kind"]))
+                infrastructure_reason = str(failure["error_reason"])
+
             noise_is_complete = bool(calibrated_noise_floor_id)
-            if noise_is_complete:
+            if failure is None and noise_is_complete:
                 if (
                     noise_floor_id is not None
                     and noise_floor_id != calibrated_noise_floor_id
@@ -1224,7 +1347,9 @@ class RuntimeFirstShardWorker:
                 noise_intent = None
                 persist_progress()
 
-            if not noise_is_complete or not noise.valid or noise.p99_delta_ms is None:
+            if failure is not None:
+                pass
+            elif not noise_is_complete or not noise.valid or noise.p99_delta_ms is None:
                 state = EntryState.INFRASTRUCTURE_FAILED
                 infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
                 infrastructure_reason = "invalid fixed-protocol A/A noise calibration"
@@ -1259,17 +1384,26 @@ class RuntimeFirstShardWorker:
                             + ",".join(evidence.reason_codes)
                         )
                         break
-                    record = PairRuntimeRecord.from_evidence(
-                        pair=pair,
-                        entry=entry,
-                        evidence=evidence,
-                        noise_floor_id=noise_floor_id,
-                        noise_p99_ms=noise.p99_delta_ms,
-                        dbms_fingerprint=dbms_fingerprint,
-                        dbms_health_epoch=dbms_health_epoch,
-                        source_query_ordinal=ordinal,
-                        graph_fingerprint=graph_snapshot_hash,
-                    )
+                    try:
+                        record = PairRuntimeRecord.from_evidence(
+                            pair=pair,
+                            entry=entry,
+                            evidence=evidence,
+                            noise_floor_id=noise_floor_id,
+                            noise_p99_ms=noise.p99_delta_ms,
+                            dbms_fingerprint=dbms_fingerprint,
+                            dbms_health_epoch=dbms_health_epoch,
+                            source_query_ordinal=ordinal,
+                            graph_fingerprint=graph_snapshot_hash,
+                        )
+                    except (ArithmeticError, TypeError, ValueError) as exc:
+                        state = EntryState.INFRASTRUCTURE_FAILED
+                        infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
+                        infrastructure_reason = (
+                            "Stage-1 runtime evidence conversion failed: "
+                            f"{type(exc).__name__}"
+                        )
+                        break
                     stage1_intent = {
                         "pair_hash": pair_hash,
                         "record_digest": canonical_record_digest(record),
@@ -1310,6 +1444,8 @@ class RuntimeFirstShardWorker:
             "accepted_record_ledger": tuple(accepted_record_ledger),
             "noise_floor_id": noise_floor_id,
             "noise_intent": noise_intent,
+            "noise_failure_id": noise_failure_id,
+            "noise_failure_intent": noise_failure_intent,
             "generated_seeds": generated_seeds,
             "rejects": dict(sorted(rejects.items())),
             "rule_stats": {
@@ -2412,6 +2548,8 @@ def _pending_acceptance(
     source_query_ordinal: int,
     left: object,
     right: object,
+    *,
+    max_sample_us: int,
 ) -> dict[str, object]:
     def elapsed_us(result: object) -> int:
         value = getattr(result, "elapsed_ms", None)
@@ -2425,7 +2563,19 @@ def _pending_acceptance(
                 ErrorKind.INFRASTRUCTURE_ERROR,
                 "acceptance runtime is not a finite non-negative value",
             )
-        return int(round(float(value) * 1000.0))
+        try:
+            quantized = int(round(float(value) * 1000.0))
+        except (ArithmeticError, ValueError) as exc:
+            raise WorkerFailure(
+                ErrorKind.INFRASTRUCTURE_ERROR,
+                "acceptance runtime cannot be quantized to integer microseconds",
+            ) from exc
+        if quantized > max_sample_us:
+            raise WorkerFailure(
+                ErrorKind.INFRASTRUCTURE_ERROR,
+                "acceptance runtime exceeds the entry query timeout bound",
+            )
+        return quantized
 
     return {
         "acceptance_a_us": elapsed_us(left),
@@ -2636,21 +2786,66 @@ def _load_or_calibrate_entry_noise(
     anchored_noise_floor_id: str | None,
     pending_noise_intent: Mapping[str, object] | None,
     persist_intent: Callable[[str, tuple[str, ...]], None],
+    anchored_noise_failure_id: str | None,
+    pending_noise_failure_intent: Mapping[str, object] | None,
+    persist_failure_intent: Callable[[str], None],
 ) -> tuple[NoiseCalibration, str]:
     path = entry_dir / "noise_calibration.json"
     failure_path = entry_dir / "noise_calibration_failure.json"
     selected = _expected_noise_probe_records(pending)
     expected_probe_hashes = tuple(str(value["pair_hash"]) for value in selected)
-    if _load_entry_noise_failure(
+    existing_failure = _load_entry_noise_failure(
         failure_path,
         entry=entry,
         graph_snapshot_hash=graph_snapshot_hash,
         dbms_fingerprint=dbms_fingerprint,
         dbms_health_epoch=dbms_health_epoch,
-    ) is not None:
+    )
+    if existing_failure is not None:
+        failure_id = str(existing_failure["content_hash"])
+        if path.exists():
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "complete and failed noise artifacts cannot coexist",
+            )
+        if anchored_noise_failure_id is not None:
+            if (
+                anchored_noise_failure_id != failure_id
+                or pending_noise_failure_intent is not None
+            ):
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "anchored noise failure differs from its artifact",
+                )
+        elif pending_noise_failure_intent is not None:
+            if pending_noise_failure_intent.get("noise_failure_id") != failure_id:
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "durable noise failure differs from its exact intent",
+                )
+        else:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "noise failure artifact exists without an anchor or durable intent",
+            )
+        return NoiseCalibration(
+            valid=False,
+            sample_count=int(existing_failure["sample_count"]),
+            p95_delta_ms=None,
+            p99_delta_ms=None,
+            median_order_bias_ms=None,
+            long_tail_ratio=None,
+            reason_codes=tuple(existing_failure["reason_codes"]),
+        ), ""
+    if anchored_noise_failure_id is not None:
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-            "an incomplete noise calibration failure is already durable",
+            "noise failure progress is anchored without its durable artifact",
+        )
+    if pending_noise_failure_intent is not None:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "noise failure intent exists without its exact durable artifact",
         )
     existing = _load_entry_noise(
         path,
@@ -2734,6 +2929,11 @@ def _load_or_calibrate_entry_noise(
                 max_sample_us=_entry_sample_upper_bound_us(entry),
             )
         except (AdapterError, ArithmeticError, MemoryError, OSError, ValueError) as exc:
+            failure_kind = (
+                _entry_infrastructure_error_kind(exc)
+                or ErrorKind.INFRASTRUCTURE_ERROR
+            )
+            failure_reason = f"noise calibration measurement failed: {exc}"
             _write_entry_noise_failure(
                 failure_path,
                 entry=entry,
@@ -2743,11 +2943,19 @@ def _load_or_calibrate_entry_noise(
                 expected_probe_hashes=expected_probe_hashes,
                 raw_probe_samples=(),
                 reason_codes=(f"measurement_error:{type(exc).__name__}",),
+                error_kind=failure_kind,
+                error_reason=failure_reason,
+                persist_intent=persist_failure_intent,
             )
-            raise WorkerFailure(
-                _entry_infrastructure_error_kind(exc) or ErrorKind.INFRASTRUCTURE_ERROR,
-                f"noise calibration measurement failed: {exc}",
-            ) from exc
+            return NoiseCalibration(
+                valid=False,
+                sample_count=0,
+                p95_delta_ms=None,
+                p99_delta_ms=None,
+                median_order_bias_ms=None,
+                long_tail_ratio=None,
+                reason_codes=(f"measurement_error:{type(exc).__name__}",),
+            ), ""
         complete = (
             len(raw_probe_samples) == 20
             and all(len(samples) == 10 for samples in raw_probe_samples)
@@ -2762,6 +2970,9 @@ def _load_or_calibrate_entry_noise(
                 expected_probe_hashes=expected_probe_hashes,
                 raw_probe_samples=raw_probe_samples,
                 reason_codes=noise.reason_codes or ("incomplete_aa_samples",),
+                error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
+                error_reason="invalid fixed-protocol A/A noise calibration",
+                persist_intent=persist_failure_intent,
             )
             return noise, ""
         probe_samples_us = [
@@ -2910,6 +3121,9 @@ def _write_entry_noise_failure(
     expected_probe_hashes: tuple[str, ...],
     raw_probe_samples: tuple[tuple[tuple[str, int, int], ...], ...],
     reason_codes: tuple[str, ...],
+    error_kind: ErrorKind,
+    error_reason: str,
+    persist_intent: Callable[[str], None],
 ) -> None:
     completed = [
         {
@@ -2932,8 +3146,12 @@ def _write_entry_noise_failure(
         "completed_probe_samples_us": completed,
         "sample_count": sum(len(samples) for samples in raw_probe_samples),
         "reason_codes": list(reason_codes),
+        "error_kind": error_kind.value,
+        "error_reason": error_reason,
     }
-    _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
+    content_hash = canonical_hash(body)
+    persist_intent(content_hash)
+    _atomic_write_json(path, {**body, "content_hash": content_hash})
 
 
 def _load_entry_noise_failure(
@@ -2959,8 +3177,26 @@ def _load_entry_noise_failure(
             "noise calibration failure artifact is not an object",
         )
     body = {key: value for key, value in payload.items() if key != "content_hash"}
+    expected_keys = {
+        "completed_probe_samples_us",
+        "dbms_fingerprint",
+        "dbms_health_epoch",
+        "entry_id",
+        "error_kind",
+        "error_reason",
+        "expected_probe_pair_hashes",
+        "graph_snapshot_hash",
+        "pairs_per_query",
+        "probe_queries",
+        "protocol_version",
+        "reason_codes",
+        "sample_count",
+        "schema_version",
+        "status",
+    }
     if (
-        payload.get("content_hash") != canonical_hash(body)
+        set(body) != expected_keys
+        or payload.get("content_hash") != canonical_hash(body)
         or body.get("schema_version") != 1
         or body.get("status") != "incomplete"
         or body.get("entry_id") != entry.entry_id
@@ -2972,12 +3208,23 @@ def _load_entry_noise_failure(
         or body.get("pairs_per_query") != 10
         or not isinstance(body.get("reason_codes"), list)
         or not body["reason_codes"]
+        or any(not isinstance(value, str) or not value for value in body["reason_codes"])
+        or body.get("error_kind") not in {
+            ErrorKind.DRIVER_TIMEOUT.value,
+            ErrorKind.DBMS_UNAVAILABLE.value,
+            ErrorKind.DBMS_CRASHED.value,
+            ErrorKind.INFRASTRUCTURE_ERROR.value,
+        }
+        or not isinstance(body.get("error_reason"), str)
+        or not body["error_reason"]
+        or type(body.get("sample_count")) is not int
+        or body["sample_count"] < 0
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
             "noise calibration failure artifact identity or hash is invalid",
         )
-    return body
+    return {**body, "content_hash": payload["content_hash"]}
 
 
 def _expected_noise_probe_records(
@@ -3476,7 +3723,7 @@ def _write_entry_runtime_invalidation(
 
 def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, object]:
     default: dict[str, object] = {
-        "schema_version": 4,
+        "schema_version": 5,
         "entry_id": entry.entry_id,
         "elapsed_seconds": 0.0,
         "last_query_ordinal": 0,
@@ -3490,7 +3737,9 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         "accepted_record_ledger": [],
         "noise_floor_id": None,
         "noise_intent": None,
-        "_loaded_schema_version": 4,
+        "noise_failure_id": None,
+        "noise_failure_intent": None,
+        "_loaded_schema_version": 5,
     }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -3514,6 +3763,8 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     accepted_record_ledger = body.get("accepted_record_ledger", [])
     noise_floor_id = body.get("noise_floor_id")
     noise_intent = body.get("noise_intent")
+    noise_failure_id = body.get("noise_failure_id")
+    noise_failure_intent = body.get("noise_failure_intent")
     max_sample_us = _entry_sample_upper_bound_us(entry)
     valid_rejects = isinstance(rejects, dict) and all(
         isinstance(key, str)
@@ -3635,6 +3886,15 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
             for value in noise_intent["probe_pair_hashes"]
         )
     )
+    valid_noise_failure_id = noise_failure_id is None or (
+        isinstance(noise_failure_id, str) and len(noise_failure_id) == 64
+    )
+    valid_noise_failure_intent = noise_failure_intent is None or (
+        isinstance(noise_failure_intent, dict)
+        and set(noise_failure_intent) == {"noise_failure_id"}
+        and isinstance(noise_failure_intent["noise_failure_id"], str)
+        and len(noise_failure_intent["noise_failure_id"]) == 64
+    )
     schema_keys = {
         1: {
             "accepted_pair_hashes",
@@ -3685,9 +3945,27 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
             "schema_version",
             "stage1_intent",
         },
+        5: {
+            "accepted_pair_hashes",
+            "accepted_record_ledger",
+            "attempted_query_records",
+            "elapsed_seconds",
+            "entry_id",
+            "evidence_identity",
+            "last_query_ordinal",
+            "legacy_migration_sha256",
+            "noise_failure_id",
+            "noise_failure_intent",
+            "noise_floor_id",
+            "noise_intent",
+            "pending_acceptances",
+            "reject_counts",
+            "schema_version",
+            "stage1_intent",
+        },
     }
     if (
-        schema_version not in {1, 2, 3, 4}
+        schema_version not in {1, 2, 3, 4, 5}
         or set(body) != schema_keys.get(schema_version, set())
         or body.get("entry_id") != entry.entry_id
         or payload.get("content_hash") != canonical_hash(body)
@@ -3701,24 +3979,42 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         or attempted != last_ordinal
         or not valid_rejects
         or not valid_accepted
-        or (schema_version in {2, 3, 4} and (not valid_pending or not valid_migration))
-        or (schema_version in {3, 4} and (not valid_identity or not valid_intent))
+        or (schema_version in {2, 3, 4, 5} and (not valid_pending or not valid_migration))
+        or (schema_version in {3, 4, 5} and (not valid_identity or not valid_intent))
         or (
             schema_version == 3
             and bool(accepted or pending or stage1_intent)
         )
         or (
-            schema_version == 4
+            schema_version in {4, 5}
             and (not valid_ledger or not valid_noise_floor or not valid_noise_intent)
         )
         or (
-            schema_version == 4
+            schema_version in {4, 5}
             and (
                 any(value > last_ordinal for value in ledger_ordinals)
                 or any(value > last_ordinal for value in pending_ordinals)
             )
         )
-        or (schema_version == 4 and noise_floor_id is not None and noise_intent is not None)
+        or (
+            schema_version == 5
+            and (not valid_noise_failure_id or not valid_noise_failure_intent)
+        )
+        or (
+            schema_version in {4, 5}
+            and noise_floor_id is not None
+            and noise_intent is not None
+        )
+        or (
+            schema_version == 5
+            and noise_failure_id is not None
+            and noise_failure_intent is not None
+        )
+        or (
+            schema_version == 5
+            and (noise_failure_id is not None or noise_failure_intent is not None)
+            and (noise_floor_id is not None or noise_intent is not None)
+        )
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -3736,6 +4032,9 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         body["accepted_record_ledger"] = []
         body["noise_floor_id"] = None
         body["noise_intent"] = None
+    if schema_version in {1, 2, 3, 4}:
+        body["noise_failure_id"] = None
+        body["noise_failure_intent"] = None
     body["_loaded_schema_version"] = schema_version
     return body
 
@@ -3757,10 +4056,12 @@ def _persist_entry_progress(
     accepted_record_ledger: tuple[Mapping[str, object], ...] = (),
     noise_floor_id: str | None = None,
     noise_intent: Mapping[str, object] | None = None,
+    noise_failure_id: str | None = None,
+    noise_failure_intent: Mapping[str, object] | None = None,
 ) -> None:
     elapsed = prior_elapsed + max(0.0, now - attempt_started)
     body = {
-        "schema_version": 4,
+        "schema_version": 5,
         "entry_id": entry.entry_id,
         "elapsed_seconds": elapsed,
         "last_query_ordinal": last_query_ordinal,
@@ -3777,6 +4078,10 @@ def _persist_entry_progress(
         "accepted_record_ledger": [dict(value) for value in accepted_record_ledger],
         "noise_floor_id": noise_floor_id,
         "noise_intent": dict(noise_intent) if noise_intent is not None else None,
+        "noise_failure_id": noise_failure_id,
+        "noise_failure_intent": (
+            dict(noise_failure_intent) if noise_failure_intent is not None else None
+        ),
     }
     _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
 
