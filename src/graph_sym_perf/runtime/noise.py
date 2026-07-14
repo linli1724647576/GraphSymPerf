@@ -31,6 +31,8 @@ def collect_aa_noise_samples(
     probe_queries: tuple[str, ...],
     *,
     pairs_per_query: int = 10,
+    timeout_ms: float | None = None,
+    max_sample_us: int | None = None,
 ) -> tuple[NoiseCalibration, tuple[tuple[tuple[str, int, int], ...], ...]]:
     probe_samples: list[tuple[tuple[str, int, int], ...]] = []
     for index, query in enumerate(probe_queries):
@@ -38,7 +40,13 @@ def collect_aa_noise_samples(
             executor,
             query,
             query,
-            policy=RuntimePolicy(warmups=0, pairs=pairs_per_query, seed=index, require_exact_balance=pairs_per_query % 2 == 0),
+            policy=RuntimePolicy(
+                warmups=0,
+                pairs=pairs_per_query,
+                seed=index,
+                require_exact_balance=pairs_per_query % 2 == 0,
+                timeout_ms=timeout_ms,
+            ),
         )
         if evidence.verdict.value != "pass":
             return NoiseCalibration(
@@ -71,18 +79,24 @@ def collect_aa_noise_samples(
             )
         probe_samples.append(tuple(integer_samples))
     frozen = tuple(probe_samples)
-    return summarize_aa_noise_samples(frozen), frozen
+    return summarize_aa_noise_samples(frozen, max_sample_us=max_sample_us), frozen
 
 
 def summarize_aa_noise_samples(
     probe_samples_us: tuple[tuple[tuple[str, int, int], ...], ...]
     | list[list[list[object]]],
+    *,
+    max_sample_us: int | None = None,
 ) -> NoiseCalibration:
     """Recompute fixed-protocol A/A statistics from integer microseconds."""
 
     deltas: list[float] = []
     signed_ab: list[float] = []
     signed_ba: list[float] = []
+    if max_sample_us is not None and (
+        type(max_sample_us) is not int or max_sample_us < 0
+    ):
+        raise ValueError("max_sample_us must be a non-negative integer or null")
     for index, probe_samples in enumerate(probe_samples_us):
         if not isinstance(probe_samples, tuple | list) or not probe_samples:
             raise ValueError("A/A probe samples must be a non-empty sequence")
@@ -94,6 +108,8 @@ def summarize_aa_noise_samples(
             or type(sample[2]) is not int
             or sample[1] < 0
             or sample[2] < 0
+            or (max_sample_us is not None and sample[1] > max_sample_us)
+            or (max_sample_us is not None and sample[2] > max_sample_us)
             for sample in probe_samples
         ):
             raise ValueError("A/A samples must be ordered non-negative integer microseconds")

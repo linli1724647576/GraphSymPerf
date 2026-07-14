@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -847,6 +848,8 @@ class RuntimeFirstShardWorker:
             )
         if loaded_schema == 3 and (
             progress["accepted_pair_hashes"]
+            or pending
+            or stage1_intent is not None
             or store.count
             or (entry_dir / "noise_calibration.json").exists()
         ):
@@ -1195,11 +1198,8 @@ class RuntimeFirstShardWorker:
                 pending_noise_intent=noise_intent,
                 persist_intent=persist_noise_intent,
             )
-            if not noise.valid or noise.p99_delta_ms is None:
-                state = EntryState.INFRASTRUCTURE_FAILED
-                infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
-                infrastructure_reason = "invalid fixed-protocol A/A noise calibration"
-            else:
+            noise_is_complete = bool(calibrated_noise_floor_id)
+            if noise_is_complete:
                 if (
                     noise_floor_id is not None
                     and noise_floor_id != calibrated_noise_floor_id
@@ -1223,6 +1223,12 @@ class RuntimeFirstShardWorker:
                 noise_floor_id = calibrated_noise_floor_id
                 noise_intent = None
                 persist_progress()
+
+            if not noise_is_complete or not noise.valid or noise.p99_delta_ms is None:
+                state = EntryState.INFRASTRUCTURE_FAILED
+                infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
+                infrastructure_reason = "invalid fixed-protocol A/A noise calibration"
+            else:
                 stage1 = self.spec.runtime["stage1"]
                 for pending_record in tuple(pending):
                     if self._clock() >= deadline:
@@ -2602,10 +2608,11 @@ def _validate_runtime_records(
             summary = summarize_integer_samples(
                 [tuple(sample) for sample in samples],
                 noise_p99_ms=noise_p99_ms,
+                max_sample_us=_entry_sample_upper_bound_us(entry),
             )
             if any(record.get(key) != value for key, value in summary.items()):
                 raise ValueError("runtime record summary differs from canonical integer samples")
-        except (TypeError, ValueError) as exc:
+        except (ArithmeticError, TypeError, ValueError) as exc:
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "pair_runtime record is not bound to this RulePlanEntry",
@@ -2631,8 +2638,20 @@ def _load_or_calibrate_entry_noise(
     persist_intent: Callable[[str, tuple[str, ...]], None],
 ) -> tuple[NoiseCalibration, str]:
     path = entry_dir / "noise_calibration.json"
+    failure_path = entry_dir / "noise_calibration_failure.json"
     selected = _expected_noise_probe_records(pending)
     expected_probe_hashes = tuple(str(value["pair_hash"]) for value in selected)
+    if _load_entry_noise_failure(
+        failure_path,
+        entry=entry,
+        graph_snapshot_hash=graph_snapshot_hash,
+        dbms_fingerprint=dbms_fingerprint,
+        dbms_health_epoch=dbms_health_epoch,
+    ) is not None:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "an incomplete noise calibration failure is already durable",
+        )
     existing = _load_entry_noise(
         path,
         entry=entry,
@@ -2705,13 +2724,45 @@ def _load_or_calibrate_entry_noise(
                 str(selected_record["pair_hash"]),
             )
             probes.append(pair.query_a)
-        noise, raw_probe_samples = collect_aa_noise_samples(
-            RuntimeHarness(),
-            adapter,
-            tuple(probes),
-            pairs_per_query=10,
+        try:
+            noise, raw_probe_samples = collect_aa_noise_samples(
+                RuntimeHarness(),
+                adapter,
+                tuple(probes),
+                pairs_per_query=10,
+                timeout_ms=float(entry.query_timeout_seconds * 1000),
+                max_sample_us=_entry_sample_upper_bound_us(entry),
+            )
+        except (AdapterError, ArithmeticError, MemoryError, OSError, ValueError) as exc:
+            _write_entry_noise_failure(
+                failure_path,
+                entry=entry,
+                graph_snapshot_hash=graph_snapshot_hash,
+                dbms_fingerprint=dbms_fingerprint,
+                dbms_health_epoch=dbms_health_epoch,
+                expected_probe_hashes=expected_probe_hashes,
+                raw_probe_samples=(),
+                reason_codes=(f"measurement_error:{type(exc).__name__}",),
+            )
+            raise WorkerFailure(
+                _entry_infrastructure_error_kind(exc) or ErrorKind.INFRASTRUCTURE_ERROR,
+                f"noise calibration measurement failed: {exc}",
+            ) from exc
+        complete = (
+            len(raw_probe_samples) == 20
+            and all(len(samples) == 10 for samples in raw_probe_samples)
         )
-        if not noise.valid or len(raw_probe_samples) != 20:
+        if not complete:
+            _write_entry_noise_failure(
+                failure_path,
+                entry=entry,
+                graph_snapshot_hash=graph_snapshot_hash,
+                dbms_fingerprint=dbms_fingerprint,
+                dbms_health_epoch=dbms_health_epoch,
+                expected_probe_hashes=expected_probe_hashes,
+                raw_probe_samples=raw_probe_samples,
+                reason_codes=noise.reason_codes or ("incomplete_aa_samples",),
+            )
             return noise, ""
         probe_samples_us = [
             {
@@ -2839,13 +2890,94 @@ def _load_entry_noise(
         ):
             raise ValueError("invalid noise calibration field")
         noise = summarize_aa_noise_samples(
-            [value["samples_us"] for value in probe_samples]
+            [value["samples_us"] for value in probe_samples],
+            max_sample_us=_entry_sample_upper_bound_us(entry),
         )
-        if calibration != to_jsonable(asdict(noise)) or not noise.valid:
+        if calibration != to_jsonable(asdict(noise)):
             raise ValueError("noise summary differs from canonical integer samples")
-    except (KeyError, TypeError, ValueError) as exc:
+    except (ArithmeticError, KeyError, TypeError, ValueError) as exc:
         raise WorkerFailure(ErrorKind.EVIDENCE_INTEGRITY_ERROR, "noise calibration shape is invalid") from exc
     return noise, str(payload["content_hash"])
+
+
+def _write_entry_noise_failure(
+    path: Path,
+    *,
+    entry: RulePlanEntry,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+    dbms_health_epoch: str,
+    expected_probe_hashes: tuple[str, ...],
+    raw_probe_samples: tuple[tuple[tuple[str, int, int], ...], ...],
+    reason_codes: tuple[str, ...],
+) -> None:
+    completed = [
+        {
+            "pair_hash": expected_probe_hashes[index],
+            "samples_us": [list(sample) for sample in samples],
+        }
+        for index, samples in enumerate(raw_probe_samples)
+    ]
+    body = {
+        "schema_version": 1,
+        "status": "incomplete",
+        "entry_id": entry.entry_id,
+        "graph_snapshot_hash": graph_snapshot_hash,
+        "dbms_fingerprint": dbms_fingerprint,
+        "dbms_health_epoch": dbms_health_epoch,
+        "protocol_version": "aa-noise-20x10-v1",
+        "probe_queries": 20,
+        "pairs_per_query": 10,
+        "expected_probe_pair_hashes": list(expected_probe_hashes),
+        "completed_probe_samples_us": completed,
+        "sample_count": sum(len(samples) for samples in raw_probe_samples),
+        "reason_codes": list(reason_codes),
+    }
+    _atomic_write_json(path, {**body, "content_hash": canonical_hash(body)})
+
+
+def _load_entry_noise_failure(
+    path: Path,
+    *,
+    entry: RulePlanEntry,
+    graph_snapshot_hash: str,
+    dbms_fingerprint: str,
+    dbms_health_epoch: str,
+) -> dict[str, object] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "noise calibration failure artifact is unreadable",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "noise calibration failure artifact is not an object",
+        )
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    if (
+        payload.get("content_hash") != canonical_hash(body)
+        or body.get("schema_version") != 1
+        or body.get("status") != "incomplete"
+        or body.get("entry_id") != entry.entry_id
+        or body.get("graph_snapshot_hash") != graph_snapshot_hash
+        or body.get("dbms_fingerprint") != dbms_fingerprint
+        or body.get("dbms_health_epoch") != dbms_health_epoch
+        or body.get("protocol_version") != "aa-noise-20x10-v1"
+        or body.get("probe_queries") != 20
+        or body.get("pairs_per_query") != 10
+        or not isinstance(body.get("reason_codes"), list)
+        or not body["reason_codes"]
+    ):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "noise calibration failure artifact identity or hash is invalid",
+        )
+    return body
 
 
 def _expected_noise_probe_records(
@@ -3266,6 +3398,10 @@ def _runtime_evidence_identity(
     return identity
 
 
+def _entry_sample_upper_bound_us(entry: RulePlanEntry) -> int:
+    return math.ceil(float(entry.query_timeout_seconds) * 1_000_000)
+
+
 def _load_entry_runtime_invalidation(
     entry_dir: Path,
     *,
@@ -3378,6 +3514,7 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     accepted_record_ledger = body.get("accepted_record_ledger", [])
     noise_floor_id = body.get("noise_floor_id")
     noise_intent = body.get("noise_intent")
+    max_sample_us = _entry_sample_upper_bound_us(entry)
     valid_rejects = isinstance(rejects, dict) and all(
         isinstance(key, str)
         and key
@@ -3401,9 +3538,9 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         and type(value["source_query_ordinal"]) is int
         and 1 <= value["source_query_ordinal"] <= entry.max_generated_seed_budget
         and type(value["acceptance_a_us"]) is int
-        and value["acceptance_a_us"] >= 0
+        and 0 <= value["acceptance_a_us"] <= max_sample_us
         and type(value["acceptance_b_us"]) is int
-        and value["acceptance_b_us"] >= 0
+        and 0 <= value["acceptance_b_us"] <= max_sample_us
         for value in pending
     )
     pending_hashes = [value["pair_hash"] for value in pending] if valid_pending else []
@@ -3459,9 +3596,9 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         and type(value["source_query_ordinal"]) is int
         and 1 <= value["source_query_ordinal"] <= entry.max_generated_seed_budget
         and type(value["acceptance_a_us"]) is int
-        and value["acceptance_a_us"] >= 0
+        and 0 <= value["acceptance_a_us"] <= max_sample_us
         and type(value["acceptance_b_us"]) is int
-        and value["acceptance_b_us"] >= 0
+        and 0 <= value["acceptance_b_us"] <= max_sample_us
         for value in accepted_record_ledger
     )
     ledger_hashes = (
@@ -3566,6 +3703,10 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         or not valid_accepted
         or (schema_version in {2, 3, 4} and (not valid_pending or not valid_migration))
         or (schema_version in {3, 4} and (not valid_identity or not valid_intent))
+        or (
+            schema_version == 3
+            and bool(accepted or pending or stage1_intent)
+        )
         or (
             schema_version == 4
             and (not valid_ledger or not valid_noise_floor or not valid_noise_intent)

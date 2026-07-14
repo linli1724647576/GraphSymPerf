@@ -32,6 +32,7 @@ class RulePlanEntryLike(Protocol):
     graph_scale: int
     shard_seed: int
     measurement_protocol_id: str
+    query_timeout_seconds: int | float
 
 
 class ArtifactWriteError(OSError):
@@ -108,7 +109,11 @@ class PairRuntimeRecord:
             )
             for sample in evidence.paired_samples
         )
-        summary = summarize_integer_samples(samples_us, noise_p99_ms=noise_p99_ms)
+        summary = summarize_integer_samples(
+            samples_us,
+            noise_p99_ms=noise_p99_ms,
+            max_sample_us=math.ceil(float(entry.query_timeout_seconds) * 1_000_000),
+        )
         return cls(
             pair_hash=pair.pair_hash,
             rule_id=entry.rule_id,
@@ -290,6 +295,7 @@ def summarize_integer_samples(
     | list[tuple[str, int | None, int | None]],
     *,
     noise_p99_ms: float,
+    max_sample_us: int | None = None,
 ) -> dict[str, Any]:
     """Reconstruct every compact summary from canonical integer samples."""
 
@@ -302,6 +308,10 @@ def summarize_integer_samples(
         raise ValueError("noise_p99_ms must be finite and non-negative")
     if not samples_us:
         raise ValueError("runtime samples must not be empty")
+    if max_sample_us is not None and (
+        type(max_sample_us) is not int or max_sample_us < 0
+    ):
+        raise ValueError("max_sample_us must be a non-negative integer or null")
     normalized: list[tuple[str, int | None, int | None]] = []
     for sample in samples_us:
         if not isinstance(sample, tuple | list) or len(sample) != 3:
@@ -311,7 +321,9 @@ def summarize_integer_samples(
             raise ValueError("runtime sample order is invalid")
         for value in (a_us, b_us):
             if value is not None and (
-                type(value) is not int or value < 0
+                type(value) is not int
+                or value < 0
+                or (max_sample_us is not None and value > max_sample_us)
             ):
                 raise ValueError("runtime microseconds must be non-negative integers or null")
         normalized.append((order, a_us, b_us))

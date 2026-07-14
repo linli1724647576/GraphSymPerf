@@ -1287,6 +1287,53 @@ def test_noise_calibration_rejects_fewer_than_twenty_distinct_accepted_probes(tm
     assert not tuple(tmp_path.glob("entries/*/pair_runtime.jsonl"))
 
 
+@pytest.mark.parametrize("state", ("pending_only", "intent_only"))
+def test_schema3_nonempty_uncommitted_state_cannot_upgrade(tmp_path, state) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    body = {
+        "schema_version": 3,
+        "entry_id": entry.entry_id,
+        "elapsed_seconds": 0.0,
+        "last_query_ordinal": 1,
+        "attempted_query_records": 1,
+        "reject_counts": {},
+        "accepted_pair_hashes": [],
+        "pending_acceptances": [],
+        "legacy_migration_sha256": None,
+        "evidence_identity": {
+            "dbms_fingerprint": "a" * 64,
+            "dbms_health_epoch": "e" * 64,
+            "graph_snapshot_hash": "g" * 64,
+        },
+        "stage1_intent": None,
+    }
+    if state == "pending_only":
+        body["pending_acceptances"] = [
+            {
+                "acceptance_a_us": 1,
+                "acceptance_b_us": 1,
+                "pair_hash": "1" * 64,
+                "source_query_ordinal": 1,
+            }
+        ]
+    else:
+        body["stage1_intent"] = {
+            "pair_hash": "1" * 64,
+            "record_digest": "2" * 64,
+            "source_query_ordinal": 1,
+        }
+    path = tmp_path / "acceptance_progress.json"
+    path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkerFailure) as captured:
+        worker_module._load_entry_progress(path, entry=entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
 def test_noise_artifact_freezes_exact_integer_samples_and_progress_anchor(tmp_path) -> None:
     queries = tuple(
         f"MATCH (n) WHERE n.id = {index} RETURN n"
@@ -1329,6 +1376,117 @@ def test_noise_artifact_freezes_exact_integer_samples_and_progress_anchor(tmp_pa
     progress = json.loads((entry_dir / "acceptance_progress.json").read_text(encoding="utf-8"))
     assert progress["noise_floor_id"] == noise["content_hash"]
     assert progress["noise_intent"] is None
+
+
+def test_complete_invalid_noise_is_anchored_as_auditable_evidence(tmp_path) -> None:
+    queries = tuple(
+        f"MATCH (n) WHERE n.id = {index} RETURN n"
+        for index in range(1, 21)
+    )
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=20,
+        max_generated_seed_budget=20,
+    )
+
+    class OrderBiasedNoiseAdapter(_Adapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.runtime_calls = 0
+
+        def execute(self, query, parameters, query_kind, **kwargs):
+            result = super().execute(query, parameters, query_kind, **kwargs)
+            if query_kind != "runtime":
+                return result
+            self.runtime_calls += 1
+            return ExecutionResult(
+                system=result.system,
+                query_kind=result.query_kind,
+                rows=result.rows,
+                elapsed_ms=10.0 if self.runtime_calls % 2 else 20.0,
+                summary=result.summary,
+            )
+
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=queries,
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: OrderBiasedNoiseAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    noise = json.loads((entry_dir / "noise_calibration.json").read_text(encoding="utf-8"))
+    assert noise["calibration"]["valid"] is False
+    assert noise["calibration"]["reason_codes"] == ["aa_order_bias"]
+    assert len(noise["probe_samples_us"]) == 20
+    progress = json.loads((entry_dir / "acceptance_progress.json").read_text(encoding="utf-8"))
+    assert progress["noise_floor_id"] == noise["content_hash"]
+    assert progress["noise_intent"] is None
+    assert not (entry_dir / "pair_runtime.jsonl").exists()
+
+
+def test_incomplete_noise_writes_separate_typed_failure_artifact(tmp_path) -> None:
+    queries = tuple(
+        f"MATCH (n) WHERE n.id = {index} RETURN n"
+        for index in range(1, 21)
+    )
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=20,
+        max_generated_seed_budget=20,
+    )
+
+    class InterruptedNoiseAdapter(_Adapter):
+        def execute(self, query, parameters, query_kind, **kwargs):
+            result = super().execute(query, parameters, query_kind, **kwargs)
+            if query_kind != "runtime":
+                return result
+            return ExecutionResult(
+                system=result.system,
+                query_kind=result.query_kind,
+                rows=result.rows,
+                elapsed_ms=float("nan"),
+                summary=result.summary,
+            )
+
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=queries,
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: InterruptedNoiseAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "infrastructure_failed"
+    entry_dir = next(tmp_path.glob("entries/*"))
+    assert not (entry_dir / "noise_calibration.json").exists()
+    failure = json.loads(
+        (entry_dir / "noise_calibration_failure.json").read_text(encoding="utf-8")
+    )
+    assert failure["reason_codes"] == ["aa_probe_inconclusive"]
+    assert failure["protocol_version"] == "aa-noise-20x10-v1"
+    assert failure["content_hash"] == canonical_hash(
+        {key: value for key, value in failure.items() if key != "content_hash"}
+    )
+    assert not (entry_dir / "pair_runtime.jsonl").exists()
+
+    with pytest.raises(WorkerFailure) as captured:
+        worker(entry)
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
 def test_retry_recovers_only_an_exact_noise_artifact_intent_window(
@@ -1468,6 +1626,74 @@ def test_retry_recomputes_noise_artifact_from_expected_probes_and_integer_sample
         retry(entry)
 
     assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+@pytest.mark.parametrize("sample_case", ("at_bound", "above_bound", "huge_integer"))
+def test_noise_loader_bounds_rehashed_integer_microseconds(tmp_path, sample_case) -> None:
+    queries = tuple(
+        f"MATCH (n) WHERE n.id = {index} RETURN n"
+        for index in range(1, 21)
+    )
+    statements = ("CREATE (n:Node {id: 1})",)
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=20,
+        max_generated_seed_budget=20,
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=statements,
+            query_texts=queries,
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+    worker(entry)
+    noise_path = next(tmp_path.glob("entries/*/noise_calibration.json"))
+    payload = json.loads(noise_path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    upper = int(entry.query_timeout_seconds * 1_000_000)
+    replacement = (
+        upper
+        if sample_case == "at_bound"
+        else upper + 1
+        if sample_case == "above_bound"
+        else 10**1000
+    )
+    for probe in body["probe_samples_us"]:
+        for sample in probe["samples_us"]:
+            sample[1] = replacement
+            sample[2] = replacement
+    if sample_case != "huge_integer":
+        body["calibration"] = worker_module.to_jsonable(
+            asdict(
+                worker_module.summarize_aa_noise_samples(
+                    [value["samples_us"] for value in body["probe_samples_us"]]
+                )
+            )
+        )
+    noise_path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+    load = lambda: worker_module._load_entry_noise(
+        noise_path,
+        entry=entry,
+        graph_snapshot_hash=_graph_snapshot_hash(statements),
+        dbms_fingerprint="a" * 64,
+        dbms_health_epoch="e" * 64,
+        expected_probe_hashes=tuple(body["probe_pair_hashes"]),
+    )
+
+    if sample_case == "at_bound":
+        assert load() is not None
+    else:
+        with pytest.raises(WorkerFailure) as captured:
+            load()
+        assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
 def test_invalid_stage1_measurement_never_becomes_an_accepted_record(tmp_path) -> None:
@@ -2665,6 +2891,81 @@ def test_rule_entry_retry_recomputes_every_compact_runtime_binding(
         retry(entry)
 
     assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+@pytest.mark.parametrize("sample_case", ("at_bound", "above_bound", "huge_integer"))
+def test_runtime_integer_microseconds_obey_entry_timeout_bound(
+    tmp_path,
+    monkeypatch,
+    sample_case,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    first(entry)
+    entry_dir = next(tmp_path.glob("entries/*"))
+    records_path = entry_dir / "pair_runtime.jsonl"
+    record = json.loads(records_path.read_text(encoding="utf-8"))
+    upper = int(entry.query_timeout_seconds * 1_000_000)
+    if sample_case == "at_bound":
+        replacement = upper
+        for sample in record["samples_us"]:
+            sample[1] = replacement
+            sample[2] = replacement
+        record.update(
+            worker_module.summarize_integer_samples(
+                [tuple(sample) for sample in record["samples_us"]],
+                noise_p99_ms=0.2,
+            )
+        )
+    elif sample_case == "above_bound":
+        replacement = upper + 1
+        for sample in record["samples_us"]:
+            sample[1] = replacement
+        record.update(
+            worker_module.summarize_integer_samples(
+                [tuple(sample) for sample in record["samples_us"]],
+                noise_p99_ms=0.2,
+            )
+        )
+    else:
+        replacement = 10**1000
+        for sample in record["samples_us"][:2]:
+            sample[1] = replacement
+    records_path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    progress_path = entry_dir / "acceptance_progress.json"
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in progress.items() if key != "content_hash"}
+    body["accepted_record_ledger"][0]["record_digest"] = (
+        worker_module.canonical_record_digest(record)
+    )
+    progress_path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("retry must use sealed corpus"),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    if sample_case == "at_bound":
+        assert retry(entry)["terminal_state"] == "stage1_complete"
+    else:
+        with pytest.raises(WorkerFailure) as captured:
+            retry(entry)
+        assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
 def test_worker_quarantines_each_core_rule_after_dynamic_equivalence_mismatch(tmp_path) -> None:
