@@ -4569,16 +4569,12 @@ def test_rule_entry_retry_resumes_durable_accepted_pairs_without_double_counting
     assert not tuple(tmp_path.glob("entries/*/accepted_pairs.jsonl"))
 
 
-def test_task5_legacy_evidence_migrates_crash_safely_to_pair_runtime(tmp_path, monkeypatch) -> None:
-    _install_valid_noise_stub(monkeypatch)
+def test_task5_legacy_nonempty_progress_without_applicability_ledger_fails_closed(
+    tmp_path,
+) -> None:
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     query = "MATCH (n) WHERE n.id = 1 RETURN n"
     statements = ("CREATE (n:Node {id: 1})",)
-    generated = GeneratedShard(
-        graph_statements=statements,
-        query_texts=(query,),
-        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
-    )
     built = worker_module.RulePairFactory(worker_module.RuleRegistry.default()).build(
         query,
         entry,
@@ -4630,52 +4626,24 @@ def test_task5_legacy_evidence_migrates_crash_safely_to_pair_runtime(tmp_path, m
         encoding="utf-8",
     )
 
-    class SimulatedMigrationCrash(BaseException):
-        pass
-
-    real_unlink = worker_module._unlink_fsync
-    monkeypatch.setattr(
-        worker_module,
-        "_unlink_fsync",
-        lambda _path: (_ for _ in ()).throw(SimulatedMigrationCrash()),
-    )
-    first = RuntimeFirstShardWorker(
+    worker = RuntimeFirstShardWorker(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
-        generation_runner=lambda _entry, _raw_dir: generated,
-        adapter_factory=lambda _entry: _Adapter(),
+        generation_runner=lambda *_args: pytest.fail(
+            "missing applicability evidence must fail before generation"
+        ),
+        adapter_factory=lambda *_args: pytest.fail(
+            "missing applicability evidence must fail before DBMS connection"
+        ),
     )
-    first.bind_run_dir(tmp_path)
-    with pytest.raises(SimulatedMigrationCrash):
-        first(entry)
+    worker.bind_run_dir(tmp_path)
 
-    migration_progress = json.loads((entry_dir / "acceptance_progress.json").read_text())
-    assert migration_progress["schema_version"] == 6
-    assert migration_progress["evidence_identity"] == {
-        "dbms_fingerprint": "a" * 64,
-        "dbms_health_epoch": "e" * 64,
-        "graph_snapshot_hash": _graph_snapshot_hash(statements),
-    }
-    assert migration_progress["stage1_intent"] is None
-    assert migration_progress["legacy_migration_sha256"]
-    assert len(migration_progress["pending_acceptances"]) == 1
+    with pytest.raises(WorkerFailure) as captured:
+        worker(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert "applicable-query ledger" in str(captured.value)
     assert (entry_dir / "accepted_pairs.jsonl").exists()
-
-    monkeypatch.setattr(worker_module, "_unlink_fsync", real_unlink)
-    retry = RuntimeFirstShardWorker(
-        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
-        generation_runner=lambda _entry, _raw_dir: generated,
-        adapter_factory=lambda _entry: _Adapter(),
-    )
-    retry.bind_run_dir(tmp_path)
-
-    result = retry(entry)
-
-    assert result["terminal_state"] == "stage2_complete"
-    assert result["accepted_pairs"] == 1
-    assert not (entry_dir / "accepted_pairs.jsonl").exists()
-    compact = json.loads((entry_dir / "pair_runtime.jsonl").read_text())
-    assert compact["pair_hash"] == pair.pair_hash
-    assert "query_a" not in compact and "query_b" not in compact
+    assert not (entry_dir / "pair_runtime.jsonl").exists()
 
 
 def test_rule_entry_retry_keeps_reject_progress_and_does_not_repeat_completed_seed(
