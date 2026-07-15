@@ -27,7 +27,12 @@ from graph_sym_perf.experiment.entry_paths import rule_plan_entry_directory_name
 from graph_sym_perf.experiment.plan_models import RulePlan, RulePlanEntry, RunPlan
 from graph_sym_perf.experiment.planner import resolved_manifest_hash
 from graph_sym_perf.experiment.selection import CellSummary
-from graph_sym_perf.experiment.process_monitor import ProcessMonitor, WorkerProcessError, bind_worker_attempt
+from graph_sym_perf.experiment.process_monitor import (
+    ProcessMonitor,
+    WorkerProcessError,
+    bind_worker_attempt,
+    sanitize_terminal_error,
+)
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import (
     EntryState,
@@ -305,6 +310,7 @@ class RulePlanSupervisor:
                     "infrastructure_reason": f"{type(exc).__name__}: {exc}",
                     "terminal_state": final_state.value,
                 }
+            final_result = _sanitize_terminal_result(final_result, final_state)
             terminal_body = to_jsonable(dict(final_result))
             if not isinstance(terminal_body, Mapping):
                 terminal_body = {
@@ -312,6 +318,7 @@ class RulePlanSupervisor:
                     "artifact_complete": False,
                     "certificate_complete": False,
                     "entry_id": entry.entry_id,
+                    "infrastructure_error_kind": ErrorKind.INFRASTRUCTURE_ERROR.value,
                     "infrastructure_reason": "terminal result is not JSON-object serializable",
                     "terminal_state": EntryState.INFRASTRUCTURE_FAILED.value,
                 }
@@ -341,7 +348,9 @@ class RulePlanSupervisor:
             failure_body = {
                 "entry_id": entry.entry_id,
                 "error_kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
-                "reason": f"{type(exc).__name__}: {exc}",
+                "reason": sanitize_terminal_error(
+                    f"{type(exc).__name__}: {exc}"
+                ),
             }
             _atomic_write_json(
                 entry_dir / "cell_summary_failure.json",
@@ -379,6 +388,34 @@ class RulePlanSupervisor:
                 "state": state,
             },
         )
+
+
+def _sanitize_terminal_result(
+    result: Mapping[str, object],
+    state: EntryState,
+) -> dict[str, object]:
+    sanitized = dict(result)
+    for key in (
+        "error_reason",
+        "failure_reason",
+        "infrastructure_reason",
+        "message",
+        "reason",
+        "resource_exhaustion_reason",
+    ):
+        if key in sanitized and sanitized[key] is not None:
+            sanitized[key] = sanitize_terminal_error(sanitized[key])
+    if state is EntryState.INFRASTRUCTURE_FAILED:
+        sanitized.setdefault(
+            "infrastructure_error_kind",
+            ErrorKind.INFRASTRUCTURE_ERROR.value,
+        )
+    elif state is EntryState.RESOURCE_EXHAUSTED:
+        sanitized.setdefault(
+            "resource_exhaustion_kind",
+            ErrorKind.RESOURCE_EXHAUSTED.value,
+        )
+    return sanitized
 
 
 def cell_summary_from_result(
@@ -644,6 +681,7 @@ class ShardSupervisor:
         task_identity: str,
         reason: str,
     ) -> None:
+        reason = sanitize_terminal_error(reason)
         payload = {
             "error_kind": ErrorKind.INFRASTRUCTURE_ERROR.value,
             "manifest_hash": manifest_hash,
@@ -981,8 +1019,25 @@ class ShardSupervisor:
         error_kind: ErrorKind | None = None,
         reason: str | None = None,
     ) -> None:
-        journal.transition(state, attempt=attempt, error_kind=error_kind, reason=reason)
-        self._aggregate_event(task, journal, attempt, state, error_kind=error_kind, reason=reason)
+        safe_reason = (
+            sanitize_terminal_error(reason)
+            if reason is not None
+            else None
+        )
+        journal.transition(
+            state,
+            attempt=attempt,
+            error_kind=error_kind,
+            reason=safe_reason,
+        )
+        self._aggregate_event(
+            task,
+            journal,
+            attempt,
+            state,
+            error_kind=error_kind,
+            reason=safe_reason,
+        )
 
     def _aggregate_event(
         self,

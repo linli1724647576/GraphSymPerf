@@ -8,6 +8,7 @@ from dataclasses import replace
 
 import pytest
 
+import graph_sym_perf.experiment.supervisor as supervisor_module
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RunPlan, ShardTask, SourceRevision
@@ -395,6 +396,98 @@ def test_rule_plan_supervisor_classifies_child_crash_without_killing_campaign(
         )
     )
     assert terminal["infrastructure_error_kind"] == ErrorKind.WORKER_CRASHED.value
+
+
+@pytest.mark.parametrize("process_isolation", (False, True))
+def test_rule_plan_terminal_error_is_typed_sanitized_and_bounded(
+    tmp_path,
+    process_isolation,
+) -> None:
+    plan = _p1_rule_plan()
+    sensitive_message = (
+        "Traceback (most recent call last):\n"
+        '  File "/Users/sakuraq/private/worker.py", line 7\n'
+        "bolt://neo4j:hunter2@db.internal:7687 PASSWORD=hunter2 "
+        + ("x" * 1000)
+    )
+
+    def worker(_entry):
+        raise RuntimeError(sensitive_message)
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=0,
+        process_isolation=process_isolation,
+        heartbeat_seconds=0.05,
+        stale_after_seconds=1.0,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    terminal = json.loads(
+        next(
+            (tmp_path / "entries").glob(
+                "*/attempt-000/terminal_result.json"
+            )
+        ).read_text(encoding="utf-8")
+    )
+    reason = terminal["infrastructure_reason"]
+    assert terminal["infrastructure_error_kind"] == (
+        ErrorKind.WORKER_CRASHED.value
+        if process_isolation
+        else ErrorKind.INFRASTRUCTURE_ERROR.value
+    )
+    assert len(reason) <= 512
+    assert "\n" not in reason
+    assert "Traceback" not in reason
+    assert "/Users/sakuraq" not in reason
+    assert "hunter2" not in reason
+    assert "bolt://" not in reason
+
+
+def test_cell_summary_failure_reason_is_sanitized(tmp_path, monkeypatch) -> None:
+    plan = _p1_rule_plan()
+
+    def worker(entry):
+        return {
+            "accepted_pairs": entry.accepted_pair_quota,
+            "artifact_complete": True,
+            "certificate_complete": True,
+            "entry_id": entry.entry_id,
+            "terminal_state": "completed",
+        }
+
+    def fail_cell_summary(*_args, **_kwargs):
+        raise ValueError(
+            "/Users/sakuraq/private/cell.py "
+            "postgresql://admin:hunter2@db.internal/graph "
+            "PASSWORD=hunter2"
+        )
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "cell_summary_from_result",
+        fail_cell_summary,
+    )
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        process_isolation=False,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    failure = json.loads(
+        next(
+            (tmp_path / "entries").glob("*/cell_summary_failure.json")
+        ).read_text(encoding="utf-8")
+    )
+    reason = failure["reason"]
+    assert failure["error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    assert "/Users/sakuraq" not in reason
+    assert "hunter2" not in reason
+    assert "postgresql://" not in reason
 
 
 def _hash_for(label: str) -> str:
