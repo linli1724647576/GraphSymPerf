@@ -25,7 +25,10 @@ from graph_sym_perf.artifacts.store import (
 )
 from graph_sym_perf.issues.registry import IssueRegistry
 from graph_sym_perf.issues.durable_registry import renew_current_family_owner
-from graph_sym_perf.issues.exporter import canonical_typed_export_projection
+from graph_sym_perf.issues.exporter import (
+    canonical_typed_export_dumps,
+    canonical_typed_export_projection,
+)
 from graph_sym_perf.validation.models import DeveloperStatus, PipelineStage, VersionedIssueRecord
 
 
@@ -122,10 +125,10 @@ class IssueCommands:
             if hashlib.sha256(payload).hexdigest() != index["export_sha256"]:
                 raise ValueError("typed export hash mismatch")
             exported = json.loads(payload)
-            if (
-                not isinstance(exported, dict)
-                or exported != canonical_typed_export_projection(record.payload)
-            ):
+            expected_export = canonical_typed_export_projection(record.payload)
+            if not isinstance(exported, dict) or canonical_typed_export_dumps(
+                exported
+            ) != canonical_typed_export_dumps(expected_export):
                 raise ValueError("typed export identity does not match the issue index")
             destination = Path(output)
             destination.parent.mkdir(parents=True, exist_ok=True)

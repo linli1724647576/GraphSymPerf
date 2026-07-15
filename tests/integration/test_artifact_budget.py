@@ -1960,6 +1960,132 @@ def test_owner_renewal_rejects_rehashed_generation_export_projection_attack(
     assert pending.is_file()
 
 
+@pytest.mark.parametrize("attack", ("ratio_nan", "reference_schema_bool"))
+def test_owner_renewal_rejects_fully_synchronized_noncanonical_generation(
+    monkeypatch,
+    tmp_path,
+    attack,
+) -> None:
+    run_dir, _store, owner_index, _old_export, _old_bytes = (
+        _crash_production_owner_renewal(
+            monkeypatch,
+            tmp_path,
+            crash_seam="_after_owner_renewal_commit_write",
+        )
+    )
+    pending = run_dir / "issues" / "owner_renewal.pending.json"
+    journal = json.loads(pending.read_text())
+    generation_export = run_dir / journal["new_receipt"]["export_path"]
+    exported = json.loads(generation_export.read_text())
+    if attack == "ratio_nan":
+        exported["validated_ratio"] = float("nan")
+    else:
+        exported["original_validation_ref"]["schema_version"] = True
+    generation_export.write_text(
+        json.dumps(exported, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    forged_sha = hashlib.sha256(generation_export.read_bytes()).hexdigest()
+    journal["new_receipt"]["export_sha256"] = forged_sha
+    journal["generation_export_sha256"] = forged_sha
+    journal.pop("journal_hash")
+    journal["journal_hash"] = _durable_hash_payload(
+        "owner-renewal-journal-v1",
+        journal,
+    )
+    pending.write_text(
+        json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    owner_index.write_text(
+        json.dumps(
+            journal["new_receipt"],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    issue_id = str(journal["owner_issue_id"])
+    commit_path = run_dir / "issues" / "commits" / f"{issue_id}.json"
+    commit = json.loads(commit_path.read_text())
+    commit.update(journal["new_receipt"])
+    commit_path.write_text(
+        json.dumps(commit, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    attacked_index_bytes = owner_index.read_bytes()
+    attacked_commit_bytes = commit_path.read_bytes()
+    destination = run_dir / "developer-exports" / f"fully-synchronized-{attack}.json"
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._after_owner_renewal_commit_write",
+        lambda _root: None,
+    )
+
+    status, result = _issue_export_with_timeout(owner_index, destination)
+
+    assert status == "error"
+    assert "IssueGateError" in result
+    assert not destination.exists()
+    assert owner_index.read_bytes() == attacked_index_bytes
+    assert commit_path.read_bytes() == attacked_commit_bytes
+    assert pending.is_file()
+
+
+def test_cli_rejects_bool_as_artifact_reference_int_after_synchronized_receipts(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    run_dir, _store, owner_index, _old_export, _old_bytes = (
+        _crash_production_owner_renewal(
+            monkeypatch,
+            tmp_path,
+            crash_seam="_after_owner_renewal_commit_write",
+        )
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._after_owner_renewal_commit_write",
+        lambda _root: None,
+    )
+    recovered = run_dir / "developer-exports" / "strict-reference-recovered.json"
+    status, result = _issue_export_with_timeout(owner_index, recovered)
+    assert status == "ok", result
+    assert not (run_dir / "issues" / "owner_renewal.pending.json").exists()
+    receipt = json.loads(owner_index.read_text())
+    generation_export = run_dir / receipt["export_path"]
+    exported = json.loads(generation_export.read_text())
+    exported["reduced_validation_ref"]["schema_version"] = True
+    generation_export.write_text(
+        json.dumps(exported, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    forged_sha = hashlib.sha256(generation_export.read_bytes()).hexdigest()
+    receipt["export_sha256"] = forged_sha
+    owner_index.write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    issue_id = str(receipt["issue_id"])
+    commit_path = run_dir / "issues" / "commits" / f"{issue_id}.json"
+    commit = json.loads(commit_path.read_text())
+    commit["export_sha256"] = forged_sha
+    commit_path.write_text(
+        json.dumps(commit, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    attacked_index_bytes = owner_index.read_bytes()
+    attacked_commit_bytes = commit_path.read_bytes()
+    destination = run_dir / "developer-exports" / "forged-reference.json"
+
+    status, result = _issue_export_with_timeout(owner_index, destination)
+
+    assert status == "error"
+    assert "IssueGateError" in result
+    assert not destination.exists()
+    assert owner_index.read_bytes() == attacked_index_bytes
+    assert commit_path.read_bytes() == attacked_commit_bytes
+
+
 def _crash_production_owner_renewal(
     monkeypatch,
     tmp_path,

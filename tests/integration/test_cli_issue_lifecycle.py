@@ -1,10 +1,18 @@
 import json
 import hashlib
+from dataclasses import asdict
 from types import SimpleNamespace
 
 from graph_sym_perf.cli.__main__ import main
 from graph_sym_perf.issues.registry import canonical_reduced_pair_hash
 from graph_sym_perf.issues.commands import _current_issue_registry
+from graph_sym_perf.issues.dedup import (
+    FingerprintSubject,
+    IssueFamilyIndex,
+    compact_family_decision_payload,
+    fingerprint_issue,
+)
+from tests.unit.validation.test_promotion import _canonical_certificate
 
 
 def _registry_record(issue_id="issue-1"):
@@ -70,6 +78,24 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
         "media_type": "application/json",
         "schema_version": 1,
     }
+    fingerprint = fingerprint_issue(
+        FingerprintSubject(
+            dbms="neo4j",
+            dbms_version="dbms/1",
+            dbms_fingerprint="b" * 64,
+            graph_snapshot_hash="c" * 64,
+            canonical_rule_id="constant_true_disjunction",
+            reduced_query_a="RETURN 1",
+            reduced_query_b="RETURN 1 AS x",
+            runtime_direction="b",
+            site_class="where_boolean",
+            submission_path="relative",
+            reduced_validation_phenotype="relative:stable:b",
+        )
+    )
+    family_decision = IssueFamilyIndex().add(fingerprint, issue_id="issue-1")
+    family_payload = compact_family_decision_payload(family_decision)
+    certificate = asdict(_canonical_certificate("constant_true_disjunction"))
     exported = {
         "issue_id": "issue-1",
         "stage": "submit_ready",
@@ -79,13 +105,13 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
         "dbms_version": "dbms/1",
         "reduced_original": "RETURN 1",
         "reduced_transformed": "RETURN 1 AS x",
-        "family_id": "f" * 64,
-        "exact_signature": "e" * 64,
-        "structural_signature": None,
-        "submission_path": "relative",
-        "reduced_validation_phenotype": "relative:stable:b",
-        "family_version_hash": "c" * 64,
-        "family_decision_hash": "d" * 64,
+        "family_id": family_decision.family_id,
+        "exact_signature": fingerprint.exact,
+        "structural_signature": fingerprint.structural,
+        "submission_path": fingerprint.submission_path,
+        "reduced_validation_phenotype": fingerprint.reduced_validation_phenotype,
+        "family_version_hash": family_decision.family_version_hash,
+        "family_decision_hash": family_decision.decision_hash,
         "original_validation_hash": "1" * 64,
         "reduced_validation_hash": "2" * 64,
         "original_validation_ref": original_validation_ref,
@@ -135,26 +161,17 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
                 "issue_id": "issue-1",
                 "stage": "submit_ready",
                 "reduction_status": "reduced_valid",
-                "certificate": {"rule_id": "constant_true_disjunction"},
+                "certificate": certificate,
                 "validated_ratio": 4.0,
                 "dbms_version": "dbms/1",
                 "reduced_query_a": "RETURN 1",
                 "reduced_query_b": "RETURN 1 AS x",
-                "family_id": "f" * 64,
+                "family_id": family_decision.family_id,
                 "original_validation_hash": "1" * 64,
                 "reduced_validation_hash": "2" * 64,
                 "original_validation_ref": original_validation_ref,
                 "final_validation_ref": reduced_validation_ref,
-                "family_decision": {
-                    "family_version_hash": "c" * 64,
-                    "decision_hash": "d" * 64,
-                    "fingerprint": {
-                        "exact": "e" * 64,
-                        "structural": None,
-                        "submission_path": "relative",
-                        "reduced_validation_phenotype": "relative:stable:b",
-                    },
-                },
+                "family_decision": family_payload,
                 "duplicate_clearance": {
                     "issue_id": clearance.issue_id,
                     "possible_duplicate": clearance.possible_duplicate,

@@ -27,7 +27,10 @@ from graph_sym_perf.issues.dedup import (
     family_member_proof_root,
 )
 from graph_sym_perf.issues.registry import IssueRegistry
-from graph_sym_perf.issues.exporter import canonical_typed_export_projection
+from graph_sym_perf.issues.exporter import (
+    canonical_typed_export_dumps,
+    canonical_typed_export_projection,
+)
 from graph_sym_perf.validation.models import (
     DeveloperStatus,
     PipelineStage,
@@ -776,10 +779,12 @@ def _generation_export_binds_owner(
         expected = canonical_typed_export_projection(issue_payload)
     except (TypeError, ValueError):
         return False
-    return (
-        set(exported) == set(expected)
-        and stable_json_dumps(dict(exported)) == stable_json_dumps(expected)
-    )
+    try:
+        return canonical_typed_export_dumps(exported) == canonical_typed_export_dumps(
+            expected
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _validate_receipt_payload(value: object, *, issue_id: str) -> dict[str, object]:
@@ -2013,9 +2018,7 @@ def _write_json_immutable(path: Path, payload: Mapping[str, object]) -> None:
     """Create one canonical generation without replacing an existing inode."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = (
-        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode("utf-8")
+    encoded = (canonical_typed_export_dumps(payload) + "\n").encode("utf-8")
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(name)
     try:

@@ -1,9 +1,12 @@
-import json
 import copy
+import json
+from dataclasses import asdict
 
 import pytest
 
 from graph_sym_perf.artifacts.schema import ArtifactReference
+from graph_sym_perf.issues import exporter
+from graph_sym_perf.issues.dedup import compact_family_decision_payload
 from graph_sym_perf.issues.exporter import export_issue
 from graph_sym_perf.validation.models import PipelineStage
 from graph_sym_perf.validation.promotion import promote
@@ -40,6 +43,129 @@ def _refs() -> dict[str, ArtifactReference]:
             "2" * 64, "objects/22/" + "2" * 64, 100, "application/json"
         ),
     }
+
+
+def _sealed_projection_source() -> dict[str, object]:
+    issue = _issue()
+    refs = _refs()
+    return {
+        "issue_id": issue.issue_id,
+        "family_id": issue.family_id,
+        "stage": issue.stage.value,
+        "dbms_version": issue.validation.manifest.dbms_version,
+        "certificate": asdict(issue.certificate),
+        "validated_ratio": issue.reduction.final_validation.validated_ratio,
+        "reduction_status": issue.reduction.status.value,
+        "reduced_query_a": issue.reduction.reduced_pair.query_a,
+        "reduced_query_b": issue.reduction.reduced_pair.query_b,
+        "family_decision": compact_family_decision_payload(issue.family_decision),
+        "original_validation_hash": issue.reduction.original_validation_hash,
+        "reduced_validation_hash": issue.reduction.reduced_validation_hash,
+        "original_validation_ref": asdict(refs["original_validation_ref"]),
+        "final_validation_ref": asdict(refs["reduced_validation_ref"]),
+    }
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "ratio_bool",
+        "ratio_nan",
+        "ratio_inf",
+        "ratio_negative_inf",
+        "ratio_string",
+        "reference_schema_bool",
+        "reference_extra",
+        "reference_missing",
+        "reference_wrong_type",
+        "family_extra",
+        "family_missing",
+        "family_wrong_type",
+        "certificate_extra",
+        "certificate_missing",
+        "certificate_wrong_type",
+        "fingerprint_extra",
+        "fingerprint_missing",
+        "fingerprint_wrong_type",
+        "member_count_bool",
+    ),
+)
+def test_canonical_typed_export_projection_rejects_ambiguous_types_and_shapes(
+    attack,
+) -> None:
+    source = copy.deepcopy(_sealed_projection_source())
+    family = source["family_decision"]
+    certificate = source["certificate"]
+    assert isinstance(family, dict)
+    assert isinstance(certificate, dict)
+    fingerprint = family["fingerprint"]
+    assert isinstance(fingerprint, dict)
+    if attack == "ratio_bool":
+        source["validated_ratio"] = True
+    elif attack == "ratio_nan":
+        source["validated_ratio"] = float("nan")
+    elif attack == "ratio_inf":
+        source["validated_ratio"] = float("inf")
+    elif attack == "ratio_negative_inf":
+        source["validated_ratio"] = float("-inf")
+    elif attack == "ratio_string":
+        source["validated_ratio"] = "4.0"
+    elif attack == "reference_schema_bool":
+        source["original_validation_ref"]["schema_version"] = True
+    elif attack == "reference_extra":
+        source["original_validation_ref"]["extra"] = "forged"
+    elif attack == "reference_missing":
+        source["original_validation_ref"].pop("media_type")
+    elif attack == "reference_wrong_type":
+        source["original_validation_ref"]["size_bytes"] = "100"
+    elif attack == "family_extra":
+        family["extra"] = "forged"
+    elif attack == "family_missing":
+        family.pop("member_proof_root")
+    elif attack == "family_wrong_type":
+        source["family_decision"] = []
+    elif attack == "certificate_extra":
+        certificate["extra"] = "forged"
+    elif attack == "certificate_missing":
+        certificate.pop("proof_id")
+    elif attack == "certificate_wrong_type":
+        certificate["submit_eligible"] = 1
+    elif attack == "fingerprint_extra":
+        fingerprint["extra"] = "forged"
+    elif attack == "fingerprint_missing":
+        fingerprint.pop("query_a_hash")
+    elif attack == "fingerprint_wrong_type":
+        fingerprint["normalized_pair"] = ["only-one"]
+    else:
+        family["member_count"] = True
+
+    with pytest.raises(ValueError):
+        exporter.canonical_typed_export_projection(source)
+
+
+@pytest.mark.parametrize(
+    "attack",
+    ("top_extra", "top_missing", "top_wrong_type", "nested_schema_bool", "nan"),
+)
+def test_canonical_typed_export_stable_serialization_rejects_noncanonical_payload(
+    attack,
+) -> None:
+    projection = exporter.canonical_typed_export_projection(
+        _sealed_projection_source()
+    )
+    if attack == "top_extra":
+        projection["extra"] = "forged"
+    elif attack == "top_missing":
+        projection.pop("rule_id")
+    elif attack == "top_wrong_type":
+        projection["stage"] = 1
+    elif attack == "nested_schema_bool":
+        projection["reduced_validation_ref"]["schema_version"] = True
+    else:
+        projection["validated_ratio"] = float("nan")
+
+    with pytest.raises(ValueError):
+        exporter.canonical_typed_export_dumps(projection)
 
 
 def test_exporter_rejects_untyped_raw_candidate(tmp_path) -> None:
