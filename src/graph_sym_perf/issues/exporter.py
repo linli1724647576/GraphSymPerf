@@ -10,7 +10,10 @@ from collections.abc import Mapping
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from graph_sym_perf.artifacts.schema import ArtifactReference
+from graph_sym_perf.artifacts.schema import (
+    ArtifactReference,
+    canonical_artifact_reference_payload,
+)
 from graph_sym_perf.issues.dedup import (
     IssueFingerprint,
     compact_family_decision_payload,
@@ -43,9 +46,6 @@ _TYPED_EXPORT_FIELDS = frozenset(
         "original_validation_ref",
         "reduced_validation_ref",
     }
-)
-_ARTIFACT_REFERENCE_FIELDS = frozenset(
-    {"content_hash", "relative_path", "size_bytes", "media_type", "schema_version"}
 )
 _COMPACT_FAMILY_FIELDS = frozenset(
     {
@@ -191,20 +191,10 @@ def _validate_canonical_typed_export(value: object) -> None:
 
 
 def _validate_artifact_reference(value: object, name: str) -> dict[str, object]:
-    mapping = _exact_mapping(value, _ARTIFACT_REFERENCE_FIELDS, name)
-    if (
-        not isinstance(mapping.get("content_hash"), str)
-        or not isinstance(mapping.get("relative_path"), str)
-        or type(mapping.get("size_bytes")) is not int
-        or not isinstance(mapping.get("media_type"), str)
-        or type(mapping.get("schema_version")) is not int
-    ):
-        raise ValueError(f"{name} has ambiguous field types")
     try:
-        ArtifactReference(**mapping)
-    except (TypeError, ValueError) as exc:
+        return canonical_artifact_reference_payload(value)
+    except ValueError as exc:
         raise ValueError(f"{name} is invalid") from exc
-    return mapping
 
 
 def _validate_family(value: object) -> dict[str, object]:

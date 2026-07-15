@@ -2086,6 +2086,125 @@ def test_cli_rejects_bool_as_artifact_reference_int_after_synchronized_receipts(
     assert commit_path.read_bytes() == attacked_commit_bytes
 
 
+@pytest.mark.parametrize(
+    "attack",
+    ("schema_bool", "schema_string", "reference_extra", "reference_missing"),
+)
+def test_owner_renewal_rejects_synchronized_noncanonical_receipt_issue_reference(
+    monkeypatch,
+    tmp_path,
+    attack,
+) -> None:
+    run_dir, _store, owner_index, _old_export, _old_bytes = (
+        _crash_production_owner_renewal(
+            monkeypatch,
+            tmp_path,
+            crash_seam="_after_owner_renewal_commit_write",
+        )
+    )
+    pending = run_dir / "issues" / "owner_renewal.pending.json"
+    journal = json.loads(pending.read_text())
+    if attack == "schema_bool":
+        journal["new_receipt"]["issue_ref"]["schema_version"] = True
+    elif attack == "schema_string":
+        journal["new_receipt"]["issue_ref"]["schema_version"] = "1"
+    elif attack == "reference_extra":
+        journal["new_receipt"]["issue_ref"]["extra"] = "forged"
+    else:
+        journal["new_receipt"]["issue_ref"].pop("media_type")
+    journal.pop("journal_hash")
+    journal["journal_hash"] = _durable_hash_payload(
+        "owner-renewal-journal-v1",
+        journal,
+    )
+    pending.write_text(
+        json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    owner_index.write_text(
+        json.dumps(
+            journal["new_receipt"],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    issue_id = str(journal["owner_issue_id"])
+    commit_path = run_dir / "issues" / "commits" / f"{issue_id}.json"
+    commit = json.loads(commit_path.read_text())
+    commit["issue_ref"] = journal["new_receipt"]["issue_ref"]
+    commit_path.write_text(
+        json.dumps(commit, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    attacked_index_bytes = owner_index.read_bytes()
+    attacked_commit_bytes = commit_path.read_bytes()
+    destination = run_dir / "developer-exports" / f"forged-receipt-{attack}.json"
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._after_owner_renewal_commit_write",
+        lambda _root: None,
+    )
+
+    status, result = _issue_export_with_timeout(owner_index, destination)
+
+    assert status == "error"
+    assert "IssueGateError" in result
+    assert not destination.exists()
+    assert owner_index.read_bytes() == attacked_index_bytes
+    assert commit_path.read_bytes() == attacked_commit_bytes
+    assert pending.is_file()
+
+
+def test_cli_rejects_synchronized_noncanonical_receipt_without_pending_renewal(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    run_dir, _store, owner_index, _old_export, _old_bytes = (
+        _crash_production_owner_renewal(
+            monkeypatch,
+            tmp_path,
+            crash_seam="_after_owner_renewal_commit_write",
+        )
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._after_owner_renewal_commit_write",
+        lambda _root: None,
+    )
+    recovered = run_dir / "developer-exports" / "receipt-recovered.json"
+    status, result = _issue_export_with_timeout(owner_index, recovered)
+    assert status == "ok", result
+    pending = run_dir / "issues" / "owner_renewal.pending.json"
+    assert not pending.exists()
+
+    receipt = json.loads(owner_index.read_text())
+    receipt["issue_ref"]["size_bytes"] = "1"
+    owner_index.write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    issue_id = str(receipt["issue_id"])
+    commit_path = run_dir / "issues" / "commits" / f"{issue_id}.json"
+    commit = json.loads(commit_path.read_text())
+    commit["issue_ref"] = receipt["issue_ref"]
+    commit_path.write_text(
+        json.dumps(commit, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    attacked_index_bytes = owner_index.read_bytes()
+    attacked_commit_bytes = commit_path.read_bytes()
+    destination = run_dir / "developer-exports" / "forged-direct-receipt.json"
+
+    status, result = _issue_export_with_timeout(owner_index, destination)
+
+    assert status == "error"
+    assert "IssueGateError" in result
+    assert not destination.exists()
+    assert owner_index.read_bytes() == attacked_index_bytes
+    assert commit_path.read_bytes() == attacked_commit_bytes
+    assert not pending.exists()
+
+
 def _crash_production_owner_renewal(
     monkeypatch,
     tmp_path,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import hashlib
 from statistics import median
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Mapping
@@ -41,6 +41,32 @@ class ArtifactReference:
             raise ValueError("artifact size/media type is invalid")
         if self.schema_version != 1:
             raise ValueError("unsupported artifact reference schema version")
+
+
+_ARTIFACT_REFERENCE_FIELDS = frozenset(
+    {"content_hash", "relative_path", "size_bytes", "media_type", "schema_version"}
+)
+
+
+def canonical_artifact_reference_payload(value: object) -> dict[str, object]:
+    """Return the sole strict JSON projection of an artifact reference."""
+
+    if not isinstance(value, Mapping) or set(value) != _ARTIFACT_REFERENCE_FIELDS:
+        raise ValueError("artifact reference has missing or unknown fields")
+    payload = dict(value)
+    if (
+        not isinstance(payload.get("content_hash"), str)
+        or not isinstance(payload.get("relative_path"), str)
+        or type(payload.get("size_bytes")) is not int
+        or not isinstance(payload.get("media_type"), str)
+        or type(payload.get("schema_version")) is not int
+    ):
+        raise ValueError("artifact reference has ambiguous field types")
+    try:
+        reference = ArtifactReference(**payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("artifact reference is invalid") from exc
+    return asdict(reference)
 
 
 @dataclass(frozen=True)

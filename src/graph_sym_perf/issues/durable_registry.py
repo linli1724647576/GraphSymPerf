@@ -31,6 +31,12 @@ from graph_sym_perf.issues.exporter import (
     canonical_typed_export_dumps,
     canonical_typed_export_projection,
 )
+from graph_sym_perf.issues.receipts import (
+    canonical_issue_commit_payload,
+    canonical_issue_commit_receipt_payload,
+    canonical_issue_receipt_payload,
+    issue_receipts_equal,
+)
 from graph_sym_perf.validation.models import (
     DeveloperStatus,
     PipelineStage,
@@ -430,20 +436,20 @@ def _load_owner_evidence_unlocked(
 ) -> tuple[dict[str, object], object, object, Path]:
     """Validate a durable receipt, sealed issue chain, export, and owner binding."""
 
-    required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
     index_path = root / "index" / f"{record.issue_id}.json"
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-    if not isinstance(index, dict) or set(index) != required:
-        raise ValueError("family owner index receipt is incomplete")
-    receipt = {name: index[name] for name in required}
-    if receipt.get("issue_id") != record.issue_id:
-        raise ValueError("family owner index receipt has the wrong identity")
+    receipt = canonical_issue_receipt_payload(
+        json.loads(index_path.read_text(encoding="utf-8")),
+        issue_id=record.issue_id,
+    )
     commit_path = root / "commits" / f"{record.issue_id}.json"
     if require_commit or commit_path.exists():
-        commit = json.loads(commit_path.read_text(encoding="utf-8"))
+        commit = _load_owner_commit(root, record.issue_id)
         if (
-            not isinstance(commit, dict)
-            or any(commit.get(name) != receipt.get(name) for name in required)
+            not issue_receipts_equal(
+                _commit_receipt(commit),
+                receipt,
+                issue_id=record.issue_id,
+            )
             or (
                 require_commit
                 and commit.get("registry_record_hash") != _record_hash(record)
@@ -476,9 +482,7 @@ def _verify_owner_receipt_unlocked(
         verify_issue_hash_chain,
     )
 
-    required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
-    if set(receipt) != required or receipt.get("issue_id") != record.issue_id:
-        raise ValueError("family owner receipt is incomplete")
+    receipt = canonical_issue_receipt_payload(receipt, issue_id=record.issue_id)
     run_dir = root.parent.resolve()
     store_path = (run_dir / str(receipt["artifact_store"])).resolve()
     export_path = (run_dir / str(receipt["export_path"])).resolve()
@@ -617,15 +621,24 @@ def _renew_current_family_owner_unlocked(
     )
     generation_export_path = root / "submit-ready" / generation_name
     _write_json_immutable(generation_export_path, exported)
-    new_receipt = {
-        "artifact_store": receipt["artifact_store"],
-        "export_path": str(generation_export_path.relative_to(root.parent)),
-        "export_sha256": hashlib.sha256(generation_export_path.read_bytes()).hexdigest(),
-        "issue_id": owner_issue_id,
-        "issue_ref": asdict(issue_ref),
-    }
+    new_receipt = canonical_issue_receipt_payload(
+        {
+            "artifact_store": receipt["artifact_store"],
+            "export_path": str(generation_export_path.relative_to(root.parent)),
+            "export_sha256": hashlib.sha256(
+                generation_export_path.read_bytes()
+            ).hexdigest(),
+            "issue_id": owner_issue_id,
+            "issue_ref": asdict(issue_ref),
+        },
+        issue_id=owner_issue_id,
+    )
     old_commit = _load_owner_commit(root, owner_issue_id)
-    if _commit_receipt(old_commit) != receipt:
+    if not issue_receipts_equal(
+        _commit_receipt(old_commit),
+        receipt,
+        issue_id=owner_issue_id,
+    ):
         raise ValueError("family renewal old index and commit disagree")
     journal: dict[str, object] = {
         "schema": "owner-renewal-v1",
@@ -706,7 +719,7 @@ def _apply_owner_renewal(root: Path, payload: Mapping[str, object]) -> None:
     owner = owners[0]
     old_receipt = _validate_receipt_payload(payload["old_receipt"], issue_id=issue_id)
     new_receipt = _validate_receipt_payload(payload["new_receipt"], issue_id=issue_id)
-    if old_receipt == new_receipt:
+    if issue_receipts_equal(old_receipt, new_receipt, issue_id=issue_id):
         raise ValueError("owner renewal journal does not advance a generation")
     issue_record, _store, generation_export = _verify_owner_receipt_unlocked(
         root,
@@ -742,22 +755,28 @@ def _apply_owner_renewal(root: Path, payload: Mapping[str, object]) -> None:
     commit_receipt = _commit_receipt(commit)
     old_commit_hash = payload["old_commit_record_hash"]
     current_hash = _record_hash(owner)
-    if index == old_receipt:
-        if commit_receipt != old_receipt or commit.get("registry_record_hash") != old_commit_hash:
+    if issue_receipts_equal(index, old_receipt, issue_id=issue_id):
+        if (
+            not issue_receipts_equal(commit_receipt, old_receipt, issue_id=issue_id)
+            or commit.get("registry_record_hash") != old_commit_hash
+        ):
             raise ValueError("owner renewal old pointer state is invalid")
         _write_json_atomic(index_path, new_receipt)
         _after_owner_renewal_index_write(root)
         index = new_receipt
-    if index != new_receipt:
+    if not issue_receipts_equal(index, new_receipt, issue_id=issue_id):
         raise ValueError("owner renewal index is outside the journal state")
-    if commit_receipt == old_receipt:
+    if issue_receipts_equal(commit_receipt, old_receipt, issue_id=issue_id):
         if commit.get("registry_record_hash") != old_commit_hash:
             raise ValueError("owner renewal old commit binding is invalid")
         _write_commit(root, owner, new_receipt)
         _after_owner_renewal_commit_write(root)
         commit = _load_owner_commit(root, issue_id)
         commit_receipt = _commit_receipt(commit)
-    if commit_receipt != new_receipt or commit.get("registry_record_hash") != current_hash:
+    if (
+        not issue_receipts_equal(commit_receipt, new_receipt, issue_id=issue_id)
+        or commit.get("registry_record_hash") != current_hash
+    ):
         raise ValueError("owner renewal commit is outside the journal state")
     if not _owner_commit_is_current(root, owner):
         raise ValueError("owner renewal pointers did not converge")
@@ -788,14 +807,7 @@ def _generation_export_binds_owner(
 
 
 def _validate_receipt_payload(value: object, *, issue_id: str) -> dict[str, object]:
-    required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
-    if (
-        not isinstance(value, dict)
-        or set(value) != required
-        or value.get("issue_id") != issue_id
-    ):
-        raise ValueError("owner renewal receipt is incomplete")
-    return dict(value)
+    return canonical_issue_receipt_payload(value, issue_id=issue_id)
 
 
 def _load_owner_index(path: Path, *, issue_id: str) -> dict[str, object]:
@@ -806,32 +818,16 @@ def _load_owner_index(path: Path, *, issue_id: str) -> dict[str, object]:
 
 
 def _load_owner_commit(root: Path, issue_id: str) -> dict[str, object]:
-    payload = json.loads(
-        (root / "commits" / f"{issue_id}.json").read_text(encoding="utf-8")
+    return canonical_issue_commit_payload(
+        json.loads(
+            (root / "commits" / f"{issue_id}.json").read_text(encoding="utf-8")
+        ),
+        issue_id=issue_id,
     )
-    if not isinstance(payload, dict) or set(payload) != {
-        "artifact_store",
-        "export_path",
-        "export_sha256",
-        "issue_id",
-        "issue_ref",
-        "registry_record_hash",
-    }:
-        raise ValueError("owner commit is incomplete")
-    return payload
 
 
 def _commit_receipt(commit: Mapping[str, object]) -> dict[str, object]:
-    return {
-        name: commit[name]
-        for name in (
-            "artifact_store",
-            "export_path",
-            "export_sha256",
-            "issue_id",
-            "issue_ref",
-        )
-    }
+    return canonical_issue_commit_receipt_payload(commit)
 
 
 def durable_family_credentials_are_current(
@@ -2133,18 +2129,26 @@ def _owner_commit_is_current(root: Path, record: VersionedIssueRecord) -> bool:
     except (OSError, ValueError, KeyError, json.JSONDecodeError):
         return False
     return bool(
-        _commit_receipt(commit) == index
+        issue_receipts_equal(
+            _commit_receipt(commit),
+            index,
+            issue_id=record.issue_id,
+        )
         and commit.get("registry_record_hash") == _record_hash(record)
     )
 
 
 def _write_commit(root: Path, record: VersionedIssueRecord, materialized: dict[str, object]) -> None:
-    required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
-    if set(materialized) != required or materialized.get("issue_id") != record.issue_id:
-        raise ValueError("issue materialization receipt is incomplete")
+    receipt = canonical_issue_receipt_payload(
+        materialized,
+        issue_id=record.issue_id,
+    )
     path = root / "commits" / f"{record.issue_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {**materialized, "registry_record_hash": _record_hash(record)}
+    payload = canonical_issue_commit_payload(
+        {**receipt, "registry_record_hash": _record_hash(record)},
+        issue_id=record.issue_id,
+    )
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(name)
     try:

@@ -29,6 +29,12 @@ from graph_sym_perf.issues.exporter import (
     canonical_typed_export_dumps,
     canonical_typed_export_projection,
 )
+from graph_sym_perf.issues.receipts import (
+    canonical_issue_commit_payload,
+    canonical_issue_commit_receipt_payload,
+    canonical_issue_receipt_payload,
+    issue_receipts_equal,
+)
 from graph_sym_perf.validation.models import DeveloperStatus, PipelineStage, VersionedIssueRecord
 
 
@@ -75,16 +81,9 @@ class IssueCommands:
             raise IssueGateError("SubmitReadyIssue payload does not exist")
         registry_lock = None
         try:
-            index = json.loads(index_path.read_text(encoding="utf-8"))
-            required = {
-                "artifact_store",
-                "export_path",
-                "export_sha256",
-                "issue_id",
-                "issue_ref",
-            }
-            if not isinstance(index, dict) or not required <= set(index):
-                raise ValueError("not a submit-ready index")
+            index = canonical_issue_receipt_payload(
+                json.loads(index_path.read_text(encoding="utf-8"))
+            )
             if index_path.parent.name != "index" or index_path.parent.parent.name != "issues":
                 raise ValueError("index path is outside the run issue directory")
             run_dir = index_path.parent.parent.parent.resolve()
@@ -92,7 +91,9 @@ class IssueCommands:
                 run_dir / "issues",
                 owner_issue_id=str(index["issue_id"]),
             )
-            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index = canonical_issue_receipt_payload(
+                json.loads(index_path.read_text(encoding="utf-8"))
+            )
             registry_lock = (run_dir / "issues" / ".registry.lock").open("a+", encoding="utf-8")
             fcntl.flock(registry_lock.fileno(), fcntl.LOCK_SH)
             if _revoked(run_dir / "issues" / "revocations.jsonl", str(index["issue_id"])):
@@ -198,13 +199,18 @@ def _revoked(path: Path, issue_id: str) -> bool:
 
 
 def _verify_registry_commit(root: Path, index: dict[str, object]) -> dict[str, object]:
+    index = canonical_issue_receipt_payload(index)
     issue_id = str(index["issue_id"])
     commit_path = root / "commits" / f"{issue_id}.json"
-    commit = json.loads(commit_path.read_text(encoding="utf-8"))
-    if not isinstance(commit, dict):
-        raise ValueError("issue registry commit must be an object")
-    receipt_fields = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
-    if any(commit.get(name) != index.get(name) for name in receipt_fields):
+    commit = canonical_issue_commit_payload(
+        json.loads(commit_path.read_text(encoding="utf-8")),
+        issue_id=issue_id,
+    )
+    if not issue_receipts_equal(
+        canonical_issue_commit_receipt_payload(commit, issue_id=issue_id),
+        index,
+        issue_id=issue_id,
+    ):
         raise ValueError("issue index is not bound to its committed materialization receipt")
     committed_record = None
     with (root / "registry.jsonl").open("r", encoding="utf-8") as stream:

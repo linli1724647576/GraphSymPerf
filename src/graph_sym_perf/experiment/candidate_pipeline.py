@@ -29,6 +29,7 @@ from graph_sym_perf.sampling.yield_store import ValidatedYieldStore
 from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.issues.durable_registry import committed_owner_outcome, promote_unique_issue
 from graph_sym_perf.issues.exporter import export_issue
+from graph_sym_perf.issues.receipts import canonical_issue_receipt_payload
 from graph_sym_perf.validation.models import CandidateBundle, EquivalenceEvidence, PipelineStage
 from graph_sym_perf.validation.promotion import deterministic_issue_id
 from graph_sym_perf.validation.validator import IssueValidator
@@ -368,13 +369,16 @@ class ProductionCandidatePipeline:
             )
             export_hash = hashlib.sha256(export_path.read_bytes()).hexdigest()
             index_path = self.run_dir / "issues" / "index" / f"{issue.issue_id}.json"
-            receipt = {
-                "artifact_store": str(store.root.relative_to(self.run_dir)),
-                "export_path": str(export_path.relative_to(self.run_dir)),
-                "export_sha256": export_hash,
-                "issue_id": issue.issue_id,
-                "issue_ref": asdict(issue_record.reference),
-            }
+            receipt = canonical_issue_receipt_payload(
+                {
+                    "artifact_store": str(store.root.relative_to(self.run_dir)),
+                    "export_path": str(export_path.relative_to(self.run_dir)),
+                    "export_sha256": export_hash,
+                    "issue_id": issue.issue_id,
+                    "issue_ref": asdict(issue_record.reference),
+                },
+                issue_id=issue.issue_id,
+            )
             _atomic_json(index_path, receipt)
             materialized.update(issue_id=issue.issue_id, index_path=index_path)
             return receipt

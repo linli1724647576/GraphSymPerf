@@ -117,7 +117,13 @@ def _receipt() -> dict[str, object]:
         "export_path": "issues/submit-ready/issue-1.json",
         "export_sha256": "a" * 64,
         "issue_id": "issue-1",
-        "issue_ref": {"content_hash": "b" * 64},
+        "issue_ref": {
+            "content_hash": "b" * 64,
+            "relative_path": "objects/bb/" + "b" * 64,
+            "size_bytes": 0,
+            "media_type": "application/json",
+            "schema_version": 1,
+        },
     }
 
 
