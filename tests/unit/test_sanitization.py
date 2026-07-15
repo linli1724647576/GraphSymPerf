@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from graph_sym_perf.sanitization import sanitize_structure, sanitize_text
+import pytest
+
+from graph_sym_perf.sanitization import (
+    SanitizationIntegrityError,
+    sanitize_structure,
+    sanitize_text,
+)
 
 
 def test_recursive_sanitizer_redacts_sensitive_keys_and_leak_bearing_strings() -> None:
@@ -69,3 +75,34 @@ def test_text_sanitizer_redacts_entire_multiword_authorization_value() -> None:
     assert "keyId" not in sanitized
     assert "opaque-tail" not in sanitized
     assert "retryable=true" in sanitized
+
+
+def test_recursive_sanitizer_rejects_changes_to_nested_sealed_evidence() -> None:
+    sealed = {
+        "content_hash": "a" * 64,
+        "payload": {
+            "message": "Authorization: Custom Scheme sealed-auth-tail; retry=true",
+        },
+    }
+
+    with pytest.raises(
+        SanitizationIntegrityError,
+        match="EVIDENCE_INTEGRITY_ERROR",
+    ):
+        sanitize_structure({"result": {"nested": [sealed]}})
+
+
+@pytest.mark.parametrize(
+    "seal_key",
+    ("content_hash", "report_hash", "receipt", "registry_signature"),
+)
+def test_already_sanitized_sealed_evidence_passes_unchanged(seal_key: str) -> None:
+    sealed = {
+        seal_key: "b" * 64,
+        "payload": {
+            "message": "Authorization: <redacted>; retry=true",
+            "query": "MATCH (n) RETURN n",
+        },
+    }
+
+    assert sanitize_structure(sealed) is sealed

@@ -45,7 +45,7 @@ from graph_sym_perf.experiment.state import (
     can_transition,
 )
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
-from graph_sym_perf.sanitization import sanitize_structure
+from graph_sym_perf.sanitization import SanitizationIntegrityError, sanitize_structure
 
 
 @dataclass(frozen=True)
@@ -340,7 +340,22 @@ class RulePlanSupervisor:
                     "infrastructure_reason": f"{type(exc).__name__}: {exc}",
                     "terminal_state": final_state.value,
                 }
-            final_result = _sanitize_terminal_result(final_result, final_state)
+            try:
+                final_result = _sanitize_terminal_result(final_result, final_state)
+            except SanitizationIntegrityError:
+                non_retryable_failure = True
+                final_state = EntryState.INFRASTRUCTURE_FAILED
+                final_result = {
+                    "accepted_pairs": 0,
+                    "artifact_complete": False,
+                    "certificate_complete": False,
+                    "entry_id": entry.entry_id,
+                    "infrastructure_error_kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
+                    "infrastructure_reason": (
+                        "sealed worker evidence requires producer-side sanitization"
+                    ),
+                    "terminal_state": final_state.value,
+                }
             terminal_body = to_jsonable(dict(final_result))
             if not isinstance(terminal_body, Mapping):
                 terminal_body = {

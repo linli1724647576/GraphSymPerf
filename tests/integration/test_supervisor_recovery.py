@@ -667,6 +667,46 @@ def test_terminal_result_is_recursively_sanitized_without_rewriting_query_result
     ).read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("process_isolation", (False, True))
+def test_terminal_boundary_rejects_stale_seal_instead_of_rewriting_receipt(
+    tmp_path,
+    process_isolation,
+) -> None:
+    plan = _p1_rule_plan()
+
+    def worker(entry):
+        return {
+            "accepted_pairs": entry.accepted_pair_quota,
+            "artifact_complete": True,
+            "certificate_complete": True,
+            "entry_id": entry.entry_id,
+            "terminal_state": "completed",
+            "nested_receipt": {
+                "content_hash": "a" * 64,
+                "message": "Authorization: Custom Scheme terminal-sealed-secret; retry=true",
+            },
+        }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=0,
+        process_isolation=process_isolation,
+        heartbeat_seconds=0.05,
+        stale_after_seconds=1.0,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    terminal_path = next(
+        (tmp_path / "entries").glob("*/attempt-000/terminal_result.json")
+    )
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+    assert terminal["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    assert "terminal-sealed-secret" not in terminal_path.read_text(encoding="utf-8")
+    assert terminal.get("nested_receipt") is None
+
+
 def _hash_for(label: str) -> str:
     return hashlib.sha256(label.encode("utf-8")).hexdigest()
 

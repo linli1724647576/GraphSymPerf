@@ -9,6 +9,10 @@ from typing import Any
 
 REDACTED = "<redacted>"
 
+
+class SanitizationIntegrityError(ValueError):
+    """A generic boundary would invalidate already sealed evidence."""
+
 _SENSITIVE_KEY_SUFFIX = re.compile(
     r"(?:password|passwd|pwd|secret|token|authorization|credential|api[_-]?key|auth)$",
     re.IGNORECASE,
@@ -59,13 +63,24 @@ _TRACEBACK_HEADER = re.compile(
     r"traceback\s*\(most recent call last\)\s*:?,?",
     re.IGNORECASE,
 )
+_SEAL_KEY = re.compile(
+    r"(?:^|_)(?:content_hash|report_hash|receipt(?:_hash)?|signature(?:_hash)?)$",
+    re.IGNORECASE,
+)
 
 
 def is_sensitive_key(value: object) -> bool:
     """Return whether a structured key names a credential-bearing value."""
 
-    if not isinstance(value, str):
+    normalized = _normalized_key(value)
+    if normalized is None:
         return False
+    return _SENSITIVE_KEY_SUFFIX.search(normalized) is not None
+
+
+def _normalized_key(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
     normalized = value.strip()
     while (
         len(normalized) >= 2
@@ -73,7 +88,7 @@ def is_sensitive_key(value: object) -> bool:
         and normalized[-1] == normalized[0]
     ):
         normalized = normalized[1:-1].strip()
-    return _SENSITIVE_KEY_SUFFIX.search(normalized) is not None
+    return normalized
 
 
 def sanitize_text(
@@ -119,10 +134,17 @@ def sanitize_structure(value: Any) -> Any:
     """Recursively sanitize JSON-like values while preserving container shape."""
 
     if isinstance(value, Mapping):
-        return {
+        sanitized = {
             key: REDACTED if is_sensitive_key(key) else sanitize_structure(item)
             for key, item in value.items()
         }
+        if _is_sealed_mapping(value):
+            if sanitized != dict(value):
+                raise SanitizationIntegrityError(
+                    "EVIDENCE_INTEGRITY_ERROR: boundary sanitization would alter sealed evidence"
+                )
+            return value
+        return sanitized
     if isinstance(value, list):
         return [sanitize_structure(item) for item in value]
     if isinstance(value, tuple):
@@ -132,8 +154,17 @@ def sanitize_structure(value: Any) -> Any:
     return value
 
 
+def _is_sealed_mapping(value: Mapping[Any, Any]) -> bool:
+    return any(
+        normalized is not None and _SEAL_KEY.search(normalized) is not None
+        for key in value
+        if (normalized := _normalized_key(key)) is not None
+    )
+
+
 __all__ = [
     "REDACTED",
+    "SanitizationIntegrityError",
     "is_sensitive_key",
     "sanitize_structure",
     "sanitize_text",

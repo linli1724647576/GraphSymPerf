@@ -7,7 +7,7 @@ import pytest
 
 from graph_sym_perf.core import TargetSystem
 from graph_sym_perf.experiment.plan_models import RunPlan, SourceRevision
-from graph_sym_perf.experiment.process_monitor import ProcessMonitor
+from graph_sym_perf.experiment.process_monitor import ProcessMonitor, WorkerProcessError
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import ErrorKind
 from graph_sym_perf.experiment.process_control import terminate_process_group
@@ -134,6 +134,17 @@ class _SensitiveStructuredResultWorker:
         }
 
 
+class _SensitiveSealedResultWorker:
+    def __call__(self, _task):
+        return {
+            "accepted_pairs": 1,
+            "nested": {
+                "content_hash": "a" * 64,
+                "message": "Authorization: Custom Scheme sealed-ipc-secret; retry=true",
+            },
+        }
+
+
 def test_large_worker_result_is_persisted_by_reference_without_queue_deadlock(tmp_path) -> None:
     context = _attempt_context(tmp_path)
     monitor = ProcessMonitor(
@@ -171,6 +182,24 @@ def test_worker_result_is_recursively_sanitized_before_ipc_reference(tmp_path) -
         "bolt://",
     ):
         assert forbidden not in persisted
+
+
+def test_worker_rejects_sealed_result_that_would_need_boundary_sanitization(
+    tmp_path,
+) -> None:
+    context = _attempt_context(tmp_path)
+    monitor = ProcessMonitor(
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.2,
+        hard_timeout_seconds=0.5,
+    )
+
+    with pytest.raises(WorkerProcessError) as captured:
+        monitor.run(_SensitiveSealedResultWorker(), object(), context)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert "sealed-ipc-secret" not in str(captured.value)
+    assert not (context.attempt_dir / "result.json").exists()
 
 
 class _MarkerWorker:
