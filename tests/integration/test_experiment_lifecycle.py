@@ -538,6 +538,45 @@ def test_campaign_source_guard_rejects_gdsmith_drift_between_plan_and_guard(
         guard()
 
 
+def test_source_guard_constructor_rejects_drift_after_tooling_verification(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = verified_gdsmith_environment(
+        tmp_path / "gdsmith-fixture",
+        spec.generation.expected_commit,
+    )
+    plan = campaign_module.build_rule_plan(
+        spec,
+        CampaignPhase.P0,
+        environment=environment,
+    )
+    jar_path = Path(environment["GRAPHSYMPERF_GDSMITH_JAR"])
+    real_verify = lifecycle_module._SourceProvenanceGuard._verify_artifact_provenance
+    mutated = False
+
+    def verify_then_mutate(guard) -> None:
+        nonlocal mutated
+        real_verify(guard)
+        if not mutated:
+            mutated = True
+            jar_path.write_bytes(jar_path.read_bytes() + b"post-verify-drift")
+
+    monkeypatch.setattr(
+        lifecycle_module._SourceProvenanceGuard,
+        "_verify_artifact_provenance",
+        verify_then_mutate,
+    )
+
+    with pytest.raises(ManifestMismatchError, match="source provenance changed"):
+        campaign_module._campaign_source_provenance_guard(
+            spec,
+            plan,
+            environment=environment,
+        )
+
+
 @pytest.mark.parametrize("changed_source", ("repository", "gdsmith"))
 def test_campaign_source_guard_rejects_cleanliness_drift_after_plan(
     monkeypatch,

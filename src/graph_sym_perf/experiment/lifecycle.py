@@ -260,14 +260,12 @@ class _SourceProvenanceGuard:
             raise ManifestMismatchError("source provenance must be clean")
         self.repository_root = spec.source_path.parents[1]
         self.environment = os.environ if environment is None else environment
-        self._verify_artifact_provenance()
-        self.artifact_signature = self._artifact_signature()
+        self.artifact_signature = self._verified_artifact_signature()
 
     def __call__(self) -> None:
         signature = self._artifact_signature()
         if signature != self.artifact_signature:
-            self._verify_artifact_provenance()
-            self.artifact_signature = signature
+            self.artifact_signature = self._verified_artifact_signature()
         try:
             rules_sha256 = hashlib.sha256(self.spec.rules_source_path.read_bytes()).hexdigest()
         except OSError as exc:
@@ -301,6 +299,14 @@ class _SourceProvenanceGuard:
             != self.expected.gdsmith_build_manifest_sha256
         ):
             raise ManifestMismatchError("source provenance changed during run")
+
+    def _verified_artifact_signature(self) -> tuple[object, ...]:
+        signature_before = self._artifact_signature()
+        self._verify_artifact_provenance()
+        signature_after = self._artifact_signature()
+        if signature_before != signature_after:
+            raise ManifestMismatchError("source provenance changed during run")
+        return signature_after
 
     def _artifact_signature(self) -> tuple[object, ...]:
         config = GdsmithConfig(expected_source_commit=self.spec.generation.expected_commit)
