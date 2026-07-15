@@ -539,6 +539,45 @@ def _rule_plan_entry(
     )
 
 
+def test_entry_summary_sanitizes_runtime_diagnostics_before_first_write(tmp_path) -> None:
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        environment={},
+    )
+    attempt_dir = tmp_path / "attempt-000"
+    attempt_dir.mkdir()
+    sensitive = (
+        "Traceback (most recent call last):\n"
+        '  File "/Users/sakuraq/private/worker.py", line 7\n'
+        "bolt://neo4j:uri-password@db.internal:7687 "
+        "GRAPHSYMPERF_NEO4J_PASSWORD=env-password "
+        "NEO4J_PASSWORD: driver-password; "
+        "Authorization: Bearer opaque-authorization-value;"
+    )
+
+    result = worker._finish_entry(
+        _rule_plan_entry(),
+        attempt_dir,
+        terminal_state="infrastructure_failed",
+        generated=None,
+        infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
+        infrastructure_reason=sensitive,
+    )
+
+    raw = (attempt_dir / "summary.json").read_text(encoding="utf-8")
+    assert result["infrastructure_reason"] == json.loads(raw)["infrastructure_reason"]
+    for forbidden in (
+        "uri-password",
+        "env-password",
+        "driver-password",
+        "opaque-authorization-value",
+        "/Users/sakuraq",
+        "Traceback",
+        "bolt://",
+    ):
+        assert forbidden not in raw
+
+
 def test_worker_graph_identity_matches_validation_snapshot_contract() -> None:
     statements = (" CREATE (a) ", "", "CREATE (b)")
 

@@ -418,7 +418,10 @@ def test_rule_plan_terminal_error_is_typed_sanitized_and_bounded(
     sensitive_message = (
         "Traceback (most recent call last):\n"
         '  File "/Users/sakuraq/private/worker.py", line 7\n'
-        "bolt://neo4j:hunter2@db.internal:7687 PASSWORD=hunter2 "
+        "bolt://neo4j:hunter2@db.internal:7687 "
+        "GRAPHSYMPERF_NEO4J_PASSWORD=hunter2 "
+        "NEO4J_PASSWORD=driver-password "
+        "Authorization: Bearer opaque-authorization-value; "
         + ("x" * 1000)
     )
 
@@ -454,7 +457,15 @@ def test_rule_plan_terminal_error_is_typed_sanitized_and_bounded(
     assert "Traceback" not in reason
     assert "/Users/sakuraq" not in reason
     assert "hunter2" not in reason
+    assert "driver-password" not in reason
+    assert "opaque-authorization-value" not in reason
     assert "bolt://" not in reason
+    cell_summary = next(
+        (tmp_path / "entries").glob("*/cell_summary.json")
+    ).read_text(encoding="utf-8")
+    assert "hunter2" not in cell_summary
+    assert "driver-password" not in cell_summary
+    assert "opaque-authorization-value" not in cell_summary
 
 
 def test_cell_summary_failure_reason_is_sanitized(tmp_path, monkeypatch) -> None:

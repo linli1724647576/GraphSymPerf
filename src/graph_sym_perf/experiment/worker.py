@@ -66,6 +66,7 @@ from graph_sym_perf.experiment.plan_models import (
 )
 from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.entry_paths import rule_plan_entry_directory_name
+from graph_sym_perf.experiment.process_monitor import sanitize_terminal_error
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import (
     EntryState,
@@ -2829,7 +2830,9 @@ class RuntimeFirstShardWorker:
                 else str(infrastructure_error_kind or ErrorKind.INFRASTRUCTURE_ERROR.value)
             )
             summary["infrastructure_error_kind"] = kind
-            summary["infrastructure_reason"] = str(infrastructure_reason)
+            summary["infrastructure_reason"] = sanitize_terminal_error(
+                infrastructure_reason
+            )
         _atomic_write_json(attempt_dir / "summary.json", summary)
         return summary
 

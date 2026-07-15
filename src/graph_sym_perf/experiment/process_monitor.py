@@ -272,8 +272,12 @@ _CONNECTION_URI = re.compile(
     r"\b[a-z][a-z0-9+.-]*://[^\s'\"<>]+",
     re.IGNORECASE,
 )
+_AUTHORIZATION_ASSIGNMENT = re.compile(
+    r"(?i)(\b(?:[a-z0-9]+[_-])*authorization\b\s*[:=]\s*)"
+    r"(?:(?:bearer|basic|token)\s+)?(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+)
 _SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)(\b(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|credential)\b\s*[:=]\s*)"
+    r"(?i)(\b(?:[a-z0-9]+[_-])*(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|credential)\b\s*[:=]\s*)"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
 )
 _SECRET_BEARING_TOKEN = re.compile(
@@ -314,6 +318,7 @@ def sanitize_terminal_error(value: object, *, limit: int = _TERMINAL_ERROR_LIMIT
     rendered = " ".join(safe_lines)
     rendered = _TRACEBACK_HEADER.sub("", rendered)
     rendered = _CONNECTION_URI.sub("<connection-uri>", rendered)
+    rendered = _AUTHORIZATION_ASSIGNMENT.sub(r"\1<redacted>", rendered)
     rendered = _SENSITIVE_ASSIGNMENT.sub(r"\1<redacted>", rendered)
     rendered = _SECRET_BEARING_TOKEN.sub("<redacted>", rendered)
     rendered = _WINDOWS_ABSOLUTE_PATH.sub("<absolute-path>", rendered)
