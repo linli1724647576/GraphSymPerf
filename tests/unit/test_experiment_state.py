@@ -33,6 +33,7 @@ def test_error_kind_is_a_closed_typed_reliability_taxonomy() -> None:
         "DBMS_CRASHED",
         "INFRASTRUCTURE_ERROR",
         "EVIDENCE_INTEGRITY_ERROR",
+        "RESOURCE_EXHAUSTED",
     }
 
 

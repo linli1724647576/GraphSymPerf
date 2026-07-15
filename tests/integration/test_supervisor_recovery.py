@@ -11,7 +11,7 @@ import pytest
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RunPlan, ShardTask, SourceRevision
-from graph_sym_perf.experiment.state import ShardJournal, ShardState
+from graph_sym_perf.experiment.state import EntryState, ShardJournal, ShardState
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle
 from graph_sym_perf.experiment.planner import write_resolved_manifest
@@ -287,13 +287,15 @@ def test_rule_plan_supervisor_enforces_entry_hard_timeout(tmp_path) -> None:
     ).run(plan, worker)
 
     assert time.monotonic() - started < 1.8
-    assert summary.infrastructure_failed == plan.entries
+    assert summary.resource_exhausted == plan.entries
+    assert summary.infrastructure_failed == ()
     terminal = json.loads(
         next((tmp_path / "entries").glob("*/attempt-000/terminal_result.json")).read_text(
             encoding="utf-8"
         )
     )
-    assert terminal["infrastructure_error_kind"] == ErrorKind.WORKER_HUNG.value
+    assert terminal["resource_exhaustion_kind"] == ErrorKind.RESOURCE_EXHAUSTED.value
+    assert terminal["terminal_state"] == EntryState.RESOURCE_EXHAUSTED.value
 
 
 def test_rule_plan_supervisor_classifies_child_crash_without_killing_campaign(

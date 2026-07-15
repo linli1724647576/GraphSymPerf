@@ -34,11 +34,13 @@ class ProcessMonitor:
         stale_after_seconds: float,
         hard_timeout_seconds: float | None,
         bootstrap_timeout_seconds: float = 5.0,
+        hard_timeout_error_kind: ErrorKind = ErrorKind.WORKER_HUNG,
     ) -> None:
         self.heartbeat_seconds = heartbeat_seconds
         self.stale_after_seconds = stale_after_seconds
         self.hard_timeout_seconds = hard_timeout_seconds
         self.bootstrap_timeout_seconds = bootstrap_timeout_seconds
+        self.hard_timeout_error_kind = hard_timeout_error_kind
 
     def run(self, worker: Callable[[object], dict], task: object, attempt: AttemptContext) -> dict:
         attempt_dir = attempt.attempt_dir
@@ -97,7 +99,15 @@ class ProcessMonitor:
                     failure = WorkerProcessError(ErrorKind.WORKER_HUNG, "heartbeat became stale", inflight=inflight)
                     break
                 if shard_deadline is not None and time.monotonic() >= shard_deadline:
-                    failure = WorkerProcessError(ErrorKind.WORKER_HUNG, "shard hard deadline exceeded", inflight=inflight)
+                    failure = WorkerProcessError(
+                        self.hard_timeout_error_kind,
+                        (
+                            "worker hard runtime budget exhausted"
+                            if self.hard_timeout_error_kind is ErrorKind.RESOURCE_EXHAUSTED
+                            else "shard hard deadline exceeded"
+                        ),
+                        inflight=inflight,
+                    )
                     break
             process.join(min(0.01, self.heartbeat_seconds))
 

@@ -242,6 +242,7 @@ class RulePlanSupervisor:
                         heartbeat_seconds=self.heartbeat_seconds,
                         stale_after_seconds=self.stale_after_seconds,
                         hard_timeout_seconds=float(entry.max_entry_runtime_seconds),
+                        hard_timeout_error_kind=ErrorKind.RESOURCE_EXHAUSTED,
                     ).run(worker, entry, context)
                 else:
                     bind_worker_attempt(worker, context)
@@ -251,16 +252,28 @@ class RulePlanSupervisor:
                 final_result = dict(value)
                 final_state = classify_rule_plan_result(entry, final_result)
             except WorkerProcessError as exc:
-                final_state = EntryState.INFRASTRUCTURE_FAILED
-                final_result = {
-                    "accepted_pairs": 0,
-                    "artifact_complete": False,
-                    "certificate_complete": False,
-                    "entry_id": entry.entry_id,
-                    "infrastructure_error_kind": exc.kind.value,
-                    "infrastructure_reason": str(exc),
-                    "terminal_state": final_state.value,
-                }
+                if exc.kind is ErrorKind.RESOURCE_EXHAUSTED:
+                    final_state = EntryState.RESOURCE_EXHAUSTED
+                    final_result = {
+                        "accepted_pairs": 0,
+                        "artifact_complete": False,
+                        "certificate_complete": False,
+                        "entry_id": entry.entry_id,
+                        "resource_exhaustion_kind": exc.kind.value,
+                        "resource_exhaustion_reason": str(exc),
+                        "terminal_state": final_state.value,
+                    }
+                else:
+                    final_state = EntryState.INFRASTRUCTURE_FAILED
+                    final_result = {
+                        "accepted_pairs": 0,
+                        "artifact_complete": False,
+                        "certificate_complete": False,
+                        "entry_id": entry.entry_id,
+                        "infrastructure_error_kind": exc.kind.value,
+                        "infrastructure_reason": str(exc),
+                        "terminal_state": final_state.value,
+                    }
             except Exception as exc:
                 final_state = EntryState.INFRASTRUCTURE_FAILED
                 final_result = {
