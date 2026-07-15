@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.sanitization import (
     SanitizationIntegrityError,
     sanitize_structure,
@@ -78,34 +79,64 @@ def test_text_sanitizer_redacts_entire_multiword_authorization_value() -> None:
 
 
 def test_recursive_sanitizer_rejects_changes_to_nested_sealed_evidence() -> None:
-    sealed = {
-        "content_hash": "a" * 64,
+    body = {
         "payload": {
             "message": "Authorization: Custom Scheme sealed-auth-tail; retry=true",
         },
+    }
+    sealed = {**body, "content_hash": canonical_hash(body)}
+
+    with pytest.raises(
+        SanitizationIntegrityError,
+        match="EVIDENCE_INTEGRITY_ERROR",
+    ):
+        sanitize_structure({"diagnostics": {"nested": [sealed]}})
+
+
+def test_valid_sanitized_canonical_envelope_passes_unchanged() -> None:
+    body = {
+        "payload": {
+            "message": "Authorization: <redacted>; retry=true",
+            "query": "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n",
+        },
+    }
+    sealed = {**body, "content_hash": canonical_hash(body)}
+
+    assert sanitize_structure(sealed) is sealed
+
+
+@pytest.mark.parametrize("content_hash", ("not-a-hash", "a" * 64))
+def test_invalid_canonical_envelope_claim_fails_closed(content_hash: str) -> None:
+    envelope = {
+        "payload": {"message": "already safe"},
+        "content_hash": content_hash,
     }
 
     with pytest.raises(
         SanitizationIntegrityError,
         match="EVIDENCE_INTEGRITY_ERROR",
     ):
-        sanitize_structure({"result": {"nested": [sealed]}})
+        sanitize_structure(envelope)
 
 
-@pytest.mark.parametrize(
-    "seal_key",
-    ("content_hash", "report_hash", "receipt", "registry_signature"),
-)
-def test_already_sanitized_sealed_evidence_passes_unchanged(seal_key: str) -> None:
-    sealed = {
-        seal_key: "b" * 64,
-        "payload": {
-            "message": "Authorization: <redacted>; retry=true",
-            "query": "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n",
-        },
+def test_marker_named_fields_do_not_claim_a_generic_seal() -> None:
+    ordinary = {
+        "content_hash": "not-a-seal",
+        "report_hash": "b" * 64,
+        "receipt": "literal receipt",
+        "signature": "literal signature",
+        "password": "opaque-password-value",
+        "message": "Authorization: Custom Scheme diagnostic-tail; retry=true",
     }
 
-    assert sanitize_structure(sealed) is sealed
+    sanitized = sanitize_structure(ordinary)
+
+    assert sanitized["content_hash"] == "not-a-seal"
+    assert sanitized["report_hash"] == "b" * 64
+    assert sanitized["receipt"] == "literal receipt"
+    assert sanitized["signature"] == "literal signature"
+    assert sanitized["password"] == "<redacted>"
+    assert "diagnostic-tail" not in sanitized["message"]
 
 
 def test_evidence_fields_preserve_query_result_and_record_string_semantics() -> None:
@@ -127,9 +158,39 @@ def test_evidence_fields_preserve_query_result_and_record_string_semantics() -> 
     assert sanitized["query_b"] == value["query_b"]
     assert sanitized["results"][0] == value["results"][0]
     assert sanitized["results"][1]["value"] == value["results"][1]["value"]
-    assert sanitized["results"][1]["password"] == "<redacted>"
-    assert sanitized["records"][0]["token"] == "<redacted>"
+    assert sanitized["results"][1]["password"] == "result-secret"
+    assert sanitized["records"][0]["token"] == "record-secret"
     assert sanitized["records"][0]["value"] == "bolt://literal-result"
+
+
+def test_typed_evidence_subtrees_preserve_all_database_values_and_keys() -> None:
+    value = {
+        "query_text": "MATCH (n) WHERE token = 'literal' RETURN n",
+        "params": {
+            "password": "literal-password-parameter",
+            "message": "Authorization: literal parameter",
+        },
+        "records": (
+            {
+                "content_hash": "not-a-seal",
+                "receipt": "literal-receipt-column",
+                "signature": "literal-signature-column",
+                "password": "literal-password-column",
+                "token": "literal-token-column",
+                "error": "file:///Users/example/Literal Row/File Name.txt",
+                "reason": "auth=literal-row-value",
+                "bolt://literal-key": "literal-key-value",
+                "leaked-secret-material": "literal-secret-key-value",
+            },
+        ),
+    }
+
+    sanitized = sanitize_structure(value)
+
+    assert sanitized["query_text"] == value["query_text"]
+    assert sanitized["params"] == value["params"]
+    assert sanitized["records"] == value["records"]
+    assert isinstance(sanitized["records"], tuple)
 
 
 def test_diagnostic_fields_clean_dotted_assignments_and_full_spaced_paths() -> None:
@@ -144,7 +205,17 @@ def test_diagnostic_fields_clean_dotted_assignments_and_full_spaced_paths() -> N
             "failed at /Users/sakuraq/My Other Secret Folder/unquoted output.json; "
             "retry=true"
         ),
+        "error": (
+            "token=bare-token auth = bare-auth; "
+            "config.neo4j.Authorization = Signature keyId=public algorithm=hmac "
+            "dotted-auth-tail; retry=true; "
+            'failed reading "file:///Users/sakuraq/My URI Folder/output file.db"'
+        ),
         "config.neo4j.password": "mapping-password",
+        "password_value": "hunter2",
+        "access_token_value": "opaque-access-123",
+        "authorization_header": "Bearer abc.def",
+        "credentials": {"user": "neo4j", "pass": "opaque-pass"},
     }
 
     rendered = repr(sanitize_structure(value))
@@ -157,8 +228,18 @@ def test_diagnostic_fields_clean_dotted_assignments_and_full_spaced_paths() -> N
         "My Other Secret Folder",
         "diagnostic-auth-tail",
         "mapping-password",
+        "bare-token",
+        "bare-auth",
+        "dotted-auth-tail",
+        "keyId",
+        "My URI Folder",
+        "hunter2",
+        "opaque-access-123",
+        "abc.def",
+        "opaque-pass",
     ):
         assert forbidden not in rendered
+    assert "retry=true" in rendered
 
 
 @pytest.mark.parametrize(

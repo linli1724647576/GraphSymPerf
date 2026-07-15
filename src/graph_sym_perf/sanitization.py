@@ -14,11 +14,13 @@ class SanitizationIntegrityError(ValueError):
     """A generic boundary would invalidate already sealed evidence."""
 
 _SENSITIVE_KEY_SUFFIX = re.compile(
-    r"(?:password|passwd|pwd|secret|token|authorization|credential|api[_-]?key|auth)$",
+    r"(?:^|[._-])"
+    r"(?:password|passwd|pwd|secret|token|authorization|credential|credentials|api[_-]?key|auth)"
+    r"(?:[._-](?:value|header))?$",
     re.IGNORECASE,
 )
 _PLAIN_INLINE_SECRET_NAME = (
-    r"(?:password|passwd|pwd|secret|authorization|credential|api[_-]?key)"
+    r"(?:password|passwd|pwd|secret|token|authorization|credential|api[_-]?key)"
 )
 _PREFIXED_INLINE_SECRET_NAME = (
     r"(?:(?:[A-Za-z0-9]+[_-])+"
@@ -27,7 +29,7 @@ _PREFIXED_INLINE_SECRET_NAME = (
 _INLINE_SECRET_NAME = (
     rf"(?:{_PLAIN_INLINE_SECRET_NAME}|{_PREFIXED_INLINE_SECRET_NAME})"
 )
-_INLINE_AUTH_NAME = r"(?:authorization|(?:[A-Za-z0-9]+[_-])+auth)"
+_INLINE_AUTH_NAME = r"(?:authorization|auth|(?:[A-Za-z0-9]+[_-])+auth)"
 _INLINE_KEY_PREFIX = (
     r"(?<![A-Za-z0-9_.])"
     r"(?P<key_quote>['\"]?)"
@@ -51,6 +53,15 @@ _DOTTED_SENSITIVE_ASSIGNMENT = re.compile(
     r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;}}\]]+)",
     re.IGNORECASE,
 )
+_DOTTED_AUTHORIZATION_ASSIGNMENT = re.compile(
+    r"(?<![A-Za-z0-9_.])"
+    r"(?P<dotted_auth_quote>['\"]?)"
+    r"(?:[A-Za-z0-9_-]+\.)+"
+    r"(?:authorization|auth)"
+    r"(?P=dotted_auth_quote)\s*[:=]\s*"
+    r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^;\r\n]*)",
+    re.IGNORECASE,
+)
 _AUTHORIZATION_ASSIGNMENT = re.compile(
     rf"(?P<prefix>{_INLINE_KEY_PREFIX}{_INLINE_AUTH_KEY_SUFFIX})"
     r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^;\r\n]*)",
@@ -63,6 +74,10 @@ _SENSITIVE_ASSIGNMENT = re.compile(
 )
 _CONNECTION_URI = re.compile(
     r"\b[a-z][a-z0-9+.-]*://[^\s'\"<>]+",
+    re.IGNORECASE,
+)
+_QUOTED_FILE_URI = re.compile(
+    r"(?P<file_uri_quote>['\"])file://[^\r\n]*?(?P=file_uri_quote)",
     re.IGNORECASE,
 )
 _SECRET_BEARING_TOKEN = re.compile(
@@ -86,20 +101,20 @@ _TRACEBACK_HEADER = re.compile(
     r"traceback\s*\(most recent call last\)\s*:?,?",
     re.IGNORECASE,
 )
-_SEAL_KEY = re.compile(
-    r"(?:^|_)(?:content_hash|report_hash|receipt(?:_hash)?|signature(?:_hash)?)$",
-    re.IGNORECASE,
-)
+_CANONICAL_HASH = re.compile(r"^[0-9a-f]{64}$")
+_CANONICAL_ENVELOPE_KEYS = frozenset({"payload", "content_hash"})
 _EVIDENCE_TEXT_FIELDS = frozenset(
     {
         "cypher",
         "graph_statements",
         "parameter_values",
         "parameters",
+        "params",
         "queries",
         "query",
         "query_a",
         "query_b",
+        "query_text",
         "query_texts",
         "record",
         "records",
@@ -178,9 +193,14 @@ def sanitize_text(
         safe_lines.append(stripped if single_line else line)
     rendered = (" " if single_line else "\n").join(safe_lines)
     rendered = _TRACEBACK_HEADER.sub("", rendered)
+    rendered = _DOTTED_AUTHORIZATION_ASSIGNMENT.sub(
+        "<redacted-assignment>",
+        rendered,
+    )
     rendered = _DOTTED_SENSITIVE_ASSIGNMENT.sub("<redacted-assignment>", rendered)
     rendered = _AUTHORIZATION_ASSIGNMENT.sub(r"\g<prefix><redacted>", rendered)
     rendered = _SENSITIVE_ASSIGNMENT.sub(r"\g<prefix><redacted>", rendered)
+    rendered = _QUOTED_FILE_URI.sub("<file-uri>", rendered)
     rendered = _CONNECTION_URI.sub("<connection-uri>", rendered)
     rendered = _SECRET_BEARING_TOKEN.sub(REDACTED, rendered)
     rendered = _QUOTED_ABSOLUTE_PATH.sub("<absolute-path>", rendered)
@@ -205,12 +225,18 @@ def _sanitize_structure(value: Any, *, preserve_text: bool) -> Any:
     """Internal field-aware recursion used by the public boundary sanitizer."""
 
     if isinstance(value, Mapping):
-        for key in value:
-            _require_safe_mapping_key(key)
+        if not preserve_text:
+            for key in value:
+                _require_safe_mapping_key(key)
+        canonical_envelope = (
+            False
+            if preserve_text
+            else _require_valid_canonical_envelope_if_recognized(value)
+        )
         sanitized = {
             key: (
                 REDACTED
-                if is_sensitive_key(key)
+                if not preserve_text and is_sensitive_key(key)
                 else _sanitize_structure(
                     item,
                     preserve_text=_field_preserves_text(key, inherited=preserve_text),
@@ -218,7 +244,7 @@ def _sanitize_structure(value: Any, *, preserve_text: bool) -> Any:
             )
             for key, item in value.items()
         }
-        if _is_sealed_mapping(value):
+        if canonical_envelope:
             if sanitized != dict(value):
                 raise SanitizationIntegrityError(
                     "EVIDENCE_INTEGRITY_ERROR: boundary sanitization would alter sealed evidence"
@@ -241,16 +267,18 @@ def _sanitize_structure(value: Any, *, preserve_text: bool) -> Any:
 
 
 def _field_preserves_text(key: object, *, inherited: bool) -> bool:
+    if inherited:
+        return True
     normalized = _normalized_key(key)
     if normalized is None:
-        return inherited
+        return False
     lowered = normalized.lower()
     parts = frozenset(part for part in re.split(r"[._-]+", lowered) if part)
     if parts & _DIAGNOSTIC_FIELD_PARTS or lowered in {"health_event", "reason_codes"}:
         return False
     if lowered in _EVIDENCE_TEXT_FIELDS or lowered.endswith("_query"):
         return True
-    return inherited
+    return False
 
 
 def _require_safe_mapping_key(key: object) -> None:
@@ -268,12 +296,30 @@ def _require_safe_mapping_key(key: object) -> None:
         )
 
 
-def _is_sealed_mapping(value: Mapping[Any, Any]) -> bool:
-    return any(
-        normalized is not None and _SEAL_KEY.search(normalized) is not None
-        for key in value
-        if (normalized := _normalized_key(key)) is not None
-    )
+def _require_valid_canonical_envelope_if_recognized(
+    value: Mapping[Any, Any],
+) -> bool:
+    if frozenset(value) != _CANONICAL_ENVELOPE_KEYS:
+        return False
+    content_hash = value.get("content_hash")
+    body = {"payload": value.get("payload")}
+    if (
+        not isinstance(content_hash, str)
+        or _CANONICAL_HASH.fullmatch(content_hash) is None
+        or _project_canonical_hash(body) != content_hash
+    ):
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: invalid canonical evidence envelope"
+        )
+    return True
+
+
+def _project_canonical_hash(payload: object) -> str:
+    # Import lazily because evidence_validation reaches runtime.records, which
+    # imports this boundary sanitizer during package initialization.
+    from graph_sym_perf.experiment.evidence_validation import canonical_hash
+
+    return canonical_hash(payload)
 
 
 __all__ = [

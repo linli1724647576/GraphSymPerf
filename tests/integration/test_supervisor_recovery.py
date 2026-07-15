@@ -12,6 +12,7 @@ import graph_sym_perf.experiment.supervisor as supervisor_module
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RunPlan, ShardTask, SourceRevision
+from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.state import EntryState, ShardJournal, ShardState
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle
@@ -675,6 +676,13 @@ def test_terminal_boundary_rejects_stale_seal_instead_of_rewriting_receipt(
     plan = _p1_rule_plan()
 
     def worker(entry):
+        envelope_body = {
+            "payload": {
+                "message": (
+                    "Authorization: Custom Scheme terminal-sealed-secret; retry=true"
+                ),
+            },
+        }
         return {
             "accepted_pairs": entry.accepted_pair_quota,
             "artifact_complete": True,
@@ -682,8 +690,8 @@ def test_terminal_boundary_rejects_stale_seal_instead_of_rewriting_receipt(
             "entry_id": entry.entry_id,
             "terminal_state": "completed",
             "nested_receipt": {
-                "content_hash": "a" * 64,
-                "message": "Authorization: Custom Scheme terminal-sealed-secret; retry=true",
+                **envelope_body,
+                "content_hash": canonical_hash(envelope_body),
             },
         }
 

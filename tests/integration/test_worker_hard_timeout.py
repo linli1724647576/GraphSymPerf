@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.plan_models import RunPlan, SourceRevision
 from graph_sym_perf.experiment.process_monitor import ProcessMonitor, WorkerProcessError
 from graph_sym_perf.experiment.scheduling import AttemptContext
@@ -136,12 +137,16 @@ class _SensitiveStructuredResultWorker:
 
 class _SensitiveSealedResultWorker:
     def __call__(self, _task):
+        body = {
+            "payload": {
+                "message": (
+                    "Authorization: Custom Scheme sealed-ipc-secret; retry=true"
+                ),
+            },
+        }
         return {
             "accepted_pairs": 1,
-            "nested": {
-                "content_hash": "a" * 64,
-                "message": "Authorization: Custom Scheme sealed-ipc-secret; retry=true",
-            },
+            "nested": {**body, "content_hash": canonical_hash(body)},
         }
 
 
@@ -150,16 +155,36 @@ class _FieldSemanticResultWorker:
         return {
             "accepted_pairs": 1,
             "query": "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n",
+            "query_text": "RETURN $password AS literal_parameter_name",
+            "params": {
+                "password": "literal-parameter",
+                "message": "Authorization: literal parameter",
+            },
             "results": [
                 "Authorization: literal result",
                 {"value": "/Users/example/literal result", "password": "row-secret"},
             ],
-            "records": [{"value": "bolt://literal-record"}],
-            "diagnostics": (
-                "config.neo4j.password = probe-password; "
-                "{'driver_token': 'probe-token'}; "
-                'failed at "/Users/sakuraq/My Secret Folder/probe output.json"'
-            ),
+            "records": [
+                {
+                    "content_hash": "literal-content-hash-column",
+                    "receipt": "literal-receipt-column",
+                    "signature": "literal-signature-column",
+                    "password": "literal-password-column",
+                    "token": "literal-token-column",
+                    "message": "auth=literal-row-auth",
+                    "bolt://literal-key": "literal-key-value",
+                }
+            ],
+            "diagnostics": {
+                "message": (
+                    "token=probe-token auth=probe-auth; "
+                    "config.neo4j.Authorization = Signature keyId=public "
+                    "probe-dotted-auth; retry=true; "
+                    'failed at "file:///Users/sakuraq/My URI Folder/probe output.json"'
+                ),
+                "password_value": "hunter2",
+                "authorization_header": "Bearer opaque-header",
+            },
         }
 
 
@@ -235,16 +260,35 @@ def test_process_monitor_preserves_evidence_fields_and_cleans_diagnostics(
     assert result["query"] == (
         "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n"
     )
+    assert result["query_text"] == "RETURN $password AS literal_parameter_name"
+    assert result["params"] == {
+        "password": "literal-parameter",
+        "message": "Authorization: literal parameter",
+    }
     assert result["results"][0] == "Authorization: literal result"
     assert result["results"][1]["value"] == "/Users/example/literal result"
-    assert result["results"][1]["password"] == "<redacted>"
-    assert result["records"] == [{"value": "bolt://literal-record"}]
+    assert result["results"][1]["password"] == "row-secret"
+    assert result["records"] == [
+        {
+            "content_hash": "literal-content-hash-column",
+            "receipt": "literal-receipt-column",
+            "signature": "literal-signature-column",
+            "password": "literal-password-column",
+            "token": "literal-token-column",
+            "message": "auth=literal-row-auth",
+            "bolt://literal-key": "literal-key-value",
+        }
+    ]
     persisted = (context.attempt_dir / "result.json").read_text(encoding="utf-8")
     for forbidden in (
-        "probe-password",
         "probe-token",
+        "probe-auth",
+        "probe-dotted-auth",
+        "keyId",
+        "hunter2",
+        "opaque-header",
         "/Users/sakuraq",
-        "My Secret Folder",
+        "My URI Folder",
     ):
         assert forbidden not in persisted
 
