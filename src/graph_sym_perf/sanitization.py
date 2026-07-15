@@ -61,6 +61,28 @@ _CREDENTIAL_KEY_TOKENS = frozenset(
     }
 )
 _CREDENTIAL_KEY_SUFFIX_TOKENS = frozenset({"header", "value"})
+_COMPACT_CREDENTIAL_KEYS = frozenset(
+    {
+        "accesstoken",
+        "accesstokenheader",
+        "accesstokenvalue",
+        "apikey",
+        "apikeyvalue",
+        "authorization",
+        "authorizationheader",
+        "authorizationvalue",
+        "clientsecret",
+        "clientsecretvalue",
+        "credentials",
+        "neo4jpassword",
+        "neo4jpasswordvalue",
+        "passwd",
+        "password",
+        "passwordheader",
+        "passwordvalue",
+        "pwd",
+    }
+)
 _PLAIN_INLINE_SECRET_NAME = (
     r"(?:password|passwd|pwd|secret|token|authorization|credential|api[_-]?key)"
 )
@@ -154,6 +176,9 @@ def is_sensitive_key(value: object) -> bool:
     normalized = _normalized_key(value)
     if normalized is None:
         return False
+    compact = re.sub(r"[^A-Za-z0-9]", "", normalized).lower()
+    if compact in _COMPACT_CREDENTIAL_KEYS:
+        return True
     tokens = _key_tokens(normalized)
     for index, token in enumerate(tokens):
         if (

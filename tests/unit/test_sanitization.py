@@ -435,12 +435,36 @@ def test_diagnostic_fields_clean_dotted_assignments_and_full_spaced_paths() -> N
         "AccessTokenValue",
         "NEO4J_PASSWORD",
         "APIKey",
+        "PassWord",
+        "pAssword",
+        "PASSword",
+        "passWord",
+        "PASSWORDVALUE",
+        "ACCESSTOKEN",
     ),
 )
 def test_operational_sensitive_key_tokenizer_covers_common_naming_styles(
     key: str,
 ) -> None:
     assert sanitize_structure({key: "opaque-credential"}) == {key: "<redacted>"}
+
+
+@pytest.mark.parametrize(
+    "key",
+    (
+        "compassWord",
+        "tokenizer",
+        "authorizationStatus",
+        "passage",
+        "accessTokenization",
+    ),
+)
+def test_compact_credential_detection_avoids_ordinary_key_false_positives(
+    key: str,
+) -> None:
+    assert sanitize_structure({key: "ordinary-value"}) == {
+        key: "ordinary-value"
+    }
 
 
 def test_typed_evidence_columns_are_not_interpreted_as_operational_keys() -> None:
