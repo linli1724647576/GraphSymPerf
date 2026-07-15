@@ -4,26 +4,181 @@ import os
 import signal
 import shutil
 import time
+from dataclasses import replace
 
 import pytest
 
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.core import ExecutionResult, TargetSystem
-from graph_sym_perf.experiment.plan_models import RunPlan, ShardTask, SourceRevision
+from graph_sym_perf.experiment.plan_models import CampaignPhase, RunPlan, ShardTask, SourceRevision
 from graph_sym_perf.experiment.state import ShardJournal, ShardState
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle
 from graph_sym_perf.experiment.planner import write_resolved_manifest
 from graph_sym_perf.experiment.supervisor import (
     AttemptContext,
+    EntryResultIntegrityError,
     ManifestMismatchError,
+    RulePlanSupervisor,
     ShardSupervisor,
+    classify_rule_plan_result,
     _manifest_hash,
     _task_identity,
 )
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
 from graph_sym_perf.experiment.worker import WorkerFailure
 from graph_sym_perf.experiment.state import ErrorKind
+
+
+def _p1_rule_plan():
+    from graph_sym_perf.experiment.planner import build_rule_plan
+
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    plan = build_rule_plan(spec, CampaignPhase.P1)
+    return replace(plan, entries=(plan.entries[0],))
+
+
+@pytest.mark.parametrize(
+    ("terminal_state", "accepted", "expected"),
+    (
+        ("completed", 200, "completed"),
+        ("completed", 199, "underfilled"),
+        ("underfilled", 199, "underfilled"),
+        ("quarantined", 17, "quarantined"),
+        ("resource_exhausted", 17, "resource_exhausted"),
+        ("infrastructure_failed", 0, "infrastructure_failed"),
+    ),
+)
+def test_rule_plan_terminal_classification_is_exact(
+    terminal_state: str,
+    accepted: int,
+    expected: str,
+) -> None:
+    entry = _p1_rule_plan().entries[0]
+    assert classify_rule_plan_result(
+        entry,
+        {"terminal_state": terminal_state, "accepted_pairs": accepted},
+    ).value == expected
+
+
+def test_rule_plan_terminal_classification_rejects_overfill_unknown_and_identity_drift() -> None:
+    entry = _p1_rule_plan().entries[0]
+    with pytest.raises(EntryResultIntegrityError, match="overfill"):
+        classify_rule_plan_result(
+            entry,
+            {"terminal_state": "completed", "accepted_pairs": entry.accepted_pair_quota + 1},
+        )
+    with pytest.raises(EntryResultIntegrityError, match="unknown terminal"):
+        classify_rule_plan_result(entry, {"terminal_state": "mystery", "accepted_pairs": 0})
+    with pytest.raises(EntryResultIntegrityError, match="identity"):
+        classify_rule_plan_result(
+            entry,
+            {
+                "entry_id": "other-entry",
+                "terminal_state": "completed",
+                "accepted_pairs": entry.accepted_pair_quota,
+            },
+        )
+
+
+def test_rule_plan_supervisor_retries_in_new_attempt_and_writes_typed_cell_summary(tmp_path) -> None:
+    plan = _p1_rule_plan()
+    calls = 0
+
+    class Worker:
+        run_dir = None
+        context = None
+
+        def bind_run_dir(self, run_dir) -> None:
+            self.run_dir = run_dir
+
+        def bind_attempt_context(self, context) -> None:
+            self.context = context
+
+        def __call__(self, entry):
+            nonlocal calls
+            calls += 1
+            assert self.context is not None
+            if calls == 1:
+                return {
+                    "entry_id": entry.entry_id,
+                    "terminal_state": "infrastructure_failed",
+                    "accepted_pairs": 0,
+                    "certificate_complete": False,
+                    "artifact_complete": True,
+                }
+            return {
+                "entry_id": entry.entry_id,
+                "terminal_state": "completed",
+                "accepted_pairs": entry.accepted_pair_quota,
+                "certificate_complete": True,
+                "artifact_complete": True,
+            }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=1,
+    ).run(plan, Worker())
+
+    assert summary.completed == plan.entries
+    entry_dir = next((tmp_path / "entries").iterdir())
+    assert (entry_dir / "attempt-000" / "attempt.json").is_file()
+    retry = json.loads((entry_dir / "attempt-001" / "attempt.json").read_text(encoding="utf-8"))
+    assert retry["previous_attempt"] == "attempt-000"
+    first_result = json.loads(
+        (entry_dir / "attempt-000" / "terminal_result.json").read_text(encoding="utf-8")
+    )
+    assert retry["previous_attempt_result_hash"] == first_result["content_hash"]
+    cell = json.loads((entry_dir / "cell_summary.json").read_text(encoding="utf-8"))
+    assert cell["terminal_state"] == "completed"
+    assert cell["quota"] == plan.entries[0].accepted_pair_quota
+    assert len((tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()) >= 4
+
+
+def test_rule_plan_supervisor_writes_one_cell_summary_for_every_terminal_class(tmp_path) -> None:
+    plan = _p1_rule_plan()
+    base = plan.entries[0]
+    entries = tuple(
+        replace(
+            base,
+            entry_id=f"p1:neo4j:discovery:rule-{index}:128:0",
+            rule_id=f"rule-{index}",
+            shard_seed=base.shard_seed + index + 1,
+        )
+        for index in range(4)
+    )
+    plan = replace(plan, entries=entries)
+    states = {
+        entries[0].entry_id: ("underfilled", 1),
+        entries[1].entry_id: ("quarantined", 1),
+        entries[2].entry_id: ("resource_exhausted", 1),
+        entries[3].entry_id: ("infrastructure_failed", 0),
+    }
+
+    def worker(entry):
+        state, accepted = states[entry.entry_id]
+        return {
+            "entry_id": entry.entry_id,
+            "terminal_state": state,
+            "accepted_pairs": accepted,
+            "certificate_complete": state != "quarantined",
+            "artifact_complete": True,
+        }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=0,
+    ).run(plan, worker)
+
+    assert len(summary.underfilled) == 1
+    assert len(summary.quarantined) == 1
+    assert len(summary.resource_exhausted) == 1
+    assert len(summary.infrastructure_failed) == 1
+    assert len(tuple((tmp_path / "entries").glob("*/cell_summary.json"))) == 4
 
 
 def _hash_for(label: str) -> str:

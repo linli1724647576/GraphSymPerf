@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from graph_sym_perf.artifacts.store import enforce_shard_budget
@@ -23,11 +23,13 @@ from graph_sym_perf.experiment.evidence_validation import (
     validate_failure_evidence,
     validate_shard_evidence,
 )
-from graph_sym_perf.experiment.plan_models import RunPlan
+from graph_sym_perf.experiment.plan_models import RulePlan, RulePlanEntry, RunPlan
 from graph_sym_perf.experiment.planner import resolved_manifest_hash
+from graph_sym_perf.experiment.selection import CellSummary
 from graph_sym_perf.experiment.process_monitor import ProcessMonitor, WorkerProcessError, bind_worker_attempt
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import (
+    EntryState,
     ErrorKind,
     ManifestMismatchError,
     ShardJournal,
@@ -44,6 +46,336 @@ class RunSummary:
     completed: tuple[object, ...]
     incomplete: tuple[object, ...]
     failed: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class RulePlanRunSummary:
+    completed: tuple[RulePlanEntry, ...]
+    underfilled: tuple[RulePlanEntry, ...]
+    quarantined: tuple[RulePlanEntry, ...]
+    resource_exhausted: tuple[RulePlanEntry, ...]
+    infrastructure_failed: tuple[RulePlanEntry, ...]
+
+    @property
+    def failed(self) -> tuple[RulePlanEntry, ...]:
+        return (
+            *self.underfilled,
+            *self.quarantined,
+            *self.resource_exhausted,
+            *self.infrastructure_failed,
+        )
+
+
+class EntryResultIntegrityError(ValueError):
+    """A RulePlanEntry result does not belong to or satisfy its immutable plan."""
+
+
+def classify_rule_plan_result(
+    entry: RulePlanEntry,
+    result: Mapping[str, object],
+) -> EntryState:
+    """Classify one schema-v3 terminal result against its exact RulePlan quota."""
+
+    if not isinstance(result, Mapping):
+        raise EntryResultIntegrityError("entry result must be a mapping")
+    identity_fields = {
+        "entry_id": entry.entry_id,
+        "rule_id": entry.rule_id,
+        "family": entry.family,
+        "graph_scale": entry.graph_scale,
+        "shard_index": entry.shard_index,
+        "target": entry.target.value,
+        "stream": entry.stream.value,
+        "accepted_pair_quota": entry.accepted_pair_quota,
+    }
+    for name, expected in identity_fields.items():
+        if name in result and result[name] != expected:
+            raise EntryResultIntegrityError(f"entry result identity drift in {name}")
+    accepted = result.get("accepted_pairs")
+    if not isinstance(accepted, int) or isinstance(accepted, bool) or accepted < 0:
+        raise EntryResultIntegrityError("accepted_pairs must be a non-negative integer")
+    if accepted > entry.accepted_pair_quota:
+        raise EntryResultIntegrityError(
+            f"entry result overfill: {accepted} > {entry.accepted_pair_quota}"
+        )
+    raw_state = result.get("terminal_state")
+    try:
+        state = raw_state if isinstance(raw_state, EntryState) else EntryState(str(raw_state))
+    except ValueError as exc:
+        raise EntryResultIntegrityError(f"unknown terminal state: {raw_state!r}") from exc
+    terminal = {
+        EntryState.COMPLETED,
+        EntryState.UNDERFILLED,
+        EntryState.QUARANTINED,
+        EntryState.RESOURCE_EXHAUSTED,
+        EntryState.INFRASTRUCTURE_FAILED,
+    }
+    if state not in terminal:
+        raise EntryResultIntegrityError(f"unknown terminal state: {state.value}")
+    if state is EntryState.COMPLETED:
+        return (
+            EntryState.COMPLETED
+            if accepted == entry.accepted_pair_quota
+            else EntryState.UNDERFILLED
+        )
+    if state is EntryState.UNDERFILLED and accepted >= entry.accepted_pair_quota:
+        raise EntryResultIntegrityError("underfilled terminal state contradicts exact quota")
+    return state
+
+
+class RulePlanSupervisor:
+    """Small schema-v3 supervisor that preserves per-entry attempts and outcomes."""
+
+    def __init__(
+        self,
+        run_dir: str | Path,
+        *,
+        campaign_id: str,
+        input_manifest_hash: str,
+        retry_limit: int = 0,
+    ) -> None:
+        if not 0 <= retry_limit <= 3:
+            raise ValueError("retry_limit must be between zero and three")
+        if not campaign_id:
+            raise ValueError("campaign_id must be non-empty")
+        if CONTENT_HASH.fullmatch(input_manifest_hash) is None:
+            raise ValueError("input_manifest_hash must be a lowercase sha256")
+        self.run_dir = Path(run_dir)
+        self.campaign_id = campaign_id
+        self.input_manifest_hash = input_manifest_hash
+        self.retry_limit = retry_limit
+
+    def run(
+        self,
+        plan: RulePlan,
+        worker: Callable[[RulePlanEntry], Mapping[str, object]],
+    ) -> RulePlanRunSummary:
+        if not isinstance(plan, RulePlan):
+            raise TypeError("RulePlanSupervisor requires a RulePlan")
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        bind_run_dir = getattr(worker, "bind_run_dir", None)
+        if callable(bind_run_dir):
+            bind_run_dir(self.run_dir)
+        outcomes: dict[EntryState, list[RulePlanEntry]] = {
+            state: []
+            for state in (
+                EntryState.COMPLETED,
+                EntryState.UNDERFILLED,
+                EntryState.QUARANTINED,
+                EntryState.RESOURCE_EXHAUSTED,
+                EntryState.INFRASTRUCTURE_FAILED,
+            )
+        }
+        for entry in plan.entries:
+            state = self._run_entry(entry, worker)
+            outcomes[state].append(entry)
+        return RulePlanRunSummary(
+            completed=tuple(outcomes[EntryState.COMPLETED]),
+            underfilled=tuple(outcomes[EntryState.UNDERFILLED]),
+            quarantined=tuple(outcomes[EntryState.QUARANTINED]),
+            resource_exhausted=tuple(outcomes[EntryState.RESOURCE_EXHAUSTED]),
+            infrastructure_failed=tuple(outcomes[EntryState.INFRASTRUCTURE_FAILED]),
+        )
+
+    def _run_entry(
+        self,
+        entry: RulePlanEntry,
+        worker: Callable[[RulePlanEntry], Mapping[str, object]],
+    ) -> EntryState:
+        entry_dir = self.run_dir / "entries" / _rule_plan_entry_directory(entry)
+        entry_dir.mkdir(parents=True, exist_ok=True)
+        if (entry_dir / "cell_summary.json").exists():
+            raise FileExistsError(f"entry already has an immutable cell summary: {entry.entry_id}")
+        final_result: Mapping[str, object] = {}
+        final_state = EntryState.INFRASTRUCTURE_FAILED
+        for attempt in range(self.retry_limit + 1):
+            attempt_dir = entry_dir / f"attempt-{attempt:03d}"
+            attempt_dir.mkdir(parents=False, exist_ok=False)
+            previous = f"attempt-{attempt - 1:03d}" if attempt else None
+            previous_result_hash: str | None = None
+            if previous is not None:
+                previous_payload = read_json_object(entry_dir / previous / "terminal_result.json")
+                previous_result_hash = previous_payload.get("content_hash")
+                previous_body = {
+                    key: value
+                    for key, value in previous_payload.items()
+                    if key != "content_hash"
+                }
+                if previous_result_hash != canonical_hash(previous_body):
+                    raise EntryResultIntegrityError("previous attempt result hash mismatch")
+            _atomic_write_json(
+                attempt_dir / "attempt.json",
+                {
+                    "attempt": attempt,
+                    "entry_id": entry.entry_id,
+                    "previous_attempt": previous,
+                    "previous_attempt_result_hash": previous_result_hash,
+                },
+            )
+            self._event(entry, attempt, "attempt_started", previous_attempt=previous)
+            context = AttemptContext(
+                attempt=attempt,
+                attempt_dir=attempt_dir,
+                shard_dir=entry_dir,
+                manifest_hash=self.input_manifest_hash,
+                target_key=entry.target.value,
+                accepted_pair_hashes=frozenset(),
+                candidate_hashes=frozenset(),
+                lease_root=self.run_dir / ".leases",
+                max_parallel_generation_systems=1,
+                max_parallel_measurement_systems=1,
+                max_parallel_shards_per_system=1,
+                task_identity=canonical_hash(to_jsonable(entry)),
+            )
+            try:
+                bind_worker_attempt(worker, context)
+                value = worker(entry)
+                if not isinstance(value, Mapping):
+                    raise EntryResultIntegrityError("entry worker must return a mapping")
+                final_result = dict(value)
+                final_state = classify_rule_plan_result(entry, final_result)
+            except Exception as exc:
+                final_state = EntryState.INFRASTRUCTURE_FAILED
+                final_result = {
+                    "accepted_pairs": 0,
+                    "artifact_complete": False,
+                    "certificate_complete": False,
+                    "entry_id": entry.entry_id,
+                    "infrastructure_reason": f"{type(exc).__name__}: {exc}",
+                    "terminal_state": final_state.value,
+                }
+            terminal_body = to_jsonable(dict(final_result))
+            if not isinstance(terminal_body, Mapping):
+                terminal_body = {
+                    "accepted_pairs": 0,
+                    "artifact_complete": False,
+                    "certificate_complete": False,
+                    "entry_id": entry.entry_id,
+                    "infrastructure_reason": "terminal result is not JSON-object serializable",
+                    "terminal_state": EntryState.INFRASTRUCTURE_FAILED.value,
+                }
+                final_result = terminal_body
+                final_state = EntryState.INFRASTRUCTURE_FAILED
+            _atomic_write_json(
+                attempt_dir / "terminal_result.json",
+                {**terminal_body, "content_hash": canonical_hash(terminal_body)},
+            )
+            self._event(entry, attempt, final_state.value, previous_attempt=previous)
+            if final_state is not EntryState.INFRASTRUCTURE_FAILED or attempt >= self.retry_limit:
+                break
+        cell = cell_summary_from_result(
+            entry,
+            final_result,
+            campaign_id=self.campaign_id,
+            input_manifest_hash=self.input_manifest_hash,
+            terminal_state=final_state,
+        )
+        body = asdict(cell)
+        _atomic_write_json(entry_dir / "cell_summary.json", {**body, "content_hash": canonical_hash(body)})
+        return final_state
+
+    def _event(
+        self,
+        entry: RulePlanEntry,
+        attempt: int,
+        state: str,
+        *,
+        previous_attempt: str | None,
+    ) -> None:
+        _append_jsonl_fsync(
+            self.run_dir / "events.jsonl",
+            {
+                "attempt": attempt,
+                "entry_id": entry.entry_id,
+                "previous_attempt": previous_attempt,
+                "state": state,
+            },
+        )
+
+
+def cell_summary_from_result(
+    entry: RulePlanEntry,
+    result: Mapping[str, object],
+    *,
+    campaign_id: str,
+    input_manifest_hash: str,
+    terminal_state: EntryState | None = None,
+) -> CellSummary:
+    state = terminal_state or classify_rule_plan_result(entry, result)
+    accepted = _nonnegative_int(result.get("accepted_pairs", 0), "accepted_pairs")
+    validation_passed = _nonnegative_int(
+        result.get("validation_passed_count", result.get("validation_passed_pairs", 0)),
+        "validation_passed_count",
+    )
+    raw_control_pass = result.get("control_validation_passed_count")
+    if raw_control_pass is None:
+        raw_control_pass = int(bool(result.get("control_validation_pass", False)))
+    return CellSummary(
+        campaign_id=campaign_id,
+        phase=entry.phase.value,
+        input_manifest_hash=input_manifest_hash,
+        target=entry.target.value,
+        rule_id=entry.rule_id,
+        family=entry.family,
+        stream=entry.stream.value,
+        graph_scale=entry.graph_scale,
+        shard_seed=entry.shard_seed,
+        accepted_pairs=accepted,
+        quota=entry.accepted_pair_quota,
+        applicability_count=_nonnegative_int(result.get("applicability_count", 0), "applicability_count"),
+        stage2_count=_nonnegative_int(
+            result.get("stage2_count", result.get("stage2_measured_pairs", 0)),
+            "stage2_count",
+        ),
+        validation_passed_count=validation_passed,
+        control_validation_passed_count=_nonnegative_int(
+            raw_control_pass,
+            "control_validation_passed_count",
+        ),
+        validation_pair_yield=_finite_float(result.get("validation_pair_yield", 0.0), "validation_pair_yield"),
+        validation_yield_ci_low=_finite_float(result.get("validation_yield_ci_low", 0.0), "validation_yield_ci_low"),
+        best_validated_delta_ms=_finite_float(result.get("best_validated_delta_ms", 0.0), "best_validated_delta_ms"),
+        best_validated_ratio=_finite_float(result.get("best_validated_ratio", 1.0), "best_validated_ratio"),
+        best_ratio_ci_low=_finite_float(result.get("best_ratio_ci_low", 1.0), "best_ratio_ci_low"),
+        best_delta_over_noise=_finite_float(result.get("best_delta_over_noise", 0.0), "best_delta_over_noise"),
+        typed_mismatches=_nonnegative_int(result.get("typed_mismatches", 0), "typed_mismatches"),
+        certificate_complete=result.get("certificate_complete") is True,
+        health_events=_nonnegative_int(result.get("health_events", 0), "health_events"),
+        artifact_complete=result.get("artifact_complete") is True,
+        timeout_rate=_finite_float(result.get("timeout_rate", 0.0), "timeout_rate"),
+        terminal_state=state.value,
+    )
+
+
+def load_cell_summary(path: str | Path) -> CellSummary:
+    payload = read_json_object(Path(path))
+    content_hash = payload.pop("content_hash", None)
+    if content_hash != canonical_hash(payload):
+        raise EntryResultIntegrityError("cell summary content hash mismatch")
+    try:
+        return CellSummary(**payload)
+    except (TypeError, ValueError) as exc:
+        raise EntryResultIntegrityError(f"invalid cell summary: {exc}") from exc
+
+
+def _rule_plan_entry_directory(entry: RulePlanEntry) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", entry.entry_id).strip("-") or "entry"
+    return f"{safe[:96]}-{canonical_hash(to_jsonable(entry))[:12]}"
+
+
+def _nonnegative_int(value: object, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise EntryResultIntegrityError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _finite_float(value: object, name: str) -> float:
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise EntryResultIntegrityError(f"{name} must be numeric")
+    number = float(value)
+    if not (float("-inf") < number < float("inf")):
+        raise EntryResultIntegrityError(f"{name} must be finite")
+    return number
 
 
 class ShardSupervisor:

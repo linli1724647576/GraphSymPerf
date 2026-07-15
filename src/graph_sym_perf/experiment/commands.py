@@ -9,9 +9,16 @@ from pathlib import Path
 
 from graph_sym_perf.core import TargetSystem, to_jsonable
 from graph_sym_perf.experiment.doctor_v2 import run_doctor, run_doctor_spec
+from graph_sym_perf.experiment.campaign import CampaignLifecycle, campaign_identity
 from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle, LifecycleResult, RunStatus
-from graph_sym_perf.experiment.plan_models import FrozenMapping, freeze_value
-from graph_sym_perf.experiment.planner import build_run_plan, write_resolved_manifest
+from graph_sym_perf.experiment.plan_models import (
+    CampaignPhase,
+    FrozenMapping,
+    ValidatedYieldExperimentSpec,
+    freeze_value,
+)
+from graph_sym_perf.experiment.planner import build_rule_plan, build_run_plan, write_resolved_manifest
+from graph_sym_perf.experiment.selection import load_pilot_selection
 from graph_sym_perf.config import migrate_legacy_config_to_v2
 from graph_sym_perf.config import environment_with_dotenv
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -30,9 +37,37 @@ class GatePrerequisiteError(RuntimeError):
 class ExperimentCommands:
     """Stable public boundary around planning and the durable run lifecycle."""
 
-    def plan(self, *, config: str | Path, output: str | Path | None = None):
+    def plan(
+        self,
+        *,
+        config: str | Path,
+        output: str | Path | None = None,
+        phase: str | CampaignPhase | None = None,
+        selection: str | Path | None = None,
+    ):
         spec = load_experiment_spec(config)
-        plan = build_run_plan(spec, environment=_formal_environment(config))
+        if isinstance(spec, ValidatedYieldExperimentSpec):
+            if phase is None:
+                raise ValueError("schema-v3 planning requires --phase")
+            parsed_phase = phase if isinstance(phase, CampaignPhase) else CampaignPhase(str(phase))
+            selected_cells: tuple[tuple[str, int], ...] = ()
+            if parsed_phase is CampaignPhase.P2:
+                if selection is None:
+                    raise ValueError("P2 planning requires --selection")
+                pilot = load_pilot_selection(
+                    selection,
+                    expected_campaign_id=campaign_identity(spec),
+                )
+                if pilot.status != "selected" or not pilot.cells:
+                    raise ValueError("P2 planning requires a successful non-empty selection")
+                selected_cells = tuple((cell.rule_id, cell.graph_scale) for cell in pilot.cells)
+            elif selection is not None:
+                raise ValueError("--selection is only valid for P2")
+            plan = build_rule_plan(spec, parsed_phase, selected_cells=selected_cells)
+        else:
+            if phase is not None or selection is not None:
+                raise ValueError("phase selection requires a schema-v3 config")
+            plan = build_run_plan(spec, environment=_formal_environment(config))
         if output is not None:
             write_resolved_manifest(plan, output)
         return plan
@@ -41,16 +76,73 @@ class ExperimentCommands:
         options = {} if output_root is None else {"output_root": output_root}
         return run_doctor(config, environment=_formal_environment(config), **options)
 
-    def run(self, *, config: str | Path, output_root: str | Path = "runs") -> LifecycleResult:
+    def run(
+        self,
+        *,
+        config: str | Path,
+        output_root: str | Path = "runs",
+        phase: str | CampaignPhase | None = None,
+        run_id: str | None = None,
+        parent_run: str | None = None,
+        selection: str | Path | None = None,
+    ):
         spec = load_experiment_spec(config)
         environment = _formal_environment(config)
         report = run_doctor(config, environment=environment, output_root=output_root)
         if not report.ready:
             raise ExperimentNotReady("doctor is not ready; inspect the generated doctor report")
+        if isinstance(spec, ValidatedYieldExperimentSpec):
+            if phase is None or run_id is None:
+                raise ValueError("schema-v3 run requires --phase and --run-id")
+            parsed_phase = phase if isinstance(phase, CampaignPhase) else CampaignPhase(str(phase))
+            return CampaignLifecycle(output_root).run(
+                spec,
+                FormalRuntimeFirstShardWorker(spec, environment=environment),
+                phase=parsed_phase,
+                run_id=run_id,
+                parent_run=parent_run,
+                selection=selection,
+            )
+        if any(value is not None for value in (phase, run_id, parent_run, selection)):
+            raise ValueError("phase ancestry arguments require a schema-v3 config")
         return ExperimentLifecycle(output_root, environment=environment).run(
             spec,
             FormalRuntimeFirstShardWorker(spec, environment=environment),
         )
+
+    def select(
+        self,
+        *,
+        config: str | Path,
+        campaign_root: str | Path,
+        p1_run: str,
+        output: str | Path,
+    ):
+        spec = load_experiment_spec(config)
+        if not isinstance(spec, ValidatedYieldExperimentSpec):
+            raise ValueError("pilot selection requires a schema-v3 config")
+        maximum = spec.campaign.p2.max_rule_scale_cells
+        if maximum is None:
+            raise ValueError("campaign.p2.max_rule_scale_cells is required")
+        selection = CampaignLifecycle(campaign_root).create_selection(
+            p1_run=p1_run,
+            output=output,
+            max_cells=maximum,
+            expected_campaign_id=campaign_identity(spec),
+        )
+        return selection
+
+    def report(self, *, config: str | Path, campaign_root: str | Path) -> dict[str, object]:
+        spec = load_experiment_spec(config)
+        if not isinstance(spec, ValidatedYieldExperimentSpec):
+            raise ValueError("campaign report requires a schema-v3 config")
+        report = CampaignLifecycle(campaign_root).report()
+        expected = campaign_identity(spec)
+        for phase in report["phases"]:
+            outcome = phase.get("outcome", {})
+            if outcome.get("campaign_id") != expected:
+                raise ValueError("campaign report contains mixed campaign identities")
+        return report
 
     def resume(
         self,

@@ -218,6 +218,21 @@ def test_more_than_six_validation_winners_fails_with_selection_overflow() -> Non
     assert "selection_overflow" in selection.reason_codes
 
 
+def test_three_validation_scales_for_one_rule_requires_explicit_overflow_resolution() -> None:
+    cells = tuple(
+        _winner("pattern_order_symmetry", "sym", scale, 1.0 - index / 10)
+        for index, scale in enumerate((128, 256, 512))
+    )
+    selection = select_p2_cells(
+        cells,
+        max_cells=6,
+        campaign_id=CAMPAIGN_ID,
+        input_p1_manifest_hash=MANIFEST_HASH,
+    )
+    assert selection.status == "selection_overflow"
+    assert "rule_scale_overflow" in selection.reason_codes
+
+
 def test_control_contamination_fails_the_entire_selection() -> None:
     contaminated = replace(
         _cell("alpha_renaming_symmetry", "sym"),

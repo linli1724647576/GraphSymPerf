@@ -7,12 +7,39 @@ from graph_sym_perf.experiment.commands import (
     ExperimentNotReady,
     GatePrerequisiteError,
 )
-from graph_sym_perf.experiment.plan_models import ExperimentSpec, RunPlan, ShardTask
+from graph_sym_perf.experiment.campaign import (
+    CampaignLifecycle,
+    CampaignLifecycleResult,
+    MeasurementSessionBusy,
+    MeasurementSessionLock,
+    PhaseAncestryError,
+)
+from graph_sym_perf.experiment.plan_models import (
+    CampaignPhase,
+    ExperimentSpec,
+    RulePlan,
+    RulePlanEntry,
+    RunPlan,
+    ShardTask,
+)
 from graph_sym_perf.experiment.doctor_v2 import run_doctor
 from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle, LifecycleResult, RunStatus
-from graph_sym_perf.experiment.planner import build_run_plan, write_resolved_manifest
+from graph_sym_perf.experiment.planner import build_rule_plan, build_run_plan, write_resolved_manifest
+from graph_sym_perf.experiment.selection import (
+    CellSummary,
+    PilotCellDecision,
+    PilotSelection,
+    evaluate_p0_gate,
+    evaluate_p1_cell,
+    select_p2_cells,
+)
 from graph_sym_perf.experiment.spec import load_experiment_spec
-from graph_sym_perf.experiment.supervisor import RunSummary, ShardSupervisor
+from graph_sym_perf.experiment.supervisor import (
+    RulePlanRunSummary,
+    RulePlanSupervisor,
+    RunSummary,
+    ShardSupervisor,
+)
 from graph_sym_perf.experiment.worker import FormalRuntimeFirstShardWorker, RuntimeFirstShardWorker
 
 __all__ = [
@@ -20,9 +47,22 @@ __all__ = [
     "ExperimentNotReady",
     "GatePrerequisiteError",
     "ExperimentLifecycle",
+    "CampaignLifecycle",
+    "CampaignLifecycleResult",
+    "CampaignPhase",
+    "CellSummary",
     "ExperimentSpec",
     "FormalRuntimeFirstShardWorker",
     "LifecycleResult",
+    "MeasurementSessionBusy",
+    "MeasurementSessionLock",
+    "PhaseAncestryError",
+    "PilotCellDecision",
+    "PilotSelection",
+    "RulePlan",
+    "RulePlanEntry",
+    "RulePlanRunSummary",
+    "RulePlanSupervisor",
     "RunPlan",
     "RunSummary",
     "RunStatus",
@@ -31,8 +71,12 @@ __all__ = [
     "ShardTask",
     "TargetSystem",
     "build_run_plan",
+    "build_rule_plan",
+    "evaluate_p0_gate",
+    "evaluate_p1_cell",
     "load_experiment_spec",
     "migrate_legacy_config_to_v2",
     "run_doctor",
+    "select_p2_cells",
     "write_resolved_manifest",
 ]

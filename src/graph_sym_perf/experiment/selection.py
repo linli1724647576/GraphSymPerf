@@ -252,14 +252,25 @@ def select_p2_cells(
 
     eligible = [decision for decision in decisions if decision.eligible]
     winners = [decision for decision in eligible if decision.summary.validation_passed_count > 0]
-    if len(winners) > max_cells:
+    winner_counts_by_rule: dict[str, int] = {}
+    for winner in winners:
+        winner_counts_by_rule[winner.summary.rule_id] = (
+            winner_counts_by_rule.get(winner.summary.rule_id, 0) + 1
+        )
+    rule_scale_overflow = any(count > 2 for count in winner_counts_by_rule.values())
+    if len(winners) > max_cells or rule_scale_overflow:
+        overflow_reasons = (
+            ("selection_overflow", "rule_scale_overflow")
+            if rule_scale_overflow
+            else ("selection_overflow",)
+        )
         return _selection_result(
             campaign_id,
             input_p1_manifest_hash,
             decisions,
             (),
             status="selection_overflow",
-            reasons=("selection_overflow",),
+            reasons=overflow_reasons,
         )
 
     selected: list[PilotCellDecision] = list(winners)

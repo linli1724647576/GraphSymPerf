@@ -1,10 +1,24 @@
 import json
 import hashlib
+import os
+import subprocess
+import sys
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle
+from graph_sym_perf.experiment.evidence_validation import canonical_hash
+from graph_sym_perf.experiment.campaign import (
+    CampaignLifecycle,
+    MeasurementSessionBusy,
+    MeasurementSessionLock,
+    MeasurementSessionOwnershipError,
+    PhaseAncestryError,
+)
+from graph_sym_perf.experiment.plan_models import CampaignPhase
+from graph_sym_perf.experiment.selection import select_p2_cells, write_pilot_selection
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.state import ManifestMismatchError
 from graph_sym_perf.experiment.supervisor import RunSummary
@@ -36,6 +50,299 @@ class _CompleteLifecycleWorker:
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             }
         return {"accepted_pairs": len(hashes), "accepted_pair_hashes": hashes, "stage_evidence": stages}
+
+
+class _CampaignFixtureWorker:
+    def __init__(self, *, underfill_first: bool = False, assert_lock_root=None) -> None:
+        self.underfill_first = underfill_first
+        self.assert_lock_root = assert_lock_root
+        self.calls = 0
+
+    def bind_run_dir(self, _run_dir) -> None:
+        return None
+
+    def bind_attempt_context(self, _context) -> None:
+        return None
+
+    def __call__(self, entry):
+        self.calls += 1
+        if self.assert_lock_root is not None:
+            with pytest.raises(MeasurementSessionBusy, match="MEASUREMENT_SESSION_BUSY"):
+                MeasurementSessionLock(self.assert_lock_root).acquire()
+        accepted = entry.accepted_pair_quota
+        terminal = "completed"
+        if self.underfill_first and self.calls == 1:
+            accepted -= 1
+            terminal = "underfilled"
+        is_winner = entry.stream.value == "discovery" and (
+            (entry.rule_id == "constant_true_disjunction" and entry.graph_scale == 128)
+            or (entry.rule_id == "pattern_order_symmetry" and entry.graph_scale == 512)
+        )
+        return {
+            "accepted_pairs": accepted,
+            "artifact_complete": True,
+            "certificate_complete": True,
+            "control_validation_pass": False,
+            "entry_id": entry.entry_id,
+            "regression_artifact_complete": True,
+            "regression_passed": True,
+            "terminal_state": terminal,
+            "validation_passed_count": int(is_winner),
+            "validation_pair_yield": 0.1 if is_winner else 0.0,
+            "validation_yield_ci_low": 0.05 if is_winner else 0.0,
+            "best_validated_delta_ms": 80.0 if is_winner else 0.0,
+            "best_validated_ratio": 2.0 if is_winner else 1.0,
+            "best_ratio_ci_low": 1.5 if is_winner else 1.0,
+            "best_delta_over_noise": 6.0 if is_winner else 0.0,
+        }
+
+
+def test_campaign_phase_ancestry_selection_and_exact_p2_expansion(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = CampaignLifecycle(tmp_path)
+    p0 = lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
+    assert p0.passed
+    p1 = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(),
+        phase=CampaignPhase.P1,
+        run_id="p1",
+        parent_run="p0",
+    )
+    assert p1.passed
+
+    selection = select_p2_cells(
+        lifecycle.cell_summaries("p1"),
+        campaign_id=p1.campaign_id,
+        input_p1_manifest_hash=p1.manifest_hash,
+    )
+    assert len(selection.cells) == 4  # two winners plus one deterministic fallback per family
+    selection_path = tmp_path / "pilot_selection.json"
+    write_pilot_selection(selection, selection_path)
+    p2 = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(),
+        phase=CampaignPhase.P2,
+        run_id="p2",
+        parent_run="p1",
+        selection=selection_path,
+    )
+    assert p2.passed
+
+    p1_plan = json.loads((p1.run_dir / "rule_plan.json").read_text(encoding="utf-8"))
+    p2_plan = json.loads((p2.run_dir / "rule_plan.json").read_text(encoding="utf-8"))
+    assert len(p2_plan["entries"]) == len(selection.cells) * 3
+    assert {entry["shard_index"] for entry in p2_plan["entries"]} == {0, 1, 2}
+    assert all(entry["accepted_pair_quota"] == 1000 for entry in p2_plan["entries"])
+    assert not (
+        {entry["shard_seed"] for entry in p1_plan["entries"]}
+        & {entry["shard_seed"] for entry in p2_plan["entries"]}
+    )
+
+
+def test_campaign_requires_successful_matching_parent_and_preserves_manifests(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = CampaignLifecycle(tmp_path)
+    with pytest.raises(PhaseAncestryError, match="P0 parent"):
+        lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P1, run_id="p1")
+
+    failed = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(underfill_first=True),
+        phase=CampaignPhase.P0,
+        run_id="failed-p0",
+    )
+    assert not failed.passed
+    with pytest.raises(PhaseAncestryError, match="successful"):
+        lifecycle.run(
+            spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P1,
+            run_id="blocked-p1",
+            parent_run="failed-p0",
+        )
+
+    good = lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="good-p0")
+    assert good.passed
+    with pytest.raises(PhaseAncestryError, match="campaign"):
+        lifecycle.run(
+            replace(spec, name="identity-drift"),
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P1,
+            run_id="drift-p1",
+            parent_run="good-p0",
+        )
+    with pytest.raises(FileExistsError, match="run id"):
+        lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="good-p0")
+
+    interrupted = tmp_path / "interrupted"
+    interrupted.mkdir()
+    (interrupted / "rule_plan.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(FileExistsError, match="run id"):
+        lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="interrupted")
+
+
+def test_campaign_rejects_tampered_parent_and_selection_context(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = CampaignLifecycle(tmp_path)
+    p0 = lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
+    outcome_path = p0.run_dir / "phase_outcome.json"
+    outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
+    outcome["passed"] = False
+    outcome_path.write_text(json.dumps(outcome), encoding="utf-8")
+    with pytest.raises(PhaseAncestryError, match="content hash"):
+        lifecycle.run(
+            spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P1,
+            run_id="p1",
+            parent_run="p0",
+        )
+
+    intact = lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="intact-p0")
+    rule_plan_path = intact.run_dir / "rule_plan.json"
+    rule_plan = json.loads(rule_plan_path.read_text(encoding="utf-8"))
+    rule_plan["entries"][0]["accepted_pair_quota"] = 999
+    rule_plan_path.write_text(json.dumps(rule_plan), encoding="utf-8")
+    with pytest.raises(PhaseAncestryError, match="rule plan content hash"):
+        lifecycle.run(
+            spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P1,
+            run_id="tampered-plan-p1",
+            parent_run="intact-p0",
+        )
+
+
+def test_measurement_session_is_cross_process_exclusive_and_owner_only(tmp_path) -> None:
+    lock = MeasurementSessionLock(tmp_path)
+    lease = lock.acquire()
+    try:
+        with pytest.raises(MeasurementSessionBusy, match="MEASUREMENT_SESSION_BUSY"):
+            MeasurementSessionLock(tmp_path).acquire()
+        script = (
+            "from graph_sym_perf.experiment.campaign import MeasurementSessionLock, MeasurementSessionBusy; "
+            f"root={str(tmp_path)!r}; "
+            "\ntry: MeasurementSessionLock(root).acquire()"
+            "\nexcept MeasurementSessionBusy: raise SystemExit(23)"
+            "\nraise SystemExit(0)"
+        )
+        completed = subprocess.run(
+            (sys.executable, "-c", script),
+            check=False,
+            env={**os.environ, "PYTHONPATH": str((__import__("pathlib").Path.cwd() / "src"))},
+        )
+        assert completed.returncode == 23
+
+        owner_path = tmp_path / ".neo4j-measurement-session" / "owner.json"
+        owner = json.loads(owner_path.read_text(encoding="utf-8"))
+        owner["token"] = "forged-owner"
+        owner_path.write_text(json.dumps(owner), encoding="utf-8")
+        with pytest.raises(MeasurementSessionOwnershipError, match="ownership"):
+            lease.release()
+    finally:
+        # Test-only cleanup after deliberately corrupting the owner receipt.
+        import shutil
+
+        shutil.rmtree(tmp_path / ".neo4j-measurement-session", ignore_errors=True)
+
+
+def test_campaign_holds_measurement_lock_across_worker_validation(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    result = CampaignLifecycle(tmp_path).run(
+        spec,
+        _CampaignFixtureWorker(assert_lock_root=tmp_path),
+        phase=CampaignPhase.P0,
+        run_id="p0",
+    )
+    assert result.passed
+
+
+def test_campaign_rejects_a_forged_p2_seed_overlap(monkeypatch, tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = CampaignLifecycle(tmp_path)
+    lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
+    p1 = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(),
+        phase=CampaignPhase.P1,
+        run_id="p1",
+        parent_run="p0",
+    )
+    selection_path = tmp_path / "pilot_selection.json"
+    write_pilot_selection(
+        select_p2_cells(
+            lifecycle.cell_summaries("p1"),
+            campaign_id=p1.campaign_id,
+            input_p1_manifest_hash=p1.manifest_hash,
+        ),
+        selection_path,
+    )
+    p1_plan = json.loads((p1.run_dir / "rule_plan.json").read_text(encoding="utf-8"))
+    overlapping_seed = p1_plan["entries"][0]["shard_seed"]
+    from graph_sym_perf.experiment import campaign as campaign_module
+
+    real_builder = campaign_module.build_rule_plan
+
+    def forged_builder(*args, **kwargs):
+        plan = real_builder(*args, **kwargs)
+        if plan.phase is CampaignPhase.P2:
+            plan = replace(
+                plan,
+                entries=(replace(plan.entries[0], shard_seed=overlapping_seed), *plan.entries[1:]),
+            )
+        return plan
+
+    monkeypatch.setattr(campaign_module, "build_rule_plan", forged_builder)
+    with pytest.raises(PhaseAncestryError, match="overlap P1"):
+        lifecycle.run(
+            spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P2,
+            run_id="forged-p2",
+            parent_run="p1",
+            selection=selection_path,
+        )
+
+
+def test_measurement_lock_recovers_only_a_content_bound_dead_owner(tmp_path) -> None:
+    first = MeasurementSessionLock(tmp_path).acquire()
+    owner_path = tmp_path / ".neo4j-measurement-session" / "owner.json"
+    owner = json.loads(owner_path.read_text(encoding="utf-8"))
+    owner["pid"] = 2_000_000_000
+    body = {key: value for key, value in owner.items() if key != "content_hash"}
+    owner["content_hash"] = canonical_hash(body)
+    owner_path.write_text(
+        json.dumps(owner, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    recovered = MeasurementSessionLock(tmp_path).acquire()
+    recovered.release()
+    with pytest.raises(MeasurementSessionOwnershipError):
+        first.release()
+
+
+def test_measurement_lock_never_steals_a_live_pid_with_mismatched_identity(tmp_path) -> None:
+    lease = MeasurementSessionLock(tmp_path).acquire()
+    owner_path = tmp_path / ".neo4j-measurement-session" / "owner.json"
+    owner = json.loads(owner_path.read_text(encoding="utf-8"))
+    owner["process_start_identity"] = "forged-live-identity"
+    body = {key: value for key, value in owner.items() if key != "content_hash"}
+    owner["content_hash"] = canonical_hash(body)
+    owner_path.write_text(
+        json.dumps(owner, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    try:
+        with pytest.raises(MeasurementSessionBusy, match="MEASUREMENT_SESSION_BUSY"):
+            MeasurementSessionLock(tmp_path).acquire()
+    finally:
+        import shutil
+
+        shutil.rmtree(tmp_path / ".neo4j-measurement-session", ignore_errors=True)
+    with pytest.raises(MeasurementSessionOwnershipError):
+        lease.release()
 
 
 def test_lifecycle_writes_immutable_manifest_and_summary(tmp_path) -> None:
