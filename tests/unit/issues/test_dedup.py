@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import itertools
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from graph_sym_perf.issues.dedup import (
     KnownRegressionSignature,
     fingerprint_issue,
     known_regression_signature_from_manifest,
+    serialized_family_decision_is_valid,
 )
 
 
@@ -200,6 +202,81 @@ def test_exact_and_structural_matches_share_only_one_family() -> None:
     assert structural.family_id == first.family_id
     assert structural.match_kind is FamilyMatchKind.STRUCTURAL
     assert not structural.is_new_family
+
+
+def test_exact_structural_bridge_unions_every_insertion_order_deterministically() -> None:
+    """C shares A's exact signature and B's structural signature."""
+
+    fingerprints = {
+        "a": fingerprint_issue(_subject(site_class="where_boolean")),
+        "b": fingerprint_issue(_structurally_equivalent_subject()),
+        "c": fingerprint_issue(_subject()),
+    }
+    outcomes = set()
+
+    for order in itertools.permutations(fingerprints):
+        index = IssueFamilyIndex()
+        issued = {
+            issue_id: index.add(fingerprints[issue_id], issue_id=issue_id)
+            for issue_id in order
+        }
+        current = index.reissue_owner(fingerprints["b"], issue_id="b")
+        outcomes.add(
+            (
+                current.family_id,
+                current.owner_issue_id,
+                current.family_members,
+                current.family_version_hash,
+            )
+        )
+
+        assert current.verify()
+        assert current.owner_issue_id == "b"
+        assert {member for member, _exact in current.family_members} == {"a", "b", "c"}
+        assert all(
+            not decision.verify()
+            for decision in issued.values()
+            if len(decision.family_members) < 3
+        )
+
+    assert len(outcomes) == 1
+
+
+def test_owner_reissue_requires_the_full_original_fingerprint_identity() -> None:
+    index = IssueFamilyIndex()
+    original = fingerprint_issue(_subject())
+    index.add(original, issue_id="owner")
+
+    for drifted in (
+        fingerprint_issue(_subject(submission_path="absolute")),
+        fingerprint_issue(
+            _subject(reduced_validation_phenotype="absolute:stable:b")
+        ),
+    ):
+        assert drifted.exact == original.exact
+        with pytest.raises(ValueError, match="current family owner"):
+            index.reissue_owner(drifted, issue_id="owner")
+
+
+def test_serialized_family_validator_fails_closed_for_malformed_member_shape() -> None:
+    index = IssueFamilyIndex()
+    decision = index.add(fingerprint_issue(_subject()), issue_id="owner")
+    payload = {
+        "issue_id": decision.issue_id,
+        "owner_issue_id": decision.owner_issue_id,
+        "family_id": decision.family_id,
+        "fingerprint": decision.fingerprint.__dict__,
+        "match_kind": decision.match_kind.value,
+        "matched_issue_id": decision.matched_issue_id,
+        "known_regression_match": decision.known_regression_match,
+        "known_regression_case_id": decision.known_regression_case_id,
+        "is_new_family": decision.is_new_family,
+        "family_members": [[]],
+        "family_version_hash": decision.family_version_hash,
+        "decision_hash": decision.decision_hash,
+    }
+
+    assert not serialized_family_decision_is_valid(payload)
 
 
 def test_structural_merge_requires_every_conservative_dimension_to_match() -> None:

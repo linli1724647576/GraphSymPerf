@@ -127,6 +127,10 @@ class ArtifactChainWriter:
                 "known_regression_case_id": issue.family_decision.known_regression_case_id,
                 "is_new_family": issue.family_decision.is_new_family,
                 "family_members": issue.family_decision.family_members,
+                "family_fingerprints": tuple(
+                    (member, asdict(fingerprint))
+                    for member, fingerprint in issue.family_decision.family_fingerprints
+                ),
                 "family_version_hash": issue.family_decision.family_version_hash,
                 "decision_hash": issue.family_decision.decision_hash,
             },

@@ -3,6 +3,7 @@ import copy
 
 import pytest
 
+from graph_sym_perf.artifacts.schema import ArtifactReference
 from graph_sym_perf.issues.exporter import export_issue
 from graph_sym_perf.validation.models import PipelineStage
 from graph_sym_perf.validation.promotion import promote
@@ -30,12 +31,23 @@ def _issue():
     return issue
 
 
+def _refs() -> dict[str, ArtifactReference]:
+    return {
+        "original_validation_ref": ArtifactReference(
+            "1" * 64, "objects/11/" + "1" * 64, 100, "application/json"
+        ),
+        "reduced_validation_ref": ArtifactReference(
+            "2" * 64, "objects/22/" + "2" * 64, 100, "application/json"
+        ),
+    }
+
+
 def test_exporter_rejects_untyped_raw_candidate(tmp_path) -> None:
     with pytest.raises(TypeError):
-        export_issue({"stage": "submit_ready"}, tmp_path / "issue.json")  # type: ignore[arg-type]
+        export_issue({"stage": "submit_ready"}, tmp_path / "issue.json", **_refs())  # type: ignore[arg-type]
 
     with pytest.raises(TypeError):
-        export_issue(_report(), tmp_path / "validation.json")  # type: ignore[arg-type]
+        export_issue(_report(), tmp_path / "validation.json", **_refs())  # type: ignore[arg-type]
 
 
 def test_exporter_rechecks_runtime_gates_even_for_a_forged_submit_ready_instance(tmp_path) -> None:
@@ -43,13 +55,13 @@ def test_exporter_rechecks_runtime_gates_even_for_a_forged_submit_ready_instance
     object.__setattr__(issue, "stage", PipelineStage.SCREENED)
 
     with pytest.raises(ValueError, match="promotion gates"):
-        export_issue(issue, tmp_path / "forged.json")
+        export_issue(issue, tmp_path / "forged.json", **_refs())
 
 
 def test_exporter_serializes_only_a_fully_gated_submit_ready_issue(tmp_path) -> None:
     issue = _issue()
 
-    path = export_issue(issue, tmp_path / "issue.json")
+    path = export_issue(issue, tmp_path / "issue.json", **_refs())
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["issue_id"] == issue.issue_id
@@ -66,6 +78,8 @@ def test_exporter_serializes_only_a_fully_gated_submit_ready_issue(tmp_path) -> 
     assert payload["family_decision_hash"] == issue.family_decision.decision_hash
     assert payload["original_validation_hash"] == issue.reduction.original_validation_hash
     assert payload["reduced_validation_hash"] == issue.reduction.reduced_validation_hash
+    assert payload["original_validation_ref"]["content_hash"] == "1" * 64
+    assert payload["reduced_validation_ref"]["content_hash"] == "2" * 64
 
 
 def test_exporter_rejects_a_clearance_for_a_different_issue_identity(tmp_path) -> None:
@@ -73,7 +87,7 @@ def test_exporter_rejects_a_clearance_for_a_different_issue_identity(tmp_path) -
     object.__setattr__(issue, "duplicate_clearance", _duplicate_clearance(issue_id="wrong-issue"))
 
     with pytest.raises(ValueError, match="promotion gates"):
-        export_issue(issue, tmp_path / "wrong-clearance.json")
+        export_issue(issue, tmp_path / "wrong-clearance.json", **_refs())
 
 
 def test_exporter_rejects_a_tampered_family_decision(tmp_path) -> None:
@@ -83,4 +97,4 @@ def test_exporter_rejects_a_tampered_family_decision(tmp_path) -> None:
     object.__setattr__(issue, "family_decision", forged)
 
     with pytest.raises(ValueError, match="promotion gates"):
-        export_issue(issue, tmp_path / "forged-family.json")
+        export_issue(issue, tmp_path / "forged-family.json", **_refs())

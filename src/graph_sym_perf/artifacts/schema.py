@@ -633,7 +633,7 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     required_family = {
         "issue_id", "owner_issue_id", "family_id", "fingerprint", "match_kind", "matched_issue_id",
         "known_regression_match", "known_regression_case_id", "is_new_family",
-        "family_members", "family_version_hash", "decision_hash",
+        "family_members", "family_fingerprints", "family_version_hash", "decision_hash",
     }
     if not isinstance(family, Mapping) or set(family) != required_family:
         raise ValueError("issue artifact family decision is incomplete")

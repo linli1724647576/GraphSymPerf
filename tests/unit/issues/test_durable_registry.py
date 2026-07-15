@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import itertools
 import json
 from pathlib import Path
 import multiprocessing
@@ -10,6 +11,12 @@ from graph_sym_perf.artifacts.schema import ArtifactReference
 from graph_sym_perf.issues.durable_registry import (
     durable_family_credentials_are_current,
     promote_unique_issue,
+    _load_records,
+    _commit_family_transaction,
+    _record_payload,
+    _records_with_current_family,
+    _recover_family_transaction,
+    _write_payload_lines_atomic,
     _replay_family_index,
 )
 from graph_sym_perf.issues.dedup import (
@@ -135,14 +142,13 @@ def test_real_durable_promotion_replays_owner_with_current_family_version(tmp_pa
         **_validation_refs(),
     )
 
-    assert first is not None and repaired is not None
+    assert first is not None and repaired is None
     assert first_status == "unique_family"
-    assert repaired_status == "family_owner_repaired"
-    assert first.family_id == repaired.family_id
+    assert repaired_status == "owner_already_committed"
     assert len((tmp_path / "registry.jsonl").read_text(encoding="utf-8").splitlines()) == 1
     record = json.loads((tmp_path / "registry.jsonl").read_text(encoding="utf-8"))
-    assert record["family_id"] == repaired.family_id
-    assert record["family_version_hash"] == repaired.family_decision.family_version_hash
+    assert record["family_id"] == first.family_id
+    assert record["family_version_hash"] == first.family_decision.family_version_hash
 
 
 def test_formal_promotion_requires_manifest_and_dbms_matches_sealed_target(tmp_path) -> None:
@@ -317,36 +323,38 @@ def test_concurrent_replay_under_flock_commits_one_family(tmp_path) -> None:
     outcomes = tuple(queue.get(timeout=2) for _process in processes)
     assert {status for _family, status in outcomes} == {
         "unique_family",
-        "family_owner_repaired",
+        "owner_validation_provenance_drift",
     }
-    assert len({family for family, _status in outcomes}) == 1
+    assert len({family for family, _status in outcomes if family is not None}) == 1
     assert len((tmp_path / "registry.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
+def _subject_values(*, changed: bool = False) -> dict[str, str]:
+    return {
+        "dbms": "neo4j",
+        "dbms_version": "dbms-version",
+        "dbms_fingerprint": "c" * 64,
+        "graph_snapshot_hash": "1" * 64,
+        "canonical_rule_id": "pattern_order_symmetry",
+        "reduced_query_a": (
+            "MATCH (left:Customer {score: 99}), (right:Place) RETURN left, right"
+            if changed
+            else "MATCH (a:Person {age: 10}), (b:City) RETURN a, b"
+        ),
+        "reduced_query_b": (
+            "MATCH (right:Place), (left:Customer {score: 99}) RETURN left, right"
+            if changed
+            else "MATCH (b:City), (a:Person {age: 10}) RETURN a, b"
+        ),
+        "runtime_direction": "b",
+        "site_class": "match_pattern_component",
+        "submission_path": "relative",
+        "reduced_validation_phenotype": "relative:stable:b",
+    }
+
+
 def _fingerprint(*, changed: bool = False):
-    return fingerprint_issue(
-        FingerprintSubject(
-            dbms="neo4j",
-            dbms_version="dbms-version",
-            dbms_fingerprint="c" * 64,
-            graph_snapshot_hash="1" * 64,
-            canonical_rule_id="pattern_order_symmetry",
-            reduced_query_a=(
-                "MATCH (left:Customer {score: 99}), (right:Place) RETURN left, right"
-                if changed
-                else "MATCH (a:Person {age: 10}), (b:City) RETURN a, b"
-            ),
-            reduced_query_b=(
-                "MATCH (right:Place), (left:Customer {score: 99}) RETURN left, right"
-                if changed
-                else "MATCH (b:City), (a:Person {age: 10}) RETURN a, b"
-            ),
-            runtime_direction="b",
-            site_class="match_pattern_component",
-            submission_path="relative",
-            reduced_validation_phenotype="relative:stable:b",
-        )
-    )
+    return fingerprint_issue(FingerprintSubject(**_subject_values(changed=changed)))
 
 
 def _formal_family_record(fingerprint, decision, *, stage: PipelineStage):
@@ -354,7 +362,7 @@ def _formal_family_record(fingerprint, decision, *, stage: PipelineStage):
     reduced_ref = _validation_refs()["reduced_validation_ref"]
     original_mapping = original_ref.__dict__
     reduced_mapping = reduced_ref.__dict__
-    changed = decision.issue_id == "duplicate"
+    changed = fingerprint.exact == _fingerprint(changed=True).exact
     query_a = (
         "MATCH (left:Customer {score: 99}), (right:Place) RETURN left, right"
         if changed
@@ -431,6 +439,191 @@ def test_durable_family_replay_uses_explicit_owner_independent_of_record_order()
 
     assert current.owner_issue_id == "owner"
     assert current.family_members == owner_decision.family_members
+
+
+@pytest.mark.parametrize(
+    "order",
+    tuple(itertools.permutations(("a-owner", "b-owner", "c-bridge"))),
+)
+def test_durable_bridge_union_leaves_one_owner_and_replays_after_restart(
+    monkeypatch,
+    tmp_path,
+    order,
+) -> None:
+    fingerprints = (
+        _fingerprint(changed=False),
+        _fingerprint(changed=True),
+        fingerprint_issue(
+            FingerprintSubject(
+                **{
+                    **_subject_values(changed=False),
+                    "site_class": "match_pattern_component",
+                }
+            )
+        ),
+    )
+    # Make A's structural seed distinct while C keeps A's exact and B's structural seed.
+    fingerprints = (
+        fingerprint_issue(
+            FingerprintSubject(
+                **{**_subject_values(changed=False), "site_class": "where_boolean"}
+            )
+        ),
+        fingerprints[1],
+        fingerprints[2],
+    )
+    fingerprints_by_id = dict(
+        zip(("a-owner", "b-owner", "c-bridge"), fingerprints, strict=True)
+    )
+    issue_ids = iter(order)
+    issued_fingerprints = iter(fingerprints_by_id[issue_id] for issue_id in order)
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry.deterministic_issue_id",
+        lambda *_args: next(issue_ids),
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._validated_fingerprint",
+        lambda *_args, **_kwargs: next(issued_fingerprints),
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._record",
+        lambda issue_id, _validation, _reduction, _certificate_value, _dbms, *, fingerprint,
+        family_decision, validation_provenance, stage: replace(
+            _formal_family_record(fingerprint, family_decision, stage=stage),
+            issue_id=issue_id,
+            original_validation_hash=validation_provenance["original_validation_hash"],
+            reduced_validation_hash=validation_provenance["reduced_validation_hash"],
+            original_validation_ref=validation_provenance["original_validation_ref"],
+            reduced_validation_ref=validation_provenance["reduced_validation_ref"],
+            validation_provenance_hash=validation_provenance["validation_provenance_hash"],
+        ),
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry.promote",
+        lambda *_args, family_decision, duplicate_clearance, **_kwargs: SimpleNamespace(
+            issue_id=family_decision.issue_id,
+            family_id=family_decision.family_id,
+            family_decision=family_decision,
+            duplicate_clearance=duplicate_clearance,
+        ),
+    )
+
+    statuses = []
+    for _ in range(3):
+        _issue, status = promote_unique_issue(
+            tmp_path,
+            validation=_report(),
+            reduction=_reduction(),
+            certificate=_certificate(),
+            dbms="neo4j",
+            known_regression_manifest=REGRESSION_MANIFEST,
+            materialize=_dynamic_receipt,
+            **_validation_refs(),
+        )
+        statuses.append(status)
+
+    registry_records = _load_records(tmp_path / "registry.jsonl")
+    review_records = _load_records(tmp_path / "dedup_review.jsonl")
+    assert statuses[0] == "unique_family"
+    assert len(registry_records) == 1
+    assert len(review_records) == 2
+    assert {record.owner_issue_id for record in (*registry_records, *review_records)} == {
+        "b-owner"
+    }
+    replayed = _replay_family_index((*review_records, *registry_records))
+    owner_fingerprint = fingerprints_by_id[registry_records[0].issue_id]
+    current = replayed.reissue_owner(
+        owner_fingerprint,
+        issue_id=registry_records[0].issue_id,
+    )
+    assert {member for member, _exact in current.family_members} == {
+        "a-owner",
+        "b-owner",
+        "c-bridge",
+    }
+    assert (tmp_path / "family_unions.jsonl").is_file()
+    assert not (tmp_path / "family_transaction.pending.json").exists()
+
+
+def test_durable_bridge_union_recovers_a_crash_after_registry_replace(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    fingerprint_a = fingerprint_issue(
+        FingerprintSubject(
+            **{**_subject_values(changed=False), "site_class": "where_boolean"}
+        )
+    )
+    fingerprint_b = _fingerprint(changed=True)
+    fingerprint_c = _fingerprint(changed=False)
+    index = IssueFamilyIndex()
+    decision_a = index.add(fingerprint_a, issue_id="a-owner")
+    decision_b = index.add(fingerprint_b, issue_id="b-owner")
+    before = (
+        _formal_family_record(
+            fingerprint_a,
+            decision_a,
+            stage=PipelineStage.SUBMIT_READY,
+        ),
+        _formal_family_record(
+            fingerprint_b,
+            decision_b,
+            stage=PipelineStage.SUBMIT_READY,
+        ),
+    )
+    decision_c = index.add(fingerprint_c, issue_id="c-bridge")
+    candidate = _formal_family_record(
+        fingerprint_c,
+        decision_c,
+        stage=PipelineStage.REDUCED_VALID,
+    )
+    after = _records_with_current_family(
+        index,
+        (*before, candidate),
+        family_id=str(decision_c.family_id),
+    )
+    _write_payload_lines_atomic(
+        tmp_path / "registry.jsonl",
+        [_record_payload(record) for record in before],
+    )
+    crashed = False
+
+    def crash_once(_root):
+        nonlocal crashed
+        if not crashed:
+            crashed = True
+            raise OSError("injected union crash")
+
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._after_union_registry_replace",
+        crash_once,
+    )
+    with pytest.raises(OSError, match="injected union crash"):
+        _commit_family_transaction(
+            tmp_path,
+            previous_records=before,
+            records=after,
+        )
+
+    assert (tmp_path / "family_transaction.pending.json").is_file()
+    assert len(_load_records(tmp_path / "registry.jsonl")) == 1
+    _recover_family_transaction(tmp_path)
+
+    records = _load_records(
+        tmp_path / "registry.jsonl",
+        tmp_path / "dedup_review.jsonl",
+    )
+    replayed = _replay_family_index(records)
+    owner = next(record for record in records if record.stage is PipelineStage.SUBMIT_READY)
+    owner_fingerprint = {
+        "a-owner": fingerprint_a,
+        "b-owner": fingerprint_b,
+        "c-bridge": fingerprint_c,
+    }[owner.issue_id]
+    current = replayed.reissue_owner(owner_fingerprint, issue_id=owner.issue_id)
+    assert len(current.family_members) == 3
+    assert not (tmp_path / "family_transaction.pending.json").exists()
+    assert len((tmp_path / "family_unions.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
 @pytest.mark.parametrize("attack", ("missing", "conflicting", "multiple_submit_ready", "owner_absent"))
@@ -631,12 +824,186 @@ def test_registry_commits_only_after_materialization_and_repairs_exact_retry(tmp
         **_validation_refs(),
     )
 
-    assert first is not None and repaired is not None
+    assert first is not None and repaired is None
     assert first_status == "unique_family"
-    assert repaired_status == "family_owner_repaired"
-    assert calls == ["materialized", "materialized"]
+    assert repaired_status == "owner_already_committed"
+    assert calls == ["materialized"]
     assert len((tmp_path / "registry.jsonl").read_text(encoding="utf-8").splitlines()) == 1
     assert (tmp_path / "commits" / f"{first.issue_id}.json").is_file()
+
+
+def test_owner_retry_recovers_crash_after_registry_commit_without_provenance_rewrite(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    report = _report()
+    reduction = _reduction()
+    materialized = []
+    from graph_sym_perf.issues import durable_registry as registry_module
+
+    real_write_commit = registry_module._write_commit
+
+    def crash_before_commit(*_args, **_kwargs):
+        raise OSError("injected commit crash")
+
+    monkeypatch.setattr(registry_module, "_write_commit", crash_before_commit)
+    with pytest.raises(OSError, match="injected commit crash"):
+        promote_unique_issue(
+            tmp_path,
+            validation=report,
+            reduction=reduction,
+            certificate=_certificate(),
+            dbms="neo4j",
+            known_regression_manifest=REGRESSION_MANIFEST,
+            materialize=lambda issue: materialized.append(issue.issue_id)
+            or _dynamic_receipt(issue),
+            **_validation_refs(),
+        )
+
+    registry_before = json.loads((tmp_path / "registry.jsonl").read_text(encoding="utf-8"))
+    monkeypatch.setattr(registry_module, "_write_commit", real_write_commit)
+    repaired, status = promote_unique_issue(
+        tmp_path,
+        validation=report,
+        reduction=reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=lambda issue: materialized.append(issue.issue_id)
+        or _dynamic_receipt(issue),
+        **_validation_refs(),
+    )
+    terminal, terminal_status = promote_unique_issue(
+        tmp_path,
+        validation=report,
+        reduction=reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=lambda _issue: (_ for _ in ()).throw(
+            AssertionError("committed retry rematerialized")
+        ),
+        **_validation_refs(),
+    )
+
+    assert repaired is not None and status == "family_owner_repaired"
+    assert terminal is None and terminal_status == "owner_already_committed"
+    assert json.loads((tmp_path / "registry.jsonl").read_text(encoding="utf-8")) == registry_before
+    assert len(materialized) == 2
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        {"submission_path": "absolute"},
+        {"reduced_validation_phenotype": "absolute:stable:b"},
+    ),
+)
+def test_durable_owner_retry_rejects_path_or_phenotype_identity_drift(
+    monkeypatch,
+    tmp_path,
+    drift,
+) -> None:
+    report = _report()
+    reduction = _reduction()
+    first, _status = promote_unique_issue(
+        tmp_path,
+        validation=report,
+        reduction=reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=_dynamic_receipt,
+        **_validation_refs(),
+    )
+    assert first is not None
+    original = first.family_decision.fingerprint
+    drifted = fingerprint_issue(
+        FingerprintSubject(
+            dbms=original.dbms,
+            dbms_version=original.dbms_version,
+            dbms_fingerprint=original.dbms_fingerprint,
+            graph_snapshot_hash=original.graph_snapshot_hash,
+            canonical_rule_id=original.canonical_rule_id,
+            reduced_query_a=reduction.reduced_pair.query_a,
+            reduced_query_b=reduction.reduced_pair.query_b,
+            runtime_direction=original.runtime_direction,
+            site_class=original.site_class,
+            submission_path=drift.get("submission_path", original.submission_path),
+            reduced_validation_phenotype=drift.get(
+                "reduced_validation_phenotype",
+                original.reduced_validation_phenotype,
+            ),
+        )
+    )
+    assert drifted.exact == original.exact
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._validated_fingerprint",
+        lambda *_args, **_kwargs: drifted,
+    )
+
+    with pytest.raises(ValueError, match="current family owner"):
+        promote_unique_issue(
+            tmp_path,
+            validation=report,
+            reduction=reduction,
+            certificate=_certificate(),
+            dbms="neo4j",
+            known_regression_manifest=REGRESSION_MANIFEST,
+            materialize=_dynamic_receipt,
+            **_validation_refs(),
+        )
+
+
+def test_durable_owner_retry_does_not_replace_committed_validation_references(
+    tmp_path,
+) -> None:
+    report = _report()
+    reduction = _reduction()
+    first, _status = promote_unique_issue(
+        tmp_path,
+        validation=report,
+        reduction=reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=_dynamic_receipt,
+        **_validation_refs(),
+    )
+    assert first is not None
+    drifted_refs = {
+        "original_validation_ref": ArtifactReference(
+            "9" * 64,
+            "objects/99/" + "9" * 64,
+            100,
+            "application/json",
+        ),
+        "reduced_validation_ref": ArtifactReference(
+            "8" * 64,
+            "objects/88/" + "8" * 64,
+            100,
+            "application/json",
+        ),
+    }
+
+    retried, status = promote_unique_issue(
+        tmp_path,
+        validation=report,
+        reduction=reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=lambda _issue: (_ for _ in ()).throw(
+            AssertionError("drifted validation refs rematerialized owner")
+        ),
+        **drifted_refs,
+    )
+
+    assert retried is None
+    assert status == "owner_validation_provenance_drift"
+    record = json.loads((tmp_path / "registry.jsonl").read_text(encoding="utf-8"))
+    assert record["original_validation_ref"]["content_hash"] == "1" * 64
+    assert record["reduced_validation_ref"]["content_hash"] == "2" * 64
 
 
 def test_materialization_failure_never_creates_a_committed_registry_record(tmp_path) -> None:

@@ -216,6 +216,7 @@ class IssueFamilyDecision:
     known_regression_case_id: str | None
     is_new_family: bool
     family_members: tuple[tuple[str, str], ...]
+    family_fingerprints: tuple[tuple[str, IssueFingerprint], ...]
     family_version_hash: str
     decision_hash: str
     _active: bool
@@ -237,12 +238,18 @@ class IssueFamilyDecision:
         known_regression_case_id: str | None,
         is_new_family: bool,
         family_members: tuple[tuple[str, str], ...],
+        family_fingerprints: tuple[tuple[str, IssueFingerprint], ...],
         token: object,
     ) -> "IssueFamilyDecision":
         if token is not _DECISION_TOKEN:
             raise TypeError("IssueFamilyDecision can only be issued by IssueFamilyIndex")
         instance = object.__new__(cls)
-        version_hash = _family_version_hash(family_id, family_members, known_regression_case_id)
+        version_hash = _family_version_hash(
+            family_id,
+            family_members,
+            family_fingerprints,
+            known_regression_case_id,
+        )
         fields: dict[str, object] = {
             "issue_id": issue_id,
             "owner_issue_id": owner_issue_id,
@@ -254,6 +261,7 @@ class IssueFamilyDecision:
             "known_regression_case_id": known_regression_case_id,
             "is_new_family": is_new_family,
             "family_members": family_members,
+            "family_fingerprints": family_fingerprints,
             "family_version_hash": version_hash,
         }
         for name, value in {
@@ -267,6 +275,7 @@ class IssueFamilyDecision:
             "known_regression_case_id": known_regression_case_id,
             "is_new_family": is_new_family,
             "family_members": family_members,
+            "family_fingerprints": family_fingerprints,
             "family_version_hash": version_hash,
             "decision_hash": _hash_payload("family-decision-v1", fields),
             "_active": True,
@@ -286,6 +295,7 @@ class IssueFamilyDecision:
             "known_regression_case_id": self.known_regression_case_id,
             "is_new_family": self.is_new_family,
             "family_members": self.family_members,
+            "family_fingerprints": self.family_fingerprints,
             "family_version_hash": self.family_version_hash,
         }
         known_invariants = (
@@ -303,6 +313,29 @@ class IssueFamilyDecision:
             and bool(self.family_members)
             and self.owner_issue_id is not None
             and any(member == self.owner_issue_id for member, _exact in self.family_members)
+            and {member for member, _exact in self.family_members}
+            == {member for member, _fingerprint in self.family_fingerprints}
+            and all(
+                dict(self.family_members).get(member) == member_fingerprint.exact
+                for member, member_fingerprint in self.family_fingerprints
+            )
+            and any(
+                member == self.issue_id
+                and member_fingerprint == self.fingerprint
+                for member, member_fingerprint in self.family_fingerprints
+            )
+            and all(member_fingerprint.verify() for _member, member_fingerprint in self.family_fingerprints)
+            and self.family_id
+            == min(_new_family_id(member_fingerprint) for _member, member_fingerprint in self.family_fingerprints)
+            and (
+                len({_new_family_id(member_fingerprint) for _member, member_fingerprint in self.family_fingerprints})
+                == 1
+                or self.owner_issue_id
+                == min(
+                    self.family_fingerprints,
+                    key=lambda item: (_new_family_id(item[1]), item[0]),
+                )[0]
+            )
             and (self.is_new_family == (self.match_kind is FamilyMatchKind.FRESH))
         )
         return bool(
@@ -311,7 +344,12 @@ class IssueFamilyDecision:
             and self.fingerprint.verify()
             and (known_invariants if self.known_regression_match else fresh_invariants)
             and self.family_version_hash
-            == _family_version_hash(self.family_id, self.family_members, self.known_regression_case_id)
+            == _family_version_hash(
+                self.family_id,
+                self.family_members,
+                self.family_fingerprints,
+                self.known_regression_case_id,
+            )
             and self.decision_hash == _hash_payload("family-decision-v1", fields)
         )
 
@@ -331,6 +369,8 @@ class IssueFamilyIndex:
         self._members: dict[str, dict[str, str]] = {}
         self._owners: dict[str, str] = {}
         self._fingerprints: dict[str, IssueFingerprint] = {}
+        self._issue_families: dict[str, str] = {}
+        self._family_seeds: dict[str, set[str]] = {}
         self._decisions: dict[str, list[IssueFamilyDecision]] = {}
 
     def add(self, fingerprint: IssueFingerprint, *, issue_id: str) -> IssueFamilyDecision:
@@ -351,40 +391,67 @@ class IssueFamilyIndex:
                     known_regression_case_id=known.case_id,
                     is_new_family=False,
                     family_members=((issue_id, fingerprint.exact),),
+                    family_fingerprints=(
+                        (issue_id, fingerprint),
+                    ),
                     token=_DECISION_TOKEN,
                 )
 
+        existing_fingerprint = self._fingerprints.get(issue_id)
+        if existing_fingerprint is not None and existing_fingerprint != fingerprint:
+            raise ValueError("issue_id is already bound to a different fingerprint")
+
         matched_issue_id: str | None = None
-        family_id = self._exact.get(fingerprint.exact)
-        match_kind = FamilyMatchKind.EXACT if family_id is not None else FamilyMatchKind.FRESH
-        if family_id is not None:
-            matched_issue_id = _first_matching_issue(self._members[family_id], fingerprint.exact)
+        exact_family_id = self._exact.get(fingerprint.exact)
         structural_key = _structural_family_key(fingerprint)
+        structural_family_id = (
+            self._structural.get(structural_key) if structural_key is not None else None
+        )
+        family_id = exact_family_id
+        match_kind = FamilyMatchKind.EXACT if family_id is not None else FamilyMatchKind.FRESH
+        if exact_family_id is not None:
+            matched_issue_id = _first_matching_issue(
+                self._members[exact_family_id], fingerprint.exact
+            )
         if family_id is None and structural_key is not None:
-            family_id = self._structural.get(structural_key)
+            family_id = structural_family_id
             if family_id is not None:
                 match_kind = FamilyMatchKind.STRUCTURAL
                 matched_issue_id = min(self._members[family_id])
-        if family_id is None:
-            family_id = _new_family_id(fingerprint)
+
+        matched_families = {
+            candidate
+            for candidate in (exact_family_id, structural_family_id)
+            if candidate is not None
+        }
+        seed = _new_family_id(fingerprint)
+        if not matched_families:
+            family_id = seed
             self._members[family_id] = {}
             self._decisions[family_id] = []
+            self._family_seeds[family_id] = {seed}
             self._owners[family_id] = issue_id
+        else:
+            family_id = self._merge_connected_families(matched_families, seed=seed)
 
         members = self._members[family_id]
         previous_exact = members.get(issue_id)
-        if previous_exact is not None and previous_exact != fingerprint.exact:
-            raise ValueError("issue_id is already bound to a different fingerprint")
         changed = previous_exact is None
         members[issue_id] = fingerprint.exact
         self._fingerprints[issue_id] = fingerprint
-        self._exact.setdefault(fingerprint.exact, family_id)
-        if structural_key is not None:
-            self._structural.setdefault(structural_key, family_id)
+        self._issue_families[issue_id] = family_id
+        self._family_seeds[family_id].add(seed)
+        if len(self._family_seeds[family_id]) > 1:
+            self._owners[family_id] = min(
+                members,
+                key=lambda member: (_new_family_id(self._fingerprints[member]), member),
+            )
+        self._rebuild_match_indexes()
         if changed:
             for decision in self._decisions[family_id]:
                 decision._invalidate()
         frozen_members = tuple(sorted(members.items()))
+        frozen_fingerprints = self._family_fingerprint_proof(family_id)
         decision = IssueFamilyDecision._from_index(
             issue_id=issue_id,
             owner_issue_id=self._owners[family_id],
@@ -396,10 +463,76 @@ class IssueFamilyIndex:
             known_regression_case_id=None,
             is_new_family=match_kind is FamilyMatchKind.FRESH,
             family_members=frozen_members,
+            family_fingerprints=frozen_fingerprints,
             token=_DECISION_TOKEN,
         )
         self._decisions[family_id].append(decision)
         return decision
+
+    def _family_fingerprint_proof(
+        self,
+        family_id: str,
+    ) -> tuple[tuple[str, IssueFingerprint], ...]:
+        return tuple(
+            sorted(
+                (
+                    issue_id,
+                    self._fingerprints[issue_id],
+                )
+                for issue_id in self._members[family_id]
+            )
+        )
+
+    def _merge_connected_families(self, family_ids: set[str], *, seed: str) -> str:
+        """Union all exact/structural components under one canonical identity."""
+
+        canonical_id = min((*family_ids, seed))
+        if family_ids == {canonical_id}:
+            self._family_seeds[canonical_id].add(seed)
+            return canonical_id
+
+        merged_members: dict[str, str] = {}
+        merged_decisions: list[IssueFamilyDecision] = []
+        merged_seeds = {seed}
+        owners: list[str] = []
+        for family_id in sorted(family_ids):
+            merged_members.update(self._members[family_id])
+            merged_decisions.extend(self._decisions[family_id])
+            merged_seeds.update(self._family_seeds[family_id])
+            owners.append(self._owners[family_id])
+            for decision in self._decisions[family_id]:
+                decision._invalidate()
+        for family_id in family_ids:
+            del self._members[family_id]
+            del self._decisions[family_id]
+            del self._family_seeds[family_id]
+            del self._owners[family_id]
+        self._members[canonical_id] = merged_members
+        self._decisions[canonical_id] = merged_decisions
+        self._family_seeds[canonical_id] = merged_seeds
+        self._owners[canonical_id] = min(
+            owners,
+            key=lambda member: (_new_family_id(self._fingerprints[member]), member),
+        )
+        for member in merged_members:
+            self._issue_families[member] = canonical_id
+        return canonical_id
+
+    def _rebuild_match_indexes(self) -> None:
+        exact: dict[str, str] = {}
+        structural: dict[tuple[str, str, str], str] = {}
+        for issue_id, fingerprint in self._fingerprints.items():
+            family_id = self._issue_families[issue_id]
+            previous_exact = exact.setdefault(fingerprint.exact, family_id)
+            if previous_exact != family_id:
+                raise ValueError("exact signature spans multiple issue families")
+            structural_key = _structural_family_key(fingerprint)
+            if structural_key is not None:
+                previous_structural = structural.setdefault(structural_key, family_id)
+                if previous_structural != family_id:
+                    raise ValueError("structural signature spans multiple issue families")
+        self._exact = exact
+        self._structural = structural
 
     def reissue_owner(
         self,
@@ -411,11 +544,12 @@ class IssueFamilyIndex:
 
         if not fingerprint.verify():
             raise ValueError("family owner reissue requires an intact fingerprint")
-        family_id = self._exact.get(fingerprint.exact)
+        family_id = self._issue_families.get(issue_id)
         if (
             family_id is None
             or self._owners.get(family_id) != issue_id
             or self._members[family_id].get(issue_id) != fingerprint.exact
+            or self._fingerprints.get(issue_id) != fingerprint
         ):
             raise ValueError("issue is not the current family owner")
         decision = IssueFamilyDecision._from_index(
@@ -429,6 +563,54 @@ class IssueFamilyIndex:
             known_regression_case_id=None,
             is_new_family=True,
             family_members=tuple(sorted(self._members[family_id].items())),
+            family_fingerprints=self._family_fingerprint_proof(family_id),
+            token=_DECISION_TOKEN,
+        )
+        self._decisions[family_id].append(decision)
+        return decision
+
+    def reissue_member(
+        self,
+        fingerprint: IssueFingerprint,
+        *,
+        issue_id: str,
+    ) -> IssueFamilyDecision:
+        """Reissue a current non-owner credential for durable union migration."""
+
+        if not fingerprint.verify():
+            raise ValueError("family member reissue requires an intact fingerprint")
+        family_id = self._issue_families.get(issue_id)
+        if (
+            family_id is None
+            or self._owners.get(family_id) == issue_id
+            or self._fingerprints.get(issue_id) != fingerprint
+        ):
+            raise ValueError("issue is not a current non-owner family member")
+        exact_match = _first_matching_issue(
+            {
+                member: exact
+                for member, exact in self._members[family_id].items()
+                if member != issue_id
+            },
+            fingerprint.exact,
+        )
+        match_kind = (
+            FamilyMatchKind.EXACT
+            if exact_match is not None
+            else FamilyMatchKind.STRUCTURAL
+        )
+        decision = IssueFamilyDecision._from_index(
+            issue_id=issue_id,
+            owner_issue_id=self._owners[family_id],
+            family_id=family_id,
+            fingerprint=fingerprint,
+            match_kind=match_kind,
+            matched_issue_id=exact_match or self._owners[family_id],
+            known_regression_match=False,
+            known_regression_case_id=None,
+            is_new_family=False,
+            family_members=tuple(sorted(self._members[family_id].items())),
+            family_fingerprints=self._family_fingerprint_proof(family_id),
             token=_DECISION_TOKEN,
         )
         self._decisions[family_id].append(decision)
@@ -566,6 +748,16 @@ def serialized_family_decision_is_valid(value: object) -> bool:
         family_members = tuple(
             (str(member[0]), str(member[1])) for member in value.get("family_members", ())
         )
+        rebuilt_fingerprints: list[tuple[str, IssueFingerprint]] = []
+        for member in value.get("family_fingerprints", ()):
+            member_value = dict(member[1])
+            member_normalized_pair = member_value.get("normalized_pair")
+            if member_normalized_pair is not None:
+                member_value["normalized_pair"] = tuple(member_normalized_pair)
+            rebuilt_fingerprints.append(
+                (str(member[0]), IssueFingerprint(**member_value))
+            )
+        family_fingerprints = tuple(rebuilt_fingerprints)
         match_kind = FamilyMatchKind(str(value.get("match_kind")))
         family_id = str(value.get("family_id"))
         issue_id = str(value.get("issue_id"))
@@ -580,9 +772,10 @@ def serialized_family_decision_is_valid(value: object) -> bool:
             known_regression_case_id=value.get("known_regression_case_id"),
             is_new_family=bool(value.get("is_new_family")),
             family_members=family_members,
+            family_fingerprints=family_fingerprints,
             token=_DECISION_TOKEN,
         )
-    except (KeyError, TypeError, ValueError):
+    except (IndexError, KeyError, TypeError, ValueError):
         return False
     return bool(
         fingerprint.verify()
@@ -594,8 +787,21 @@ def serialized_family_decision_is_valid(value: object) -> bool:
         and value.get("is_new_family") is True
         and family_id == _new_family_id(fingerprint)
         and family_members == tuple(sorted(family_members))
+        and family_fingerprints == tuple(sorted(family_fingerprints))
         and len({member for member, _exact in family_members}) == len(family_members)
+        and len({member for member, _fingerprint in family_fingerprints})
+        == len(family_fingerprints)
+        and {member for member, _exact in family_members}
+        == {member for member, _fingerprint in family_fingerprints}
+        and all(
+            dict(family_members).get(member) == member_fingerprint.exact
+            for member, member_fingerprint in family_fingerprints
+        )
         and (issue_id, fingerprint.exact) in family_members
+        and (issue_id, fingerprint) in family_fingerprints
+        and all(member_fingerprint.verify() for _member, member_fingerprint in family_fingerprints)
+        and family_id
+        == min(_new_family_id(member_fingerprint) for _member, member_fingerprint in family_fingerprints)
         and value.get("family_version_hash") == expected.family_version_hash
         and value.get("decision_hash") == expected.decision_hash
         and expected.verify()
@@ -920,11 +1126,17 @@ def _new_family_id(fingerprint: IssueFingerprint) -> str:
 def _family_version_hash(
     family_id: str | None,
     members: tuple[tuple[str, str], ...],
+    fingerprints: tuple[tuple[str, IssueFingerprint], ...],
     known_case_id: str | None,
 ) -> str:
     return _hash_payload(
         "issue-family-members-v1",
-        {"family_id": family_id, "members": members, "known_regression_case_id": known_case_id},
+        {
+            "family_id": family_id,
+            "members": members,
+            "fingerprints": fingerprints,
+            "known_regression_case_id": known_case_id,
+        },
     )
 
 

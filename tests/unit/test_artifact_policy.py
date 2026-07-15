@@ -232,6 +232,10 @@ def _issue_payload() -> dict[str, object]:
             "known_regression_case_id": decision.known_regression_case_id,
             "is_new_family": decision.is_new_family,
             "family_members": decision.family_members,
+            "family_fingerprints": tuple(
+                (member, asdict(member_fingerprint))
+                for member, member_fingerprint in decision.family_fingerprints
+            ),
             "family_version_hash": decision.family_version_hash,
             "decision_hash": decision.decision_hash,
         },

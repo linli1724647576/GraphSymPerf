@@ -24,6 +24,7 @@ from graph_sym_perf.artifacts.store import (
     verify_issue_hash_chain,
 )
 from graph_sym_perf.issues.registry import IssueRegistry
+from graph_sym_perf.issues.durable_registry import renew_current_family_owner
 from graph_sym_perf.validation.models import DeveloperStatus, PipelineStage, VersionedIssueRecord
 
 
@@ -83,6 +84,11 @@ class IssueCommands:
             if index_path.parent.name != "index" or index_path.parent.parent.name != "issues":
                 raise ValueError("index path is outside the run issue directory")
             run_dir = index_path.parent.parent.parent.resolve()
+            renew_current_family_owner(
+                run_dir / "issues",
+                owner_issue_id=str(index["issue_id"]),
+            )
+            index = json.loads(index_path.read_text(encoding="utf-8"))
             registry_lock = (run_dir / "issues" / ".registry.lock").open("a+", encoding="utf-8")
             fcntl.flock(registry_lock.fileno(), fcntl.LOCK_SH)
             if _revoked(run_dir / "issues" / "revocations.jsonl", str(index["issue_id"])):
@@ -142,6 +148,10 @@ class IssueCommands:
                 != record.payload.get("original_validation_hash")
                 or exported.get("reduced_validation_hash")
                 != record.payload.get("reduced_validation_hash")
+                or exported.get("original_validation_ref")
+                != record.payload.get("original_validation_ref")
+                or exported.get("reduced_validation_ref")
+                != record.payload.get("final_validation_ref")
             ):
                 raise ValueError("typed export identity does not match the issue index")
             destination = Path(output)

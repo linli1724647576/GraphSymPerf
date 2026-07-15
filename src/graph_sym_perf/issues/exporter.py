@@ -7,15 +7,28 @@ import os
 import tempfile
 from pathlib import Path
 
+from graph_sym_perf.artifacts.schema import ArtifactReference
 from graph_sym_perf.validation.models import SubmitReadyIssue
 from graph_sym_perf.validation.promotion import submit_ready_issue_is_valid
 
 
-def export_issue(issue: SubmitReadyIssue, destination: str | Path) -> Path:
+def export_issue(
+    issue: SubmitReadyIssue,
+    destination: str | Path,
+    *,
+    original_validation_ref: ArtifactReference,
+    reduced_validation_ref: ArtifactReference,
+) -> Path:
     if not isinstance(issue, SubmitReadyIssue):
         raise TypeError("issue exporter accepts SubmitReadyIssue only")
     if not submit_ready_issue_is_valid(issue):
         raise ValueError("SubmitReadyIssue no longer satisfies promotion gates")
+    if not isinstance(original_validation_ref, ArtifactReference) or not isinstance(
+        reduced_validation_ref, ArtifactReference
+    ):
+        raise TypeError("issue exporter requires both typed validation references")
+    if original_validation_ref == reduced_validation_ref:
+        raise ValueError("issue exporter requires distinct validation references")
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = (
@@ -40,6 +53,8 @@ def export_issue(issue: SubmitReadyIssue, destination: str | Path) -> Path:
                 "family_decision_hash": issue.family_decision.decision_hash,
                 "original_validation_hash": issue.reduction.original_validation_hash,
                 "reduced_validation_hash": issue.reduction.reduced_validation_hash,
+                "original_validation_ref": original_validation_ref.__dict__,
+                "reduced_validation_ref": reduced_validation_ref.__dict__,
             },
             indent=2,
         )

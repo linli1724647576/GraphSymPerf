@@ -27,9 +27,10 @@ from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy
 from graph_sym_perf.sampling.yield_store import ValidatedYieldStore
 from graph_sym_perf.transforms.rule_models import RuleRegistry
-from graph_sym_perf.issues.durable_registry import promote_unique_issue
+from graph_sym_perf.issues.durable_registry import committed_owner_outcome, promote_unique_issue
 from graph_sym_perf.issues.exporter import export_issue
 from graph_sym_perf.validation.models import CandidateBundle, EquivalenceEvidence, PipelineStage
+from graph_sym_perf.validation.promotion import deterministic_issue_id
 from graph_sym_perf.validation.validator import IssueValidator
 from graph_sym_perf.validation.session_runner import SubprocessSessionRunner
 
@@ -236,6 +237,8 @@ class ProductionCandidatePipeline:
                 driver_version=driver_version,
             ),
         )
+        if issue_outcome.get("promotion") == "submit_ready" and issue_outcome.get("resumed"):
+            validation_outcome["validation_ref"] = issue_outcome["original_validation_ref"]
         reduction_ref = store.put_json(
             f"reduction-report-{candidate.candidate_hash}.json",
             _reduction_summary(
@@ -270,11 +273,11 @@ class ProductionCandidatePipeline:
         graph_snapshot_ref: Mapping[str, object],
         environment: Mapping[str, object],
     ) -> dict[str, object]:
-        if getattr(reduction, "status") is not ReductionStatus.REDUCED_VALID:
-            return {"promotion": "not_applicable"}
         final_validation = getattr(reduction, "final_validation", None)
         screen_evidence = getattr(reduction, "screen_evidence", None)
-        if final_validation is None or screen_evidence is None:
+        if final_validation is None:
+            if getattr(reduction, "status") is not ReductionStatus.REDUCED_VALID:
+                return {"promotion": "not_applicable"}
             return {"promotion": "blocked_missing_reduced_evidence"}
         manifest = final_validation.manifest
         reduced_candidate = CandidateBundle.create(
@@ -309,6 +312,10 @@ class ProductionCandidatePipeline:
             "original_validation_ref": asdict(original_validation_ref),
             "reduced_validation_ref": asdict(final_record.reference),
         }
+        if getattr(reduction, "status") is not ReductionStatus.REDUCED_VALID:
+            return {"promotion": "not_applicable", **validation_provenance}
+        if screen_evidence is None:
+            return {"promotion": "blocked_missing_reduced_evidence", **validation_provenance}
         materialized: dict[str, object] = {}
 
         def materialize(issue: object) -> dict[str, object]:
@@ -333,7 +340,12 @@ class ProductionCandidatePipeline:
                 reproducer_ref=reproducer_ref,
             )
             export_path = self.run_dir / "issues" / "submit-ready" / f"{issue.issue_id}.json"
-            export_issue(issue, export_path)
+            export_issue(
+                issue,
+                export_path,
+                original_validation_ref=original_validation_ref,
+                reduced_validation_ref=final_record.reference,
+            )
             export_hash = hashlib.sha256(export_path.read_bytes()).hexdigest()
             index_path = self.run_dir / "issues" / "index" / f"{issue.issue_id}.json"
             receipt = {
@@ -359,6 +371,17 @@ class ProductionCandidatePipeline:
             materialize=materialize,
         )
         if issue is None:
+            if duplicate_status == "owner_already_committed":
+                committed = committed_owner_outcome(
+                    self.run_dir / "issues",
+                    issue_id=deterministic_issue_id(original_validation, reduction),
+                )
+                return {
+                    "promotion": "submit_ready",
+                    "duplicate_status": duplicate_status,
+                    "resumed": True,
+                    **committed,
+                }
             return {
                 "promotion": "blocked",
                 "duplicate_status": duplicate_status,

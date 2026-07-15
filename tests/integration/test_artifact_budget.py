@@ -13,6 +13,7 @@ from graph_sym_perf.artifacts.store import (
     ArtifactBudgetExceeded,
     ContentAddressedStore,
     enforce_shard_budget,
+    load_artifact_record,
     verify_candidate_outcome_validation_chain,
     verify_issue_hash_chain,
 )
@@ -22,6 +23,11 @@ from graph_sym_perf.experiment.plan_models import ShardTask
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
 from graph_sym_perf.issues.commands import IssueCommands
+from graph_sym_perf.issues.durable_registry import (
+    _commit_family_transaction,
+    _records_with_current_family,
+    durable_family_payload_is_current,
+)
 from graph_sym_perf.issues.dedup import FingerprintSubject, IssueFamilyIndex, fingerprint_issue
 from graph_sym_perf.issues.registry import IssueRegistry
 from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
@@ -526,9 +532,13 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 "matched_issue_id": family_decision.matched_issue_id,
                 "known_regression_match": family_decision.known_regression_match,
                 "known_regression_case_id": family_decision.known_regression_case_id,
-                "is_new_family": family_decision.is_new_family,
-                "family_members": family_decision.family_members,
-                "family_version_hash": family_decision.family_version_hash,
+                    "is_new_family": family_decision.is_new_family,
+                    "family_members": family_decision.family_members,
+                    "family_fingerprints": tuple(
+                        (member, asdict(member_fingerprint))
+                        for member, member_fingerprint in family_decision.family_fingerprints
+                    ),
+                    "family_version_hash": family_decision.family_version_hash,
                 "decision_hash": family_decision.decision_hash,
             },
             "original_validation_hash": original_validation_hash,
@@ -720,6 +730,8 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         "family_decision_hash": family_decision.decision_hash,
         "original_validation_hash": original_validation_hash,
         "reduced_validation_hash": reduced_validation_hash,
+        "original_validation_ref": original_ref,
+        "reduced_validation_ref": final_ref,
     }
     export_path = run_dir / "issues" / "submit-ready" / "issue-1.json"
     export_path.parent.mkdir(parents=True)
@@ -759,6 +771,304 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     exported = Path(export_result)
     assert json.loads(exported.read_text(encoding="utf-8"))["reduction_status"] == "reduced_valid"
 
+    # A/C share an exact signature while B/C share a structural signature.
+    # Simulate a crash after the durable union but before owner artifact renewal;
+    # the next export must renew from issue-1's sealed evidence, never C's.
+    original_files = {
+        path: path.read_bytes()
+        for path in (export_path, index_path, commit_path, run_dir / "issues" / "registry.jsonl")
+    }
+    pattern_a = "MATCH (a:Person {age: 10}), (b:City) RETURN a, b"
+    pattern_b = "MATCH (b:City), (a:Person {age: 10}) RETURN a, b"
+    pattern_candidate_hash, pattern_candidate_ref = candidate(pattern_a, pattern_b)
+    pattern_validation = validation(
+        pattern_candidate_hash,
+        pattern_candidate_ref,
+        "pattern-reduced",
+        pattern_a,
+        pattern_b,
+    )
+    pattern_validation_ref = asdict(
+        store.put_json("pattern-final-validation", pattern_validation.to_dict())
+    )
+    pattern_hashes = {
+        "query_a": hashlib.sha256(pattern_a.encode()).hexdigest(),
+        "query_b": hashlib.sha256(pattern_b.encode()).hexdigest(),
+    }
+    pattern_pair = EquivalentQueryPair(
+        pattern_a,
+        pattern_b,
+        FrozenMapping.from_mapping({}),
+        graph_ref["content_hash"],
+        "c" * 64,
+    )
+    pattern_universe = MinimalityUniverse.recompute(pattern_pair)
+    pattern_proof = MinimalityProof.from_results(
+        pattern_pair,
+        tuple(
+            (deletion.canonical_id, "symptom_not_preserved", "8" * 64)
+            for deletion in pattern_universe.deletions
+        ),
+    )
+    pattern_reduction = json.loads(store.read(reduction_ref))
+    pattern_reduction.update(
+        reduced_candidate_hash=pattern_candidate_hash,
+        reduced_content_hashes=pattern_hashes,
+        reduced_validation_hash=pattern_validation.payload["report_hash"],
+        reduced_validation_ref=pattern_validation_ref,
+        minimality_proof=asdict(pattern_proof),
+    )
+    pattern_reduction["final_evidence"].update(
+        query_a_hash=pattern_hashes["query_a"],
+        query_b_hash=pattern_hashes["query_b"],
+    )
+    pattern_reduction_ref = asdict(
+        store.put_json("pattern-reduction", pattern_reduction)
+    )
+    continuity_fingerprint = fingerprint_issue(
+        FingerprintSubject(
+            dbms="neo4j",
+            dbms_version="dbms/1",
+            dbms_fingerprint="c" * 64,
+            graph_snapshot_hash=graph_ref["content_hash"],
+            canonical_rule_id="constant_true_disjunction",
+            reduced_query_a=pattern_a,
+            reduced_query_b=pattern_b,
+            runtime_direction="b",
+            site_class="where_boolean",
+            submission_path="relative",
+            reduced_validation_phenotype="relative:stable:b",
+        )
+    )
+    continuity_family_decision = IssueFamilyIndex().add(
+        continuity_fingerprint,
+        issue_id="issue-1",
+    )
+    continuity_registry_record = replace(
+        typed_registry_record,
+        pair_hash=continuity_fingerprint.exact,
+        reduced_query_a=pattern_a,
+        reduced_query_b=pattern_b,
+        family_id=str(continuity_family_decision.family_id),
+        family_version_hash=continuity_family_decision.family_version_hash,
+        family_decision_hash=continuity_family_decision.decision_hash,
+        owner_issue_id="issue-1",
+        exact_signature=continuity_fingerprint.exact,
+        structural_signature=continuity_fingerprint.structural,
+        fingerprint_hash=continuity_fingerprint.fingerprint_hash,
+        reduced_validation_hash=pattern_validation.payload["report_hash"],
+        reduced_validation_ref=pattern_validation_ref,
+        validation_provenance_hash=canonical_validation_provenance_hash(
+            original_validation_hash=original_validation_hash,
+            reduced_validation_hash=pattern_validation.payload["report_hash"],
+            original_validation_ref=original_ref,
+            reduced_validation_ref=pattern_validation_ref,
+        ),
+    )
+    continuity_clearance = IssueRegistry().duplicate_clearance_for_family(
+        continuity_family_decision,
+        (continuity_registry_record,),
+    )
+    continuity_issue = ArtifactRecord.seal_issue(
+        {
+            **issue_body,
+            "family_id": continuity_family_decision.family_id,
+            "reduced_candidate_hash": pattern_candidate_hash,
+            "reduced_query_a": pattern_a,
+            "reduced_query_b": pattern_b,
+            "reduced_content_hashes": pattern_hashes,
+            "final_validation_ref": pattern_validation_ref,
+            "reduced_validation_hash": pattern_validation.payload["report_hash"],
+            "reduction_ref": pattern_reduction_ref,
+            "duplicate_clearance": {
+                "issue_id": continuity_clearance.issue_id,
+                "possible_duplicate": continuity_clearance.possible_duplicate,
+                "cluster_members": continuity_clearance.cluster_members,
+                "cluster_version_hash": continuity_clearance.cluster_version_hash,
+                "evidence_url": continuity_clearance.evidence_url,
+                "registry_signature": continuity_clearance.registry_signature,
+                "family_id": continuity_clearance.family_id,
+                "family_version_hash": continuity_clearance.family_version_hash,
+                "family_decision_hash": continuity_clearance.family_decision_hash,
+            },
+            "family_decision": {
+                "issue_id": continuity_family_decision.issue_id,
+                "owner_issue_id": continuity_family_decision.owner_issue_id,
+                "family_id": continuity_family_decision.family_id,
+                "fingerprint": asdict(continuity_family_decision.fingerprint),
+                "match_kind": continuity_family_decision.match_kind.value,
+                "matched_issue_id": continuity_family_decision.matched_issue_id,
+                "known_regression_match": continuity_family_decision.known_regression_match,
+                "known_regression_case_id": continuity_family_decision.known_regression_case_id,
+                "is_new_family": continuity_family_decision.is_new_family,
+                "family_members": continuity_family_decision.family_members,
+                "family_fingerprints": tuple(
+                    (member, asdict(member_fingerprint))
+                    for member, member_fingerprint in continuity_family_decision.family_fingerprints
+                ),
+                "family_version_hash": continuity_family_decision.family_version_hash,
+                "decision_hash": continuity_family_decision.decision_hash,
+            },
+        }
+    )
+    verify_issue_hash_chain(store, continuity_issue)
+    continuity_issue_ref = asdict(
+        store.put_json("pattern-issue-1", continuity_issue.to_dict())
+    )
+    continuity_export = {
+        **typed_export,
+        "family_id": continuity_family_decision.family_id,
+        "reduced_original": pattern_a,
+        "reduced_transformed": pattern_b,
+        "exact_signature": continuity_fingerprint.exact,
+        "structural_signature": continuity_fingerprint.structural,
+        "family_version_hash": continuity_family_decision.family_version_hash,
+        "family_decision_hash": continuity_family_decision.decision_hash,
+        "reduced_validation_hash": pattern_validation.payload["report_hash"],
+        "reduced_validation_ref": pattern_validation_ref,
+    }
+    export_path.write_text(json.dumps(continuity_export) + "\n", encoding="utf-8")
+    continuity_receipt = {
+        **receipt,
+        "issue_ref": continuity_issue_ref,
+        "export_sha256": hashlib.sha256(export_path.read_bytes()).hexdigest(),
+    }
+    index_path.write_text(json.dumps(continuity_receipt), encoding="utf-8")
+    continuity_registry_payload = asdict(continuity_registry_record)
+    continuity_registry_payload["stage"] = continuity_registry_record.stage.value
+    continuity_registry_payload["developer_status"] = continuity_registry_record.developer_status.value
+    (run_dir / "issues" / "registry.jsonl").write_text(
+        json.dumps(continuity_registry_payload) + "\n",
+        encoding="utf-8",
+    )
+    commit_path.write_text(
+        json.dumps(
+            {
+                **continuity_receipt,
+                "registry_record_hash": hashlib.sha256(
+                    json.dumps(
+                        continuity_registry_payload,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    renamed_a = "MATCH (left:Customer {score: 99}), (right:Place) RETURN left, right"
+    renamed_b = "MATCH (right:Place), (left:Customer {score: 99}) RETURN left, right"
+    bridge_fingerprints = None
+    for suffix in range(256):
+        phenotype = f"relative:stable:b:bridge-{suffix}"
+        candidate_b = fingerprint_issue(
+            FingerprintSubject(
+                dbms="neo4j",
+                dbms_version="dbms/1",
+                dbms_fingerprint="c" * 64,
+                graph_snapshot_hash=graph_ref["content_hash"],
+                canonical_rule_id="constant_true_disjunction",
+                reduced_query_a=renamed_a,
+                reduced_query_b=renamed_b,
+                runtime_direction="b",
+                site_class="where_boolean",
+                submission_path="relative",
+                reduced_validation_phenotype=phenotype,
+            )
+        )
+        candidate_c = fingerprint_issue(
+            FingerprintSubject(
+                dbms="neo4j",
+                dbms_version="dbms/1",
+                dbms_fingerprint="c" * 64,
+                graph_snapshot_hash=graph_ref["content_hash"],
+                canonical_rule_id="constant_true_disjunction",
+                reduced_query_a=pattern_a,
+                reduced_query_b=pattern_b,
+                runtime_direction="b",
+                site_class="where_boolean",
+                submission_path="relative",
+                reduced_validation_phenotype=phenotype,
+            )
+        )
+        candidate_family = IssueFamilyIndex().add(candidate_b, issue_id="issue-2").family_id
+        if (
+            candidate_b.structural == candidate_c.structural
+            and candidate_c.exact == continuity_fingerprint.exact
+            and continuity_family_decision.family_id < candidate_family
+        ):
+            bridge_fingerprints = (candidate_b, candidate_c)
+            break
+    assert bridge_fingerprints is not None
+    fingerprint_b, fingerprint_c = bridge_fingerprints
+    bridge_index = IssueFamilyIndex()
+    bridge_index.add(continuity_fingerprint, issue_id="issue-1")
+    decision_b = bridge_index.add(fingerprint_b, issue_id="issue-2")
+    decision_c = bridge_index.add(fingerprint_c, issue_id="issue-3")
+    owner_record_before = continuity_registry_record
+    owner_b_before = replace(
+        continuity_registry_record,
+        issue_id="issue-2",
+        pair_hash=fingerprint_b.exact,
+        reduced_query_a=renamed_a,
+        reduced_query_b=renamed_b,
+        family_id=str(decision_b.family_id),
+        family_version_hash=decision_b.family_version_hash,
+        family_decision_hash=decision_b.decision_hash,
+        owner_issue_id="issue-2",
+        exact_signature=fingerprint_b.exact,
+        structural_signature=fingerprint_b.structural,
+        fingerprint_hash=fingerprint_b.fingerprint_hash,
+        submission_path=fingerprint_b.submission_path,
+        reduced_phenotype=fingerprint_b.reduced_validation_phenotype,
+    )
+    bridge_record = replace(
+        continuity_registry_record,
+        issue_id="issue-3",
+        stage=PipelineStage.REDUCED_VALID,
+        family_id=str(decision_c.family_id),
+        family_version_hash=decision_c.family_version_hash,
+        family_decision_hash=decision_c.decision_hash,
+        owner_issue_id=str(decision_c.owner_issue_id),
+        exact_signature=fingerprint_c.exact,
+        structural_signature=fingerprint_c.structural,
+        fingerprint_hash=fingerprint_c.fingerprint_hash,
+        submission_path=fingerprint_c.submission_path,
+        reduced_phenotype=fingerprint_c.reduced_validation_phenotype,
+    )
+    union_records = _records_with_current_family(
+        bridge_index,
+        (owner_record_before, owner_b_before, bridge_record),
+        family_id=str(decision_c.family_id),
+    )
+    _commit_family_transaction(
+        run_dir / "issues",
+        previous_records=(owner_record_before, owner_b_before),
+        records=union_records,
+    )
+    assert len((run_dir / "issues" / "registry.jsonl").read_text().splitlines()) == 1
+    assert len((run_dir / "issues" / "dedup_review.jsonl").read_text().splitlines()) == 2
+    old_issue_payload = dict(continuity_issue.payload)
+    continuity_status, continuity_result = _issue_export_with_timeout(
+        index_path,
+        tmp_path / "bridge-renewed-developer.json",
+    )
+    assert continuity_status == "ok", continuity_result
+    renewed_index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert renewed_index["issue_ref"] != continuity_issue_ref
+    renewed_issue = load_artifact_record(store, renewed_index["issue_ref"])
+    assert renewed_issue.payload["original_validation_ref"] == original_ref
+    assert renewed_issue.payload["final_validation_ref"] == pattern_validation_ref
+    assert renewed_issue.payload["original_validation_hash"] == original_validation_hash
+    assert renewed_issue.payload["reduced_validation_hash"] == pattern_validation.payload["report_hash"]
+    assert not durable_family_payload_is_current(run_dir / "issues", old_issue_payload)
+    assert len((run_dir / "issues" / "family_unions.jsonl").read_text().splitlines()) == 1
+
+    for path, payload in original_files.items():
+        path.write_bytes(payload)
+    (run_dir / "issues" / "dedup_review.jsonl").unlink(missing_ok=True)
+    (run_dir / "issues" / "family_unions.jsonl").unlink(missing_ok=True)
+
     synchronized_export = {
         **typed_export,
         "family_id": "0" * 64,
@@ -770,6 +1080,8 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         "family_decision_hash": "4" * 64,
         "original_validation_hash": "5" * 64,
         "reduced_validation_hash": "6" * 64,
+        "original_validation_ref": final_ref,
+        "reduced_validation_ref": original_ref,
     }
     export_path.write_text(json.dumps(synchronized_export) + "\n", encoding="utf-8")
     synchronized_receipt = {
@@ -794,6 +1106,63 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     )
     assert synchronized_status == "error"
     assert "IssueGateError" in synchronized_result
+
+    reference_tampered_export = {
+        **typed_export,
+        "original_validation_ref": final_ref,
+    }
+    export_path.write_text(json.dumps(reference_tampered_export) + "\n", encoding="utf-8")
+    reference_tampered_receipt = {
+        **receipt,
+        "export_sha256": hashlib.sha256(export_path.read_bytes()).hexdigest(),
+    }
+    index_path.write_text(json.dumps(reference_tampered_receipt), encoding="utf-8")
+    commit_path.write_text(
+        json.dumps(
+            {
+                **reference_tampered_receipt,
+                "registry_record_hash": hashlib.sha256(
+                    json.dumps(registry_record, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    tampered_ref_status, tampered_ref_result = _issue_export_with_timeout(
+        index_path,
+        tmp_path / "tampered-ref-developer.json",
+    )
+    assert tampered_ref_status == "error"
+    assert "IssueGateError" in tampered_ref_result
+
+    malformed_issue_payload = json.loads(json.dumps(issue.to_dict()))
+    malformed_issue_payload["family_decision"]["family_members"] = [[]]
+    malformed_issue_ref = asdict(
+        store.put_json("malformed-family-members", malformed_issue_payload)
+    )
+    malformed_receipt = {
+        **receipt,
+        "issue_ref": malformed_issue_ref,
+        "export_sha256": hashlib.sha256(export_path.read_bytes()).hexdigest(),
+    }
+    index_path.write_text(json.dumps(malformed_receipt), encoding="utf-8")
+    commit_path.write_text(
+        json.dumps(
+            {
+                **malformed_receipt,
+                "registry_record_hash": hashlib.sha256(
+                    json.dumps(registry_record, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    malformed_status, malformed_result = _issue_export_with_timeout(
+        index_path,
+        tmp_path / "malformed-family-developer.json",
+    )
+    assert malformed_status == "error"
+    assert "IssueGateError" in malformed_result
 
     export_path.write_text(json.dumps(typed_export) + "\n", encoding="utf-8")
     receipt["export_sha256"] = hashlib.sha256(export_path.read_bytes()).hexdigest()
@@ -880,6 +1249,10 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 "known_regression_case_id": current_owner_decision.known_regression_case_id,
                 "is_new_family": current_owner_decision.is_new_family,
                 "family_members": current_owner_decision.family_members,
+                "family_fingerprints": tuple(
+                    (member, asdict(member_fingerprint))
+                    for member, member_fingerprint in current_owner_decision.family_fingerprints
+                ),
                 "family_version_hash": current_owner_decision.family_version_hash,
                 "decision_hash": current_owner_decision.decision_hash,
             },
