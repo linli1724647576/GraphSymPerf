@@ -308,6 +308,8 @@ class RulePlanSupervisor:
                     "terminal_state": final_state.value,
                 }
             except WorkerProcessError as exc:
+                if exc.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR:
+                    non_retryable_failure = True
                 if exc.kind is ErrorKind.RESOURCE_EXHAUSTED:
                     final_state = EntryState.RESOURCE_EXHAUSTED
                     final_result = {
