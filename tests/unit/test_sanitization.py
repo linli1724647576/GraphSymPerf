@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pickle
+from datetime import datetime, timezone
 
 import pytest
 
@@ -220,6 +221,51 @@ def test_non_finite_typed_evidence_initial_seal_fails_with_integrity_error() -> 
         match="EVIDENCE_INTEGRITY_ERROR",
     ):
         sanitize_structure(EvidencePayload({"rows": [float("nan")]}))
+
+
+@pytest.mark.parametrize(
+    "unsupported",
+    (
+        b"database-bytes",
+        datetime(2026, 7, 16, tzinfo=timezone.utc),
+        {"unordered", "set"},
+        object(),
+    ),
+    ids=("bytes", "datetime", "set", "object"),
+)
+def test_typed_evidence_rejects_non_json_persistence_values(
+    unsupported: object,
+) -> None:
+    with pytest.raises(
+        SanitizationIntegrityError,
+        match="EVIDENCE_INTEGRITY_ERROR",
+    ):
+        sanitize_structure(EvidencePayload({"rows": [unsupported]}))
+
+
+def test_typed_evidence_is_normalized_before_its_persisted_hash_is_computed() -> None:
+    envelope = sanitize_structure(
+        EvidencePayload(
+            {
+                "rows": (
+                    {"nested": (1, 2, 3)},
+                )
+            }
+        )
+    )
+
+    assert envelope["payload"] == {"rows": [{"nested": [1, 2, 3]}]}
+    assert envelope["content_hash"] == canonical_hash(
+        {"payload": envelope["payload"]}
+    )
+
+
+def test_typed_evidence_rejects_non_string_mapping_keys() -> None:
+    with pytest.raises(
+        SanitizationIntegrityError,
+        match="EVIDENCE_INTEGRITY_ERROR",
+    ):
+        sanitize_structure(EvidencePayload({"rows": [{1: "integer-key"}]}))
 
 
 def test_marker_named_fields_do_not_claim_a_generic_seal() -> None:

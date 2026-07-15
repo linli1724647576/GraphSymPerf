@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -366,14 +367,21 @@ def _require_valid_canonical_envelope_if_recognized(
 
 def _seal_evidence_payload(value: EvidencePayload[Any]) -> dict[str, object]:
     _require_typed_evidence_payload(value.payload)
-    body = {"payload": value.payload}
+    normalized_payload = _normalize_evidence_value(value.payload)
+    _require_typed_evidence_payload(normalized_payload)
+    body = {"payload": normalized_payload}
     return {**body, "content_hash": _canonical_envelope_hash(body)}
 
 
 def _verified_evidence_as_mapping(
     value: _VerifiedEvidenceEnvelope,
 ) -> dict[str, object]:
-    body = {"payload": value.payload}
+    normalized_payload = _normalize_evidence_value(value.payload)
+    if normalized_payload != value.payload:
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: verified evidence payload is not normalized"
+        )
+    body = {"payload": normalized_payload}
     envelope = {**body, "content_hash": value.content_hash}
     _require_typed_evidence_payload(value.payload)
     if not _require_valid_canonical_envelope_if_recognized(envelope):  # pragma: no cover
@@ -460,8 +468,13 @@ def _restore_verified_evidence_envelopes(
             )
         payload = envelope.get("payload")
         _require_typed_evidence_payload(payload)
+        normalized_payload = _normalize_evidence_value(payload)
+        if normalized_payload != payload:
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: attested evidence payload is not normalized"
+            )
         verified = _VerifiedEvidenceEnvelope(
-            payload=payload,
+            payload=normalized_payload,
             content_hash=content_hash,
             _capability=_VERIFIED_EVIDENCE_CAPABILITY,
         )
@@ -523,6 +536,33 @@ def _require_typed_evidence_payload(value: object) -> None:
         raise SanitizationIntegrityError(
             "EVIDENCE_INTEGRITY_ERROR: typed evidence payload has an invalid schema"
         )
+
+
+def _normalize_evidence_value(value: object) -> object:
+    """Return the unique strict-JSON representation used for sealing and writing."""
+
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: typed evidence contains a non-finite number"
+        )
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: typed evidence mapping keys must be strings"
+            )
+        return {
+            key: _normalize_evidence_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalize_evidence_value(item) for item in value]
+    raise SanitizationIntegrityError(
+        "EVIDENCE_INTEGRITY_ERROR: typed evidence contains a non-JSON value"
+    )
 
 
 def _is_typed_evidence_payload(value: object) -> bool:
