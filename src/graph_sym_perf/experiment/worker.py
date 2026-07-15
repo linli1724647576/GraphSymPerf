@@ -489,6 +489,7 @@ class RuntimeFirstShardWorker:
         prior_elapsed = float(progress["elapsed_seconds"])
         progress_finish_fields: dict[str, object] = {
             "accepted_hashes": tuple(progress["accepted_pair_hashes"]),
+            "applicability_count": len(progress["applicable_query_ordinals"]),
             "generated_seeds": int(progress["attempted_query_records"]),
             "rejects": dict(progress["reject_counts"]),
             "rule_stats": _rule_stats_from_entry_progress(entry, progress),
@@ -544,6 +545,7 @@ class RuntimeFirstShardWorker:
                 attempt_started=started,
                 now=self._clock(),
                 last_query_ordinal=int(progress["last_query_ordinal"]),
+                applicable_query_ordinals=tuple(progress["applicable_query_ordinals"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
@@ -573,6 +575,7 @@ class RuntimeFirstShardWorker:
                 attempt_started=started,
                 now=self._clock(),
                 last_query_ordinal=int(progress["last_query_ordinal"]),
+                applicable_query_ordinals=tuple(progress["applicable_query_ordinals"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
@@ -604,6 +607,7 @@ class RuntimeFirstShardWorker:
                 attempt_started=started,
                 now=self._clock(),
                 last_query_ordinal=int(progress["last_query_ordinal"]),
+                applicable_query_ordinals=tuple(progress["applicable_query_ordinals"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
@@ -637,6 +641,7 @@ class RuntimeFirstShardWorker:
                 attempt_started=started,
                 now=self._clock(),
                 last_query_ordinal=int(progress["last_query_ordinal"]),
+                applicable_query_ordinals=tuple(progress["applicable_query_ordinals"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
@@ -666,6 +671,7 @@ class RuntimeFirstShardWorker:
                 attempt_started=started,
                 now=self._clock(),
                 last_query_ordinal=int(progress["last_query_ordinal"]),
+                applicable_query_ordinals=tuple(progress["applicable_query_ordinals"]),
                 rejects=dict(progress["reject_counts"]),
                 accepted_hashes=tuple(progress["accepted_pair_hashes"]),
                 pending_acceptances=tuple(progress["pending_acceptances"]),
@@ -947,6 +953,7 @@ class RuntimeFirstShardWorker:
             attempt_started=started,
             now=self._clock(),
             last_query_ordinal=outcome_generated_seeds,
+            applicable_query_ordinals=tuple(outcome["applicable_query_ordinals"]),
             rejects=outcome_rejects,
             accepted_hashes=outcome_accepted_hashes,
             pending_acceptances=tuple(outcome.get("pending_acceptances", ())),
@@ -972,6 +979,7 @@ class RuntimeFirstShardWorker:
             terminal_state=outcome["terminal_state"],
             generated=generated,
             accepted_hashes=tuple(outcome["accepted_hashes"]),
+            applicability_count=len(outcome["applicable_query_ordinals"]),
             generated_seeds=int(outcome["generated_seeds"]),
             rejects=dict(outcome["rejects"]),
             rule_stats=dict(outcome["rule_stats"]),
@@ -1135,6 +1143,33 @@ class RuntimeFirstShardWorker:
         not_applicable = rejects["RULE_NOT_APPLICABLE"]
         last_query_ordinal = int(progress["last_query_ordinal"])
         generated_seeds = int(progress["attempted_query_records"])
+        applicable_query_ordinals = set(progress["applicable_query_ordinals"])
+        verified_applicability_limit = max(
+            last_query_ordinal,
+            max(applicable_query_ordinals, default=0),
+        )
+        if verified_applicability_limit > len(queries):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "applicable query ledger exceeds the sealed query corpus",
+            )
+        for verified_ordinal in range(1, verified_applicability_limit + 1):
+            verified_build = factory.build(
+                queries[verified_ordinal - 1],
+                entry,
+                entry.target,
+            )
+            replay_is_applicable = (
+                not verified_build.quarantine
+                and verified_build.pair is not None
+            )
+            if replay_is_applicable != (
+                verified_ordinal in applicable_query_ordinals
+            ):
+                raise WorkerFailure(
+                    ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                    "applicable query ledger disagrees with deterministic rule replay",
+                )
         legacy_migration_sha256 = progress["legacy_migration_sha256"]
         loaded_schema = int(progress["_loaded_schema_version"])
         current_identity = _runtime_evidence_identity(
@@ -1286,7 +1321,7 @@ class RuntimeFirstShardWorker:
         )
         accepted_hashes = (
             set(progress["accepted_pair_hashes"])
-            if loaded_schema in {4, 5}
+            if loaded_schema in {4, 5, 6}
             else set()
         )
         (
@@ -1312,6 +1347,9 @@ class RuntimeFirstShardWorker:
                 attempt_started=attempt_started,
                 now=self._clock(),
                 last_query_ordinal=last_query_ordinal,
+                applicable_query_ordinals=tuple(
+                    sorted(applicable_query_ordinals)
+                ),
                 rejects=rejects,
                 accepted_hashes=tuple(sorted(accepted_hashes)),
                 pending_acceptances=tuple(pending),
@@ -1440,7 +1478,7 @@ class RuntimeFirstShardWorker:
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                 "runtime and pending pairs exceed the immutable entry quota",
             )
-        if recovery_needs_persist or loaded_schema in {1, 2}:
+        if recovery_needs_persist or loaded_schema in {1, 2, 3, 4, 5}:
             persist_progress()
 
         infrastructure_error_kind: ErrorKind | None = None
@@ -1457,6 +1495,11 @@ class RuntimeFirstShardWorker:
                 break
             build = factory.build(query, entry, entry.target)
             if build.quarantine:
+                if ordinal in applicable_query_ordinals:
+                    raise WorkerFailure(
+                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                        "applicable query ledger disagrees with deterministic rule replay",
+                    )
                 _write_entry_quarantine(
                     entry_dir,
                     entry,
@@ -1469,6 +1512,11 @@ class RuntimeFirstShardWorker:
                 state = EntryState.QUARANTINED
                 break
             if build.pair is None:
+                if ordinal in applicable_query_ordinals:
+                    raise WorkerFailure(
+                        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                        "applicable query ledger disagrees with deterministic rule replay",
+                    )
                 reason = build.reject_code or "RULE_NOT_APPLICABLE"
                 rejects[reason] += 1
                 if reason == "RULE_NOT_APPLICABLE":
@@ -1476,6 +1524,11 @@ class RuntimeFirstShardWorker:
                 complete_query_record(ordinal)
                 continue
             pair = build.pair
+            if ordinal not in applicable_query_ordinals:
+                applicable_query_ordinals.add(ordinal)
+                # Seal applicability before downstream dialect, execution, or
+                # equivalence rejection so retries cannot lose the denominator.
+                persist_progress()
             left_decision = dialect.check(PortableQuery(pair.query_a))
             right_decision = dialect.check(PortableQuery(pair.query_b))
             if left_decision.kind is DecisionKind.REJECT:
@@ -1831,6 +1884,9 @@ class RuntimeFirstShardWorker:
         persist_progress()
         result: dict[str, object] = {
             "accepted_hashes": tuple(sorted(accepted_hashes)),
+            "applicable_query_ordinals": tuple(
+                sorted(applicable_query_ordinals)
+            ),
             "pending_acceptances": tuple(pending),
             "legacy_migration_sha256": legacy_migration_sha256,
             "evidence_identity": evidence_identity,
@@ -2639,6 +2695,7 @@ class RuntimeFirstShardWorker:
         terminal_state: object,
         generated: GeneratedShard | None,
         accepted_hashes: tuple[str, ...] = (),
+        applicability_count: int = 0,
         generated_seeds: int = 0,
         rejects: Mapping[str, int] | None = None,
         rule_stats: Mapping[str, object] | None = None,
@@ -2710,6 +2767,16 @@ class RuntimeFirstShardWorker:
             "target": entry.target.value,
             "terminal_state": state.value,
         }
+        if (
+            isinstance(applicability_count, bool)
+            or not isinstance(applicability_count, int)
+            or applicability_count < 0
+            or applicability_count > generated_seeds + 1
+        ):
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "applicability count is not bound to attempted query records",
+            )
         typed_mismatches = int((rejects or {}).get("TYPED_EQUIVALENCE_FAILED", 0))
         evidence_complete = state is EntryState.COMPLETED and acceptance_complete
         pipeline_complete = (
@@ -2718,7 +2785,7 @@ class RuntimeFirstShardWorker:
         )
         summary.update(
             {
-                "applicability_count": len(accepted_hashes),
+                "applicability_count": applicability_count,
                 "artifact_complete": evidence_complete and pipeline_complete,
                 "best_delta_over_noise": 0.0,
                 "best_ratio_ci_low": 1.0,
@@ -5831,11 +5898,12 @@ def _write_entry_runtime_invalidation(
 
 def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, object]:
     default: dict[str, object] = {
-        "schema_version": 5,
+        "schema_version": 6,
         "entry_id": entry.entry_id,
         "elapsed_seconds": 0.0,
         "last_query_ordinal": 0,
         "attempted_query_records": 0,
+        "applicable_query_ordinals": [],
         "reject_counts": {},
         "accepted_pair_hashes": [],
         "pending_acceptances": [],
@@ -5847,7 +5915,7 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         "noise_intent": None,
         "noise_failure_id": None,
         "noise_failure_intent": None,
-        "_loaded_schema_version": 5,
+        "_loaded_schema_version": 6,
     }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -5862,6 +5930,7 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     elapsed = body.get("elapsed_seconds")
     last_ordinal = body.get("last_query_ordinal")
     attempted = body.get("attempted_query_records")
+    applicable_query_ordinals = body.get("applicable_query_ordinals", [])
     rejects = body.get("reject_counts")
     accepted = body.get("accepted_pair_hashes")
     pending = body.get("pending_acceptances", [])
@@ -5884,6 +5953,17 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     valid_accepted = isinstance(accepted, list) and all(
         isinstance(value, str) and len(value) == 64 for value in accepted
     ) and len(set(accepted)) == len(accepted)
+    valid_applicable_query_ordinals = (
+        isinstance(applicable_query_ordinals, list)
+        and all(
+            type(value) is int
+            and 1 <= value <= entry.max_generated_seed_budget
+            for value in applicable_query_ordinals
+        )
+        and applicable_query_ordinals == sorted(applicable_query_ordinals)
+        and len(set(applicable_query_ordinals))
+        == len(applicable_query_ordinals)
+    )
     valid_pending = isinstance(pending, list) and all(
         isinstance(value, dict)
         and set(value) == {
@@ -6071,9 +6151,28 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
             "schema_version",
             "stage1_intent",
         },
+        6: {
+            "accepted_pair_hashes",
+            "accepted_record_ledger",
+            "applicable_query_ordinals",
+            "attempted_query_records",
+            "elapsed_seconds",
+            "entry_id",
+            "evidence_identity",
+            "last_query_ordinal",
+            "legacy_migration_sha256",
+            "noise_failure_id",
+            "noise_failure_intent",
+            "noise_floor_id",
+            "noise_intent",
+            "pending_acceptances",
+            "reject_counts",
+            "schema_version",
+            "stage1_intent",
+        },
     }
     if (
-        schema_version not in {1, 2, 3, 4, 5}
+        schema_version not in {1, 2, 3, 4, 5, 6}
         or set(body) != schema_keys.get(schema_version, set())
         or body.get("entry_id") != entry.entry_id
         or payload.get("content_hash") != canonical_hash(body)
@@ -6087,41 +6186,56 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         or attempted != last_ordinal
         or not valid_rejects
         or not valid_accepted
-        or (schema_version in {2, 3, 4, 5} and (not valid_pending or not valid_migration))
-        or (schema_version in {3, 4, 5} and (not valid_identity or not valid_intent))
+        or (schema_version in {2, 3, 4, 5, 6} and (not valid_pending or not valid_migration))
+        or (schema_version in {3, 4, 5, 6} and (not valid_identity or not valid_intent))
         or (
             schema_version == 3
             and bool(accepted or pending or stage1_intent)
         )
         or (
-            schema_version in {4, 5}
+            schema_version in {4, 5, 6}
             and (not valid_ledger or not valid_noise_floor or not valid_noise_intent)
         )
         or (
-            schema_version in {4, 5}
+            schema_version in {4, 5, 6}
             and (
                 any(value > last_ordinal for value in ledger_ordinals)
                 or any(value > last_ordinal for value in pending_ordinals)
             )
         )
         or (
-            schema_version == 5
+            schema_version in {5, 6}
             and (not valid_noise_failure_id or not valid_noise_failure_intent)
         )
         or (
-            schema_version in {4, 5}
+            schema_version in {4, 5, 6}
             and noise_floor_id is not None
             and noise_intent is not None
         )
         or (
-            schema_version == 5
+            schema_version in {5, 6}
             and noise_failure_id is not None
             and noise_failure_intent is not None
         )
         or (
-            schema_version == 5
+            schema_version in {5, 6}
             and (noise_failure_id is not None or noise_failure_intent is not None)
             and (noise_floor_id is not None or noise_intent is not None)
+        )
+        or (
+            schema_version == 6
+            and (
+                not valid_applicable_query_ordinals
+                or any(
+                    value > last_ordinal + 1
+                    for value in applicable_query_ordinals
+                )
+                or sum(
+                    value > last_ordinal
+                    for value in applicable_query_ordinals
+                )
+                > 1
+            )
         )
     ):
         raise WorkerFailure(
@@ -6143,6 +6257,13 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
     if schema_version in {1, 2, 3, 4}:
         body["noise_failure_id"] = None
         body["noise_failure_intent"] = None
+    if schema_version in {1, 2, 3, 4, 5}:
+        if last_ordinal > 0:
+            raise WorkerFailure(
+                ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+                "legacy acceptance progress lacks an applicable-query ledger",
+            )
+        body["applicable_query_ordinals"] = []
     body["_loaded_schema_version"] = schema_version
     return body
 
@@ -6155,6 +6276,7 @@ def _persist_entry_progress(
     attempt_started: float,
     now: float,
     last_query_ordinal: int,
+    applicable_query_ordinals: tuple[int, ...],
     rejects: Mapping[str, int],
     accepted_hashes: tuple[str, ...],
     pending_acceptances: tuple[Mapping[str, object], ...] = (),
@@ -6169,11 +6291,14 @@ def _persist_entry_progress(
 ) -> None:
     elapsed = prior_elapsed + max(0.0, now - attempt_started)
     body = {
-        "schema_version": 5,
+        "schema_version": 6,
         "entry_id": entry.entry_id,
         "elapsed_seconds": elapsed,
         "last_query_ordinal": last_query_ordinal,
         "attempted_query_records": last_query_ordinal,
+        "applicable_query_ordinals": list(
+            sorted(applicable_query_ordinals)
+        ),
         "reject_counts": dict(sorted(rejects.items())),
         "accepted_pair_hashes": list(sorted(accepted_hashes)),
         "pending_acceptances": sorted(
@@ -6212,6 +6337,9 @@ def _entry_outcome_from_progress(
 ) -> dict[str, object]:
     return {
         "accepted_hashes": tuple(progress["accepted_pair_hashes"]),
+        "applicable_query_ordinals": tuple(
+            progress["applicable_query_ordinals"]
+        ),
         "pending_acceptances": tuple(progress["pending_acceptances"]),
         "legacy_migration_sha256": progress["legacy_migration_sha256"],
         "evidence_identity": progress["evidence_identity"],

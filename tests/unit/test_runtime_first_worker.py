@@ -3347,6 +3347,42 @@ def test_schema3_nonempty_uncommitted_state_cannot_upgrade(tmp_path, state) -> N
     assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
 
 
+def test_schema5_attempts_without_applicability_ledger_fail_closed(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    body = {
+        "schema_version": 5,
+        "entry_id": entry.entry_id,
+        "elapsed_seconds": 0.0,
+        "last_query_ordinal": 1,
+        "attempted_query_records": 1,
+        "reject_counts": {"QUERY_EXECUTION_ERROR": 1},
+        "accepted_pair_hashes": [],
+        "pending_acceptances": [],
+        "legacy_migration_sha256": None,
+        "evidence_identity": None,
+        "stage1_intent": None,
+        "accepted_record_ledger": [],
+        "noise_floor_id": None,
+        "noise_intent": None,
+        "noise_failure_id": None,
+        "noise_failure_intent": None,
+    }
+    path = tmp_path / "acceptance_progress.json"
+    path.write_text(
+        json.dumps(
+            {**body, "content_hash": canonical_hash(body)},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkerFailure) as captured:
+        worker_module._load_entry_progress(path, entry=entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert "applicable-query ledger" in str(captured.value)
+
+
 def test_noise_artifact_freezes_exact_integer_samples_and_progress_anchor(tmp_path) -> None:
     queries = tuple(
         f"MATCH (n) WHERE n.id = {index} RETURN n"
@@ -3487,7 +3523,7 @@ def test_incomplete_noise_writes_separate_typed_failure_artifact(tmp_path) -> No
     progress = json.loads(
         (entry_dir / "acceptance_progress.json").read_text(encoding="utf-8")
     )
-    assert progress["schema_version"] == 5
+    assert progress["schema_version"] == 6
     assert progress["noise_failure_id"] == failure["content_hash"]
     assert progress["noise_failure_intent"] is None
 
@@ -3699,7 +3735,7 @@ def test_schema4_without_noise_failure_evidence_upgrades_safely(
     upgraded = json.loads(
         (entry_dir / "acceptance_progress.json").read_text(encoding="utf-8")
     )
-    assert upgraded["schema_version"] == 5
+    assert upgraded["schema_version"] == 6
     assert upgraded["noise_failure_id"] is None
     assert upgraded["noise_failure_intent"] is None
 
@@ -4106,6 +4142,14 @@ def test_worker_rejects_ordinary_query_error_without_failing_the_entry_infrastru
 
     assert result["terminal_state"] == "underfilled"
     assert result["reject_reasons"] == {"QUERY_EXECUTION_ERROR": 1}
+    assert result["accepted_pairs"] == 0
+    assert result["applicability_count"] == 1
+    progress = json.loads(
+        next(tmp_path.glob("entries/*/acceptance_progress.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert progress["applicable_query_ordinals"] == [1]
 
 
 def test_worker_classifies_connection_loss_as_entry_infrastructure_failure(tmp_path) -> None:
@@ -4125,6 +4169,54 @@ def test_worker_classifies_connection_loss_as_entry_infrastructure_failure(tmp_p
 
     assert result["terminal_state"] == "infrastructure_failed"
     assert result["accepted_pairs"] == 0
+
+
+def test_worker_rejects_self_consistently_forged_applicability_ledger(tmp_path) -> None:
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        max_generated_seed_budget=1,
+    )
+    generated = GeneratedShard(
+        graph_statements=("CREATE (n:Node {id: 1})",),
+        query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+        generator_metadata={
+            "backend": "gdsmith",
+            "requested_max_nodes": entry.graph_scale,
+        },
+    )
+    first = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: generated,
+        adapter_factory=lambda _entry: _OrdinaryQueryErrorAdapter(),
+    )
+    first.bind_run_dir(tmp_path)
+    assert first(entry)["applicability_count"] == 1
+
+    progress_path = next(tmp_path.glob("entries/*/acceptance_progress.json"))
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in progress.items() if key != "content_hash"}
+    body["applicable_query_ordinals"] = []
+    progress_path.write_text(
+        json.dumps(
+            {**body, "content_hash": canonical_hash(body)},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    retry = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda *_args: pytest.fail("retry must use sealed corpus"),
+        adapter_factory=lambda _entry: _Adapter(),
+    )
+    retry.bind_run_dir(tmp_path)
+
+    with pytest.raises(WorkerFailure) as captured:
+        retry(entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert "applicable query ledger" in str(captured.value)
 
 
 def test_query_execution_error_is_ordinary_even_when_message_mentions_infrastructure(tmp_path) -> None:
@@ -4557,7 +4649,7 @@ def test_task5_legacy_evidence_migrates_crash_safely_to_pair_runtime(tmp_path, m
         first(entry)
 
     migration_progress = json.loads((entry_dir / "acceptance_progress.json").read_text())
-    assert migration_progress["schema_version"] == 5
+    assert migration_progress["schema_version"] == 6
     assert migration_progress["evidence_identity"] == {
         "dbms_fingerprint": "a" * 64,
         "dbms_health_epoch": "e" * 64,
@@ -4620,6 +4712,7 @@ def test_rule_entry_retry_keeps_reject_progress_and_does_not_repeat_completed_se
     first_progress = json.loads(progress_path.read_text(encoding="utf-8"))
     assert first_progress["last_query_ordinal"] == 1
     assert first_progress["reject_counts"] == {"QUERY_EXECUTION_ERROR": 1}
+    assert first_progress["applicable_query_ordinals"] == [1, 2]
 
     retry_adapter = _Adapter()
     retry = RuntimeFirstShardWorker(
@@ -4635,9 +4728,11 @@ def test_rule_entry_retry_keeps_reject_progress_and_does_not_repeat_completed_se
     accepted_base_queries = [query for query, kind in retry_adapter.executed if kind == "acceptance_base"]
     assert accepted_base_queries == ["MATCH (n) WHERE n.id = 2 RETURN n"]
     assert result["acceptance_status"] == "complete"
+    assert result["applicability_count"] == 2
     assert result["acceptance_generated_seeds"] == 2
     assert result["reject_reasons"] == {"QUERY_EXECUTION_ERROR": 1}
     progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["applicable_query_ordinals"] == [1, 2]
     assert progress["elapsed_seconds"] < 10.0
 
 
