@@ -137,6 +137,7 @@ class RulePlanSupervisor:
         process_isolation: bool = True,
         heartbeat_seconds: float = 10.0,
         stale_after_seconds: float = 90.0,
+        attempt_guard: Callable[[], None] | None = None,
     ) -> None:
         if not 0 <= retry_limit <= 3:
             raise ValueError("retry_limit must be between zero and three")
@@ -153,6 +154,9 @@ class RulePlanSupervisor:
         self.process_isolation = process_isolation
         self.heartbeat_seconds = heartbeat_seconds
         self.stale_after_seconds = stale_after_seconds
+        if attempt_guard is not None and not callable(attempt_guard):
+            raise TypeError("attempt_guard must be callable")
+        self.attempt_guard = attempt_guard
 
     def run(
         self,
@@ -198,6 +202,7 @@ class RulePlanSupervisor:
         final_result: Mapping[str, object] = {}
         final_state = EntryState.INFRASTRUCTURE_FAILED
         for attempt in range(self.retry_limit + 1):
+            non_retryable_failure = False
             attempt_dir = entry_dir / f"attempt-{attempt:03d}"
             attempt_dir.mkdir(parents=False, exist_ok=False)
             previous = f"attempt-{attempt - 1:03d}" if attempt else None
@@ -237,6 +242,8 @@ class RulePlanSupervisor:
                 task_identity=canonical_hash(to_jsonable(entry)),
             )
             try:
+                if self.attempt_guard is not None:
+                    self.attempt_guard()
                 if self.process_isolation:
                     value = ProcessMonitor(
                         heartbeat_seconds=self.heartbeat_seconds,
@@ -247,6 +254,8 @@ class RulePlanSupervisor:
                 else:
                     bind_worker_attempt(worker, context)
                     value = worker(entry)
+                if self.attempt_guard is not None:
+                    self.attempt_guard()
                 if not isinstance(value, Mapping):
                     raise EntryResultIntegrityError("entry worker must return a mapping")
                 final_result = dict(value)
@@ -274,6 +283,18 @@ class RulePlanSupervisor:
                         "infrastructure_reason": str(exc),
                         "terminal_state": final_state.value,
                     }
+            except ManifestMismatchError as exc:
+                non_retryable_failure = True
+                final_state = EntryState.INFRASTRUCTURE_FAILED
+                final_result = {
+                    "accepted_pairs": 0,
+                    "artifact_complete": False,
+                    "certificate_complete": False,
+                    "entry_id": entry.entry_id,
+                    "infrastructure_error_kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
+                    "infrastructure_reason": str(exc),
+                    "terminal_state": final_state.value,
+                }
             except Exception as exc:
                 final_state = EntryState.INFRASTRUCTURE_FAILED
                 final_result = {
@@ -301,7 +322,11 @@ class RulePlanSupervisor:
                 {**terminal_body, "content_hash": canonical_hash(terminal_body)},
             )
             self._event(entry, attempt, final_state.value, previous_attempt=previous)
-            if final_state is not EntryState.INFRASTRUCTURE_FAILED or attempt >= self.retry_limit:
+            if (
+                non_retryable_failure
+                or final_state is not EntryState.INFRASTRUCTURE_FAILED
+                or attempt >= self.retry_limit
+            ):
                 break
         try:
             cell = cell_summary_from_result(

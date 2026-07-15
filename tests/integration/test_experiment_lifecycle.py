@@ -3,7 +3,7 @@ import hashlib
 import os
 import subprocess
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 
 import pytest
@@ -337,6 +337,39 @@ def test_phase_outcome_binds_rule_plan_ordered_cell_summary_root(tmp_path) -> No
 
     with pytest.raises(PhaseAncestryError, match="cell summary root"):
         lifecycle.cell_summaries("p1")
+
+
+def test_campaign_runs_manifest_bound_source_guard_before_and_after_each_entry(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    observed = []
+
+    def guard_factory(_spec, plan, *, environment):
+        assert environment == {"fixture": "1"}
+
+        def guard():
+            observed.append(plan.source_revision)
+
+        return guard
+
+    monkeypatch.setattr(
+        campaign_module,
+        "_campaign_source_provenance_guard",
+        guard_factory,
+    )
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+    result = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(),
+        phase=CampaignPhase.P0,
+        run_id="p0",
+    )
+    rule_plan = json.loads((result.run_dir / "rule_plan.json").read_text(encoding="utf-8"))
+
+    assert len(observed) == 2 * len(rule_plan["entries"])
+    assert all(asdict(source) == rule_plan["source_revision"] for source in observed)
 
 
 def test_p2_rejects_self_consistent_selection_not_built_from_parent_p1_cells(

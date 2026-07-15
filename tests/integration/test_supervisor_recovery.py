@@ -298,6 +298,79 @@ def test_rule_plan_supervisor_enforces_entry_hard_timeout(tmp_path) -> None:
     assert terminal["terminal_state"] == EntryState.RESOURCE_EXHAUSTED.value
 
 
+def test_rule_plan_attempt_guard_fails_closed_before_retry(tmp_path) -> None:
+    plan = _p1_rule_plan()
+    guard_calls = 0
+    worker_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls >= 2:
+            raise ManifestMismatchError("source provenance changed during run")
+
+    def worker(_entry):
+        nonlocal worker_calls
+        worker_calls += 1
+        raise RuntimeError("retryable worker failure")
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=1,
+        process_isolation=False,
+        attempt_guard=guard,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    assert worker_calls == 1
+    terminal = json.loads(
+        next((tmp_path / "entries").glob("*/attempt-001/terminal_result.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert terminal["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    assert "source provenance changed" in terminal["infrastructure_reason"]
+
+
+def test_rule_plan_attempt_guard_fails_closed_after_worker(tmp_path) -> None:
+    plan = _p1_rule_plan()
+    guard_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls >= 2:
+            raise ManifestMismatchError("source provenance changed during run")
+
+    def worker(entry):
+        return {
+            "accepted_pairs": entry.accepted_pair_quota,
+            "artifact_complete": True,
+            "certificate_complete": True,
+            "entry_id": entry.entry_id,
+            "terminal_state": "completed",
+        }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        process_isolation=False,
+        attempt_guard=guard,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    assert not summary.completed
+    terminal = json.loads(
+        next((tmp_path / "entries").glob("*/attempt-000/terminal_result.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert terminal["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+
+
 def test_rule_plan_supervisor_classifies_child_crash_without_killing_campaign(
     tmp_path,
 ) -> None:

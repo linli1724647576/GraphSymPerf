@@ -199,6 +199,11 @@ class CampaignLifecycle:
                 input_manifest_hash=manifest_hash,
                 retry_limit=retry_limit,
                 process_isolation=self.process_isolation,
+                attempt_guard=_campaign_source_provenance_guard(
+                    spec,
+                    plan,
+                    environment=self.environment,
+                ),
             ).run(plan, worker)
             passed, gate_reasons, regression_artifact = self._phase_passed(
                 spec,
@@ -698,6 +703,19 @@ def measurement_target_identity(
             "target": "neo4j",
         }
     )
+
+
+def _campaign_source_provenance_guard(
+    spec: ValidatedYieldExperimentSpec,
+    plan: RulePlan,
+    *,
+    environment: Mapping[str, str],
+) -> Callable[[], None]:
+    # The schema-v2 and schema-v3 lifecycles deliberately share the exact same
+    # before/after-attempt provenance verifier.
+    from graph_sym_perf.experiment.lifecycle import _SourceProvenanceGuard
+
+    return _SourceProvenanceGuard(spec, plan, environment=environment)  # type: ignore[arg-type]
 
 
 class MeasurementSessionLock:
