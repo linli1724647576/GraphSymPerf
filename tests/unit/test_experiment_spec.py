@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 import yaml
 
+import graph_sym_perf.experiment.spec as spec_module
 from graph_sym_perf.cli.__main__ import main as cli_main
 from graph_sym_perf.core import ConfigError, TargetSystem
 from graph_sym_perf.experiment import migrate_legacy_config_to_v2
@@ -202,6 +203,37 @@ def test_schema_v3_requires_the_canonical_neo4j_capability_contract(
         match=r"schema-v3.*canonical Neo4j capability contract",
     ):
         load_experiment_spec(path)
+
+
+def test_schema_v3_uses_the_same_systems_snapshot_it_validates(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    experiment = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    path = _write_config_bundle(tmp_path, experiment=experiment)
+    systems_path = path.parent / "systems.yaml"
+    original_load_yaml = spec_module._load_yaml
+    systems_loads = 0
+
+    def load_then_mutate(candidate: Path, label: str):
+        nonlocal systems_loads
+        loaded = original_load_yaml(candidate, label)
+        if candidate == systems_path:
+            systems_loads += 1
+            if systems_loads == 1:
+                changed = yaml.safe_load(systems_path.read_text(encoding="utf-8"))
+                changed["systems"]["neo4j"]["generation_backend"] = "memgraph"
+                systems_path.write_text(yaml.safe_dump(changed), encoding="utf-8")
+        return loaded
+
+    monkeypatch.setattr(spec_module, "_load_yaml", load_then_mutate)
+
+    spec = load_experiment_spec(path)
+
+    assert spec.systems[TargetSystem.NEO4J].generation_backend == "neo4j"
+    assert systems_loads == 1
 
 
 def test_schema_v3_config_cannot_override_registry_safety_facts(tmp_path: Path) -> None:

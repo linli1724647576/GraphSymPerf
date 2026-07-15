@@ -359,8 +359,9 @@ def _load_schema_v3(
     rules_raw = _mapping(raw["rules"], "rules")
     _exact_keys(rules_raw, {"discovery_rule_ids", "control_rule_ids"}, "rules")
     systems_path = source_path.parent / "systems.yaml"
-    _require_schema_v3_neo4j_capability_contract(systems_path)
-    systems = _load_systems(systems_path, targets)
+    systems_document = _load_yaml(systems_path, "systems configuration")
+    _require_schema_v3_neo4j_capability_contract(systems_document)
+    systems = _parse_systems(systems_document, targets)
     if (
         TargetSystem.NEO4J in systems
         and systems[TargetSystem.NEO4J].measurement_target_id is None
@@ -438,9 +439,10 @@ def _load_schema_v3(
     )
 
 
-def _require_schema_v3_neo4j_capability_contract(path: Path) -> None:
-    raw = _load_yaml(path, "systems configuration")
-    systems = _mapping(raw.get("systems"), "systems")
+def _require_schema_v3_neo4j_capability_contract(
+    document: Mapping[str, Any],
+) -> None:
+    systems = _mapping(document.get("systems"), "systems")
     neo4j = _mapping(systems.get(TargetSystem.NEO4J.value), "systems.neo4j")
     if any(
         neo4j.get(field) != expected
@@ -487,6 +489,13 @@ def _canonical_rule_ids(value: Any, label: str, registry: RuleRegistry) -> tuple
 
 def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[TargetSystem, SystemDefinition]:
     raw = _load_yaml(path, "systems configuration")
+    return _parse_systems(raw, targets)
+
+
+def _parse_systems(
+    raw: Mapping[str, Any],
+    targets: tuple[TargetSystem, ...],
+) -> Mapping[TargetSystem, SystemDefinition]:
     _only_keys(raw, {"schema_version", "systems"}, "systems root")
     if raw.get("schema_version") != 1:
         raise ConfigError("systems.yaml must use schema_version: 1")
