@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import ipaddress
 import os
 import re
 import socket
@@ -13,7 +12,6 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
-from urllib.parse import unquote
 from uuid import uuid4
 
 from graph_sym_perf.core import TargetSystem, to_jsonable
@@ -732,66 +730,6 @@ def measurement_target_identity(
             "target": "neo4j",
         }
     )
-
-
-def _canonical_measurement_host(host: str | None, port: int) -> Mapping[str, object]:
-    if host is None:
-        return {"unresolved_hostname": "<missing>"}
-    decoded_host = unquote(host.strip())
-    normalized_host = (
-        decoded_host
-        if ":" in decoded_host
-        else decoded_host.lower().rstrip(".")
-    )
-    if not normalized_host:
-        return {"unresolved_hostname": "<missing>"}
-    if normalized_host == "localhost":
-        return {"addresses": ["loopback"]}
-    try:
-        return {"addresses": [_canonical_ip_address(normalized_host)]}
-    except ValueError:
-        pass
-    try:
-        address_info = socket.getaddrinfo(
-            normalized_host,
-            port,
-            type=socket.SOCK_STREAM,
-        )
-    except (OSError, socket.gaierror):
-        return {"unresolved_hostname": normalized_host}
-    addresses = {
-        _canonical_ip_address(str(sockaddr[0]))
-        for _family, _type, _proto, _canonname, sockaddr in address_info
-        if isinstance(sockaddr, tuple) and sockaddr
-    }
-    if not addresses:
-        return {"unresolved_hostname": normalized_host}
-    if all(address == "loopback" for address in addresses):
-        return {"addresses": ["loopback"]}
-    return {"addresses": sorted(addresses)}
-
-
-def _canonical_ip_address(raw: str) -> str:
-    decoded = unquote(raw)
-    address_text, separator, zone_id = decoded.partition("%")
-    address = ipaddress.ip_address(address_text)
-    if separator:
-        if (
-            not isinstance(address, ipaddress.IPv6Address)
-            or not zone_id
-            or len(zone_id) > 64
-            or re.fullmatch(r"[A-Za-z0-9_.-]+", zone_id) is None
-        ):
-            raise ValueError("invalid scoped IP address")
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
-        if separator:
-            raise ValueError("IPv4-mapped IPv6 addresses cannot carry a scope ID")
-        address = address.ipv4_mapped
-    if address.is_loopback:
-        canonical = "loopback"
-    else:
-        canonical = address.compressed
-    return f"{canonical}%{zone_id}" if separator else canonical
 
 
 def _campaign_source_provenance_guard(

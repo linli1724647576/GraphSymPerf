@@ -1,7 +1,6 @@
 import json
 import hashlib
 import os
-import socket
 import subprocess
 import sys
 from dataclasses import asdict, replace
@@ -927,49 +926,15 @@ def test_same_neo4j_target_contends_across_different_campaign_roots(tmp_path) ->
         first.release()
 
 
-def test_measurement_target_identity_unifies_loopback_address_spellings() -> None:
-    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
-    uris = (
-        "bolt://localhost:7687/neo4j",
-        "bolt://127.0.0.1:7687/neo4j",
-        "bolt://[::1]:7687/neo4j",
-        "bolt://[0:0:0:0:0:0:0:1]:7687/neo4j",
-        "bolt://[::ffff:127.0.0.1]:7687/neo4j",
-    )
-
-    identities = {
-        campaign_module.measurement_target_identity(
-            spec,
-            {
-                "GRAPHSYMPERF_NEO4J_URI": uri,
-                "GRAPHSYMPERF_NEO4J_DATABASE": "neo4j",
-            },
-        )
-        for uri in uris
-    }
-
-    assert len(identities) == 1
-
-
-def test_measurement_target_identity_ignores_dns_success_partial_and_failure(
+def test_measurement_target_identity_uses_preregistered_id_without_dns(
     monkeypatch,
 ) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
 
-    def resolve(host, port, *, type):
-        assert type == socket.SOCK_STREAM
-        if host == "alias-success.internal":
-            return [(socket.AF_INET, type, 6, "", ("192.0.2.10", port))]
-        if host == "alias-partial.internal":
-            return [
-                (socket.AF_INET, type, 6, "", ("192.0.2.10", port)),
-                (socket.AF_INET6, type, 6, "", ("2001:db8::10", port, 0, 0)),
-            ]
-        if host == "alias-failure.internal":
-            raise socket.gaierror("offline fixture")
-        raise AssertionError(f"unexpected DNS lookup: {host}")
+    def reject_dns(*_args, **_kwargs):
+        raise AssertionError("measurement target identity must not perform DNS lookup")
 
-    monkeypatch.setattr(campaign_module.socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(campaign_module.socket, "getaddrinfo", reject_dns)
 
     def identity(uri, database="neo4j"):
         return campaign_module.measurement_target_identity(
@@ -980,9 +945,9 @@ def test_measurement_target_identity_ignores_dns_success_partial_and_failure(
             },
         )
 
-    first = identity("bolt://alias-success.internal:7687/neo4j")
-    assert first == identity("bolt://alias-partial.internal:7687/neo4j")
-    assert first == identity("bolt://alias-failure.internal:7687/neo4j")
+    first = identity("bolt://alias-one.internal:7687/neo4j")
+    assert first == identity("bolt://alias-two.internal:7687/neo4j")
+    assert first == identity("bolt://[fe80::1%25en0]:7687/neo4j")
     assert first == identity("bolt://other-alias.internal:7688/system", "system")
 
 
@@ -1034,41 +999,6 @@ def test_campaign_binds_measurement_target_id_across_phases(tmp_path) -> None:
             run_id="p1-target-drift",
             parent_run="p0",
         )
-
-
-def test_measurement_target_identity_normalizes_ipv4_mapped_ipv6() -> None:
-    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
-
-    def identity(uri):
-        return campaign_module.measurement_target_identity(
-            spec,
-            {
-                "GRAPHSYMPERF_NEO4J_URI": uri,
-                "GRAPHSYMPERF_NEO4J_DATABASE": "neo4j",
-            },
-        )
-
-    assert identity("bolt://192.0.2.10:7687/neo4j") == identity(
-        "bolt://[::ffff:192.0.2.10]:7687/neo4j"
-    )
-
-
-def test_canonical_scoped_ipv6_preserves_zone_identity() -> None:
-    assert campaign_module._canonical_ip_address("fe80::1%en0") == "fe80::1%en0"
-    assert campaign_module._canonical_ip_address("fe80::1%25en0") == "fe80::1%en0"
-    assert campaign_module._canonical_ip_address(
-        "fe80::1%en0"
-    ) != campaign_module._canonical_ip_address("fe80::1%en1")
-    assert campaign_module._canonical_measurement_host(
-        "fe80::1%en0",
-        7687,
-    ) != campaign_module._canonical_measurement_host("fe80::1%en1", 7687)
-
-
-@pytest.mark.parametrize("address", ("fe80::1%", "fe80::1%bad zone", "192.0.2.1%en0"))
-def test_canonical_ip_address_rejects_invalid_scope_ids(address) -> None:
-    with pytest.raises(ValueError):
-        campaign_module._canonical_ip_address(address)
 
 
 def test_busy_measurement_target_never_publishes_a_campaign_run(tmp_path) -> None:
