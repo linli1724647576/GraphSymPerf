@@ -98,7 +98,7 @@ def test_evidence_payload_is_pickleable_and_round_trips_through_verified_envelop
 
     restored = pickle.loads(pickle.dumps(wrapped))
     verified = _persist_and_restore_explicit_evidence(restored)
-    envelope = sanitize_structure(verified)
+    envelope = sanitization_module._sanitize_parent_verified_structure(verified)
 
     assert set(envelope) == {"payload", "content_hash"}
     assert unwrap_evidence_payload(verified) == payload
@@ -441,6 +441,16 @@ def test_diagnostic_fields_clean_dotted_assignments_and_full_spaced_paths() -> N
         "passWord",
         "PASSWORDVALUE",
         "ACCESSTOKEN",
+        "TOKENVALUE",
+        "TOKENHEADER",
+        "AUTHHEADER",
+        "AUTHVALUE",
+        "CREDENTIALVALUE",
+        "CREDENTIALSVALUE",
+        "PASSWDVALUE",
+        "PWDVALUE",
+        "APIKEYHEADER",
+        "NEO4JPASSWORDHEADER",
     ),
 )
 def test_operational_sensitive_key_tokenizer_covers_common_naming_styles(
@@ -449,12 +459,39 @@ def test_operational_sensitive_key_tokenizer_covers_common_naming_styles(
     assert sanitize_structure({key: "opaque-credential"}) == {key: "<redacted>"}
 
 
+def test_compact_credential_grammar_composes_prefix_base_and_suffix() -> None:
+    for base in (
+        "auth",
+        "authorization",
+        "credential",
+        "credentials",
+        "passwd",
+        "password",
+        "pwd",
+        "secret",
+        "token",
+    ):
+        for suffix in ("", "value", "header"):
+            key = f"{base}{suffix}".upper()
+            assert sanitize_structure({key: "opaque-credential"}) == {
+                key: "<redacted>"
+            }
+    for prefix in ("neo4j", "client", "vendor"):
+        for base in ("password", "secret", "token"):
+            for suffix in ("", "value", "header"):
+                key = f"{prefix}{base}{suffix}".upper()
+                assert sanitize_structure({key: "opaque-credential"}) == {
+                    key: "<redacted>"
+                }
+
+
 @pytest.mark.parametrize(
     "key",
     (
         "compassWord",
         "tokenizer",
         "authorizationStatus",
+        "secretary",
         "passage",
         "accessTokenization",
     ),

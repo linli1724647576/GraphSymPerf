@@ -61,28 +61,33 @@ _CREDENTIAL_KEY_TOKENS = frozenset(
     }
 )
 _CREDENTIAL_KEY_SUFFIX_TOKENS = frozenset({"header", "value"})
-_COMPACT_CREDENTIAL_KEYS = frozenset(
+_COMPACT_CREDENTIAL_BASES = (
+    "authorization",
+    "credentials",
+    "credential",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "auth",
+    "pwd",
+    "apikey",
+)
+_COMPACT_CREDENTIAL_PREFIXES = frozenset(
     {
-        "accesstoken",
-        "accesstokenheader",
-        "accesstokenvalue",
-        "apikey",
-        "apikeyvalue",
-        "authorization",
-        "authorizationheader",
-        "authorizationvalue",
-        "clientsecret",
-        "clientsecretvalue",
-        "credentials",
-        "neo4jpassword",
-        "neo4jpasswordvalue",
-        "passwd",
-        "password",
-        "passwordheader",
-        "passwordvalue",
-        "pwd",
+        "access",
+        "adapter",
+        "client",
+        "config",
+        "database",
+        "db",
+        "driver",
+        "neo4j",
+        "service",
+        "vendor",
     }
 )
+_COMPACT_CREDENTIAL_SUFFIXES = ("header", "value")
 _PLAIN_INLINE_SECRET_NAME = (
     r"(?:password|passwd|pwd|secret|token|authorization|credential|api[_-]?key)"
 )
@@ -177,7 +182,7 @@ def is_sensitive_key(value: object) -> bool:
     if normalized is None:
         return False
     compact = re.sub(r"[^A-Za-z0-9]", "", normalized).lower()
-    if compact in _COMPACT_CREDENTIAL_KEYS:
+    if _is_compact_credential_key(compact):
         return True
     tokens = _key_tokens(normalized)
     for index, token in enumerate(tokens):
@@ -199,6 +204,34 @@ def is_sensitive_key(value: object) -> bool:
         ):
             return True
     return False
+
+
+def _is_compact_credential_key(value: str) -> bool:
+    stem = value
+    for suffix in _COMPACT_CREDENTIAL_SUFFIXES:
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    for base in _COMPACT_CREDENTIAL_BASES:
+        if not stem.endswith(base):
+            continue
+        prefix = stem[: -len(base)]
+        if _is_compact_credential_prefix(prefix):
+            return True
+    return False
+
+
+def _is_compact_credential_prefix(value: str) -> bool:
+    if not value:
+        return True
+    reachable = {0}
+    for index in range(len(value)):
+        if index not in reachable:
+            continue
+        for prefix in _COMPACT_CREDENTIAL_PREFIXES:
+            if value.startswith(prefix, index):
+                reachable.add(index + len(prefix))
+    return len(value) in reachable
 
 
 def _normalized_key(value: object) -> str | None:
@@ -257,7 +290,7 @@ def sanitize_text(
     rendered = _SENSITIVE_ASSIGNMENT.sub(r"\g<prefix><redacted>", rendered)
     rendered = _QUOTED_FILE_URI.sub("<file-uri>", rendered)
     rendered = _CONNECTION_URI.sub("<connection-uri>", rendered)
-    rendered = _SECRET_BEARING_TOKEN.sub(REDACTED, rendered)
+    rendered = _SECRET_BEARING_TOKEN.sub(_redact_secret_bearing_token, rendered)
     rendered = _QUOTED_ABSOLUTE_PATH.sub("<absolute-path>", rendered)
     rendered = _WINDOWS_ABSOLUTE_PATH.sub("<absolute-path>", rendered)
     rendered = _POSIX_ABSOLUTE_PATH.sub("<absolute-path>", rendered)
@@ -268,6 +301,14 @@ def sanitize_text(
     if limit is not None and len(rendered) > limit:
         rendered = rendered[: max(0, limit - 1)].rstrip() + "…"
     return rendered
+
+
+def _redact_secret_bearing_token(match: re.Match[str]) -> str:
+    token = match.group(0)
+    assignment_key = re.split(r"[:=]", token, maxsplit=1)[0].strip("'\"")
+    if is_sensitive_key(assignment_key) or "secret" in _key_tokens(token):
+        return REDACTED
+    return token
 
 
 def sanitize_structure(value: Any) -> Any:
