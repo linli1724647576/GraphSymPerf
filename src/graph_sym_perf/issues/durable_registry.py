@@ -44,6 +44,7 @@ from graph_sym_perf.validation.promotion import promote
 MAX_FAMILY_MEMBERS = 4096
 MAX_MEMBER_RAW_QUERY_BYTES = 64 * 1024
 MAX_COMPACT_FAMILY_PAYLOAD_BYTES = 16 * 1024
+MAX_COMPACT_UNION_AUDIT_BYTES = 4 * 1024
 
 
 def promote_unique_issue(
@@ -80,6 +81,7 @@ def promote_unique_issue(
     with lock_path.open("a+", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         _recover_family_transaction(root_path)
+        _recover_owner_renewal(root_path)
         _validate_known_diagnostics(known_path)
         _validate_family_overflow_diagnostics(root_path / "family_overflow.jsonl")
         records = _load_records(registry_path, review_path)
@@ -317,6 +319,7 @@ def committed_owner_outcome(root: str | Path, *, issue_id: str) -> dict[str, obj
     with (root_path / ".registry.lock").open("a+", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         _recover_family_transaction(root_path)
+        _recover_owner_renewal(root_path)
         records = _load_records(root_path / "registry.jsonl", root_path / "dedup_review.jsonl")
         owners = tuple(
             record
@@ -354,6 +357,7 @@ def renew_current_family_owner(root: str | Path, *, owner_issue_id: str) -> bool
     with (root_path / ".registry.lock").open("a+", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         _recover_family_transaction(root_path)
+        _recover_owner_renewal(root_path)
         records = _load_records(root_path / "registry.jsonl", root_path / "dedup_review.jsonl")
         owners = tuple(
             record
@@ -422,12 +426,6 @@ def _load_owner_evidence_unlocked(
 ) -> tuple[dict[str, object], object, object, Path]:
     """Validate a durable receipt, sealed issue chain, export, and owner binding."""
 
-    from graph_sym_perf.artifacts.store import (
-        ContentAddressedStore,
-        load_artifact_record,
-        verify_issue_hash_chain,
-    )
-
     required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
     index_path = root / "index" / f"{record.issue_id}.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))
@@ -448,6 +446,35 @@ def _load_owner_evidence_unlocked(
             )
         ):
             raise ValueError("committed family owner receipt is inconsistent")
+    issue_record, store, export_path = _verify_owner_receipt_unlocked(
+        root,
+        record,
+        receipt,
+        require_current_family=require_current_family,
+        allow_historical_family=allow_historical_family,
+    )
+    return receipt, issue_record, store, export_path
+
+
+def _verify_owner_receipt_unlocked(
+    root: Path,
+    record: VersionedIssueRecord,
+    receipt: Mapping[str, object],
+    *,
+    require_current_family: bool,
+    allow_historical_family: bool = False,
+) -> tuple[object, object, Path]:
+    """Verify sealed owner evidence independently of mutable index pointers."""
+
+    from graph_sym_perf.artifacts.store import (
+        ContentAddressedStore,
+        load_artifact_record,
+        verify_issue_hash_chain,
+    )
+
+    required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
+    if set(receipt) != required or receipt.get("issue_id") != record.issue_id:
+        raise ValueError("family owner receipt is incomplete")
     run_dir = root.parent.resolve()
     store_path = (run_dir / str(receipt["artifact_store"])).resolve()
     export_path = (run_dir / str(receipt["export_path"])).resolve()
@@ -495,7 +522,7 @@ def _load_owner_evidence_unlocked(
         raise ValueError("committed family owner artifact is stale")
     if hashlib.sha256(export_path.read_bytes()).hexdigest() != receipt["export_sha256"]:
         raise ValueError("committed family owner export is stale")
-    return receipt, issue_record, store, export_path
+    return issue_record, store, export_path
 
 
 def _verify_owner_materialization_against_durable(
@@ -540,7 +567,7 @@ def _renew_current_family_owner_unlocked(
     if _owner_commit_is_current(root, owner_record):
         return False
     try:
-        receipt, old_issue, store, export_path = _load_owner_evidence_unlocked(
+        receipt, old_issue, store, _old_export_path = _load_owner_evidence_unlocked(
             root,
             owner_record,
             require_current_family=False,
@@ -605,23 +632,241 @@ def _renew_current_family_owner_unlocked(
         "original_validation_ref": dict(owner_record.original_validation_ref or {}),
         "reduced_validation_ref": dict(owner_record.reduced_validation_ref or {}),
     }
-    _write_json_atomic(export_path, exported)
-    receipt = {
+    generation_name = (
+        f"{owner_issue_id}.{current.family_version_hash}.{current.decision_hash}.json"
+    )
+    generation_export_path = root / "submit-ready" / generation_name
+    _write_json_immutable(generation_export_path, exported)
+    new_receipt = {
         "artifact_store": receipt["artifact_store"],
-        "export_path": receipt["export_path"],
-        "export_sha256": hashlib.sha256(export_path.read_bytes()).hexdigest(),
+        "export_path": str(generation_export_path.relative_to(root.parent)),
+        "export_sha256": hashlib.sha256(generation_export_path.read_bytes()).hexdigest(),
         "issue_id": owner_issue_id,
         "issue_ref": asdict(issue_ref),
     }
-    _write_json_atomic(root / "index" / f"{owner_issue_id}.json", receipt)
-    _write_commit(root, owner_record, receipt)
+    old_commit = _load_owner_commit(root, owner_issue_id)
+    if _commit_receipt(old_commit) != receipt:
+        raise ValueError("family renewal old index and commit disagree")
+    journal: dict[str, object] = {
+        "schema": "owner-renewal-v1",
+        "owner_issue_id": owner_issue_id,
+        "owner_record_hash": _record_hash(owner_record),
+        "old_commit_record_hash": old_commit["registry_record_hash"],
+        "old_receipt": receipt,
+        "new_receipt": new_receipt,
+        "generation_export_sha256": new_receipt["export_sha256"],
+        "generation_issue_content_hash": issue_ref.content_hash,
+        "family_version_hash": current.family_version_hash,
+        "family_decision_hash": current.decision_hash,
+    }
+    journal["journal_hash"] = _hash_payload("owner-renewal-journal-v1", journal)
+    _write_json_atomic(root / "owner_renewal.pending.json", journal)
+    _after_owner_renewal_generation_write(root)
+    _apply_owner_renewal(root, journal)
+    return True
+
+
+def _after_owner_renewal_generation_write(_root: Path) -> None:
+    """Test-only crash seam after sealed generations and the durable journal."""
+
+
+def _after_owner_renewal_index_write(_root: Path) -> None:
+    """Test-only crash seam after advancing the renewal index pointer."""
+
+
+def _after_owner_renewal_commit_write(_root: Path) -> None:
+    """Test-only crash seam after advancing the renewal commit pointer."""
+
+
+def _recover_owner_renewal(root: Path) -> None:
+    path = root / "owner_renewal.pending.json"
+    if not path.is_file():
+        return
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("owner renewal journal must be an object")
+    journal_hash = payload.pop("journal_hash", None)
+    if journal_hash != _hash_payload("owner-renewal-journal-v1", payload):
+        raise ValueError("owner renewal journal hash is invalid")
+    payload["journal_hash"] = journal_hash
+    _apply_owner_renewal(root, payload)
+
+
+def _apply_owner_renewal(root: Path, payload: Mapping[str, object]) -> None:
+    required = {
+        "schema",
+        "owner_issue_id",
+        "owner_record_hash",
+        "old_commit_record_hash",
+        "old_receipt",
+        "new_receipt",
+        "generation_export_sha256",
+        "generation_issue_content_hash",
+        "family_version_hash",
+        "family_decision_hash",
+        "journal_hash",
+    }
+    body = {name: value for name, value in payload.items() if name != "journal_hash"}
+    if (
+        set(payload) != required
+        or payload.get("schema") != "owner-renewal-v1"
+        or payload.get("journal_hash")
+        != _hash_payload("owner-renewal-journal-v1", body)
+    ):
+        raise ValueError("owner renewal journal is incomplete")
+    issue_id = str(payload["owner_issue_id"])
+    records = _load_records(root / "registry.jsonl", root / "dedup_review.jsonl")
+    owners = tuple(
+        record
+        for record in records
+        if record.issue_id == issue_id and record.stage is PipelineStage.SUBMIT_READY
+    )
+    if len(owners) != 1 or payload["owner_record_hash"] != _record_hash(owners[0]):
+        raise ValueError("owner renewal journal does not bind the current owner")
+    owner = owners[0]
+    old_receipt = _validate_receipt_payload(payload["old_receipt"], issue_id=issue_id)
+    new_receipt = _validate_receipt_payload(payload["new_receipt"], issue_id=issue_id)
+    if old_receipt == new_receipt:
+        raise ValueError("owner renewal journal does not advance a generation")
+    issue_record, _store, generation_export = _verify_owner_receipt_unlocked(
+        root,
+        owner,
+        new_receipt,
+        require_current_family=True,
+    )
+    family = issue_record.payload.get("family_decision")
+    fingerprint = family.get("fingerprint") if isinstance(family, Mapping) else None
+    exported = json.loads(generation_export.read_text(encoding="utf-8"))
+    expected_generation_name = (
+        f"{issue_id}.{payload['family_version_hash']}."
+        f"{payload['family_decision_hash']}.json"
+    )
+    issue_ref = new_receipt["issue_ref"]
+    if (
+        not isinstance(family, Mapping)
+        or not isinstance(fingerprint, Mapping)
+        or not isinstance(exported, dict)
+        or generation_export.parent != root.parent.resolve() / "issues" / "submit-ready"
+        or generation_export.name != expected_generation_name
+        or payload["generation_export_sha256"] != new_receipt["export_sha256"]
+        or not isinstance(issue_ref, Mapping)
+        or payload["generation_issue_content_hash"] != issue_ref.get("content_hash")
+        or family.get("family_version_hash") != payload["family_version_hash"]
+        or family.get("decision_hash") != payload["family_decision_hash"]
+        or not _generation_export_binds_owner(exported, issue_record.payload, owner)
+    ):
+        raise ValueError("owner renewal generation binding is invalid")
+    index_path = root / "index" / f"{issue_id}.json"
+    index = _load_owner_index(index_path, issue_id=issue_id)
+    commit = _load_owner_commit(root, issue_id)
+    commit_receipt = _commit_receipt(commit)
+    old_commit_hash = payload["old_commit_record_hash"]
+    current_hash = _record_hash(owner)
+    if index == old_receipt:
+        if commit_receipt != old_receipt or commit.get("registry_record_hash") != old_commit_hash:
+            raise ValueError("owner renewal old pointer state is invalid")
+        _write_json_atomic(index_path, new_receipt)
+        _after_owner_renewal_index_write(root)
+        index = new_receipt
+    if index != new_receipt:
+        raise ValueError("owner renewal index is outside the journal state")
+    if commit_receipt == old_receipt:
+        if commit.get("registry_record_hash") != old_commit_hash:
+            raise ValueError("owner renewal old commit binding is invalid")
+        _write_commit(root, owner, new_receipt)
+        _after_owner_renewal_commit_write(root)
+        commit = _load_owner_commit(root, issue_id)
+        commit_receipt = _commit_receipt(commit)
+    if commit_receipt != new_receipt or commit.get("registry_record_hash") != current_hash:
+        raise ValueError("owner renewal commit is outside the journal state")
+    if not _owner_commit_is_current(root, owner):
+        raise ValueError("owner renewal pointers did not converge")
     _load_owner_evidence_unlocked(
         root,
-        owner_record,
+        owner,
         require_current_family=True,
         require_commit=True,
     )
-    return True
+    (root / "owner_renewal.pending.json").unlink()
+    _fsync_directory(root)
+
+
+def _generation_export_binds_owner(
+    exported: Mapping[str, object],
+    issue_payload: Mapping[str, object],
+    owner: VersionedIssueRecord,
+) -> bool:
+    family = issue_payload.get("family_decision")
+    fingerprint = family.get("fingerprint") if isinstance(family, Mapping) else None
+    if not isinstance(family, Mapping) or not isinstance(fingerprint, Mapping):
+        return False
+    expected = {
+        "issue_id": owner.issue_id,
+        "family_id": family.get("family_id"),
+        "family_version_hash": family.get("family_version_hash"),
+        "family_decision_hash": family.get("decision_hash"),
+        "original_validation_hash": owner.original_validation_hash,
+        "reduced_validation_hash": owner.reduced_validation_hash,
+        "original_validation_ref": dict(owner.original_validation_ref or {}),
+        "reduced_validation_ref": dict(owner.reduced_validation_ref or {}),
+        "exact_signature": fingerprint.get("exact"),
+        "structural_signature": fingerprint.get("structural"),
+        "submission_path": fingerprint.get("submission_path"),
+        "reduced_validation_phenotype": fingerprint.get(
+            "reduced_validation_phenotype"
+        ),
+    }
+    return all(
+        stable_json_dumps(exported.get(name)) == stable_json_dumps(value)
+        for name, value in expected.items()
+    )
+
+
+def _validate_receipt_payload(value: object, *, issue_id: str) -> dict[str, object]:
+    required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
+    if (
+        not isinstance(value, dict)
+        or set(value) != required
+        or value.get("issue_id") != issue_id
+    ):
+        raise ValueError("owner renewal receipt is incomplete")
+    return dict(value)
+
+
+def _load_owner_index(path: Path, *, issue_id: str) -> dict[str, object]:
+    return _validate_receipt_payload(
+        json.loads(path.read_text(encoding="utf-8")),
+        issue_id=issue_id,
+    )
+
+
+def _load_owner_commit(root: Path, issue_id: str) -> dict[str, object]:
+    payload = json.loads(
+        (root / "commits" / f"{issue_id}.json").read_text(encoding="utf-8")
+    )
+    if not isinstance(payload, dict) or set(payload) != {
+        "artifact_store",
+        "export_path",
+        "export_sha256",
+        "issue_id",
+        "issue_ref",
+        "registry_record_hash",
+    }:
+        raise ValueError("owner commit is incomplete")
+    return payload
+
+
+def _commit_receipt(commit: Mapping[str, object]) -> dict[str, object]:
+    return {
+        name: commit[name]
+        for name in (
+            "artifact_store",
+            "export_path",
+            "export_sha256",
+            "issue_id",
+            "issue_ref",
+        )
+    }
 
 
 def durable_family_credentials_are_current(
@@ -649,6 +894,7 @@ def durable_family_credentials_are_current(
         with lock_path.open("a+", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             _recover_family_transaction(root_path)
+            _recover_owner_renewal(root_path)
             records = _load_records(
                 root_path / "registry.jsonl",
                 root_path / "dedup_review.jsonl",
@@ -691,6 +937,7 @@ def durable_family_payload_is_current(
         with (root_path / ".registry.lock").open("a+", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             _recover_family_transaction(root_path)
+            _recover_owner_renewal(root_path)
             if isinstance(issue_payload, Mapping):
                 issue_id = str(issue_payload.get("issue_id", ""))
                 records = _load_records(
@@ -882,8 +1129,54 @@ def _historical_family_fingerprint_proof(
         added = tuple(str(value) for value in audit["added_issue_ids"])
         if any(issue_id not in working for issue_id in added):
             raise ValueError("historical family audit additions do not replay")
+        after_records = tuple(working.values())
+        after_states = _canonical_family_component_states(after_records)
+        affected_after = [
+            state for state in after_states if set(added).intersection(state[1])
+        ]
+        if (
+            len(affected_after) != 1
+            or not set(added) <= affected_after[0][1]
+        ):
+            raise ValueError("historical family audit additions span components")
+        actual_after = [affected_after[0][0]]
+        if stable_json_dumps(actual_after) != stable_json_dumps(
+            audit["after_components"]
+        ):
+            raise ValueError("historical family audit after snapshot does not replay")
+        after_ids = set(affected_after[0][1])
+        unrelated_after = [
+            snapshot for snapshot, members in after_states if members != after_ids
+        ]
         for issue_id in added:
             del working[issue_id]
+        before_records = tuple(working.values())
+        expected_before_ids = after_ids - set(added)
+        before_states = _canonical_family_component_states(before_records)
+        affected_before = [
+            state for state in before_states if expected_before_ids.intersection(state[1])
+        ]
+        actual_before_ids = (
+            set().union(*(members for _snapshot, members in affected_before))
+            if affected_before
+            else set()
+        )
+        if actual_before_ids != expected_before_ids:
+            raise ValueError("historical family audit before component is not closed")
+        actual_before = [snapshot for snapshot, _members in affected_before]
+        if stable_json_dumps(actual_before) != stable_json_dumps(
+            audit["before_components"]
+        ):
+            raise ValueError("historical family audit before snapshot does not replay")
+        unrelated_before = [
+            snapshot
+            for snapshot, members in before_states
+            if not expected_before_ids.intersection(members)
+        ]
+        if stable_json_dumps(unrelated_after) != stable_json_dumps(
+            unrelated_before
+        ):
+            raise ValueError("historical family audit changed an unrelated component")
         if owner_id not in working:
             continue
         proof = _rebuild_historical_owner_snapshot(
@@ -895,6 +1188,83 @@ def _historical_family_fingerprint_proof(
         if proof is not None:
             return proof
     raise ValueError("historical family proof does not replay from durable records")
+
+
+def _canonical_family_component_states(
+    records: tuple[VersionedIssueRecord, ...],
+) -> tuple[tuple[dict[str, object], set[str]], ...]:
+    """Rebuild compact family components solely from raw member fingerprints."""
+
+    if not records:
+        return ()
+    index = IssueFamilyIndex()
+    fingerprints: dict[str, IssueFingerprint] = {}
+    for record in sorted(records, key=lambda item: item.issue_id):
+        fingerprint = _record_fingerprint(record)
+        fingerprints[record.issue_id] = fingerprint
+        index.add(fingerprint, issue_id=record.issue_id)
+    grouped: dict[str, list[str]] = {}
+    owner_decisions: dict[str, object] = {}
+    for issue_id, fingerprint in sorted(fingerprints.items()):
+        try:
+            decision = index.reissue_owner(fingerprint, issue_id=issue_id)
+            owner_decisions[str(decision.family_id)] = decision
+        except ValueError:
+            decision = index.reissue_member(fingerprint, issue_id=issue_id)
+        grouped.setdefault(str(decision.family_id), []).append(issue_id)
+    snapshots: list[tuple[dict[str, object], set[str]]] = []
+    for family_id, members_value in sorted(grouped.items()):
+        members = sorted(members_value)
+        decision = owner_decisions.get(family_id)
+        if decision is None:
+            raise ValueError("canonical family component has no deterministic owner")
+        proof_root = family_member_proof_root(
+            (member, fingerprints[member]) for member in members
+        )
+        snapshots.append(
+            (
+                {
+                    "family_id": family_id,
+                    "member_count": len(members),
+                    "members_root": _hash_payload(
+                        "durable-family-audit-members-v1", members
+                    ),
+                    "member_proof_root": proof_root,
+                    "owner_issue_id": str(decision.owner_issue_id),
+                    "family_version_hash": str(decision.family_version_hash),
+                    "family_decision_hash": str(decision.decision_hash),
+                    "version_decision_root": _hash_payload(
+                        "durable-family-audit-version-decision-v1",
+                        {
+                            "family_version_hash": str(
+                                decision.family_version_hash
+                            ),
+                            "family_decision_hash": str(decision.decision_hash),
+                        },
+                    ),
+                },
+                set(members),
+            )
+        )
+    return tuple(snapshots)
+
+
+def _canonical_component_snapshots(
+    records: tuple[VersionedIssueRecord, ...],
+    affected_ids: set[str],
+) -> list[dict[str, object]]:
+    components = _canonical_family_component_states(records)
+    selected = [
+        state for state in components if affected_ids.intersection(state[1])
+    ]
+    selected_ids = (
+        set().union(*(members for _snapshot, members in selected))
+        if selected
+        else set()
+    )
+    if selected_ids != affected_ids:
+        raise ValueError("family audit affected component is not closed")
+    return [snapshot for snapshot, _members in selected]
 
 
 def _rebuild_historical_owner_snapshot(
@@ -1448,51 +1818,25 @@ def _commit_family_transaction(
     )
     if removed_issue_ids:
         raise ValueError("formal family transactions cannot remove durable members")
+    before_components = _canonical_component_snapshots(
+        previous_records,
+        {record.issue_id for record in before_component},
+    )
+    after_components = _canonical_component_snapshots(
+        records,
+        {record.issue_id for record in after_component},
+    )
     previous_audits = _load_union_audits(root / "family_unions.jsonl")
-    audit = {
-        "previous_union_id": (
-            previous_audits[-1]["union_id"] if previous_audits else None
+    audit = _build_union_audit(
+        previous_union_id=(
+            str(previous_audits[-1]["union_id"]) if previous_audits else None
         ),
-        "added_issue_ids": added_issue_ids,
-        "family_ids_before": sorted({record.family_id for record in before_component}),
-        "family_ids_after": sorted({record.family_id for record in after_component}),
-        "member_count_before": len(before_component),
-        "member_count_after": len(after_component),
-        "members_root_before": _hash_payload(
-            "durable-family-audit-members-v1",
-            sorted(record.issue_id for record in before_component),
-        ),
-        "members_root_after": _hash_payload(
-            "durable-family-audit-members-v1",
-            sorted(record.issue_id for record in after_component),
-        ),
-        "owners_before": sorted(
-            record.issue_id
-            for record in before_component
-            if record.stage is PipelineStage.SUBMIT_READY
-        ),
-        "owners_after": sorted(
-            record.issue_id
-            for record in after_component
-            if record.stage is PipelineStage.SUBMIT_READY
-        ),
-        "member_proof_root_after": (
-            family_member_proof_root(
-                (record.issue_id, _record_fingerprint(record))
-                for record in after_component
-            )
-            if after_component
-            else None
-        ),
-        "decision_hashes_root_after": _hash_payload(
-            "durable-family-audit-decisions-v1",
-            sorted(
-                (record.issue_id, record.family_decision_hash)
-                for record in after_component
-            ),
-        ),
-    }
-    audit["union_id"] = _hash_payload("durable-family-union-v1", audit)
+        added_issue_ids=added_issue_ids,
+        before_components=before_components,
+        after_components=after_components,
+    )
+    if len(_serialized_payload_line(audit)) > MAX_COMPACT_UNION_AUDIT_BYTES:
+        raise ValueError("compact family union audit exceeds its durable budget")
     payload: dict[str, object] = {
         "registry_records": [_record_payload(record) for record in registry_records],
         "review_records": [_record_payload(record) for record in review_records],
@@ -1515,6 +1859,23 @@ def _recover_family_transaction(root: Path) -> None:
         raise ValueError("family transaction journal hash is invalid")
     payload["transaction_hash"] = transaction_hash
     _apply_family_transaction(root, payload)
+
+
+def _build_union_audit(
+    *,
+    previous_union_id: str | None,
+    added_issue_ids: list[str],
+    before_components: list[dict[str, object]],
+    after_components: list[dict[str, object]],
+) -> dict[str, object]:
+    audit: dict[str, object] = {
+        "previous_union_id": previous_union_id,
+        "added_issue_ids": added_issue_ids,
+        "before_components": before_components,
+        "after_components": after_components,
+    }
+    audit["union_id"] = _hash_payload("durable-family-union-v1", audit)
+    return audit
 
 
 def _apply_family_transaction(root: Path, payload: Mapping[str, object]) -> None:
@@ -1541,8 +1902,32 @@ def _append_union_audit_once(path: Path, audit: dict[str, object]) -> None:
     if any(value.get("union_id") == union_id for value in audits):
         return
     expected_previous = audits[-1]["union_id"] if audits else None
-    if audit.get("previous_union_id") != expected_previous:
+    body = {name: value for name, value in audit.items() if name != "union_id"}
+    added = audit.get("added_issue_ids")
+    before_components = audit.get("before_components")
+    after_components = audit.get("after_components")
+    if (
+        set(audit)
+        != {
+            "previous_union_id",
+            "added_issue_ids",
+            "before_components",
+            "after_components",
+            "union_id",
+        }
+        or audit.get("previous_union_id") != expected_previous
+        or union_id != _hash_payload("durable-family-union-v1", body)
+        or not isinstance(added, list)
+        or not added
+        or added != sorted(set(added))
+        or any(not isinstance(issue_id, str) or not issue_id for issue_id in added)
+        or not isinstance(before_components, list)
+        or not isinstance(after_components, list)
+        or len(_serialized_payload_line(audit)) > MAX_COMPACT_UNION_AUDIT_BYTES
+    ):
         raise ValueError("family union audit chain is discontinuous")
+    _validate_audit_components(before_components)
+    _validate_audit_components(after_components)
     _append_payload(path, audit)
 
 
@@ -1559,20 +1944,83 @@ def _load_union_audits(path: Path) -> tuple[dict[str, object], ...]:
         union_id = value.get("union_id")
         body = {name: item for name, item in value.items() if name != "union_id"}
         added = value.get("added_issue_ids")
+        before_components = value.get("before_components")
+        after_components = value.get("after_components")
         if (
-            not isinstance(union_id, str)
+            set(value)
+            != {
+                "previous_union_id",
+                "added_issue_ids",
+                "before_components",
+                "after_components",
+                "union_id",
+            }
+            or not isinstance(union_id, str)
             or union_id in seen
             or union_id != _hash_payload("durable-family-union-v1", body)
             or value.get("previous_union_id") != previous
             or not isinstance(added, list)
+            or not added
             or any(not isinstance(issue_id, str) or not issue_id for issue_id in added)
             or added != sorted(set(added))
+            or not isinstance(before_components, list)
+            or not isinstance(after_components, list)
+            or len(line.encode("utf-8")) + 1 > MAX_COMPACT_UNION_AUDIT_BYTES
         ):
             raise ValueError("family union audit chain is invalid")
+        _validate_audit_components(before_components)
+        _validate_audit_components(after_components)
         seen.add(union_id)
         previous = union_id
         audits.append(value)
     return tuple(audits)
+
+
+def _validate_audit_components(components: list[object]) -> None:
+    required = {
+        "family_id",
+        "member_count",
+        "members_root",
+        "member_proof_root",
+        "owner_issue_id",
+        "family_version_hash",
+        "family_decision_hash",
+        "version_decision_root",
+    }
+    family_ids: set[str] = set()
+    for component in components:
+        if not isinstance(component, Mapping) or set(component) != required:
+            raise ValueError("family union audit component is incomplete")
+        if (
+            not isinstance(component["family_id"], str)
+            or not component["family_id"]
+            or component["family_id"] in family_ids
+            or not isinstance(component["member_count"], int)
+            or component["member_count"] < 1
+            or any(
+                not isinstance(component[name], str)
+                or len(component[name]) != 64
+                for name in (
+                    "members_root",
+                    "member_proof_root",
+                    "family_version_hash",
+                    "family_decision_hash",
+                    "version_decision_root",
+                )
+            )
+            or not isinstance(component["owner_issue_id"], str)
+            or not component["owner_issue_id"]
+            or component["version_decision_root"]
+            != _hash_payload(
+                "durable-family-audit-version-decision-v1",
+                {
+                    "family_version_hash": component["family_version_hash"],
+                    "family_decision_hash": component["family_decision_hash"],
+                },
+            )
+        ):
+            raise ValueError("family union audit component hash is invalid")
+        family_ids.add(str(component["family_id"]))
 
 
 def _write_payload_lines_atomic(path: Path, payloads: list[object]) -> None:
@@ -1582,8 +2030,7 @@ def _write_payload_lines_atomic(path: Path, payloads: list[object]) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             for payload in payloads:
-                json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
-                stream.write("\n")
+                stream.write(_serialized_payload_line(payload).decode("utf-8"))
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -1594,6 +2041,36 @@ def _write_payload_lines_atomic(path: Path, payloads: list[object]) -> None:
 
 def _write_json_atomic(path: Path, payload: Mapping[str, object]) -> None:
     _write_payload_lines_atomic(path, [payload])
+
+
+def _serialized_payload_line(payload: object) -> bytes:
+    return (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+
+
+def _write_json_immutable(path: Path, payload: Mapping[str, object]) -> None:
+    """Create one canonical generation without replacing an existing inode."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_bytes() != encoded:
+                raise ValueError("immutable owner renewal generation already differs")
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _load_records(*paths: Path) -> tuple[VersionedIssueRecord, ...]:
@@ -1684,17 +2161,17 @@ def _record_hash(record: VersionedIssueRecord) -> str:
 
 
 def _owner_commit_is_current(root: Path, record: VersionedIssueRecord) -> bool:
-    path = root / "commits" / f"{record.issue_id}.json"
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        commit = _load_owner_commit(root, record.issue_id)
+        index = _load_owner_index(
+            root / "index" / f"{record.issue_id}.json",
+            issue_id=record.issue_id,
+        )
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
         return False
-    required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
     return bool(
-        isinstance(payload, dict)
-        and payload.get("issue_id") == record.issue_id
-        and all(name in payload for name in required)
-        and payload.get("registry_record_hash") == _record_hash(record)
+        _commit_receipt(commit) == index
+        and commit.get("registry_record_hash") == _record_hash(record)
     )
 
 
@@ -1729,6 +2206,7 @@ def _fsync_directory(path: Path) -> None:
 
 __all__ = [
     "MAX_COMPACT_FAMILY_PAYLOAD_BYTES",
+    "MAX_COMPACT_UNION_AUDIT_BYTES",
     "MAX_FAMILY_MEMBERS",
     "MAX_MEMBER_RAW_QUERY_BYTES",
     "committed_owner_outcome",

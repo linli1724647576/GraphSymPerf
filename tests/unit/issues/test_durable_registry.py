@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import hashlib
 import itertools
 import json
 from pathlib import Path
@@ -1242,6 +1243,101 @@ def test_historical_compact_proof_rejects_missing_reordered_or_rewritten_audit(
             old_family_payload,
             old_clearance_payload,
         )
+
+
+@pytest.mark.parametrize(
+    "attack",
+    ("members_root_before", "unrelated_added_member", "event_reorder"),
+)
+def test_historical_reverse_rejects_semantic_audit_attack_after_full_rehash(
+    tmp_path,
+    attack,
+) -> None:
+    fingerprint = _fingerprint()
+    unrelated_fingerprint = fingerprint_issue(
+        FingerprintSubject(
+            **{
+                **_subject_values(changed=True),
+                "submission_path": "absolute",
+                "reduced_validation_phenotype": "absolute:stable:b",
+            }
+        )
+    )
+    index = IssueFamilyIndex()
+    old_decision = index.add(fingerprint, issue_id="z-old-owner")
+    unrelated_decision = index.add(
+        unrelated_fingerprint, issue_id="unrelated-owner"
+    )
+    old_record = _formal_family_record(
+        fingerprint, old_decision, stage=PipelineStage.SUBMIT_READY
+    )
+    unrelated_record = _formal_family_record(
+        unrelated_fingerprint,
+        unrelated_decision,
+        stage=PipelineStage.SUBMIT_READY,
+    )
+    old_clearance = IssueRegistry().duplicate_clearance_for_family(
+        old_decision, (old_record,)
+    )
+    old_family_payload = compact_family_decision_payload(old_decision)
+    old_clearance_payload = compact_duplicate_clearance_payload(old_clearance)
+    previous = (old_record, unrelated_record)
+    for issue_id in ("b-middle-owner", "a-current-owner"):
+        candidate_decision = index.add(fingerprint, issue_id=issue_id)
+        candidate = _formal_family_record(
+            fingerprint, candidate_decision, stage=PipelineStage.REDUCED_VALID
+        )
+        after = _records_with_current_family(
+            index,
+            (*previous, candidate),
+            family_id=str(candidate_decision.family_id),
+        )
+        _commit_family_transaction(
+            tmp_path,
+            previous_records=previous,
+            records=after,
+        )
+        previous = after
+    audit_path = tmp_path / "family_unions.jsonl"
+    audits = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    assert all("before_components" in audit and "after_components" in audit for audit in audits)
+    assert all(
+        "member_ids" not in component
+        for audit in audits
+        for component in (*audit["before_components"], *audit["after_components"])
+    )
+    if attack == "members_root_before":
+        audits[0]["before_components"][0]["members_root"] = "0" * 64
+    elif attack == "unrelated_added_member":
+        audits[1]["added_issue_ids"].append("unrelated-owner")
+        audits[1]["added_issue_ids"].sort()
+    else:
+        audits.reverse()
+    _rewrite_union_audit_chain(audit_path, audits)
+
+    with pytest.raises(ValueError, match="audit|component|semantic"):
+        _historical_family_fingerprint_proof(
+            tmp_path,
+            old_family_payload,
+            old_clearance_payload,
+        )
+
+
+def _rewrite_union_audit_chain(path: Path, audits: list[dict[str, object]]) -> None:
+    previous = None
+    encoded: list[str] = []
+    for audit in audits:
+        body = {name: value for name, value in audit.items() if name != "union_id"}
+        body["previous_union_id"] = previous
+        union_id = hashlib.sha256(
+            (
+                "durable-family-union-v1\0" + stable_json_dumps(body)
+            ).encode("utf-8")
+        ).hexdigest()
+        payload = {**body, "union_id": union_id}
+        encoded.append(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        previous = union_id
+    path.write_text("\n".join(encoded) + "\n")
 
 
 @pytest.mark.parametrize("attack", ("missing", "conflicting", "multiple_submit_ready", "owner_absent"))

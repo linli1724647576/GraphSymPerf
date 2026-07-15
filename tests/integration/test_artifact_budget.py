@@ -30,8 +30,12 @@ from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
 from graph_sym_perf.issues.commands import IssueCommands
 from graph_sym_perf.issues.durable_registry import (
+    MAX_COMPACT_UNION_AUDIT_BYTES,
+    _build_union_audit,
     _commit_family_transaction,
+    _hash_payload as _durable_hash_payload,
     _records_with_current_family,
+    _serialized_payload_line,
     durable_family_payload_is_current,
 )
 from graph_sym_perf.issues.dedup import (
@@ -1508,7 +1512,7 @@ def test_complete_one_thousand_accepted_pair_worker_shard_stays_below_500_mb(tmp
     assert sum(path.stat().st_size for path in shard.rglob("*") if path.is_file()) <= 500 * 1024 * 1024
 
 
-def test_one_thousand_member_compact_family_proof_overhead_is_bounded_and_near_linear(
+def test_one_thousand_member_compact_family_proof_overhead_is_bounded(
     tmp_path,
 ) -> None:
     fingerprints = tuple(
@@ -1573,6 +1577,10 @@ def test_one_thousand_member_compact_family_proof_overhead_is_bounded_and_near_l
     owner_payload_sizes: list[int] = []
     serialized_versions: list[bytes] = []
     descriptors: list[dict[str, object]] = []
+    serialized_union_audit_bytes = 0
+    maximum_union_audit_bytes = 0
+    previous_component: dict[str, object] | None = None
+    previous_union_id: str | None = None
     for member_count, (member_id, member_fingerprint) in enumerate(proof, start=1):
         descriptors.append(
             {
@@ -1663,18 +1671,51 @@ def test_one_thousand_member_compact_family_proof_overhead_is_bounded_and_near_l
         serialized_versions.append(encoded)
         owner_payload_sizes.append(len(encoded))
         store.put_json(f"owner-family-version-{member_count}", version_payload)
+        component = {
+            "family_id": family_id,
+            "member_count": member_count,
+            "members_root": _durable_hash_payload(
+                "durable-family-audit-members-v1",
+                sorted(member for member, _fingerprint in proof[:member_count]),
+            ),
+            "member_proof_root": member_proof_root,
+            "owner_issue_id": owner_issue_id,
+            "family_version_hash": family_version_hash,
+            "family_decision_hash": family_payload["decision_hash"],
+            "version_decision_root": _durable_hash_payload(
+                "durable-family-audit-version-decision-v1",
+                {
+                    "family_version_hash": family_version_hash,
+                    "family_decision_hash": family_payload["decision_hash"],
+                },
+            ),
+        }
+        if previous_component is not None:
+            audit = _build_union_audit(
+                previous_union_id=previous_union_id,
+                added_issue_ids=[member_id],
+                before_components=[previous_component],
+                after_components=[component],
+            )
+            encoded_audit_bytes = len(_serialized_payload_line(audit))
+            serialized_union_audit_bytes += encoded_audit_bytes
+            maximum_union_audit_bytes = max(
+                maximum_union_audit_bytes,
+                encoded_audit_bytes,
+            )
+            previous_union_id = str(audit["union_id"])
+        previous_component = component
     after_cas_bytes = sum(
         path.stat().st_size for path in store.root.rglob("*") if path.is_file()
     )
     cas_new_bytes = after_cas_bytes - before_cas_bytes
     max_owner_artifact_payload_bytes = max(owner_payload_sizes)
-    compact_union_audit_upper_bound = 1000 * 2048
+    compact_union_audit_upper_bound = 1000 * MAX_COMPACT_UNION_AUDIT_BYTES
     family_proof_overhead_upper_bound = (
         registry_review_raw_bytes
         + cas_new_bytes
         + compact_union_audit_upper_bound
     )
-
     assert family_payload["member_proof_root"] == family_root
     assert fingerprints[-1].reduced_query_a.encode("utf-8") not in b"\n".join(
         serialized_versions
@@ -1682,6 +1723,8 @@ def test_one_thousand_member_compact_family_proof_overhead_is_bounded_and_near_l
     assert max_owner_artifact_payload_bytes < 16 * 1024
     assert registry_review_raw_bytes < 2 * 1024 * 1024
     assert cas_new_bytes < 16 * 1024 * 1024
+    assert maximum_union_audit_bytes <= MAX_COMPACT_UNION_AUDIT_BYTES
+    assert serialized_union_audit_bytes <= compact_union_audit_upper_bound
     # This strict bound covers only durable family-proof records, rolling compact
     # family envelopes and the union-audit reserve. Validation, reduction, runtime,
     # candidate and other formal run artifacts are deliberately outside this metric.
@@ -1762,10 +1805,96 @@ def test_complete_production_family_path_scales_near_linearly_at_eight_and_sixte
     assert _tree_file_bytes(run_dir) <= 500 * 1024 * 1024
 
 
-def test_compact_owner_commit_to_renew_crash_recovers_through_cli_export(
+@pytest.mark.parametrize(
+    "crash_seam",
+    (
+        "_after_owner_renewal_generation_write",
+        "_after_owner_renewal_index_write",
+        "_after_owner_renewal_commit_write",
+    ),
+)
+def test_compact_owner_renewal_transaction_recovers_every_pointer_window(
     monkeypatch,
     tmp_path,
+    crash_seam,
 ) -> None:
+    run_dir, store, owner_index, old_export, old_export_bytes = (
+        _crash_production_owner_renewal(
+            monkeypatch,
+            tmp_path,
+            crash_seam=crash_seam,
+        )
+    )
+    pending = run_dir / "issues" / "owner_renewal.pending.json"
+    assert pending.is_file()
+    monkeypatch.setattr(
+        f"graph_sym_perf.issues.durable_registry.{crash_seam}",
+        lambda _root: None,
+        raising=False,
+    )
+
+    status, result = _issue_export_with_timeout(
+        owner_index,
+        run_dir / "developer-exports" / f"recovered-{crash_seam}.json",
+    )
+
+    assert status == "ok", result
+    index = json.loads(owner_index.read_text())
+    commit = json.loads(
+        (run_dir / "issues" / "commits" / f"{index['issue_id']}.json").read_text()
+    )
+    assert all(commit[name] == index[name] for name in index)
+    assert old_export.read_bytes() == old_export_bytes
+    generation_export = run_dir / index["export_path"]
+    assert generation_export != old_export
+    assert hashlib.sha256(generation_export.read_bytes()).hexdigest() == index["export_sha256"]
+    renewed_issue = load_artifact_record(store, index["issue_ref"])
+    assert renewed_issue.payload["family_decision"]["member_count"] == 2
+    verify_issue_hash_chain(store, renewed_issue, run_dir=run_dir)
+    assert not pending.exists()
+
+
+@pytest.mark.parametrize("attack", ("missing", "tamper"))
+def test_compact_owner_renewal_pending_journal_attack_fails_closed(
+    monkeypatch,
+    tmp_path,
+    attack,
+) -> None:
+    run_dir, _store, owner_index, _old_export, _old_bytes = (
+        _crash_production_owner_renewal(
+            monkeypatch,
+            tmp_path,
+            crash_seam="_after_owner_renewal_index_write",
+        )
+    )
+    pending = run_dir / "issues" / "owner_renewal.pending.json"
+    if attack == "missing":
+        pending.unlink()
+    else:
+        payload = json.loads(pending.read_text())
+        payload["new_receipt"]["export_sha256"] = "0" * 64
+        pending.write_text(json.dumps(payload) + "\n")
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._after_owner_renewal_index_write",
+        lambda _root: None,
+        raising=False,
+    )
+
+    status, result = _issue_export_with_timeout(
+        owner_index,
+        run_dir / "developer-exports" / f"attacked-{attack}.json",
+    )
+
+    assert status == "error"
+    assert "IssueGateError" in result
+
+
+def _crash_production_owner_renewal(
+    monkeypatch,
+    tmp_path,
+    *,
+    crash_seam: str,
+):
     run_dir = tmp_path / "run"
     store = ContentAddressedStore(
         run_dir / "shards" / "neo4j-000" / "artifacts",
@@ -1776,9 +1905,9 @@ def test_compact_owner_commit_to_renew_crash_recovers_through_cli_export(
         environment={"GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "f" * 64},
         run_dir=run_dir,
     )
-    task = ShardTask(TargetSystem.NEO4J, 0, 7, 3, 3, 600)
+    task = ShardTask(TargetSystem.NEO4J, 0, 7, 2, 2, 600)
     cases = sorted(
-        (_production_family_case(index) for index in range(3)),
+        (_production_family_case(index) for index in range(2)),
         key=lambda case: deterministic_issue_id(case[0], case[1]),
     )
     graph_snapshot = cases[0][0].manifest.graph_snapshot
@@ -1787,53 +1916,25 @@ def test_compact_owner_commit_to_renew_crash_recovers_through_cli_export(
         "\n".join(graph_snapshot.statements).encode(),
         media_type="text/plain; charset=utf-8",
     )
-    renewals = 0
-
-    def crash_second_renewal(_root):
-        nonlocal renewals
-        renewals += 1
-        if renewals == 2:
-            raise OSError("injected commit-to-renew crash")
-
     monkeypatch.setattr(
-        "graph_sym_perf.issues.durable_registry._before_owner_artifact_renewal",
-        crash_second_renewal,
+        f"graph_sym_perf.issues.durable_registry.{crash_seam}",
+        lambda _root: (_ for _ in ()).throw(OSError(f"injected {crash_seam}")),
+        raising=False,
     )
     first = _persist_production_family_case(
         pipeline, store, task, cases[0], graph_ref
     )
-    second = _persist_production_family_case(
-        pipeline, store, task, cases[1], graph_ref
-    )
-    with pytest.raises(OSError, match="commit-to-renew"):
-        _persist_production_family_case(
-            pipeline, store, task, cases[2], graph_ref
-        )
     assert first["promotion"] == "submit_ready"
-    assert second["duplicate_status"] == "structural_family_duplicate"
     owner_issue_id = str(first["issue_id"])
     owner_index = run_dir / "issues" / "index" / f"{owner_issue_id}.json"
-    stale_reference = json.loads(owner_index.read_text())["issue_ref"]
-    stale_issue = load_artifact_record(store, stale_reference)
-    with pytest.raises(ValueError, match="durable family proof"):
-        verify_issue_hash_chain(store, stale_issue, run_dir=run_dir)
-    monkeypatch.setattr(
-        "graph_sym_perf.issues.durable_registry._before_owner_artifact_renewal",
-        lambda _root: None,
-    )
-
-    status, result = _issue_export_with_timeout(
-        owner_index,
-        run_dir / "developer-exports" / "recovered-owner.json",
-    )
-
-    assert status == "ok", result
-    renewed_reference = json.loads(owner_index.read_text())["issue_ref"]
-    assert renewed_reference != stale_reference
-    renewed_issue = load_artifact_record(store, renewed_reference)
-    assert renewed_issue.payload["family_decision"]["member_count"] == 3
-    verify_issue_hash_chain(store, renewed_issue, run_dir=run_dir)
-    assert len((run_dir / "issues" / "family_unions.jsonl").read_text().splitlines()) == 2
+    old_receipt = json.loads(owner_index.read_text())
+    old_export = run_dir / old_receipt["export_path"]
+    old_export_bytes = old_export.read_bytes()
+    with pytest.raises(OSError, match=crash_seam):
+        _persist_production_family_case(
+            pipeline, store, task, cases[1], graph_ref
+        )
+    return run_dir, store, owner_index, old_export, old_export_bytes
 
 
 def _persist_production_family_case(
