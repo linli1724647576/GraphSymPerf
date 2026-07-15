@@ -691,18 +691,10 @@ def measurement_target_identity(
         database = parsed.path.strip("/") or "neo4j"
     return canonical_hash(
         {
-            "container_identity": str(
-                environment.get("GRAPHSYMPERF_NEO4J_CONTAINER", "unresolved-container")
-            ),
             "database": database,
-            "endpoint": f"{parsed.scheme or 'bolt'}://{host}:{port}",
-            "image_digest": str(
-                environment.get(
-                    "GRAPHSYMPERF_NEO4J_IMAGE_DIGEST",
-                    "unresolved-image-digest",
-                )
-            ),
-            "protocol": "neo4j-exclusive-measurement-target-v1",
+            "host": host,
+            "port": port,
+            "protocol": "neo4j-exclusive-server-identity-v2",
             "target": "neo4j",
         }
     )

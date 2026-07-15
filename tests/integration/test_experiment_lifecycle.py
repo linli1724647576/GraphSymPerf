@@ -586,11 +586,25 @@ def test_same_neo4j_target_contends_across_different_campaign_roots(tmp_path) ->
         "GRAPHSYMPERF_NEO4J_CONTAINER": "neo4j-main",
     }
     identity = campaign_module.measurement_target_identity(spec, environment)
+    changed_metadata = {
+        **environment,
+        "GRAPHSYMPERF_NEO4J_URI": "neo4j://127.0.0.1:7687/neo4j",
+        "GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "b" * 64,
+        "GRAPHSYMPERF_NEO4J_CONTAINER": "neo4j-recreated",
+    }
+    same_server_identity = campaign_module.measurement_target_identity(
+        spec,
+        changed_metadata,
+    )
+    assert same_server_identity == identity
     lock_root = tmp_path / "shared-locks"
     first = MeasurementSessionLock(lock_root, target_identity=identity).acquire()
     try:
         with pytest.raises(MeasurementSessionBusy, match="MEASUREMENT_SESSION_BUSY"):
-            MeasurementSessionLock(lock_root, target_identity=identity).acquire()
+            MeasurementSessionLock(
+                lock_root,
+                target_identity=same_server_identity,
+            ).acquire()
     finally:
         first.release()
 
