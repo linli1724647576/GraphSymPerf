@@ -35,7 +35,11 @@ from graph_sym_perf.experiment.worker import (
 )
 from graph_sym_perf.experiment.worker import WorkerFailure
 from graph_sym_perf.experiment.state import ErrorKind
-from graph_sym_perf.sanitization import SanitizationIntegrityError
+from graph_sym_perf.sanitization import (
+    EvidencePayload,
+    SanitizationIntegrityError,
+    unwrap_evidence_payload,
+)
 from tests.gdsmith_artifact_fixture import (
     assume_schema_v3_sources_clean,
     verified_gdsmith_environment,
@@ -640,8 +644,19 @@ def test_terminal_result_is_recursively_sanitized_without_rewriting_query_result
                 "NEO4J_AUTH": "neo4j/terminal-auth",
                 "nested": [{"adapter_password": "terminal-password"}],
             },
-            "query": "MATCH (n) RETURN n",
-            "result_rows": [{"value": 7}],
+            "evidence": EvidencePayload(
+                {
+                    "query": "MATCH (n) WHERE auth = 'literal' RETURN n",
+                    "rows": [
+                        {
+                            "password": "literal-row-password",
+                            "message": "Authorization: literal row",
+                        }
+                    ],
+                }
+            ),
+            "query_text": "password=ordinary-query-password RETURN n",
+            "result_rows": [{"password": "ordinary-result-password"}],
         }
 
     summary = RulePlanSupervisor(
@@ -659,11 +674,24 @@ def test_terminal_result_is_recursively_sanitized_without_rewriting_query_result
         (tmp_path / "entries").glob("*/attempt-000/terminal_result.json")
     )
     terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
-    assert terminal["query"] == "MATCH (n) RETURN n"
-    assert terminal["result_rows"] == [{"value": 7}]
+    evidence = unwrap_evidence_payload(terminal["evidence"])
+    assert evidence == {
+        "query": "MATCH (n) WHERE auth = 'literal' RETURN n",
+        "rows": [
+            {
+                "password": "literal-row-password",
+                "message": "Authorization: literal row",
+            }
+        ],
+    }
+    assert terminal["result_rows"] == [{"password": "<redacted>"}]
+    receipt = terminal.pop("content_hash")
+    assert receipt == canonical_hash(terminal)
     raw = terminal_path.read_text(encoding="utf-8")
     assert "terminal-auth" not in raw
     assert "terminal-password" not in raw
+    assert "ordinary-query-password" not in raw
+    assert "ordinary-result-password" not in raw
     assert "terminal-auth" not in next(
         (tmp_path / "entries").glob("*/cell_summary.json")
     ).read_text(encoding="utf-8")

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import pickle
+
 import pytest
 
 from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.sanitization import (
+    EvidencePayload,
     SanitizationIntegrityError,
     sanitize_structure,
     sanitize_text,
+    unwrap_evidence_payload,
 )
 
 
@@ -46,7 +50,7 @@ def test_recursive_sanitizer_redacts_sensitive_keys_and_leak_bearing_strings() -
         "attempt": 3,
         "ratio": 4.5,
         "passed": False,
-        "query": "MATCH (n) WHERE n.auth = 'public' RETURN n",
+        "query": "MATCH (n) WHERE <redacted-assignment> RETURN n",
         "results": ["ordinary result", 7],
     }
     rendered = repr(sanitized)
@@ -65,6 +69,36 @@ def test_recursive_sanitizer_redacts_sensitive_keys_and_leak_bearing_strings() -
         "bolt://",
     ):
         assert forbidden not in rendered
+
+
+def test_evidence_payload_is_pickleable_and_round_trips_through_verified_envelope() -> None:
+    payload = {
+        "query": "MATCH (n) WHERE auth = 'literal' RETURN n",
+        "params": {"password": "literal-parameter"},
+        "rows": (
+            {
+                "message": "Authorization: literal row",
+                "password": "literal-column",
+            },
+        ),
+    }
+    wrapped = EvidencePayload(payload)
+
+    restored = pickle.loads(pickle.dumps(wrapped))
+    envelope = sanitize_structure(restored)
+
+    assert set(envelope) == {"payload", "content_hash"}
+    assert unwrap_evidence_payload(envelope) == payload
+
+
+def test_evidence_payload_is_revalidated_after_mutable_payload_drift() -> None:
+    wrapped = EvidencePayload({"query": "RETURN 1"})
+    wrapped.payload["password"] = "late-credential"
+
+    with pytest.raises(SanitizationIntegrityError, match="EVIDENCE_INTEGRITY_ERROR"):
+        sanitize_structure(wrapped)
+    with pytest.raises(SanitizationIntegrityError, match="EVIDENCE_INTEGRITY_ERROR"):
+        unwrap_evidence_payload(wrapped)
 
 
 def test_text_sanitizer_redacts_entire_multiword_authorization_value() -> None:
@@ -97,7 +131,7 @@ def test_valid_sanitized_canonical_envelope_passes_unchanged() -> None:
     body = {
         "payload": {
             "message": "Authorization: <redacted>; retry=true",
-            "query": "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n",
+            "query": "MATCH (n) RETURN n",
         },
     }
     sealed = {**body, "content_hash": canonical_hash(body)}
@@ -139,7 +173,7 @@ def test_marker_named_fields_do_not_claim_a_generic_seal() -> None:
     assert "diagnostic-tail" not in sanitized["message"]
 
 
-def test_evidence_fields_preserve_query_result_and_record_string_semantics() -> None:
+def test_ordinary_evidence_named_fields_do_not_activate_preservation() -> None:
     value = {
         "query": "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n",
         "query_b": "RETURN '/public/result path' AS value",
@@ -154,23 +188,30 @@ def test_evidence_fields_preserve_query_result_and_record_string_semantics() -> 
 
     sanitized = sanitize_structure(value)
 
-    assert sanitized["query"] == value["query"]
-    assert sanitized["query_b"] == value["query_b"]
-    assert sanitized["results"][0] == value["results"][0]
-    assert sanitized["results"][1]["value"] == value["results"][1]["value"]
-    assert sanitized["results"][1]["password"] == "result-secret"
-    assert sanitized["records"][0]["token"] == "record-secret"
-    assert sanitized["records"][0]["value"] == "bolt://literal-result"
+    rendered = repr(sanitized)
+    for forbidden in (
+        "'public'",
+        "'visible'",
+        "/public/result path",
+        "literal result value",
+        "/Users/example",
+        "result-secret",
+        "record-secret",
+        "bolt://literal-result",
+    ):
+        assert forbidden not in rendered
+    assert sanitized["results"][1]["password"] == "<redacted>"
+    assert sanitized["records"][0]["token"] == "<redacted>"
 
 
 def test_typed_evidence_subtrees_preserve_all_database_values_and_keys() -> None:
-    value = {
-        "query_text": "MATCH (n) WHERE token = 'literal' RETURN n",
+    payload = {
+        "query": "MATCH (n) WHERE token = 'literal' RETURN n",
         "params": {
             "password": "literal-password-parameter",
             "message": "Authorization: literal parameter",
         },
-        "records": (
+        "rows": (
             {
                 "content_hash": "not-a-seal",
                 "receipt": "literal-receipt-column",
@@ -181,16 +222,37 @@ def test_typed_evidence_subtrees_preserve_all_database_values_and_keys() -> None
                 "reason": "auth=literal-row-value",
                 "bolt://literal-key": "literal-key-value",
                 "leaked-secret-material": "literal-secret-key-value",
+                "nested_invalid_envelope": {
+                    "payload": {"message": "literal nested row"},
+                    "content_hash": "not-a-hash",
+                },
             },
         ),
+        "results": ["Authorization: literal result"],
     }
 
-    sanitized = sanitize_structure(value)
+    envelope = sanitize_structure({"evidence": EvidencePayload(payload)})["evidence"]
+    restored = unwrap_evidence_payload(envelope)
 
-    assert sanitized["query_text"] == value["query_text"]
-    assert sanitized["params"] == value["params"]
-    assert sanitized["records"] == value["records"]
-    assert isinstance(sanitized["records"], tuple)
+    assert restored == payload
+    assert isinstance(restored["rows"], tuple)
+
+
+def test_invalid_nested_envelope_under_ordinary_results_key_fails_closed() -> None:
+    value = {
+        "results": [
+            {
+                "payload": {"message": "ordinary nested value"},
+                "content_hash": "not-a-hash",
+            }
+        ]
+    }
+
+    with pytest.raises(
+        SanitizationIntegrityError,
+        match="EVIDENCE_INTEGRITY_ERROR",
+    ):
+        sanitize_structure(value)
 
 
 def test_diagnostic_fields_clean_dotted_assignments_and_full_spaced_paths() -> None:

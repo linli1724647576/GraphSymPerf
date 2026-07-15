@@ -14,6 +14,7 @@ from graph_sym_perf.experiment.state import ErrorKind
 from graph_sym_perf.experiment.process_control import terminate_process_group
 from graph_sym_perf.experiment.supervisor import ShardSupervisor
 from graph_sym_perf.experiment.worker import AdapterQueryProxy, WorkerFailure
+from graph_sym_perf.sanitization import EvidencePayload, unwrap_evidence_payload
 
 
 def test_hard_timeout_terminates_the_entire_process_group(monkeypatch) -> None:
@@ -152,10 +153,8 @@ class _SensitiveSealedResultWorker:
 
 class _FieldSemanticResultWorker:
     def __call__(self, _task):
-        return {
-            "accepted_pairs": 1,
+        evidence = {
             "query": "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n",
-            "query_text": "RETURN $password AS literal_parameter_name",
             "params": {
                 "password": "literal-parameter",
                 "message": "Authorization: literal parameter",
@@ -164,7 +163,7 @@ class _FieldSemanticResultWorker:
                 "Authorization: literal result",
                 {"value": "/Users/example/literal result", "password": "row-secret"},
             ],
-            "records": [
+            "rows": [
                 {
                     "content_hash": "literal-content-hash-column",
                     "receipt": "literal-receipt-column",
@@ -175,6 +174,12 @@ class _FieldSemanticResultWorker:
                     "bolt://literal-key": "literal-key-value",
                 }
             ],
+        }
+        return {
+            "accepted_pairs": 1,
+            "evidence": EvidencePayload(evidence),
+            "query_text": "password=ordinary-query-secret RETURN n",
+            "records": [{"password": "ordinary-row-secret"}],
             "diagnostics": {
                 "message": (
                     "token=probe-token auth=probe-auth; "
@@ -257,18 +262,18 @@ def test_process_monitor_preserves_evidence_fields_and_cleans_diagnostics(
 
     result = monitor.run(_FieldSemanticResultWorker(), object(), context)
 
-    assert result["query"] == (
+    evidence = unwrap_evidence_payload(result["evidence"])
+    assert evidence["query"] == (
         "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n"
     )
-    assert result["query_text"] == "RETURN $password AS literal_parameter_name"
-    assert result["params"] == {
+    assert evidence["params"] == {
         "password": "literal-parameter",
         "message": "Authorization: literal parameter",
     }
-    assert result["results"][0] == "Authorization: literal result"
-    assert result["results"][1]["value"] == "/Users/example/literal result"
-    assert result["results"][1]["password"] == "row-secret"
-    assert result["records"] == [
+    assert evidence["results"][0] == "Authorization: literal result"
+    assert evidence["results"][1]["value"] == "/Users/example/literal result"
+    assert evidence["results"][1]["password"] == "row-secret"
+    assert evidence["rows"] == [
         {
             "content_hash": "literal-content-hash-column",
             "receipt": "literal-receipt-column",
@@ -279,8 +284,11 @@ def test_process_monitor_preserves_evidence_fields_and_cleans_diagnostics(
             "bolt://literal-key": "literal-key-value",
         }
     ]
+    assert result["records"] == [{"password": "<redacted>"}]
     persisted = (context.attempt_dir / "result.json").read_text(encoding="utf-8")
     for forbidden in (
+        "ordinary-query-secret",
+        "ordinary-row-secret",
         "probe-token",
         "probe-auth",
         "probe-dotted-auth",

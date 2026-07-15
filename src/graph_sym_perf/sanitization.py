@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar
 
 
 REDACTED = "<redacted>"
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class EvidencePayload(Generic[T]):
+    """Explicit trust boundary for typed query/result evidence."""
+
+    payload: T
+
+    def __post_init__(self) -> None:
+        _require_typed_evidence_payload(self.payload)
 
 
 class SanitizationIntegrityError(ValueError):
@@ -103,48 +115,7 @@ _TRACEBACK_HEADER = re.compile(
 )
 _CANONICAL_HASH = re.compile(r"^[0-9a-f]{64}$")
 _CANONICAL_ENVELOPE_KEYS = frozenset({"payload", "content_hash"})
-_EVIDENCE_TEXT_FIELDS = frozenset(
-    {
-        "cypher",
-        "graph_statements",
-        "parameter_values",
-        "parameters",
-        "params",
-        "queries",
-        "query",
-        "query_a",
-        "query_b",
-        "query_text",
-        "query_texts",
-        "record",
-        "records",
-        "result",
-        "results",
-        "result_rows",
-        "rows",
-        "source_query",
-        "statement",
-        "statements",
-        "transformed_query",
-    }
-)
-_DIAGNOSTIC_FIELD_PARTS = frozenset(
-    {
-        "detail",
-        "details",
-        "diagnostic",
-        "diagnostics",
-        "error",
-        "exception",
-        "message",
-        "reason",
-        "stderr",
-        "stdout",
-        "traceback",
-        "warning",
-        "warnings",
-    }
-)
+_TYPED_EVIDENCE_KEYS = frozenset({"query", "params", "rows", "results"})
 
 
 def is_sensitive_key(value: object) -> bool:
@@ -218,29 +189,25 @@ def sanitize_text(
 def sanitize_structure(value: Any) -> Any:
     """Recursively sanitize JSON-like values while preserving container shape."""
 
-    return _sanitize_structure(value, preserve_text=False)
+    return _sanitize_structure(value)
 
 
-def _sanitize_structure(value: Any, *, preserve_text: bool) -> Any:
-    """Internal field-aware recursion used by the public boundary sanitizer."""
+def _sanitize_structure(value: Any) -> Any:
+    """Internal recursion used by the public boundary sanitizer."""
 
+    if isinstance(value, EvidencePayload):
+        return _seal_evidence_payload(value)
     if isinstance(value, Mapping):
-        if not preserve_text:
-            for key in value:
-                _require_safe_mapping_key(key)
-        canonical_envelope = (
-            False
-            if preserve_text
-            else _require_valid_canonical_envelope_if_recognized(value)
-        )
+        for key in value:
+            _require_safe_mapping_key(key)
+        canonical_envelope = _require_valid_canonical_envelope_if_recognized(value)
+        if canonical_envelope and _is_typed_evidence_payload(value.get("payload")):
+            return value
         sanitized = {
             key: (
                 REDACTED
-                if not preserve_text and is_sensitive_key(key)
-                else _sanitize_structure(
-                    item,
-                    preserve_text=_field_preserves_text(key, inherited=preserve_text),
-                )
+                if is_sensitive_key(key)
+                else _sanitize_structure(item)
             )
             for key, item in value.items()
         }
@@ -252,33 +219,12 @@ def _sanitize_structure(value: Any, *, preserve_text: bool) -> Any:
             return value
         return sanitized
     if isinstance(value, list):
-        return [
-            _sanitize_structure(item, preserve_text=preserve_text)
-            for item in value
-        ]
+        return [_sanitize_structure(item) for item in value]
     if isinstance(value, tuple):
-        return tuple(
-            _sanitize_structure(item, preserve_text=preserve_text)
-            for item in value
-        )
+        return tuple(_sanitize_structure(item) for item in value)
     if isinstance(value, str):
-        return value if preserve_text else sanitize_text(value)
+        return sanitize_text(value)
     return value
-
-
-def _field_preserves_text(key: object, *, inherited: bool) -> bool:
-    if inherited:
-        return True
-    normalized = _normalized_key(key)
-    if normalized is None:
-        return False
-    lowered = normalized.lower()
-    parts = frozenset(part for part in re.split(r"[._-]+", lowered) if part)
-    if parts & _DIAGNOSTIC_FIELD_PARTS or lowered in {"health_event", "reason_codes"}:
-        return False
-    if lowered in _EVIDENCE_TEXT_FIELDS or lowered.endswith("_query"):
-        return True
-    return False
 
 
 def _require_safe_mapping_key(key: object) -> None:
@@ -314,6 +260,47 @@ def _require_valid_canonical_envelope_if_recognized(
     return True
 
 
+def _seal_evidence_payload(value: EvidencePayload[Any]) -> dict[str, object]:
+    _require_typed_evidence_payload(value.payload)
+    body = {"payload": value.payload}
+    return {**body, "content_hash": _project_canonical_hash(body)}
+
+
+def unwrap_evidence_payload(value: object) -> object:
+    """Validate and unwrap an explicit typed-evidence value or serialized envelope."""
+
+    if isinstance(value, EvidencePayload):
+        _require_typed_evidence_payload(value.payload)
+        return value.payload
+    if not isinstance(value, Mapping):
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: typed evidence must be a canonical envelope"
+        )
+    if not _require_valid_canonical_envelope_if_recognized(value):
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: typed evidence must be a canonical envelope"
+        )
+    payload = value.get("payload")
+    _require_typed_evidence_payload(payload)
+    return payload
+
+
+def _require_typed_evidence_payload(value: object) -> None:
+    if not _is_typed_evidence_payload(value):
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: typed evidence payload has an invalid schema"
+        )
+
+
+def _is_typed_evidence_payload(value: object) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and bool(value)
+        and all(isinstance(key, str) for key in value)
+        and frozenset(value).issubset(_TYPED_EVIDENCE_KEYS)
+    )
+
+
 def _project_canonical_hash(payload: object) -> str:
     # Import lazily because evidence_validation reaches runtime.records, which
     # imports this boundary sanitizer during package initialization.
@@ -323,9 +310,11 @@ def _project_canonical_hash(payload: object) -> str:
 
 
 __all__ = [
+    "EvidencePayload",
     "REDACTED",
     "SanitizationIntegrityError",
     "is_sensitive_key",
     "sanitize_structure",
     "sanitize_text",
+    "unwrap_evidence_payload",
 ]
