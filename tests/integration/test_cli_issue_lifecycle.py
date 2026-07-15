@@ -56,6 +56,20 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
     export_dir = run_dir / "issues" / "submit-ready"
     index_dir.mkdir(parents=True)
     export_dir.mkdir(parents=True)
+    original_validation_ref = {
+        "content_hash": "1" * 64,
+        "relative_path": "objects/11/" + "1" * 64,
+        "size_bytes": 1,
+        "media_type": "application/json",
+        "schema_version": 1,
+    }
+    reduced_validation_ref = {
+        "content_hash": "2" * 64,
+        "relative_path": "objects/22/" + "2" * 64,
+        "size_bytes": 1,
+        "media_type": "application/json",
+        "schema_version": 1,
+    }
     exported = {
         "issue_id": "issue-1",
         "stage": "submit_ready",
@@ -74,6 +88,8 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
         "family_decision_hash": "d" * 64,
         "original_validation_hash": "1" * 64,
         "reduced_validation_hash": "2" * 64,
+        "original_validation_ref": original_validation_ref,
+        "reduced_validation_ref": reduced_validation_ref,
     }
     payload = (json.dumps(exported) + "\n").encode()
     typed_export = export_dir / "issue-1.json"
@@ -117,6 +133,7 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
             level="issue",
             payload={
                 "issue_id": "issue-1",
+                "stage": "submit_ready",
                 "reduction_status": "reduced_valid",
                 "certificate": {"rule_id": "constant_true_disjunction"},
                 "validated_ratio": 4.0,
@@ -126,6 +143,8 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
                 "family_id": "f" * 64,
                 "original_validation_hash": "1" * 64,
                 "reduced_validation_hash": "2" * 64,
+                "original_validation_ref": original_validation_ref,
+                "final_validation_ref": reduced_validation_ref,
                 "family_decision": {
                     "family_version_hash": "c" * 64,
                     "decision_hash": "d" * 64,

@@ -27,6 +27,7 @@ from graph_sym_perf.issues.dedup import (
     family_member_proof_root,
 )
 from graph_sym_perf.issues.registry import IssueRegistry
+from graph_sym_perf.issues.exporter import canonical_typed_export_projection
 from graph_sym_perf.validation.models import (
     DeveloperStatus,
     PipelineStage,
@@ -607,31 +608,7 @@ def _renew_current_family_owner_unlocked(
     )
     verify_issue_hash_chain(store, renewed, run_dir=root.parent)
     issue_ref = store.put_json(f"issue-{owner_issue_id}.json", renewed.to_dict())
-    fingerprint = family_payload["fingerprint"]
-    certificate = renewed.payload.get("certificate")
-    if not isinstance(fingerprint, Mapping) or not isinstance(certificate, Mapping):
-        raise ValueError("renewed issue cannot produce a typed export")
-    exported = {
-        "issue_id": owner_issue_id,
-        "family_id": current.family_id,
-        "stage": "submit_ready",
-        "dbms_version": renewed.payload.get("dbms_version"),
-        "rule_id": certificate.get("rule_id"),
-        "validated_ratio": renewed.payload.get("validated_ratio"),
-        "reduction_status": renewed.payload.get("reduction_status"),
-        "reduced_original": renewed.payload.get("reduced_query_a"),
-        "reduced_transformed": renewed.payload.get("reduced_query_b"),
-        "exact_signature": fingerprint.get("exact"),
-        "structural_signature": fingerprint.get("structural"),
-        "submission_path": fingerprint.get("submission_path"),
-        "reduced_validation_phenotype": fingerprint.get("reduced_validation_phenotype"),
-        "family_version_hash": current.family_version_hash,
-        "family_decision_hash": current.decision_hash,
-        "original_validation_hash": owner_record.original_validation_hash,
-        "reduced_validation_hash": owner_record.reduced_validation_hash,
-        "original_validation_ref": dict(owner_record.original_validation_ref or {}),
-        "reduced_validation_ref": dict(owner_record.reduced_validation_ref or {}),
-    }
+    exported = canonical_typed_export_projection(renewed.payload)
     generation_name = (
         f"{owner_issue_id}.{current.family_version_hash}.{current.decision_hash}.json"
     )
@@ -753,7 +730,7 @@ def _apply_owner_renewal(root: Path, payload: Mapping[str, object]) -> None:
         or payload["generation_issue_content_hash"] != issue_ref.get("content_hash")
         or family.get("family_version_hash") != payload["family_version_hash"]
         or family.get("decision_hash") != payload["family_decision_hash"]
-        or not _generation_export_binds_owner(exported, issue_record.payload, owner)
+        or not _generation_export_binds_owner(exported, issue_record.payload)
     ):
         raise ValueError("owner renewal generation binding is invalid")
     index_path = root / "index" / f"{issue_id}.json"
@@ -794,31 +771,14 @@ def _apply_owner_renewal(root: Path, payload: Mapping[str, object]) -> None:
 def _generation_export_binds_owner(
     exported: Mapping[str, object],
     issue_payload: Mapping[str, object],
-    owner: VersionedIssueRecord,
 ) -> bool:
-    family = issue_payload.get("family_decision")
-    fingerprint = family.get("fingerprint") if isinstance(family, Mapping) else None
-    if not isinstance(family, Mapping) or not isinstance(fingerprint, Mapping):
+    try:
+        expected = canonical_typed_export_projection(issue_payload)
+    except (TypeError, ValueError):
         return False
-    expected = {
-        "issue_id": owner.issue_id,
-        "family_id": family.get("family_id"),
-        "family_version_hash": family.get("family_version_hash"),
-        "family_decision_hash": family.get("decision_hash"),
-        "original_validation_hash": owner.original_validation_hash,
-        "reduced_validation_hash": owner.reduced_validation_hash,
-        "original_validation_ref": dict(owner.original_validation_ref or {}),
-        "reduced_validation_ref": dict(owner.reduced_validation_ref or {}),
-        "exact_signature": fingerprint.get("exact"),
-        "structural_signature": fingerprint.get("structural"),
-        "submission_path": fingerprint.get("submission_path"),
-        "reduced_validation_phenotype": fingerprint.get(
-            "reduced_validation_phenotype"
-        ),
-    }
-    return all(
-        stable_json_dumps(exported.get(name)) == stable_json_dumps(value)
-        for name, value in expected.items()
+    return (
+        set(exported) == set(expected)
+        and stable_json_dumps(dict(exported)) == stable_json_dumps(expected)
     )
 
 

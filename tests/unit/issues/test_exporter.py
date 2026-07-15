@@ -64,6 +64,27 @@ def test_exporter_serializes_only_a_fully_gated_submit_ready_issue(tmp_path) -> 
     path = export_issue(issue, tmp_path / "issue.json", **_refs())
 
     payload = json.loads(path.read_text(encoding="utf-8"))
+    assert set(payload) == {
+        "issue_id",
+        "family_id",
+        "stage",
+        "dbms_version",
+        "rule_id",
+        "validated_ratio",
+        "reduction_status",
+        "reduced_original",
+        "reduced_transformed",
+        "exact_signature",
+        "structural_signature",
+        "submission_path",
+        "reduced_validation_phenotype",
+        "family_version_hash",
+        "family_decision_hash",
+        "original_validation_hash",
+        "reduced_validation_hash",
+        "original_validation_ref",
+        "reduced_validation_ref",
+    }
     assert payload["issue_id"] == issue.issue_id
     assert payload["stage"] == "submit_ready"
     assert payload["reduction_status"] == "reduced_valid"

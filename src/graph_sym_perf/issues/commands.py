@@ -25,6 +25,7 @@ from graph_sym_perf.artifacts.store import (
 )
 from graph_sym_perf.issues.registry import IssueRegistry
 from graph_sym_perf.issues.durable_registry import renew_current_family_owner
+from graph_sym_perf.issues.exporter import canonical_typed_export_projection
 from graph_sym_perf.validation.models import DeveloperStatus, PipelineStage, VersionedIssueRecord
 
 
@@ -121,37 +122,9 @@ class IssueCommands:
             if hashlib.sha256(payload).hexdigest() != index["export_sha256"]:
                 raise ValueError("typed export hash mismatch")
             exported = json.loads(payload)
-            family = record.payload.get("family_decision")
-            fingerprint = family.get("fingerprint") if isinstance(family, Mapping) else None
             if (
                 not isinstance(exported, dict)
-                or not isinstance(family, Mapping)
-                or not isinstance(fingerprint, Mapping)
-                or exported.get("issue_id") != index["issue_id"]
-                or exported.get("stage") != "submit_ready"
-                or exported.get("reduction_status") != "reduced_valid"
-                or exported.get("reduction_status") != record.payload.get("reduction_status")
-                or exported.get("rule_id") != record.payload.get("certificate", {}).get("rule_id")
-                or exported.get("validated_ratio") != record.payload.get("validated_ratio")
-                or exported.get("dbms_version") != record.payload.get("dbms_version")
-                or exported.get("reduced_original") != record.payload.get("reduced_query_a")
-                or exported.get("reduced_transformed") != record.payload.get("reduced_query_b")
-                or exported.get("family_id") != record.payload.get("family_id")
-                or exported.get("exact_signature") != fingerprint.get("exact")
-                or exported.get("structural_signature") != fingerprint.get("structural")
-                or exported.get("submission_path") != fingerprint.get("submission_path")
-                or exported.get("reduced_validation_phenotype")
-                != fingerprint.get("reduced_validation_phenotype")
-                or exported.get("family_version_hash") != family.get("family_version_hash")
-                or exported.get("family_decision_hash") != family.get("decision_hash")
-                or exported.get("original_validation_hash")
-                != record.payload.get("original_validation_hash")
-                or exported.get("reduced_validation_hash")
-                != record.payload.get("reduced_validation_hash")
-                or exported.get("original_validation_ref")
-                != record.payload.get("original_validation_ref")
-                or exported.get("reduced_validation_ref")
-                != record.payload.get("final_validation_ref")
+                or exported != canonical_typed_export_projection(record.payload)
             ):
                 raise ValueError("typed export identity does not match the issue index")
             destination = Path(output)

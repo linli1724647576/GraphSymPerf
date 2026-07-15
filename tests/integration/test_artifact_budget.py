@@ -1889,6 +1889,77 @@ def test_compact_owner_renewal_pending_journal_attack_fails_closed(
     assert "IssueGateError" in result
 
 
+@pytest.mark.parametrize(
+    ("field", "forged_value"),
+    (
+        ("stage", "screened"),
+        ("dbms_version", "forged-dbms"),
+        ("rule_id", "forged-rule"),
+        ("validated_ratio", 999.0),
+        ("reduction_status", "reduction_partial"),
+        ("reduced_original", "RETURN 'forged-original'"),
+        ("reduced_transformed", "RETURN 'forged-transformed'"),
+        ("family_version_hash", "1" * 64),
+        ("original_validation_ref", {"content_hash": "2" * 64}),
+        ("exact_signature", "3" * 64),
+        ("unexpected_field", "forged-extra"),
+    ),
+)
+def test_owner_renewal_rejects_rehashed_generation_export_projection_attack(
+    monkeypatch,
+    tmp_path,
+    field,
+    forged_value,
+) -> None:
+    run_dir, _store, owner_index, _old_export, _old_bytes = (
+        _crash_production_owner_renewal(
+            monkeypatch,
+            tmp_path,
+            crash_seam="_after_owner_renewal_generation_write",
+        )
+    )
+    issue_id = str(json.loads(owner_index.read_text())["issue_id"])
+    commit_path = run_dir / "issues" / "commits" / f"{issue_id}.json"
+    old_index_bytes = owner_index.read_bytes()
+    old_commit_bytes = commit_path.read_bytes()
+    pending = run_dir / "issues" / "owner_renewal.pending.json"
+    journal = json.loads(pending.read_text())
+    generation_export = run_dir / journal["new_receipt"]["export_path"]
+    exported = json.loads(generation_export.read_text())
+    exported[field] = forged_value
+    generation_export.write_text(
+        json.dumps(exported, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    forged_sha = hashlib.sha256(generation_export.read_bytes()).hexdigest()
+    journal["new_receipt"]["export_sha256"] = forged_sha
+    journal["generation_export_sha256"] = forged_sha
+    journal.pop("journal_hash")
+    journal["journal_hash"] = _durable_hash_payload(
+        "owner-renewal-journal-v1",
+        journal,
+    )
+    pending.write_text(
+        json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._after_owner_renewal_generation_write",
+        lambda _root: None,
+    )
+
+    status, result = _issue_export_with_timeout(
+        owner_index,
+        run_dir / "developer-exports" / f"attacked-projection-{field}.json",
+    )
+
+    assert status == "error"
+    assert "IssueGateError" in result
+    assert owner_index.read_bytes() == old_index_bytes
+    assert commit_path.read_bytes() == old_commit_bytes
+    assert pending.is_file()
+
+
 def _crash_production_owner_renewal(
     monkeypatch,
     tmp_path,
