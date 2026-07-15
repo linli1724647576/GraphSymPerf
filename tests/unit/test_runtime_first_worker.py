@@ -29,6 +29,7 @@ from graph_sym_perf.experiment.evidence_validation import candidate_artifact_has
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.state import ErrorKind
 from graph_sym_perf.experiment.worker import (
+    FormalRuntimeFirstShardWorker,
     GeneratedShard,
     RuntimeFirstShardWorker,
     WorkerFailure,
@@ -534,6 +535,18 @@ def test_worker_graph_identity_matches_validation_snapshot_contract() -> None:
 
     assert _graph_snapshot_hash(statements) == GraphSnapshot.from_statements(statements).content_hash
     assert GraphCorpus((" CREATE (a) ", "CREATE (b)")).content_hash == _graph_snapshot_hash(statements)
+
+
+def test_formal_schema_v3_worker_installs_production_candidate_pipeline(tmp_path) -> None:
+    worker = FormalRuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        environment={},
+    )
+
+    worker.bind_run_dir(tmp_path)
+
+    assert worker._candidate_pipeline is not None
+    assert type(worker._candidate_pipeline).__name__ == "ProductionCandidatePipeline"
 
 
 def test_age_generation_provenance_never_claims_native_provider_coverage() -> None:
@@ -2427,6 +2440,98 @@ def test_worker_validates_discovery_promotions_through_injected_runner(
     resumed_result = resumed(entry)
 
     assert resumed_result["validation_passed_pairs"] == 1
+
+
+def test_worker_continues_validated_discovery_candidate_through_terminal_pipeline(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    observed = []
+
+    class _Pipeline:
+        def process(self, *_args, **_kwargs):
+            raise AssertionError("schema-v3 must not repeat original validation")
+
+        def process_validated(self, candidate, validation, **context):
+            observed.append((candidate, validation, context))
+            return {
+                "candidate_hash": candidate.candidate_hash,
+                "validation": {
+                    "candidate_hash": candidate.candidate_hash,
+                    "stage": validation.stage.value,
+                    "validation_ref": {"content_hash": "1" * 64},
+                },
+                "reduction": {
+                    "candidate_hash": candidate.candidate_hash,
+                    "promotion": "not_applicable",
+                    "status": "reduced_valid",
+                },
+            }
+
+    entry = _rule_plan_entry(rule_id="constant_true_disjunction", family="bool")
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _Stage2WideGapAdapter(),
+        validation_runner_factory=lambda _entry: _IndependentValidationRunner(),
+        candidate_pipeline=_Pipeline(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "completed"
+    assert result["pipeline_terminal_candidates"] == 1
+    assert result["submit_ready_issues"] == 0
+    assert len(observed) == 1
+    assert observed[0][1].stage.value == "validation_passed"
+    assert observed[0][2]["task"] == entry
+    assert next(tmp_path.glob("entries/*/candidate-outcomes/*.json")).is_file()
+
+
+def test_worker_never_sends_control_validation_to_candidate_pipeline(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+
+    class _Pipeline:
+        def process_validated(self, *_args, **_kwargs):
+            raise AssertionError("CONTROL validation is diagnostic and cannot enter reduction")
+
+    entry = replace(
+        _rule_plan_entry(rule_id="edge_notation_symmetry", family="sym"),
+        entry_id="p1:neo4j:control:edge_notation_symmetry:256:0",
+        stream=RuleStream.CONTROL,
+        tier="control",
+    )
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=(
+                "CREATE (a:Node {id: 1}), (b:Node {id: 2}), (a)-[:R]->(b)",
+            ),
+            query_texts=("MATCH (n)-[:R]->(m) RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: _ControlRuntimeGapAdapter(),
+        validation_runner_factory=lambda _entry: _IndependentValidationRunner(),
+        candidate_pipeline=_Pipeline(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["terminal_state"] == "completed"
+    assert result["control_validation_pass"] is True
+    assert result["pipeline_terminal_candidates"] == 0
+    assert result["submit_ready_issues"] == 0
+    assert not list(tmp_path.glob("entries/*/candidate-outcomes/*.json"))
 
 
 @pytest.mark.parametrize(

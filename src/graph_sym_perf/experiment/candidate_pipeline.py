@@ -19,7 +19,12 @@ from graph_sym_perf.artifacts.store import ContentAddressedStore
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
 from graph_sym_perf.core import TargetSystem
 from graph_sym_perf.equivalence.checker import compare_execution_results
-from graph_sym_perf.experiment.plan_models import ExperimentSpec, ShardTask
+from graph_sym_perf.experiment.plan_models import (
+    ExperimentSpec,
+    RulePlanEntry,
+    ShardTask,
+    ValidatedYieldExperimentSpec,
+)
 from graph_sym_perf.experiment.provenance import verified_execution_provenance
 from graph_sym_perf.reducer import CandidateReducer, ReductionBundle, ReductionStatus, RuleWitness
 from graph_sym_perf.reducer.dependencies import analyze_query
@@ -136,7 +141,7 @@ class ProductionCandidatePipeline:
 
     def __init__(
         self,
-        spec: ExperimentSpec,
+        spec: ExperimentSpec | ValidatedYieldExperimentSpec,
         *,
         environment: Mapping[str, str],
         run_dir: str | Path,
@@ -162,11 +167,83 @@ class ProductionCandidatePipeline:
             or not driver_version
         ):
             raise TypeError("candidate pipeline requires a bound shard artifact context")
+        if not isinstance(self.spec, ExperimentSpec):
+            raise TypeError("schema-v3 candidates must enter through process_validated")
         adapter_factory = _ValidationAdapterFactory(self.spec, self.environment, task.target)
         validator = IssueValidator(
             yield_store=ValidatedYieldStore(self.run_dir / "validated_yield" / f"{task.target.value}.jsonl")
         )
         validation = validator.validate(candidate, SubprocessSessionRunner(adapter_factory))
+        return self._process_with_validation(
+            candidate,
+            validation,
+            task=task,
+            store=store,
+            candidate_ref=candidate_ref,
+            attempt_dir=attempt_dir,
+            graph_snapshot_ref=graph_snapshot_ref,
+            driver_version=driver_version,
+            adapter_factory=adapter_factory,
+        )
+
+    def process_validated(
+        self,
+        candidate: CandidateBundle,
+        validation: object,
+        **context: object,
+    ) -> Mapping[str, object]:
+        """Continue a schema-v3 candidate from its already sealed Task-8 report.
+
+        This entry point deliberately does not construct an ``IssueValidator``:
+        the worker owns the first independent validation, while this service owns
+        reduction, the fresh reduced-candidate validation, family deduplication,
+        and materialization.
+        """
+
+        task = context.get("task")
+        store = context.get("artifact_store")
+        candidate_ref = context.get("candidate_ref")
+        attempt_dir = context.get("attempt_dir")
+        graph_snapshot_ref = context.get("graph_snapshot_ref")
+        driver_version = context.get("driver_version")
+        adapter_factory = context.get("validation_adapter_factory")
+        if (
+            not isinstance(task, RulePlanEntry)
+            or not isinstance(store, ContentAddressedStore)
+            or not isinstance(candidate_ref, ArtifactReference)
+            or not isinstance(attempt_dir, Path)
+            or not isinstance(graph_snapshot_ref, Mapping)
+            or not isinstance(driver_version, str)
+            or not driver_version
+            or not callable(adapter_factory)
+            or not isinstance(getattr(validation, "stage", None), PipelineStage)
+        ):
+            raise TypeError("validated candidate pipeline requires a bound rule-entry artifact context")
+        return self._process_with_validation(
+            candidate,
+            validation,
+            task=task,
+            store=store,
+            candidate_ref=candidate_ref,
+            attempt_dir=attempt_dir,
+            graph_snapshot_ref=graph_snapshot_ref,
+            driver_version=driver_version,
+            adapter_factory=adapter_factory,
+        )
+
+    def _process_with_validation(
+        self,
+        candidate: CandidateBundle,
+        validation: object,
+        *,
+        task: ShardTask | RulePlanEntry,
+        store: ContentAddressedStore,
+        candidate_ref: ArtifactReference,
+        attempt_dir: Path,
+        graph_snapshot_ref: Mapping[str, object],
+        driver_version: str,
+        adapter_factory: Any,
+    ) -> Mapping[str, object]:
         validation_record = ArtifactChainWriter(store).persist_validation(
             validation,
             candidate_ref=candidate_ref,
@@ -177,12 +254,11 @@ class ProductionCandidatePipeline:
                 driver_version=driver_version,
             ),
         )
-        validation_ref = asdict(validation_record.reference)
         validation_outcome = {
             "candidate_hash": candidate.candidate_hash,
             "reason_codes": list(validation.reason_codes),
             "stage": validation.stage.value,
-            "validation_ref": validation_ref,
+            "validation_ref": asdict(validation_record.reference),
         }
         if validation.stage is not PipelineStage.VALIDATION_PASSED:
             return {
@@ -288,7 +364,7 @@ class ProductionCandidatePipeline:
         original_validation: object,
         reduction: object,
         *,
-        task: ShardTask,
+        task: ShardTask | RulePlanEntry,
         store: ContentAddressedStore,
         original_validation_ref: ArtifactReference,
         graph_snapshot_ref: Mapping[str, object],
@@ -423,8 +499,8 @@ class ProductionCandidatePipeline:
         candidate: CandidateBundle,
         validation: object,
         *,
-        task: ShardTask,
-        adapter_factory: _ValidationAdapterFactory,
+        task: ShardTask | RulePlanEntry,
+        adapter_factory: Any,
         checkpoint_path: Path,
         rule_witness: RuleWitness,
     ):
@@ -499,7 +575,7 @@ def _clause_index(ast_path: str) -> int:
 
 def _validation_environment(
     candidate: CandidateBundle,
-    task: ShardTask,
+    task: ShardTask | RulePlanEntry,
     environment: Mapping[str, str],
     *,
     driver_version: str,

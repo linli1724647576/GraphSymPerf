@@ -23,9 +23,14 @@ from graph_sym_perf.experiment.supervisor import (
     ShardSupervisor,
     classify_rule_plan_result,
     _manifest_hash,
+    _rule_plan_entry_directory,
     _task_identity,
 )
-from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
+from graph_sym_perf.experiment.worker import (
+    GeneratedShard,
+    RuntimeFirstShardWorker,
+    _entry_directory_name,
+)
 from graph_sym_perf.experiment.worker import WorkerFailure
 from graph_sym_perf.experiment.state import ErrorKind
 
@@ -179,6 +184,44 @@ def test_rule_plan_supervisor_writes_one_cell_summary_for_every_terminal_class(t
     assert len(summary.resource_exhausted) == 1
     assert len(summary.infrastructure_failed) == 1
     assert len(tuple((tmp_path / "entries").glob("*/cell_summary.json"))) == 4
+
+
+def test_rule_plan_supervisor_and_worker_share_one_entry_directory_identity() -> None:
+    entry = _p1_rule_plan().entries[0]
+
+    assert _rule_plan_entry_directory(entry) == _entry_directory_name(entry.entry_id)
+
+
+def test_rule_plan_cell_summary_conversion_failure_is_typed_infrastructure(
+    tmp_path,
+) -> None:
+    plan = _p1_rule_plan()
+
+    def worker(entry):
+        return {
+            "entry_id": entry.entry_id,
+            "terminal_state": "completed",
+            "accepted_pairs": entry.accepted_pair_quota,
+            "certificate_complete": True,
+            "artifact_complete": True,
+            "health_events": "not-an-integer",
+        }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    payload = json.loads(
+        next((tmp_path / "entries").glob("*/cell_summary.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["terminal_state"] == "infrastructure_failed"
+    assert payload["artifact_complete"] is False
+    assert payload["certificate_complete"] is False
 
 
 def _hash_for(label: str) -> str:

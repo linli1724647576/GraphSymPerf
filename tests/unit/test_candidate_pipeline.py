@@ -21,7 +21,12 @@ from graph_sym_perf.experiment.candidate_pipeline import (
     _candidate_record,
     _reduction_summary,
 )
-from graph_sym_perf.experiment.plan_models import ShardTask
+from graph_sym_perf.experiment.plan_models import (
+    CampaignPhase,
+    RulePlanEntry,
+    RuleStream,
+    ShardTask,
+)
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.reducer import ReductionStatus
@@ -185,6 +190,93 @@ def test_failed_validation_is_terminal_and_never_enters_reducer(monkeypatch, tmp
         "reason": "validation_not_passed",
         "status": "not_applicable",
     }
+
+
+def test_validated_schema_v3_candidate_reuses_sealed_report_and_enters_reducer(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    report = _report()
+    candidate = _candidate_for_report(report)
+    reference = ArtifactReference("0" * 64, "objects/00/" + "0" * 64, 0, "application/json")
+    persisted = []
+    reduced = []
+
+    class _ValidatorMustNotRun:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def validate(self, *_args, **_kwargs):
+            raise AssertionError("schema-v3 must reuse the sealed Task-8 validation report")
+
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline.IssueValidator",
+        _ValidatorMustNotRun,
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline.ArtifactChainWriter.persist_validation",
+        lambda _writer, value, **_kwargs: persisted.append(value) or SimpleNamespace(reference=reference),
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline._validation_environment",
+        lambda *_args, **_kwargs: {"execution_mode": "test"},
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline._rule_witness",
+        lambda _candidate: SimpleNamespace(),
+    )
+    pipeline = ProductionCandidatePipeline(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        environment={"GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "f" * 64},
+        run_dir=tmp_path,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_reduce",
+        lambda _candidate, validation, **_kwargs: reduced.append(validation) or _reduction(),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_materialize_issue",
+        lambda *_args, **_kwargs: {"promotion": "not_applicable"},
+    )
+    entry = RulePlanEntry(
+        entry_id="p1:neo4j:discovery:constant_true_disjunction:256:0",
+        phase=CampaignPhase.P1,
+        target=TargetSystem.NEO4J,
+        rule_id="constant_true_disjunction",
+        family="bool",
+        tier="core",
+        graph_scale=256,
+        shard_index=0,
+        shard_seed=7,
+        accepted_pair_quota=1,
+        max_generated_seed_budget=2,
+        max_variants_per_seed=1,
+        proof_version="1",
+        query_timeout_seconds=30,
+        max_entry_runtime_seconds=600,
+        measurement_protocol_id="paired-runtime-v1",
+        stream=RuleStream.DISCOVERY,
+    )
+    store = ContentAddressedStore(tmp_path / "artifacts", budget_bytes=1024 * 1024)
+
+    outcome = pipeline.process_validated(
+        candidate,
+        report,
+        task=entry,
+        artifact_store=store,
+        candidate_ref=reference,
+        driver_version="driver/1",
+        graph_snapshot_ref={},
+        attempt_dir=tmp_path,
+        validation_adapter_factory=lambda _candidate: object(),
+    )
+
+    assert persisted == [report]
+    assert reduced == [report]
+    assert outcome["validation"]["stage"] == "validation_passed"
+    assert outcome["reduction"]["status"] == "reduced_valid"
 
 
 def test_reducer_screen_rejects_a_runtime_direction_reversal() -> None:

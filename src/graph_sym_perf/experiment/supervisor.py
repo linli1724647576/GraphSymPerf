@@ -23,6 +23,7 @@ from graph_sym_perf.experiment.evidence_validation import (
     validate_failure_evidence,
     validate_shard_evidence,
 )
+from graph_sym_perf.experiment.entry_paths import rule_plan_entry_directory_name
 from graph_sym_perf.experiment.plan_models import RulePlan, RulePlanEntry, RunPlan
 from graph_sym_perf.experiment.planner import resolved_manifest_hash
 from graph_sym_perf.experiment.selection import CellSummary
@@ -263,13 +264,36 @@ class RulePlanSupervisor:
             self._event(entry, attempt, final_state.value, previous_attempt=previous)
             if final_state is not EntryState.INFRASTRUCTURE_FAILED or attempt >= self.retry_limit:
                 break
-        cell = cell_summary_from_result(
-            entry,
-            final_result,
-            campaign_id=self.campaign_id,
-            input_manifest_hash=self.input_manifest_hash,
-            terminal_state=final_state,
-        )
+        try:
+            cell = cell_summary_from_result(
+                entry,
+                final_result,
+                campaign_id=self.campaign_id,
+                input_manifest_hash=self.input_manifest_hash,
+                terminal_state=final_state,
+            )
+        except (EntryResultIntegrityError, TypeError, ValueError) as exc:
+            final_state = EntryState.INFRASTRUCTURE_FAILED
+            failure_body = {
+                "entry_id": entry.entry_id,
+                "error_kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+            _atomic_write_json(
+                entry_dir / "cell_summary_failure.json",
+                {**failure_body, "content_hash": canonical_hash(failure_body)},
+            )
+            self._event(
+                entry,
+                attempt,
+                final_state.value,
+                previous_attempt=None,
+            )
+            cell = _infrastructure_failed_cell_summary(
+                entry,
+                campaign_id=self.campaign_id,
+                input_manifest_hash=self.input_manifest_hash,
+            )
         body = asdict(cell)
         _atomic_write_json(entry_dir / "cell_summary.json", {**body, "content_hash": canonical_hash(body)})
         return final_state
@@ -359,8 +383,44 @@ def load_cell_summary(path: str | Path) -> CellSummary:
 
 
 def _rule_plan_entry_directory(entry: RulePlanEntry) -> str:
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", entry.entry_id).strip("-") or "entry"
-    return f"{safe[:96]}-{canonical_hash(to_jsonable(entry))[:12]}"
+    return rule_plan_entry_directory_name(entry.entry_id)
+
+
+def _infrastructure_failed_cell_summary(
+    entry: RulePlanEntry,
+    *,
+    campaign_id: str,
+    input_manifest_hash: str,
+) -> CellSummary:
+    return CellSummary(
+        campaign_id=campaign_id,
+        phase=entry.phase.value,
+        input_manifest_hash=input_manifest_hash,
+        target=entry.target.value,
+        rule_id=entry.rule_id,
+        family=entry.family,
+        stream=entry.stream.value,
+        graph_scale=entry.graph_scale,
+        shard_seed=entry.shard_seed,
+        accepted_pairs=0,
+        quota=entry.accepted_pair_quota,
+        applicability_count=0,
+        stage2_count=0,
+        validation_passed_count=0,
+        control_validation_passed_count=0,
+        validation_pair_yield=0.0,
+        validation_yield_ci_low=0.0,
+        best_validated_delta_ms=0.0,
+        best_validated_ratio=1.0,
+        best_ratio_ci_low=1.0,
+        best_delta_over_noise=0.0,
+        typed_mismatches=0,
+        certificate_complete=False,
+        health_events=0,
+        artifact_complete=False,
+        timeout_rate=0.0,
+        terminal_state=EntryState.INFRASTRUCTURE_FAILED.value,
+    )
 
 
 def _nonnegative_int(value: object, name: str) -> int:
