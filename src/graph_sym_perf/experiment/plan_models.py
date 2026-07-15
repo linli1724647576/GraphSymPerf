@@ -86,6 +86,7 @@ class SystemDefinition:
     graph_isolation: str
     default_timeout_seconds: int
     rule_capabilities: tuple[str, ...] = ()
+    measurement_target_id: str | None = None
 
 
 class CampaignPhase(str, Enum):

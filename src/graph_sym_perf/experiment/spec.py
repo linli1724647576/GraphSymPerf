@@ -352,6 +352,13 @@ def _load_schema_v3(
     rules_raw = _mapping(raw["rules"], "rules")
     _exact_keys(rules_raw, {"discovery_rule_ids", "control_rule_ids"}, "rules")
     systems = _load_systems(source_path.parent / "systems.yaml", targets)
+    if (
+        TargetSystem.NEO4J in systems
+        and systems[TargetSystem.NEO4J].measurement_target_id is None
+    ):
+        raise ConfigError(
+            "systems.neo4j.measurement_target_id is required for schema-v3 campaigns"
+        )
     rules_path = source_path.parent / "rules.yaml"
     rules_catalog, rules_schema_sha256 = _load_rules(rules_path)
     registry = RuleRegistry.default()
@@ -478,7 +485,11 @@ def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[Targ
             "graph_isolation",
             "default_timeout_seconds",
         }
-        _only_keys(item, required_fields | {"rule_capabilities"}, f"systems.{target.value}")
+        _only_keys(
+            item,
+            required_fields | {"rule_capabilities", "measurement_target_id"},
+            f"systems.{target.value}",
+        )
         missing_fields = required_fields - set(item)
         if missing_fields:
             raise ConfigError(
@@ -500,11 +511,35 @@ def _load_systems(path: Path, targets: tuple[TargetSystem, ...]) -> Mapping[Targ
                 if "rule_capabilities" in item
                 else ()
             ),
+            measurement_target_id=(
+                _measurement_target_id(
+                    item["measurement_target_id"],
+                    f"systems.{target.value}.measurement_target_id",
+                )
+                if "measurement_target_id" in item
+                else None
+            ),
         )
     missing = [target.value for target in targets if target not in available]
     if missing:
         raise ConfigError(f"missing system definition(s): {', '.join(missing)}")
     return FrozenMapping({target: available[target] for target in targets})
+
+
+def _measurement_target_id(value: Any, label: str) -> str:
+    target_id = _nonempty_string(value, label)
+    valid_characters = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    )
+    if (
+        len(target_id) > 128
+        or target_id[0] not in valid_characters - frozenset("._-")
+        or any(character not in valid_characters for character in target_id)
+    ):
+        raise ConfigError(
+            f"{label} must be an ASCII identifier of at most 128 characters"
+        )
+    return target_id
 
 
 def _load_rules(path: Path) -> tuple[Mapping[str, object], str]:

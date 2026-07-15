@@ -13,10 +13,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
-from urllib.parse import urlparse
 from uuid import uuid4
 
-from graph_sym_perf.core import to_jsonable
+from graph_sym_perf.core import TargetSystem, to_jsonable
 from graph_sym_perf.experiment.evidence_validation import canonical_hash, read_json_object
 from graph_sym_perf.experiment.entry_paths import rule_plan_entry_directory_name
 from graph_sym_perf.experiment.plan_models import (
@@ -715,19 +714,20 @@ def measurement_target_identity(
 ) -> str:
     if not isinstance(spec, ValidatedYieldExperimentSpec):
         raise TypeError("measurement target identity requires a schema-v3 spec")
-    uri = str(environment.get("GRAPHSYMPERF_NEO4J_URI", "")).strip()
-    parsed = urlparse(uri)
-    host = parsed.hostname
-    port = parsed.port or 7687
-    database = str(environment.get("GRAPHSYMPERF_NEO4J_DATABASE", "")).strip()
-    if not database:
-        database = parsed.path.strip("/") or "neo4j"
+    del environment
+    definition = spec.systems.get(TargetSystem.NEO4J)
+    target_id = definition.measurement_target_id if definition is not None else None
+    if (
+        not isinstance(target_id, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", target_id) is None
+    ):
+        raise PhaseAncestryError(
+            "schema-v3 Neo4j measurement_target_id is missing or invalid"
+        )
     return canonical_hash(
         {
-            "database": database,
-            "host_binding": _canonical_measurement_host(host, port),
-            "port": port,
-            "protocol": "neo4j-exclusive-server-identity-v3",
+            "measurement_target_id": target_id,
+            "protocol": "neo4j-exclusive-server-identity-v4",
             "target": "neo4j",
         }
     )

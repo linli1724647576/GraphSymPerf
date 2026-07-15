@@ -22,7 +22,8 @@ from graph_sym_perf.experiment.campaign import (
     PhaseAncestryError,
 )
 from graph_sym_perf.experiment import campaign as campaign_module
-from graph_sym_perf.experiment.plan_models import CampaignPhase
+from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.experiment.plan_models import CampaignPhase, FrozenMapping
 from graph_sym_perf.experiment.selection import select_p2_cells, write_pilot_selection
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.state import ManifestMismatchError
@@ -911,19 +912,23 @@ def test_measurement_target_identity_unifies_loopback_address_spellings() -> Non
     assert len(identities) == 1
 
 
-def test_measurement_target_identity_uses_stable_resolved_address_sets(
+def test_measurement_target_identity_ignores_dns_success_partial_and_failure(
     monkeypatch,
 ) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
 
     def resolve(host, port, *, type):
         assert type == socket.SOCK_STREAM
-        assert host in {"neo-a.internal", "neo-b.internal"}
-        values = [
-            (socket.AF_INET, type, 6, "", ("192.0.2.10", port)),
-            (socket.AF_INET6, type, 6, "", ("2001:db8::10", port, 0, 0)),
-        ]
-        return values if host == "neo-a.internal" else list(reversed(values))
+        if host == "alias-success.internal":
+            return [(socket.AF_INET, type, 6, "", ("192.0.2.10", port))]
+        if host == "alias-partial.internal":
+            return [
+                (socket.AF_INET, type, 6, "", ("192.0.2.10", port)),
+                (socket.AF_INET6, type, 6, "", ("2001:db8::10", port, 0, 0)),
+            ]
+        if host == "alias-failure.internal":
+            raise socket.gaierror("offline fixture")
+        raise AssertionError(f"unexpected DNS lookup: {host}")
 
     monkeypatch.setattr(campaign_module.socket, "getaddrinfo", resolve)
 
@@ -936,35 +941,60 @@ def test_measurement_target_identity_uses_stable_resolved_address_sets(
             },
         )
 
-    first = identity("bolt://neo-a.internal.:7687/neo4j")
-    assert first == identity("bolt://neo-b.internal:7687/neo4j")
-    assert first != identity("bolt://neo-a.internal:7688/neo4j")
-    assert first != identity("bolt://neo-a.internal:7687/system", "system")
+    first = identity("bolt://alias-success.internal:7687/neo4j")
+    assert first == identity("bolt://alias-partial.internal:7687/neo4j")
+    assert first == identity("bolt://alias-failure.internal:7687/neo4j")
+    assert first == identity("bolt://other-alias.internal:7688/system", "system")
 
 
-def test_measurement_target_identity_dns_failure_is_conservative(
-    monkeypatch,
+def test_different_preregistered_measurement_targets_can_run_concurrently(
+    tmp_path,
 ) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
-    monkeypatch.setattr(
-        campaign_module.socket,
-        "getaddrinfo",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            socket.gaierror("offline fixture")
-        ),
+    systems = dict(spec.systems)
+    systems[TargetSystem.NEO4J] = replace(
+        systems[TargetSystem.NEO4J],
+        measurement_target_id="neo4j-independent-target-v2",
     )
+    other_spec = replace(spec, systems=FrozenMapping(systems))
+    first_identity = campaign_module.measurement_target_identity(spec, {})
+    second_identity = campaign_module.measurement_target_identity(other_spec, {})
+    assert first_identity != second_identity
 
-    def identity(host):
-        return campaign_module.measurement_target_identity(
-            spec,
-            {
-                "GRAPHSYMPERF_NEO4J_URI": f"bolt://{host}:7687/neo4j",
-                "GRAPHSYMPERF_NEO4J_DATABASE": "neo4j",
-            },
+    first = MeasurementSessionLock(
+        tmp_path,
+        target_identity=first_identity,
+    ).acquire()
+    try:
+        second = MeasurementSessionLock(
+            tmp_path,
+            target_identity=second_identity,
+        ).acquire()
+        second.release()
+    finally:
+        first.release()
+
+
+def test_campaign_binds_measurement_target_id_across_phases(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+    p0 = lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
+    assert p0.passed
+
+    systems = dict(spec.systems)
+    systems[TargetSystem.NEO4J] = replace(
+        systems[TargetSystem.NEO4J],
+        measurement_target_id="neo4j-drifted-target-v2",
+    )
+    drifted_spec = replace(spec, systems=FrozenMapping(systems))
+    with pytest.raises(PhaseAncestryError, match="campaign"):
+        lifecycle.run(
+            drifted_spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P1,
+            run_id="p1-target-drift",
+            parent_run="p0",
         )
-
-    assert identity("missing-a.internal") == identity("missing-a.internal.")
-    assert identity("missing-a.internal") != identity("missing-b.internal")
 
 
 def test_measurement_target_identity_normalizes_ipv4_mapped_ipv6() -> None:

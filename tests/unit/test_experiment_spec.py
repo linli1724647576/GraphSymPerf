@@ -108,6 +108,27 @@ def test_validated_yield_config_freezes_the_approved_budget() -> None:
     assert spec.systems[TargetSystem.NEO4J].rule_capabilities == (
         "multi_label_intersection",
     )
+    assert (
+        spec.systems[TargetSystem.NEO4J].measurement_target_id
+        == "neo4j-formal-runtime-target-v1"
+    )
+
+
+def test_schema_v3_requires_a_preregistered_neo4j_measurement_target_id(
+    tmp_path: Path,
+) -> None:
+    experiment = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    systems = yaml.safe_load(Path("config/systems.yaml").read_text(encoding="utf-8"))
+    systems["systems"]["neo4j"].pop("measurement_target_id", None)
+    path = _write_config_bundle(tmp_path, experiment=experiment, systems=systems)
+
+    with pytest.raises(
+        ConfigError,
+        match=r"systems\.neo4j\.measurement_target_id.*schema-v3",
+    ):
+        load_experiment_spec(path)
 
 
 def test_schema_v3_config_cannot_override_registry_safety_facts(tmp_path: Path) -> None:
