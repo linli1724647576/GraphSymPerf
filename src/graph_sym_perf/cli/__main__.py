@@ -87,14 +87,14 @@ def main(argv: list[str] | None = None) -> int:
     issues = IssueCommands()
     try:
         if args.command == "experiment" and args.experiment_command == "run":
-            run_options = {"config": args.config, "output_root": args.output_root}
-            if args.phase is not None:
-                run_options.update(
-                    phase=args.phase,
-                    run_id=args.run_id,
-                    parent_run=args.parent_run,
-                    selection=args.selection,
-                )
+            run_options = {
+                "config": args.config,
+                "output_root": args.output_root,
+                "phase": args.phase,
+                "run_id": args.run_id,
+                "parent_run": args.parent_run,
+                "selection": args.selection,
+            }
             result = experiments.run(**run_options)
             if args.phase is not None:
                 summary = result.summary

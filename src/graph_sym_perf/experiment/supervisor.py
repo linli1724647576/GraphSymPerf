@@ -134,6 +134,9 @@ class RulePlanSupervisor:
         campaign_id: str,
         input_manifest_hash: str,
         retry_limit: int = 0,
+        process_isolation: bool = True,
+        heartbeat_seconds: float = 10.0,
+        stale_after_seconds: float = 90.0,
     ) -> None:
         if not 0 <= retry_limit <= 3:
             raise ValueError("retry_limit must be between zero and three")
@@ -141,10 +144,15 @@ class RulePlanSupervisor:
             raise ValueError("campaign_id must be non-empty")
         if CONTENT_HASH.fullmatch(input_manifest_hash) is None:
             raise ValueError("input_manifest_hash must be a lowercase sha256")
+        if heartbeat_seconds <= 0 or stale_after_seconds <= heartbeat_seconds:
+            raise ValueError("stale_after_seconds must exceed heartbeat_seconds")
         self.run_dir = Path(run_dir)
         self.campaign_id = campaign_id
         self.input_manifest_hash = input_manifest_hash
         self.retry_limit = retry_limit
+        self.process_isolation = process_isolation
+        self.heartbeat_seconds = heartbeat_seconds
+        self.stale_after_seconds = stale_after_seconds
 
     def run(
         self,
@@ -229,12 +237,30 @@ class RulePlanSupervisor:
                 task_identity=canonical_hash(to_jsonable(entry)),
             )
             try:
-                bind_worker_attempt(worker, context)
-                value = worker(entry)
+                if self.process_isolation:
+                    value = ProcessMonitor(
+                        heartbeat_seconds=self.heartbeat_seconds,
+                        stale_after_seconds=self.stale_after_seconds,
+                        hard_timeout_seconds=float(entry.max_entry_runtime_seconds),
+                    ).run(worker, entry, context)
+                else:
+                    bind_worker_attempt(worker, context)
+                    value = worker(entry)
                 if not isinstance(value, Mapping):
                     raise EntryResultIntegrityError("entry worker must return a mapping")
                 final_result = dict(value)
                 final_state = classify_rule_plan_result(entry, final_result)
+            except WorkerProcessError as exc:
+                final_state = EntryState.INFRASTRUCTURE_FAILED
+                final_result = {
+                    "accepted_pairs": 0,
+                    "artifact_complete": False,
+                    "certificate_complete": False,
+                    "entry_id": entry.entry_id,
+                    "infrastructure_error_kind": exc.kind.value,
+                    "infrastructure_reason": str(exc),
+                    "terminal_state": final_state.value,
+                }
             except Exception as exc:
                 final_state = EntryState.INFRASTRUCTURE_FAILED
                 final_result = {

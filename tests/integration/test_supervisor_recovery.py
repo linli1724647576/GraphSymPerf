@@ -125,6 +125,7 @@ def test_rule_plan_supervisor_retries_in_new_attempt_and_writes_typed_cell_summa
         campaign_id="campaign-fixture",
         input_manifest_hash="a" * 64,
         retry_limit=1,
+        process_isolation=False,
     ).run(plan, Worker())
 
     assert summary.completed == plan.entries
@@ -177,6 +178,7 @@ def test_rule_plan_supervisor_writes_one_cell_summary_for_every_terminal_class(t
         campaign_id="campaign-fixture",
         input_manifest_hash="a" * 64,
         retry_limit=0,
+        process_isolation=False,
     ).run(plan, worker)
 
     assert len(summary.underfilled) == 1
@@ -211,6 +213,7 @@ def test_rule_plan_cell_summary_conversion_failure_is_typed_infrastructure(
         tmp_path,
         campaign_id="campaign-fixture",
         input_manifest_hash="a" * 64,
+        process_isolation=False,
     ).run(plan, worker)
 
     assert summary.infrastructure_failed == plan.entries
@@ -222,6 +225,101 @@ def test_rule_plan_cell_summary_conversion_failure_is_typed_infrastructure(
     assert payload["terminal_state"] == "infrastructure_failed"
     assert payload["artifact_complete"] is False
     assert payload["certificate_complete"] is False
+
+
+def test_rule_plan_supervisor_runs_formal_entry_in_an_isolated_process(tmp_path) -> None:
+    plan = _p1_rule_plan()
+    parent_pid = os.getpid()
+
+    def worker(entry):
+        return {
+            "accepted_pairs": entry.accepted_pair_quota,
+            "artifact_complete": True,
+            "certificate_complete": True,
+            "entry_id": entry.entry_id,
+            "terminal_state": "completed",
+            "worker_pid": os.getpid(),
+        }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        process_isolation=True,
+        heartbeat_seconds=0.05,
+        stale_after_seconds=1.0,
+    ).run(plan, worker)
+
+    assert summary.completed == plan.entries
+    terminal = json.loads(
+        next((tmp_path / "entries").glob("*/attempt-000/terminal_result.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert terminal["worker_pid"] != parent_pid
+
+
+def test_rule_plan_supervisor_enforces_entry_hard_timeout(tmp_path) -> None:
+    plan = _p1_rule_plan()
+    plan = replace(
+        plan,
+        entries=(replace(plan.entries[0], max_entry_runtime_seconds=1),),
+    )
+
+    def worker(entry):
+        time.sleep(2.0)
+        return {
+            "accepted_pairs": entry.accepted_pair_quota,
+            "artifact_complete": True,
+            "certificate_complete": True,
+            "entry_id": entry.entry_id,
+            "terminal_state": "completed",
+        }
+
+    started = time.monotonic()
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        process_isolation=True,
+        heartbeat_seconds=0.05,
+        stale_after_seconds=1.0,
+    ).run(plan, worker)
+
+    assert time.monotonic() - started < 1.8
+    assert summary.infrastructure_failed == plan.entries
+    terminal = json.loads(
+        next((tmp_path / "entries").glob("*/attempt-000/terminal_result.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert terminal["infrastructure_error_kind"] == ErrorKind.WORKER_HUNG.value
+
+
+def test_rule_plan_supervisor_classifies_child_crash_without_killing_campaign(
+    tmp_path,
+) -> None:
+    plan = _p1_rule_plan()
+
+    def worker(_entry):
+        os._exit(17)
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        process_isolation=True,
+        heartbeat_seconds=0.05,
+        stale_after_seconds=1.0,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    terminal = json.loads(
+        next((tmp_path / "entries").glob("*/attempt-000/terminal_result.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert terminal["infrastructure_error_kind"] == ErrorKind.WORKER_CRASHED.value
 
 
 def _hash_for(label: str) -> str:

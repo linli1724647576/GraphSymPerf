@@ -120,6 +120,7 @@ def _campaign_lifecycle(root):
         root,
         environment={"fixture": "1"},
         regression_verifier=_verified_regression_reference,
+        process_isolation=False,
     )
 
 

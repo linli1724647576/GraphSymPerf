@@ -45,15 +45,49 @@ def test_runtime_first_run_calls_only_the_public_experiment_interface(monkeypatc
     calls = {}
 
     class _Commands:
-        def run(self, *, config, output_root):
-            calls.update(config=config, output_root=output_root)
+        def run(self, **kwargs):
+            calls.update(kwargs)
             return _LifecycleResult()
 
     monkeypatch.setattr("graph_sym_perf.cli.__main__.ExperimentCommands", _Commands)
 
     assert main(["experiment", "run", "--config", "config/experiment.yaml", "--output-root", str(tmp_path)]) == 0
-    assert calls == {"config": "config/experiment.yaml", "output_root": str(tmp_path)}
+    assert calls == {
+        "config": "config/experiment.yaml",
+        "output_root": str(tmp_path),
+        "phase": None,
+        "run_id": None,
+        "parent_run": None,
+        "selection": None,
+    }
     assert "formal-run" in capsys.readouterr().out
+
+
+def test_cli_never_drops_parent_or_selection_when_phase_is_absent(monkeypatch, tmp_path) -> None:
+    calls = {}
+
+    class _Commands:
+        def run(self, **kwargs):
+            calls.update(kwargs)
+            raise ValueError("phase ancestry arguments require a schema-v3 config")
+
+    monkeypatch.setattr("graph_sym_perf.cli.__main__.ExperimentCommands", _Commands)
+
+    assert main(
+        [
+            "experiment",
+            "run",
+            "--config",
+            "config/experiment.yaml",
+            "--parent-run",
+            "p0-run",
+            "--selection",
+            str(tmp_path / "selection.json"),
+        ]
+    ) == 2
+    assert calls["phase"] is None
+    assert calls["parent_run"] == "p0-run"
+    assert calls["selection"].endswith("selection.json")
 
 
 def test_runtime_first_plan_prints_exact_formal_budget(capsys) -> None:

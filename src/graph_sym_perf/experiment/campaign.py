@@ -100,6 +100,7 @@ class CampaignLifecycle:
             Mapping[str, object],
         ] | None = None,
         measurement_lock_root: str | Path | None = None,
+        process_isolation: bool = True,
     ) -> None:
         self.campaign_root = Path(campaign_root)
         self.environment = dict(os.environ if environment is None else environment)
@@ -110,6 +111,7 @@ class CampaignLifecycle:
             or configured_lock_root
             or (Path(tempfile.gettempdir()) / "graphsymperf-measurement-locks")
         )
+        self.process_isolation = process_isolation
 
     def run(
         self,
@@ -196,6 +198,7 @@ class CampaignLifecycle:
                 campaign_id=campaign_id,
                 input_manifest_hash=manifest_hash,
                 retry_limit=retry_limit,
+                process_isolation=self.process_isolation,
             ).run(plan, worker)
             passed, gate_reasons, regression_artifact = self._phase_passed(
                 spec,
