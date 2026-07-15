@@ -34,11 +34,15 @@ from graph_sym_perf.experiment.worker import (
 )
 from graph_sym_perf.experiment.worker import WorkerFailure
 from graph_sym_perf.experiment.state import ErrorKind
-from tests.gdsmith_artifact_fixture import verified_gdsmith_environment
+from tests.gdsmith_artifact_fixture import (
+    assume_schema_v3_sources_clean,
+    verified_gdsmith_environment,
+)
 
 
 @pytest.fixture(autouse=True)
 def _default_rule_plan_tooling(tmp_path, monkeypatch) -> None:
+    assume_schema_v3_sources_clean(monkeypatch)
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
     for name, value in verified_gdsmith_environment(
         tmp_path / "gdsmith-fixture",

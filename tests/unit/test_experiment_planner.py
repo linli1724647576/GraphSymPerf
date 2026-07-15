@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+import graph_sym_perf.experiment.planner as planner_module
+
 from graph_sym_perf.core import ConfigError, TargetSystem
 from graph_sym_perf.experiment.plan_models import (
     CampaignPhase,
@@ -24,11 +26,15 @@ from graph_sym_perf.experiment.planner import (
     write_resolved_manifest,
 )
 from graph_sym_perf.experiment.spec import load_experiment_spec
-from tests.gdsmith_artifact_fixture import verified_gdsmith_environment
+from tests.gdsmith_artifact_fixture import (
+    assume_schema_v3_sources_clean,
+    verified_gdsmith_environment,
+)
 
 
 @pytest.fixture(autouse=True)
 def _default_rule_plan_tooling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assume_schema_v3_sources_clean(monkeypatch)
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
     environment = verified_gdsmith_environment(
         tmp_path / "default-gdsmith",
@@ -96,6 +102,34 @@ def test_rule_plan_seals_verified_gdsmith_artifact_digests_and_fails_closed(
     assert plan.source_revision.provenance_complete
     with pytest.raises(ConfigError, match="verified GDsmith artifact"):
         build_rule_plan(spec, CampaignPhase.P1, environment={})
+
+
+@pytest.mark.parametrize(
+    ("dirty_source", "expected_message"),
+    (
+        ("repository", "GraphSymPerf repository must be clean"),
+        ("gdsmith", "GDsmith checkout must be clean"),
+    ),
+)
+def test_schema3_rule_plan_rejects_any_already_dirty_source_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dirty_source: str,
+    expected_message: str,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = verified_gdsmith_environment(tmp_path, spec.generation.expected_commit)
+    repository_root = spec.source_path.parents[1]
+
+    def dirty(path: Path) -> bool:
+        if dirty_source == "repository":
+            return path == repository_root
+        return path == spec.generation.checkout
+
+    monkeypatch.setattr(planner_module, "_git_dirty", dirty)
+
+    with pytest.raises(ConfigError, match=expected_message):
+        build_rule_plan(spec, CampaignPhase.P1, environment=environment)
 
 
 def test_p2_requires_bounded_explicit_rule_scale_cells() -> None:

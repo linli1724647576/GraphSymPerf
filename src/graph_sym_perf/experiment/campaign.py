@@ -563,6 +563,11 @@ class CampaignLifecycle:
     ) -> None:
         if not plan.source_revision.provenance_complete:
             raise PhaseAncestryError("RulePlan source revision is incomplete")
+        if (
+            plan.source_revision.repository_dirty is not False
+            or plan.source_revision.gdsmith_dirty is not False
+        ):
+            raise PhaseAncestryError("RulePlan source revision must be clean")
         if parent_ref is None:
             return
         parent_run = parent_ref.get("run_id")
@@ -792,8 +797,8 @@ def _source_revision_payload_complete(value: Mapping[str, object]) -> bool:
     )
     return (
         all(isinstance(value.get(name), str) and bool(str(value.get(name))) for name in string_fields)
-        and isinstance(value.get("repository_dirty"), bool)
-        and isinstance(value.get("gdsmith_dirty"), bool)
+        and value.get("repository_dirty") is False
+        and value.get("gdsmith_dirty") is False
     )
 
 

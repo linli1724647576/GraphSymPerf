@@ -253,6 +253,11 @@ class _SourceProvenanceGuard:
         self.schema_version = plan.schema_version
         if plan.schema_version == 3 and not self.expected.provenance_complete:
             raise ManifestMismatchError("source provenance is incomplete")
+        if plan.schema_version == 3 and (
+            self.expected.repository_dirty is not False
+            or self.expected.gdsmith_dirty is not False
+        ):
+            raise ManifestMismatchError("source provenance must be clean")
         self.repository_root = spec.source_path.parents[1]
         self.environment = os.environ if environment is None else environment
         self._verify_artifact_provenance()

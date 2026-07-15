@@ -340,11 +340,25 @@ def _rule_plan_source_revision(
     environment: Mapping[str, str] | None,
 ) -> SourceRevision:
     repository_root = spec.source_path.parents[1]
+    repository_dirty = _git_dirty(repository_root)
+    if repository_dirty is not False:
+        raise ConfigError(
+            "schema-v3 GraphSymPerf repository must be clean"
+            if repository_dirty is True
+            else "schema-v3 GraphSymPerf repository cleanliness is unavailable"
+        )
     gdsmith_commit = _git_output(spec.generation.checkout, "rev-parse", "HEAD")
     if gdsmith_commit != spec.generation.expected_commit:
         raise ConfigError(
             "GDsmith checkout does not match generation.expected_commit: "
             f"expected {spec.generation.expected_commit}, got {gdsmith_commit or 'unavailable'}"
+        )
+    gdsmith_dirty = _git_dirty(spec.generation.checkout)
+    if gdsmith_dirty is not False:
+        raise ConfigError(
+            "schema-v3 GDsmith checkout must be clean"
+            if gdsmith_dirty is True
+            else "schema-v3 GDsmith checkout cleanliness is unavailable"
         )
     tooling = check_gdsmith_tooling(
         GdsmithConfig(expected_source_commit=spec.generation.expected_commit),
@@ -360,9 +374,9 @@ def _rule_plan_source_revision(
         )
     revision = SourceRevision(
         repository_commit=_git_output(repository_root, "rev-parse", "HEAD"),
-        repository_dirty=_git_dirty(repository_root),
+        repository_dirty=repository_dirty,
         gdsmith_commit=gdsmith_commit,
-        gdsmith_dirty=_git_dirty(spec.generation.checkout),
+        gdsmith_dirty=gdsmith_dirty,
         rules_schema_sha256=spec.rules_schema_sha256,
         gdsmith_jar_sha256=tooling.jar_sha256,
         gdsmith_build_manifest_sha256=tooling.build_manifest_sha256,

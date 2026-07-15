@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import graph_sym_perf.experiment.lifecycle as lifecycle_module
+import graph_sym_perf.experiment.planner as planner_module
 from graph_sym_perf.experiment.lifecycle import ExperimentLifecycle
 from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.campaign import (
@@ -25,7 +27,15 @@ from graph_sym_perf.experiment.selection import select_p2_cells, write_pilot_sel
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.state import ManifestMismatchError
 from graph_sym_perf.experiment.supervisor import RunSummary
-from tests.gdsmith_artifact_fixture import verified_gdsmith_environment
+from tests.gdsmith_artifact_fixture import (
+    assume_schema_v3_sources_clean,
+    verified_gdsmith_environment,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clean_schema_v3_sources(monkeypatch) -> None:
+    assume_schema_v3_sources_clean(monkeypatch)
 
 
 class _CompleteLifecycleWorker:
@@ -324,6 +334,38 @@ def test_campaign_rejects_an_incomplete_rule_plan_source_revision_before_p0(
     assert not (tmp_path / "incomplete-p0").exists()
 
 
+def test_campaign_rejects_a_forged_dirty_rule_plan_before_p0(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+    real_builder = campaign_module.build_rule_plan
+
+    def dirty_builder(*args, **kwargs):
+        plan = real_builder(*args, **kwargs)
+        return replace(
+            plan,
+            source_revision=replace(plan.source_revision, repository_dirty=True),
+        )
+
+    monkeypatch.setattr(campaign_module, "build_rule_plan", dirty_builder)
+    monkeypatch.setattr(
+        campaign_module,
+        "_campaign_source_provenance_guard",
+        lambda *_args, **_kwargs: lambda: None,
+    )
+
+    with pytest.raises(PhaseAncestryError, match="source revision must be clean"):
+        lifecycle.run(
+            spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P0,
+            run_id="dirty-p0",
+        )
+    assert not (tmp_path / "dirty-p0").exists()
+
+
 def test_campaign_rejects_incomplete_parent_source_revision_even_when_resealed(
     tmp_path,
 ) -> None:
@@ -492,6 +534,45 @@ def test_campaign_source_guard_rejects_gdsmith_drift_between_plan_and_guard(
             plan,
             environment=environment,
         )
+        guard()
+
+
+@pytest.mark.parametrize("changed_source", ("repository", "gdsmith"))
+def test_campaign_source_guard_rejects_cleanliness_drift_after_plan(
+    monkeypatch,
+    tmp_path,
+    changed_source,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = verified_gdsmith_environment(
+        tmp_path / "gdsmith-fixture",
+        spec.generation.expected_commit,
+    )
+    repository_root = spec.source_path.parents[1]
+    dirty_state = {"repository": False, "gdsmith": False}
+
+    def dirty(path):
+        if path == repository_root:
+            return dirty_state["repository"]
+        if path == spec.generation.checkout:
+            return dirty_state["gdsmith"]
+        return False
+
+    monkeypatch.setattr(lifecycle_module, "_git_dirty", dirty)
+    monkeypatch.setattr(planner_module, "_git_dirty", dirty)
+    plan = campaign_module.build_rule_plan(
+        spec,
+        CampaignPhase.P0,
+        environment=environment,
+    )
+    dirty_state[changed_source] = True
+    guard = campaign_module._campaign_source_provenance_guard(
+        spec,
+        plan,
+        environment=environment,
+    )
+
+    with pytest.raises(ManifestMismatchError, match="source provenance changed"):
         guard()
 
 
