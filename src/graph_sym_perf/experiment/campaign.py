@@ -12,6 +12,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from graph_sym_perf.core import to_jsonable
@@ -98,10 +99,17 @@ class CampaignLifecycle:
             [ValidatedYieldExperimentSpec, Path, Mapping[str, str]],
             Mapping[str, object],
         ] | None = None,
+        measurement_lock_root: str | Path | None = None,
     ) -> None:
         self.campaign_root = Path(campaign_root)
         self.environment = dict(os.environ if environment is None else environment)
         self._regression_verifier = regression_verifier or _verify_regression_artifact
+        configured_lock_root = self.environment.get("GRAPHSYMPERF_MEASUREMENT_LOCK_ROOT")
+        self.measurement_lock_root = Path(
+            measurement_lock_root
+            or configured_lock_root
+            or (Path(tempfile.gettempdir()) / "graphsymperf-measurement-locks")
+        )
 
     def run(
         self,
@@ -156,51 +164,49 @@ class CampaignLifecycle:
             }
             _validate_p2_plan(plan, pilot, p1_seeds=p1_seeds)
 
-        run_dir.mkdir(parents=True, exist_ok=False)
-        write_resolved_manifest(plan, run_dir / "rule_plan.json")
-        rule_plan_hash = resolved_manifest_hash(plan)
-        manifest_body: dict[str, object] = {
-            "campaign_id": campaign_id,
-            "campaign_protocol_version": CAMPAIGN_PROTOCOL_VERSION,
-            "config_hash": config_hash,
-            "parent": parent_ref,
-            "phase": phase.value,
-            "rule_plan_hash": rule_plan_hash,
-            "run_id": run_id,
-            "selection": selection_ref,
-        }
-        manifest_hash = canonical_hash(manifest_body)
-        _write_sealed_json(run_dir / "resolved_manifest.json", manifest_body)
-
-        bind_regression_root = getattr(worker, "bind_regression_artifact_root", None)
-        if callable(bind_regression_root):
-            bind_regression_root(
-                self._regression_root_for_phase(
-                    phase,
-                    run_dir=run_dir,
-                    parent=parent_ref,
-                )
-            )
-
-        lease = MeasurementSessionLock(self.campaign_root).acquire()
+        lease = self.measurement_lock(spec).acquire()
         try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+            write_resolved_manifest(plan, run_dir / "rule_plan.json")
+            rule_plan_hash = resolved_manifest_hash(plan)
+            manifest_body: dict[str, object] = {
+                "campaign_id": campaign_id,
+                "campaign_protocol_version": CAMPAIGN_PROTOCOL_VERSION,
+                "config_hash": config_hash,
+                "parent": parent_ref,
+                "phase": phase.value,
+                "rule_plan_hash": rule_plan_hash,
+                "run_id": run_id,
+                "selection": selection_ref,
+            }
+            manifest_hash = canonical_hash(manifest_body)
+            _write_sealed_json(run_dir / "resolved_manifest.json", manifest_body)
+
+            bind_regression_root = getattr(worker, "bind_regression_artifact_root", None)
+            if callable(bind_regression_root):
+                bind_regression_root(
+                    self._regression_root_for_phase(
+                        phase,
+                        run_dir=run_dir,
+                        parent=parent_ref,
+                    )
+                )
             summary = RulePlanSupervisor(
                 run_dir,
                 campaign_id=campaign_id,
                 input_manifest_hash=manifest_hash,
                 retry_limit=retry_limit,
             ).run(plan, worker)
+            passed, gate_reasons, regression_artifact = self._phase_passed(
+                spec,
+                phase,
+                plan,
+                summary,
+                run_id,
+            )
+            _ordered_summaries, cell_summary_root = self._ordered_cell_summaries(run_id)
         finally:
             lease.release()
-
-        passed, gate_reasons, regression_artifact = self._phase_passed(
-            spec,
-            phase,
-            plan,
-            summary,
-            run_id,
-        )
-        _ordered_summaries, cell_summary_root = self._ordered_cell_summaries(run_id)
         outcome_body = {
             "campaign_id": campaign_id,
             "cell_summary_root": cell_summary_root,
@@ -229,6 +235,15 @@ class CampaignLifecycle:
             manifest_hash=manifest_hash,
             passed=passed,
             summary=summary,
+        )
+
+    def measurement_lock(
+        self,
+        spec: ValidatedYieldExperimentSpec,
+    ) -> "MeasurementSessionLock":
+        return MeasurementSessionLock(
+            self.measurement_lock_root,
+            target_identity=measurement_target_identity(spec, self.environment),
         )
 
     def cell_summaries(self, run_id: str) -> tuple[CellSummary, ...]:
@@ -630,35 +645,99 @@ def _verify_regression_artifact(
     }
 
 
+def measurement_target_identity(
+    spec: ValidatedYieldExperimentSpec,
+    environment: Mapping[str, str],
+) -> str:
+    if not isinstance(spec, ValidatedYieldExperimentSpec):
+        raise TypeError("measurement target identity requires a schema-v3 spec")
+    uri = str(environment.get("GRAPHSYMPERF_NEO4J_URI", "")).strip()
+    parsed = urlparse(uri)
+    host = (parsed.hostname or "unresolved-host").lower()
+    port = parsed.port or 7687
+    database = str(environment.get("GRAPHSYMPERF_NEO4J_DATABASE", "")).strip()
+    if not database:
+        database = parsed.path.strip("/") or "neo4j"
+    return canonical_hash(
+        {
+            "container_identity": str(
+                environment.get("GRAPHSYMPERF_NEO4J_CONTAINER", "unresolved-container")
+            ),
+            "database": database,
+            "endpoint": f"{parsed.scheme or 'bolt'}://{host}:{port}",
+            "image_digest": str(
+                environment.get(
+                    "GRAPHSYMPERF_NEO4J_IMAGE_DIGEST",
+                    "unresolved-image-digest",
+                )
+            ),
+            "protocol": "neo4j-exclusive-measurement-target-v1",
+            "target": "neo4j",
+        }
+    )
+
+
 class MeasurementSessionLock:
     """One conservative, identity-bound Neo4j measurement owner per campaign."""
 
-    def __init__(self, campaign_root: str | Path) -> None:
+    def __init__(
+        self,
+        campaign_root: str | Path,
+        *,
+        target_identity: str | None = None,
+    ) -> None:
         self.campaign_root = Path(campaign_root)
-        self.lock_dir = self.campaign_root / ".neo4j-measurement-session"
+        if target_identity is not None and re.fullmatch(r"[0-9a-f]{64}", target_identity) is None:
+            raise ValueError("target_identity must be a lowercase sha256")
+        self.target_identity = target_identity or canonical_hash(
+            {"legacy_lock_root": str(self.campaign_root.resolve())}
+        )
+        self.lock_dir = (
+            self.campaign_root / f"neo4j-{self.target_identity}"
+            if target_identity is not None
+            else self.campaign_root / ".neo4j-measurement-session"
+        )
         self.owner_path = self.lock_dir / "owner.json"
 
     def acquire(self) -> "MeasurementSessionLease":
         self.campaign_root.mkdir(parents=True, exist_ok=True)
         for _ in range(2):
+            staging = self.campaign_root / f".{self.lock_dir.name}.pending-{uuid4().hex}"
             try:
-                self.lock_dir.mkdir(mode=0o700)
-            except FileExistsError:
-                if not self._recover_proven_stale_owner():
-                    raise MeasurementSessionBusy(
-                        f"{MEASUREMENT_SESSION_BUSY}: Neo4j measurement session already owned"
-                    )
-                continue
-            token = uuid4().hex
-            body = {
-                "host": socket.gethostname(),
-                "pid": os.getpid(),
-                "process_start_identity": _process_start_identity(os.getpid()),
-                "token": token,
-            }
-            sealed = {**body, "content_hash": canonical_hash(body)}
-            raw = _create_owner_file(self.owner_path, sealed)
-            return MeasurementSessionLease(self.lock_dir, self.owner_path, sealed, raw)
+                staging.mkdir(mode=0o700)
+                token = uuid4().hex
+                body = {
+                    "host": socket.gethostname(),
+                    "pid": os.getpid(),
+                    "process_start_identity": _process_start_identity(os.getpid()),
+                    "target_identity": self.target_identity,
+                    "token": token,
+                }
+                sealed = {**body, "content_hash": canonical_hash(body)}
+                raw = _create_owner_file(staging / "owner.json", sealed)
+                try:
+                    staging.rename(self.lock_dir)
+                except OSError:
+                    if not self.lock_dir.exists():
+                        raise
+                    if not self._recover_proven_stale_owner():
+                        raise MeasurementSessionBusy(
+                            f"{MEASUREMENT_SESSION_BUSY}: Neo4j measurement session already owned"
+                        )
+                    continue
+                return MeasurementSessionLease(
+                    self.lock_dir,
+                    self.owner_path,
+                    sealed,
+                    raw,
+                )
+            finally:
+                if staging.exists():
+                    try:
+                        (staging / "owner.json").unlink(missing_ok=True)
+                        staging.rmdir()
+                    except OSError:
+                        pass
         raise MeasurementSessionBusy(f"{MEASUREMENT_SESSION_BUSY}: lock acquisition raced")
 
     def _recover_proven_stale_owner(self) -> bool:
@@ -677,8 +756,12 @@ class MeasurementSessionLock:
         pid = body.get("pid")
         process_start = body.get("process_start_identity")
         token = body.get("token")
+        host = body.get("host")
+        target_identity = body.get("target_identity")
         if (
-            not isinstance(pid, int)
+            host != socket.gethostname()
+            or target_identity != self.target_identity
+            or not isinstance(pid, int)
             or isinstance(pid, bool)
             or pid <= 0
             or not isinstance(process_start, str)

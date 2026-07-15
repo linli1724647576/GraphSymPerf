@@ -17,6 +17,7 @@ from graph_sym_perf.experiment.campaign import (
     MeasurementSessionOwnershipError,
     PhaseAncestryError,
 )
+from graph_sym_perf.experiment import campaign as campaign_module
 from graph_sym_perf.experiment.plan_models import CampaignPhase
 from graph_sym_perf.experiment.selection import select_p2_cells, write_pilot_selection
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -53,9 +54,9 @@ class _CompleteLifecycleWorker:
 
 
 class _CampaignFixtureWorker:
-    def __init__(self, *, underfill_first: bool = False, assert_lock_root=None) -> None:
+    def __init__(self, *, underfill_first: bool = False, assert_lock=None) -> None:
         self.underfill_first = underfill_first
-        self.assert_lock_root = assert_lock_root
+        self.assert_lock = assert_lock
         self.calls = 0
 
     def bind_run_dir(self, _run_dir) -> None:
@@ -66,9 +67,9 @@ class _CampaignFixtureWorker:
 
     def __call__(self, entry):
         self.calls += 1
-        if self.assert_lock_root is not None:
+        if self.assert_lock is not None:
             with pytest.raises(MeasurementSessionBusy, match="MEASUREMENT_SESSION_BUSY"):
-                MeasurementSessionLock(self.assert_lock_root).acquire()
+                self.assert_lock.acquire()
         accepted = entry.accepted_pair_quota
         terminal = "completed"
         if self.underfill_first and self.calls == 1:
@@ -365,9 +366,10 @@ def test_measurement_session_is_cross_process_exclusive_and_owner_only(tmp_path)
 
 def test_campaign_holds_measurement_lock_across_worker_validation(tmp_path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
-    result = _campaign_lifecycle(tmp_path).run(
+    lifecycle = _campaign_lifecycle(tmp_path)
+    result = lifecycle.run(
         spec,
-        _CampaignFixtureWorker(assert_lock_root=tmp_path),
+        _CampaignFixtureWorker(assert_lock=lifecycle.measurement_lock(spec)),
         phase=CampaignPhase.P0,
         run_id="p0",
     )
@@ -459,6 +461,85 @@ def test_measurement_lock_never_steals_a_live_pid_with_mismatched_identity(tmp_p
         shutil.rmtree(tmp_path / ".neo4j-measurement-session", ignore_errors=True)
     with pytest.raises(MeasurementSessionOwnershipError):
         lease.release()
+
+
+def test_measurement_lock_never_reclaims_a_foreign_host_owner(tmp_path) -> None:
+    lease = MeasurementSessionLock(tmp_path).acquire()
+    owner_path = tmp_path / ".neo4j-measurement-session" / "owner.json"
+    owner = json.loads(owner_path.read_text(encoding="utf-8"))
+    owner["host"] = "remote-builder.example"
+    owner["pid"] = 2_000_000_000
+    body = {key: value for key, value in owner.items() if key != "content_hash"}
+    owner["content_hash"] = canonical_hash(body)
+    owner_path.write_text(json.dumps(owner), encoding="utf-8")
+    try:
+        with pytest.raises(MeasurementSessionBusy, match="MEASUREMENT_SESSION_BUSY"):
+            MeasurementSessionLock(tmp_path).acquire()
+    finally:
+        import shutil
+
+        shutil.rmtree(tmp_path / ".neo4j-measurement-session", ignore_errors=True)
+    with pytest.raises(MeasurementSessionOwnershipError):
+        lease.release()
+
+
+def test_measurement_owner_publish_failure_rolls_back_without_poisoning_lock(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    original = campaign_module._create_owner_file
+    monkeypatch.setattr(
+        campaign_module,
+        "_create_owner_file",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("injected-owner-write")),
+    )
+    with pytest.raises(OSError, match="injected-owner-write"):
+        MeasurementSessionLock(tmp_path).acquire()
+    assert not (tmp_path / ".neo4j-measurement-session").exists()
+
+    monkeypatch.setattr(campaign_module, "_create_owner_file", original)
+    lease = MeasurementSessionLock(tmp_path).acquire()
+    lease.release()
+
+
+def test_same_neo4j_target_contends_across_different_campaign_roots(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = {
+        "GRAPHSYMPERF_NEO4J_URI": "bolt://127.0.0.1:7687/neo4j",
+        "GRAPHSYMPERF_NEO4J_DATABASE": "neo4j",
+        "GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "a" * 64,
+        "GRAPHSYMPERF_NEO4J_CONTAINER": "neo4j-main",
+    }
+    identity = campaign_module.measurement_target_identity(spec, environment)
+    lock_root = tmp_path / "shared-locks"
+    first = MeasurementSessionLock(lock_root, target_identity=identity).acquire()
+    try:
+        with pytest.raises(MeasurementSessionBusy, match="MEASUREMENT_SESSION_BUSY"):
+            MeasurementSessionLock(lock_root, target_identity=identity).acquire()
+    finally:
+        first.release()
+
+
+def test_busy_measurement_target_never_publishes_a_campaign_run(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = CampaignLifecycle(
+        tmp_path / "campaign",
+        environment={"fixture": "1"},
+        regression_verifier=_verified_regression_reference,
+        measurement_lock_root=tmp_path / "locks",
+    )
+    lease = lifecycle.measurement_lock(spec).acquire()
+    try:
+        with pytest.raises(MeasurementSessionBusy, match="MEASUREMENT_SESSION_BUSY"):
+            lifecycle.run(
+                spec,
+                _CampaignFixtureWorker(),
+                phase=CampaignPhase.P0,
+                run_id="must-not-exist",
+            )
+    finally:
+        lease.release()
+    assert not (tmp_path / "campaign" / "must-not-exist").exists()
 
 
 def test_lifecycle_writes_immutable_manifest_and_summary(tmp_path) -> None:
