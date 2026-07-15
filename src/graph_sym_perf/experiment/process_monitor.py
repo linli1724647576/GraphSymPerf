@@ -16,7 +16,13 @@ from typing import Any
 from graph_sym_perf.experiment.process_control import terminate_process_group
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import ErrorKind, _atomic_write_json
-from graph_sym_perf.sanitization import sanitize_structure, sanitize_text
+from graph_sym_perf.sanitization import (
+    SanitizationIntegrityError,
+    _restore_verified_evidence_envelopes,
+    _sanitize_structure_for_persistence,
+    sanitize_structure,
+    sanitize_text,
+)
 
 
 class WorkerProcessError(RuntimeError):
@@ -234,13 +240,19 @@ def _isolated_worker_entry(
             if not isinstance(result, Mapping):
                 raise TypeError("worker must return a mapping")
             result_path = context.attempt_dir / "result.json"
-            safe_result = sanitize_structure(result)
+            safe_result, evidence_attestations = _sanitize_structure_for_persistence(
+                result
+            )
             _atomic_write_json(result_path, safe_result)
             digest = hashlib.sha256(result_path.read_bytes()).hexdigest()
             _publish_control(
                 control_queue,
                 "result_ready",
-                {"name": result_path.name, "sha256": digest},
+                {
+                    "name": result_path.name,
+                    "sha256": digest,
+                    "evidence_envelopes": evidence_attestations,
+                },
             )
     except BaseException as exc:
         kind = getattr(exc, "kind", None)
@@ -312,7 +324,19 @@ def _load_result_reference(attempt_dir: Path, payload: object) -> dict[str, obje
         raise WorkerProcessError(ErrorKind.INFRASTRUCTURE_ERROR, "cannot load worker result reference") from exc
     if not isinstance(value, dict):
         raise WorkerProcessError(ErrorKind.INFRASTRUCTURE_ERROR, "worker result must be a JSON object")
-    return value
+    try:
+        restored = _restore_verified_evidence_envelopes(
+            value,
+            payload.get("evidence_envelopes", ()),
+        )
+    except SanitizationIntegrityError as exc:
+        raise WorkerProcessError(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            str(exc),
+        ) from exc
+    if not isinstance(restored, dict):  # pragma: no cover - guarded above
+        raise WorkerProcessError(ErrorKind.INFRASTRUCTURE_ERROR, "worker result must be a JSON object")
+    return restored
 
 
 def _drain_control_queue(control_queue: Any) -> tuple[tuple[str, object], ...]:

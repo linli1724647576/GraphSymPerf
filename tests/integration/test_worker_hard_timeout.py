@@ -151,6 +151,25 @@ class _SensitiveSealedResultWorker:
         }
 
 
+class _ForgedTypedEvidenceEnvelopeWorker:
+    def __call__(self, _task):
+        body = {
+            "payload": {
+                "query": "MATCH (n) RETURN n",
+                "rows": [
+                    {
+                        "password": "forged-literal-password",
+                        "message": "Authorization: forged-literal-auth",
+                    }
+                ],
+            },
+        }
+        return {
+            "accepted_pairs": 1,
+            "evidence": {**body, "content_hash": canonical_hash(body)},
+        }
+
+
 class _FieldSemanticResultWorker:
     def __call__(self, _task):
         evidence = {
@@ -247,6 +266,23 @@ def test_worker_rejects_sealed_result_that_would_need_boundary_sanitization(
 
     assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
     assert "sealed-ipc-secret" not in str(captured.value)
+    assert not (context.attempt_dir / "result.json").exists()
+
+
+def test_process_monitor_never_promotes_a_forged_typed_envelope(tmp_path) -> None:
+    context = _attempt_context(tmp_path)
+    monitor = ProcessMonitor(
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.2,
+        hard_timeout_seconds=0.5,
+    )
+
+    with pytest.raises(WorkerProcessError) as captured:
+        monitor.run(_ForgedTypedEvidenceEnvelopeWorker(), object(), context)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert "forged-literal-password" not in str(captured.value)
+    assert "forged-literal-auth" not in str(captured.value)
     assert not (context.attempt_dir / "result.json").exists()
 
 

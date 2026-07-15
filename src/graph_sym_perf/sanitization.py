@@ -25,6 +25,24 @@ class EvidencePayload(Generic[T]):
 class SanitizationIntegrityError(ValueError):
     """A generic boundary would invalidate already sealed evidence."""
 
+
+_VERIFIED_EVIDENCE_CAPABILITY = object()
+
+
+@dataclass(frozen=True)
+class _VerifiedEvidenceEnvelope:
+    """Process-local evidence capability created after durable verification."""
+
+    payload: object
+    content_hash: str
+    _capability: object
+
+    def __post_init__(self) -> None:
+        if self._capability is not _VERIFIED_EVIDENCE_CAPABILITY:
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: verified evidence capability is invalid"
+            )
+
 _CAMEL_ACRONYM_BOUNDARY = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
 _CAMEL_WORD_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _KEY_SEPARATORS = re.compile(r"[._-]+")
@@ -232,22 +250,53 @@ def sanitize_structure(value: Any) -> Any:
     return _sanitize_structure(value)
 
 
-def _sanitize_structure(value: Any) -> Any:
+def _sanitize_structure_for_persistence(
+    value: Any,
+) -> tuple[Any, tuple[dict[str, object], ...]]:
+    """Sanitize a child result and attest only explicit evidence wrappers."""
+
+    attestations: list[dict[str, object]] = []
+    sanitized = _sanitize_structure(
+        value,
+        evidence_attestations=attestations,
+        path=(),
+    )
+    return sanitized, tuple(attestations)
+
+
+def _sanitize_structure(
+    value: Any,
+    *,
+    evidence_attestations: list[dict[str, object]] | None = None,
+    path: tuple[str | int, ...] = (),
+) -> Any:
     """Internal recursion used by the public boundary sanitizer."""
 
+    if isinstance(value, _VerifiedEvidenceEnvelope):
+        return _verified_evidence_as_mapping(value)
     if isinstance(value, EvidencePayload):
-        return _seal_evidence_payload(value)
+        envelope = _seal_evidence_payload(value)
+        if evidence_attestations is not None:
+            evidence_attestations.append(
+                {
+                    "path": list(path),
+                    "content_hash": envelope["content_hash"],
+                }
+            )
+        return envelope
     if isinstance(value, Mapping):
         for key in value:
             _require_safe_mapping_key(key)
         canonical_envelope = _require_valid_canonical_envelope_if_recognized(value)
-        if canonical_envelope and _is_typed_evidence_payload(value.get("payload")):
-            return value
         sanitized = {
             key: (
                 REDACTED
                 if is_sensitive_key(key)
-                else _sanitize_structure(item)
+                else _sanitize_structure(
+                    item,
+                    evidence_attestations=evidence_attestations,
+                    path=path + (key,),
+                )
             )
             for key, item in value.items()
         }
@@ -259,9 +308,23 @@ def _sanitize_structure(value: Any) -> Any:
             return value
         return sanitized
     if isinstance(value, list):
-        return [_sanitize_structure(item) for item in value]
+        return [
+            _sanitize_structure(
+                item,
+                evidence_attestations=evidence_attestations,
+                path=path + (index,),
+            )
+            for index, item in enumerate(value)
+        ]
     if isinstance(value, tuple):
-        return tuple(_sanitize_structure(item) for item in value)
+        return tuple(
+            _sanitize_structure(
+                item,
+                evidence_attestations=evidence_attestations,
+                path=path + (index,),
+            )
+            for index, item in enumerate(value)
+        )
     if isinstance(value, str):
         return sanitize_text(value)
     return value
@@ -307,6 +370,19 @@ def _seal_evidence_payload(value: EvidencePayload[Any]) -> dict[str, object]:
     return {**body, "content_hash": _canonical_envelope_hash(body)}
 
 
+def _verified_evidence_as_mapping(
+    value: _VerifiedEvidenceEnvelope,
+) -> dict[str, object]:
+    body = {"payload": value.payload}
+    envelope = {**body, "content_hash": value.content_hash}
+    _require_typed_evidence_payload(value.payload)
+    if not _require_valid_canonical_envelope_if_recognized(envelope):  # pragma: no cover
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: verified evidence envelope is invalid"
+        )
+    return envelope
+
+
 def _canonical_envelope_hash(body: Mapping[str, object]) -> str:
     try:
         return _project_canonical_hash(body)
@@ -317,22 +393,129 @@ def _canonical_envelope_hash(body: Mapping[str, object]) -> str:
 
 
 def unwrap_evidence_payload(value: object) -> object:
-    """Validate and unwrap an explicit typed-evidence value or serialized envelope."""
+    """Unwrap explicit evidence or a process-locally verified envelope."""
 
     if isinstance(value, EvidencePayload):
         _require_typed_evidence_payload(value.payload)
         return value.payload
-    if not isinstance(value, Mapping):
+    if isinstance(value, _VerifiedEvidenceEnvelope):
+        _verified_evidence_as_mapping(value)
+        return value.payload
+    raise SanitizationIntegrityError(
+        "EVIDENCE_INTEGRITY_ERROR: typed evidence was not verified at its source boundary"
+    )
+
+
+def _restore_verified_evidence_envelopes(
+    value: object,
+    attestations: object,
+) -> object:
+    """Restore capabilities after file SHA and envelope attestations are checked."""
+
+    if not isinstance(attestations, (list, tuple)):
         raise SanitizationIntegrityError(
-            "EVIDENCE_INTEGRITY_ERROR: typed evidence must be a canonical envelope"
+            "EVIDENCE_INTEGRITY_ERROR: evidence attestations have an invalid schema"
         )
-    if not _require_valid_canonical_envelope_if_recognized(value):
-        raise SanitizationIntegrityError(
-            "EVIDENCE_INTEGRITY_ERROR: typed evidence must be a canonical envelope"
+    seen_paths: set[tuple[str | int, ...]] = set()
+    for attestation in attestations:
+        if not isinstance(attestation, Mapping) or frozenset(attestation) != {
+            "path",
+            "content_hash",
+        }:
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: evidence attestation has an invalid schema"
+            )
+        raw_path = attestation.get("path")
+        content_hash = attestation.get("content_hash")
+        if not isinstance(raw_path, (list, tuple)) or not all(
+            isinstance(segment, str)
+            or (isinstance(segment, int) and not isinstance(segment, bool))
+            for segment in raw_path
+        ):
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: evidence attestation path is invalid"
+            )
+        path = tuple(raw_path)
+        if path in seen_paths:
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: duplicate evidence attestation path"
+            )
+        seen_paths.add(path)
+        if not isinstance(content_hash, str) or _CANONICAL_HASH.fullmatch(content_hash) is None:
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: evidence attestation hash is invalid"
+            )
+        envelope = _value_at_path(value, path)
+        if not isinstance(envelope, Mapping):
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: attested evidence envelope is missing"
+            )
+        if not _require_valid_canonical_envelope_if_recognized(envelope):
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: attested evidence envelope is invalid"
+            )
+        if envelope.get("content_hash") != content_hash:
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: evidence attestation hash mismatch"
+            )
+        payload = envelope.get("payload")
+        _require_typed_evidence_payload(payload)
+        verified = _VerifiedEvidenceEnvelope(
+            payload=payload,
+            content_hash=content_hash,
+            _capability=_VERIFIED_EVIDENCE_CAPABILITY,
         )
-    payload = value.get("payload")
-    _require_typed_evidence_payload(payload)
-    return payload
+        value = _replace_value_at_path(value, path, verified)
+    return value
+
+
+def _value_at_path(value: object, path: tuple[str | int, ...]) -> object:
+    current = value
+    for segment in path:
+        if isinstance(current, Mapping) and isinstance(segment, str):
+            if segment not in current:
+                break
+            current = current[segment]
+            continue
+        if (
+            isinstance(current, (list, tuple))
+            and isinstance(segment, int)
+            and not isinstance(segment, bool)
+            and 0 <= segment < len(current)
+        ):
+            current = current[segment]
+            continue
+        break
+    else:
+        return current
+    raise SanitizationIntegrityError(
+        "EVIDENCE_INTEGRITY_ERROR: evidence attestation path is missing"
+    )
+
+
+def _replace_value_at_path(
+    value: object,
+    path: tuple[str | int, ...],
+    replacement: object,
+) -> object:
+    if not path:
+        return replacement
+    parent = _value_at_path(value, path[:-1])
+    segment = path[-1]
+    if isinstance(parent, dict) and isinstance(segment, str) and segment in parent:
+        parent[segment] = replacement
+        return value
+    if (
+        isinstance(parent, list)
+        and isinstance(segment, int)
+        and not isinstance(segment, bool)
+        and 0 <= segment < len(parent)
+    ):
+        parent[segment] = replacement
+        return value
+    raise SanitizationIntegrityError(
+        "EVIDENCE_INTEGRITY_ERROR: evidence attestation path cannot be restored"
+    )
 
 
 def _require_typed_evidence_payload(value: object) -> None:

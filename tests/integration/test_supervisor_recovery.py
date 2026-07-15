@@ -674,7 +674,13 @@ def test_terminal_result_is_recursively_sanitized_without_rewriting_query_result
         (tmp_path / "entries").glob("*/attempt-000/terminal_result.json")
     )
     terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
-    evidence = unwrap_evidence_payload(terminal["evidence"])
+    evidence_envelope = terminal["evidence"]
+    assert isinstance(evidence_envelope, dict)
+    evidence_body = {"payload": evidence_envelope["payload"]}
+    assert evidence_envelope["content_hash"] == canonical_hash(evidence_body)
+    with pytest.raises(SanitizationIntegrityError, match="source boundary"):
+        unwrap_evidence_payload(evidence_envelope)
+    evidence = evidence_envelope["payload"]
     assert evidence == {
         "query": "MATCH (n) WHERE auth = 'literal' RETURN n",
         "rows": [

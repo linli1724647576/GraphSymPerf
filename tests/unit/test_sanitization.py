@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pickle
 
 import pytest
@@ -13,6 +14,15 @@ from graph_sym_perf.sanitization import (
     sanitize_text,
     unwrap_evidence_payload,
 )
+
+
+def _persist_and_restore_explicit_evidence(value: object) -> object:
+    safe, attestations = sanitization_module._sanitize_structure_for_persistence(value)
+    persisted = json.loads(json.dumps(safe))
+    return sanitization_module._restore_verified_evidence_envelopes(
+        persisted,
+        attestations,
+    )
 
 
 def test_recursive_sanitizer_redacts_sensitive_keys_and_leak_bearing_strings() -> None:
@@ -76,20 +86,29 @@ def test_evidence_payload_is_pickleable_and_round_trips_through_verified_envelop
     payload = {
         "query": "MATCH (n) WHERE auth = 'literal' RETURN n",
         "params": {"password": "literal-parameter"},
-        "rows": (
+        "rows": [
             {
                 "message": "Authorization: literal row",
                 "password": "literal-column",
             },
-        ),
+        ],
     }
     wrapped = EvidencePayload(payload)
 
     restored = pickle.loads(pickle.dumps(wrapped))
-    envelope = sanitize_structure(restored)
+    verified = _persist_and_restore_explicit_evidence(restored)
+    envelope = sanitize_structure(verified)
 
     assert set(envelope) == {"payload", "content_hash"}
-    assert unwrap_evidence_payload(envelope) == payload
+    assert unwrap_evidence_payload(verified) == payload
+
+
+def test_serialized_typed_envelope_cannot_claim_source_verified_status() -> None:
+    body = {"payload": {"query": "RETURN 1"}}
+    envelope = {**body, "content_hash": canonical_hash(body)}
+
+    with pytest.raises(SanitizationIntegrityError, match="source boundary"):
+        unwrap_evidence_payload(envelope)
 
 
 def test_evidence_payload_is_revalidated_after_mutable_payload_drift() -> None:
@@ -261,7 +280,7 @@ def test_typed_evidence_subtrees_preserve_all_database_values_and_keys() -> None
             "password": "literal-password-parameter",
             "message": "Authorization: literal parameter",
         },
-        "rows": (
+        "rows": [
             {
                 "content_hash": "not-a-seal",
                 "receipt": "literal-receipt-column",
@@ -277,15 +296,17 @@ def test_typed_evidence_subtrees_preserve_all_database_values_and_keys() -> None
                     "content_hash": "not-a-hash",
                 },
             },
-        ),
+        ],
         "results": ["Authorization: literal result"],
     }
 
-    envelope = sanitize_structure({"evidence": EvidencePayload(payload)})["evidence"]
-    restored = unwrap_evidence_payload(envelope)
+    verified_result = _persist_and_restore_explicit_evidence(
+        {"evidence": EvidencePayload(payload)}
+    )
+    restored = unwrap_evidence_payload(verified_result["evidence"])
 
     assert restored == payload
-    assert isinstance(restored["rows"], tuple)
+    assert isinstance(restored["rows"], list)
 
 
 def test_invalid_nested_envelope_under_ordinary_results_key_fails_closed() -> None:
@@ -389,9 +410,9 @@ def test_typed_evidence_columns_are_not_interpreted_as_operational_keys() -> Non
         ]
     }
 
-    envelope = sanitize_structure(EvidencePayload(payload))
+    verified = _persist_and_restore_explicit_evidence(EvidencePayload(payload))
 
-    assert unwrap_evidence_payload(envelope) == payload
+    assert unwrap_evidence_payload(verified) == payload
 
 
 @pytest.mark.parametrize(
