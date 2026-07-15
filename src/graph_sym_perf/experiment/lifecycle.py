@@ -263,9 +263,7 @@ class _SourceProvenanceGuard:
         self.artifact_signature = self._verified_artifact_signature()
 
     def __call__(self) -> None:
-        signature = self._artifact_signature()
-        if signature != self.artifact_signature:
-            self.artifact_signature = self._verified_artifact_signature()
+        self.artifact_signature = self._verified_artifact_signature()
         try:
             rules_sha256 = hashlib.sha256(self.spec.rules_source_path.read_bytes()).hexdigest()
         except OSError as exc:

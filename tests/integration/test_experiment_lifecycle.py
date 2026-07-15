@@ -576,6 +576,41 @@ def test_source_guard_constructor_rejects_drift_after_tooling_verification(
         )
 
 
+def test_source_guard_rechecks_tooling_on_every_attempt(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = verified_gdsmith_environment(
+        tmp_path / "gdsmith-fixture",
+        spec.generation.expected_commit,
+    )
+    plan = campaign_module.build_rule_plan(
+        spec,
+        CampaignPhase.P0,
+        environment=environment,
+    )
+    guard = campaign_module._campaign_source_provenance_guard(
+        spec,
+        plan,
+        environment=environment,
+    )
+    real_check = lifecycle_module.check_gdsmith_tooling
+    tooling_checks = 0
+
+    def check_tooling(*args, **kwargs):
+        nonlocal tooling_checks
+        tooling_checks += 1
+        return real_check(*args, **kwargs)
+
+    monkeypatch.setattr(lifecycle_module, "check_gdsmith_tooling", check_tooling)
+
+    guard()
+    guard()
+
+    assert tooling_checks == 2
+
+
 @pytest.mark.parametrize("changed_source", ("repository", "gdsmith"))
 def test_campaign_source_guard_rejects_cleanliness_drift_after_plan(
     monkeypatch,
