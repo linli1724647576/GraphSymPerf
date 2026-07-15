@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import ipaddress
 import os
 import re
 import socket
@@ -701,7 +702,7 @@ def measurement_target_identity(
         raise TypeError("measurement target identity requires a schema-v3 spec")
     uri = str(environment.get("GRAPHSYMPERF_NEO4J_URI", "")).strip()
     parsed = urlparse(uri)
-    host = (parsed.hostname or "unresolved-host").lower()
+    host = parsed.hostname
     port = parsed.port or 7687
     database = str(environment.get("GRAPHSYMPERF_NEO4J_DATABASE", "")).strip()
     if not database:
@@ -709,12 +710,53 @@ def measurement_target_identity(
     return canonical_hash(
         {
             "database": database,
-            "host": host,
+            "host_binding": _canonical_measurement_host(host, port),
             "port": port,
-            "protocol": "neo4j-exclusive-server-identity-v2",
+            "protocol": "neo4j-exclusive-server-identity-v3",
             "target": "neo4j",
         }
     )
+
+
+def _canonical_measurement_host(host: str | None, port: int) -> Mapping[str, object]:
+    if host is None:
+        return {"unresolved_hostname": "<missing>"}
+    normalized_host = host.strip().lower().rstrip(".")
+    if not normalized_host:
+        return {"unresolved_hostname": "<missing>"}
+    if normalized_host == "localhost":
+        return {"addresses": ["loopback"]}
+    try:
+        return {"addresses": [_canonical_ip_address(normalized_host)]}
+    except ValueError:
+        pass
+    try:
+        address_info = socket.getaddrinfo(
+            normalized_host,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+    except (OSError, socket.gaierror):
+        return {"unresolved_hostname": normalized_host}
+    addresses = {
+        _canonical_ip_address(str(sockaddr[0]))
+        for _family, _type, _proto, _canonname, sockaddr in address_info
+        if isinstance(sockaddr, tuple) and sockaddr
+    }
+    if not addresses:
+        return {"unresolved_hostname": normalized_host}
+    if all(address == "loopback" for address in addresses):
+        return {"addresses": ["loopback"]}
+    return {"addresses": sorted(addresses)}
+
+
+def _canonical_ip_address(raw: str) -> str:
+    address = ipaddress.ip_address(raw.split("%", 1)[0])
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if address.is_loopback:
+        return "loopback"
+    return address.compressed
 
 
 def _campaign_source_provenance_guard(
