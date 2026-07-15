@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,8 @@ from graph_sym_perf.issues.dedup import (
     fingerprint_issue,
     known_regression_signature_from_manifest,
     serialized_family_decision_is_valid,
+    _fingerprint_hash,
+    _structural_signature,
 )
 
 
@@ -135,6 +138,28 @@ def test_structural_normalization_abstracts_names_and_literals_only_after_parse(
     assert "10" not in first.normalized_pair[0]
 
 
+def test_fingerprint_verification_recomputes_parser_proven_fields_from_raw_queries() -> None:
+    original = fingerprint_issue(_subject())
+    forged_pair = ("FORGED NORMAL FORM A", "FORGED NORMAL FORM B")
+    forged = replace(original, normalized_pair=forged_pair)
+    structural = _structural_signature(
+        dbms=forged.dbms,
+        dbms_version=forged.dbms_version,
+        dbms_fingerprint=forged.dbms_fingerprint,
+        canonical_rule_id=forged.canonical_rule_id,
+        site_class=forged.site_class,
+        normalized_pair=forged_pair,
+        runtime_direction=forged.runtime_direction,
+    )
+    forged = replace(forged, structural=structural)
+    forged = replace(
+        forged,
+        fingerprint_hash=_fingerprint_hash(forged, exact=forged.exact, structural=structural),
+    )
+
+    assert not forged.verify()
+
+
 def test_structural_property_value_variable_survives_alpha_renaming() -> None:
     first_query = (
         "MATCH (b), (c) MATCH (a:Person {peer: b}) RETURN a, b, c"
@@ -202,6 +227,31 @@ def test_exact_and_structural_matches_share_only_one_family() -> None:
     assert structural.family_id == first.family_id
     assert structural.match_kind is FamilyMatchKind.STRUCTURAL
     assert not structural.is_new_family
+
+
+def test_exact_duplicate_single_seed_owner_is_deterministic_in_every_insertion_order() -> None:
+    fingerprints = {
+        "z-owner": fingerprint_issue(_subject(graph_snapshot_hash="1" * 64)),
+        "a-owner": fingerprint_issue(_subject(graph_snapshot_hash="2" * 64)),
+    }
+    outcomes = set()
+
+    for order in itertools.permutations(fingerprints):
+        index = IssueFamilyIndex()
+        issued = [
+            index.add(fingerprints[issue_id], issue_id=issue_id)
+            for issue_id in order
+        ]
+        current = index.reissue_owner(fingerprints["a-owner"], issue_id="a-owner")
+        outcomes.add(
+            (current.family_id, current.owner_issue_id, current.family_version_hash)
+        )
+
+        assert current.verify()
+        assert current.owner_issue_id == "a-owner"
+        assert all(not decision.verify() for decision in issued[:-1])
+
+    assert len(outcomes) == 1
 
 
 def test_exact_structural_bridge_unions_every_insertion_order_deterministically() -> None:
@@ -279,6 +329,36 @@ def test_serialized_family_validator_fails_closed_for_malformed_member_shape() -
     assert not serialized_family_decision_is_valid(payload)
 
 
+def test_serialized_family_validator_fails_closed_for_non_text_raw_query() -> None:
+    decision = IssueFamilyIndex().add(
+        fingerprint_issue(_subject()),
+        issue_id="owner",
+    )
+    payload = {
+        "issue_id": decision.issue_id,
+        "owner_issue_id": decision.owner_issue_id,
+        "family_id": decision.family_id,
+        "fingerprint": decision.fingerprint.__dict__,
+        "match_kind": decision.match_kind.value,
+        "matched_issue_id": decision.matched_issue_id,
+        "known_regression_match": decision.known_regression_match,
+        "known_regression_case_id": decision.known_regression_case_id,
+        "is_new_family": decision.is_new_family,
+        "family_members": decision.family_members,
+        "family_fingerprints": tuple(
+            (member, member_fingerprint.__dict__)
+            for member, member_fingerprint in decision.family_fingerprints
+        ),
+        "family_version_hash": decision.family_version_hash,
+        "decision_hash": decision.decision_hash,
+    }
+    forged = copy.deepcopy(payload)
+    forged["fingerprint"]["reduced_query_a"] = 7
+    forged["family_fingerprints"][0][1]["reduced_query_a"] = 7
+
+    assert not serialized_family_decision_is_valid(forged)
+
+
 def test_structural_merge_requires_every_conservative_dimension_to_match() -> None:
     baseline = fingerprint_issue(_subject())
     changes = (
@@ -342,7 +422,7 @@ def test_replaying_the_original_family_owner_reissues_current_decision() -> None
     index = IssueFamilyIndex()
     original = index.add(fingerprint_issue(_subject()), issue_id="owner")
     index.add(
-        fingerprint_issue(_structurally_equivalent_subject()), issue_id="duplicate"
+        fingerprint_issue(_structurally_equivalent_subject()), issue_id="z-duplicate"
     )
 
     replayed = index.reissue_owner(fingerprint_issue(_subject()), issue_id="owner")
@@ -352,8 +432,8 @@ def test_replaying_the_original_family_owner_reissues_current_decision() -> None
     assert replayed.is_new_family
     assert replayed.match_kind is FamilyMatchKind.FRESH
     assert replayed.family_members == (
-        ("duplicate", fingerprint_issue(_structurally_equivalent_subject()).exact),
         ("owner", fingerprint_issue(_subject()).exact),
+        ("z-duplicate", fingerprint_issue(_structurally_equivalent_subject()).exact),
     )
 
 

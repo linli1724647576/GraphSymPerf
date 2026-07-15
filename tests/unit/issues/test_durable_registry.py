@@ -117,7 +117,7 @@ def _concurrent_promote(root: str, queue) -> None:
     queue.put((getattr(issue, "family_id", None), status))
 
 
-def test_real_durable_promotion_replays_owner_with_current_family_version(tmp_path) -> None:
+def test_receipt_only_committed_owner_replay_fails_closed(tmp_path) -> None:
     report = _report()
     reduction = _reduction()
 
@@ -144,7 +144,7 @@ def test_real_durable_promotion_replays_owner_with_current_family_version(tmp_pa
 
     assert first is not None and repaired is None
     assert first_status == "unique_family"
-    assert repaired_status == "owner_already_committed"
+    assert repaired_status == "owner_terminal_evidence_unavailable"
     assert len((tmp_path / "registry.jsonl").read_text(encoding="utf-8").splitlines()) == 1
     record = json.loads((tmp_path / "registry.jsonl").read_text(encoding="utf-8"))
     assert record["family_id"] == first.family_id
@@ -323,7 +323,7 @@ def test_concurrent_replay_under_flock_commits_one_family(tmp_path) -> None:
     outcomes = tuple(queue.get(timeout=2) for _process in processes)
     assert {status for _family, status in outcomes} == {
         "unique_family",
-        "owner_validation_provenance_drift",
+        "owner_terminal_evidence_unavailable",
     }
     assert len({family for family, _status in outcomes if family is not None}) == 1
     assert len((tmp_path / "registry.jsonl").read_text(encoding="utf-8").splitlines()) == 1
@@ -421,7 +421,7 @@ def test_durable_family_replay_uses_explicit_owner_independent_of_record_order()
     duplicate_fingerprint = _fingerprint(changed=True)
     issued = IssueFamilyIndex()
     issued.add(owner_fingerprint, issue_id="owner")
-    duplicate_decision = issued.add(duplicate_fingerprint, issue_id="duplicate")
+    duplicate_decision = issued.add(duplicate_fingerprint, issue_id="z-duplicate")
     owner_decision = issued.reissue_owner(owner_fingerprint, issue_id="owner")
     owner = _formal_family_record(
         owner_fingerprint,
@@ -439,6 +439,52 @@ def test_durable_family_replay_uses_explicit_owner_independent_of_record_order()
 
     assert current.owner_issue_id == "owner"
     assert current.family_members == owner_decision.family_members
+
+
+def test_exact_single_seed_owner_replays_deterministically_after_restart() -> None:
+    fingerprints = {
+        "z-owner": fingerprint_issue(
+            FingerprintSubject(**{**_subject_values(), "graph_snapshot_hash": "1" * 64})
+        ),
+        "a-owner": fingerprint_issue(
+            FingerprintSubject(**{**_subject_values(), "graph_snapshot_hash": "2" * 64})
+        ),
+    }
+
+    for insertion_order in itertools.permutations(fingerprints):
+        issued = IssueFamilyIndex()
+        for issue_id in insertion_order:
+            issued.add(fingerprints[issue_id], issue_id=issue_id)
+        owner_decision = issued.reissue_owner(
+            fingerprints["a-owner"],
+            issue_id="a-owner",
+        )
+        member_decision = issued.reissue_member(
+            fingerprints["z-owner"],
+            issue_id="z-owner",
+        )
+        records = (
+            _formal_family_record(
+                fingerprints["a-owner"],
+                owner_decision,
+                stage=PipelineStage.SUBMIT_READY,
+            ),
+            _formal_family_record(
+                fingerprints["z-owner"],
+                member_decision,
+                stage=PipelineStage.REDUCED_VALID,
+            ),
+        )
+
+        for record_order in itertools.permutations(records):
+            replayed = _replay_family_index(record_order)
+            current = replayed.reissue_owner(
+                fingerprints["a-owner"],
+                issue_id="a-owner",
+            )
+            assert current.owner_issue_id == "a-owner"
+            assert current.family_id == owner_decision.family_id
+            assert current.family_version_hash == owner_decision.family_version_hash
 
 
 @pytest.mark.parametrize(
@@ -632,7 +678,7 @@ def test_durable_family_replay_rejects_ambiguous_owner_state(attack: str) -> Non
     duplicate_fingerprint = _fingerprint(changed=True)
     issued = IssueFamilyIndex()
     issued.add(owner_fingerprint, issue_id="owner")
-    duplicate_decision = issued.add(duplicate_fingerprint, issue_id="duplicate")
+    duplicate_decision = issued.add(duplicate_fingerprint, issue_id="z-duplicate")
     owner_decision = issued.reissue_owner(owner_fingerprint, issue_id="owner")
     owner = _formal_family_record(owner_fingerprint, owner_decision, stage=PipelineStage.SUBMIT_READY)
     duplicate = _formal_family_record(
@@ -642,7 +688,7 @@ def test_durable_family_replay_rejects_ambiguous_owner_state(attack: str) -> Non
     )
     records = {
         "missing": (replace(owner, owner_issue_id=""), duplicate),
-        "conflicting": (owner, replace(duplicate, owner_issue_id="duplicate")),
+        "conflicting": (owner, replace(duplicate, owner_issue_id="z-duplicate")),
         "multiple_submit_ready": (owner, replace(duplicate, stage=PipelineStage.SUBMIT_READY)),
         "owner_absent": (duplicate,),
     }[attack]
@@ -651,7 +697,7 @@ def test_durable_family_replay_rejects_ambiguous_owner_state(attack: str) -> Non
         _replay_family_index(records)
 
 
-def test_structural_duplicate_survives_restart_and_owner_repair_uses_new_version(
+def test_receipt_only_structural_owner_repair_fails_closed_after_restart(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -771,20 +817,13 @@ def test_structural_duplicate_survives_restart_and_owner_repair_uses_new_version
 
     assert first is not None and first_status == "unique_family"
     assert duplicate is None and duplicate_status == "structural_family_duplicate"
-    assert repaired is not None and repaired_status == "family_owner_repaired"
+    assert repaired is None and repaired_status == "owner_terminal_evidence_unavailable"
     assert first.family_decision.verify()
     assert not durable_family_credentials_are_current(
         tmp_path,
         decision=first.family_decision,
         clearance=first.duplicate_clearance,
     )
-    assert repaired.family_decision.verify()
-    assert durable_family_credentials_are_current(
-        tmp_path,
-        decision=repaired.family_decision,
-        clearance=repaired.duplicate_clearance,
-    )
-    assert len(repaired.family_decision.family_members) == 2
     assert len((tmp_path / "registry.jsonl").read_text(encoding="utf-8").splitlines()) == 1
     assert len((tmp_path / "dedup_review.jsonl").read_text(encoding="utf-8").splitlines()) == 1
     review = json.loads((tmp_path / "dedup_review.jsonl").read_text(encoding="utf-8"))
@@ -794,7 +833,7 @@ def test_structural_duplicate_survives_restart_and_owner_repair_uses_new_version
     assert review["reduced_validation_ref"]["content_hash"] == "2" * 64
 
 
-def test_registry_commits_only_after_materialization_and_repairs_exact_retry(tmp_path) -> None:
+def test_receipt_only_exact_retry_never_rematerializes_without_sealed_evidence(tmp_path) -> None:
     report = _report()
     reduction = _reduction()
     calls = []
@@ -826,13 +865,13 @@ def test_registry_commits_only_after_materialization_and_repairs_exact_retry(tmp
 
     assert first is not None and repaired is None
     assert first_status == "unique_family"
-    assert repaired_status == "owner_already_committed"
+    assert repaired_status == "owner_terminal_evidence_unavailable"
     assert calls == ["materialized"]
     assert len((tmp_path / "registry.jsonl").read_text(encoding="utf-8").splitlines()) == 1
     assert (tmp_path / "commits" / f"{first.issue_id}.json").is_file()
 
 
-def test_owner_retry_recovers_crash_after_registry_commit_without_provenance_rewrite(
+def test_receipt_only_owner_retry_after_registry_commit_fails_closed(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -886,10 +925,10 @@ def test_owner_retry_recovers_crash_after_registry_commit_without_provenance_rew
         **_validation_refs(),
     )
 
-    assert repaired is not None and status == "family_owner_repaired"
-    assert terminal is None and terminal_status == "owner_already_committed"
+    assert repaired is None and status == "owner_terminal_evidence_unavailable"
+    assert terminal is None and terminal_status == "owner_terminal_evidence_unavailable"
     assert json.loads((tmp_path / "registry.jsonl").read_text(encoding="utf-8")) == registry_before
-    assert len(materialized) == 2
+    assert len(materialized) == 1
 
 
 @pytest.mark.parametrize(
@@ -1000,7 +1039,7 @@ def test_durable_owner_retry_does_not_replace_committed_validation_references(
     )
 
     assert retried is None
-    assert status == "owner_validation_provenance_drift"
+    assert status == "owner_terminal_evidence_unavailable"
     record = json.loads((tmp_path / "registry.jsonl").read_text(encoding="utf-8"))
     assert record["original_validation_ref"]["content_hash"] == "1" * 64
     assert record["reduced_validation_ref"]["content_hash"] == "2" * 64

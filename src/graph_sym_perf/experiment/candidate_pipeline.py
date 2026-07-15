@@ -239,25 +239,45 @@ class ProductionCandidatePipeline:
         )
         if issue_outcome.get("promotion") == "submit_ready" and issue_outcome.get("resumed"):
             validation_outcome["validation_ref"] = issue_outcome["original_validation_ref"]
-        reduction_ref = store.put_json(
-            f"reduction-report-{candidate.candidate_hash}.json",
-            _reduction_summary(
+        resumed_summary = issue_outcome.get("reduction_summary")
+        if resumed_summary is not None and not (
+            issue_outcome.get("promotion") == "submit_ready"
+            and issue_outcome.get("resumed")
+            and isinstance(resumed_summary, Mapping)
+        ):
+            raise ValueError("terminal reduction summary is only valid for a resumed owner")
+        summary = (
+            dict(resumed_summary)
+            if isinstance(resumed_summary, Mapping)
+            else _reduction_summary(
                 reduction,
                 original_candidate_hash=candidate.candidate_hash,
                 original_validation_ref=issue_outcome.get("original_validation_ref"),
                 reduced_validation_ref=issue_outcome.get("reduced_validation_ref"),
-            ),
+            )
         )
+        reduction_ref = store.put_json(
+            f"reduction-report-{candidate.candidate_hash}.json",
+            summary,
+        )
+        visible_issue_outcome = {
+            name: value
+            for name, value in issue_outcome.items()
+            if name != "reduction_summary"
+        }
         return {
             "candidate_hash": candidate.candidate_hash,
             "validation": validation_outcome,
             "reduction": {
                 "candidate_hash": candidate.candidate_hash,
-                "reason": reduction.stop_reason,
-                "reduced_candidate_hash": reduction.reduced_candidate_hash or None,
+                "reason": summary.get("stop_reason", reduction.stop_reason),
+                "reduced_candidate_hash": summary.get(
+                    "reduced_candidate_hash",
+                    reduction.reduced_candidate_hash or None,
+                ),
                 "reduction_ref": asdict(reduction_ref),
-                "status": reduction.status.value,
-                **issue_outcome,
+                "status": summary.get("status", reduction.status.value),
+                **visible_issue_outcome,
             },
         }
 

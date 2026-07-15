@@ -28,7 +28,16 @@ from graph_sym_perf.issues.durable_registry import (
     _records_with_current_family,
     durable_family_payload_is_current,
 )
-from graph_sym_perf.issues.dedup import FingerprintSubject, IssueFamilyIndex, fingerprint_issue
+from graph_sym_perf.issues.dedup import (
+    FingerprintSubject,
+    IssueFamilyIndex,
+    _family_version_hash,
+    _fingerprint_hash,
+    _hash_payload as _dedup_hash_payload,
+    _new_family_id,
+    _structural_signature,
+    fingerprint_issue,
+)
 from graph_sym_perf.issues.registry import IssueRegistry
 from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
 from graph_sym_perf.runtime.models import EquivalentQueryPair
@@ -42,6 +51,7 @@ from graph_sym_perf.validation.models import (
     candidate_hash_from_content_hashes,
     canonical_content_hash,
     canonical_validation_provenance_hash,
+    _duplicate_signature,
 )
 
 
@@ -615,6 +625,86 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     with pytest.raises(ValueError, match="canonical report projection"):
         verify_issue_hash_chain(store, synchronized_issue)
     issue_body = {key: value for key, value in issue.payload.items() if key != "issue_hash"}
+
+    forged_pair = ("FORGED NORMAL FORM A", "FORGED NORMAL FORM B")
+    forged_fingerprint = replace(fingerprint, normalized_pair=forged_pair)
+    forged_structural = _structural_signature(
+        dbms=forged_fingerprint.dbms,
+        dbms_version=forged_fingerprint.dbms_version,
+        dbms_fingerprint=forged_fingerprint.dbms_fingerprint,
+        canonical_rule_id=forged_fingerprint.canonical_rule_id,
+        site_class=forged_fingerprint.site_class,
+        normalized_pair=forged_pair,
+        runtime_direction=forged_fingerprint.runtime_direction,
+    )
+    forged_fingerprint = replace(forged_fingerprint, structural=forged_structural)
+    forged_fingerprint = replace(
+        forged_fingerprint,
+        fingerprint_hash=_fingerprint_hash(
+            forged_fingerprint,
+            exact=forged_fingerprint.exact,
+            structural=forged_structural,
+        ),
+    )
+    forged_family_id = _new_family_id(forged_fingerprint)
+    forged_members = (("issue-1", forged_fingerprint.exact),)
+    forged_fingerprints = (("issue-1", forged_fingerprint),)
+    forged_family_version = _family_version_hash(
+        forged_family_id,
+        forged_members,
+        forged_fingerprints,
+        None,
+    )
+    forged_decision_fields = {
+        "issue_id": "issue-1",
+        "owner_issue_id": "issue-1",
+        "family_id": forged_family_id,
+        "fingerprint_hash": forged_fingerprint.fingerprint_hash,
+        "match_kind": "fresh",
+        "matched_issue_id": None,
+        "known_regression_match": False,
+        "known_regression_case_id": None,
+        "is_new_family": True,
+        "family_members": forged_members,
+        "family_fingerprints": forged_fingerprints,
+        "family_version_hash": forged_family_version,
+    }
+    forged_decision_hash = _dedup_hash_payload(
+        "family-decision-v1",
+        forged_decision_fields,
+    )
+    forged_clearance_fields = {
+        "issue_id": "issue-1",
+        "possible_duplicate": False,
+        "cluster_members": ("issue-1",),
+        "cluster_version_hash": forged_family_version,
+        "evidence_url": None,
+        "family_id": forged_family_id,
+        "family_version_hash": forged_family_version,
+        "family_decision_hash": forged_decision_hash,
+    }
+    forged_family_payload = {
+        **forged_decision_fields,
+        "fingerprint": asdict(forged_fingerprint),
+        "family_fingerprints": tuple(
+            (member, asdict(member_fingerprint))
+            for member, member_fingerprint in forged_fingerprints
+        ),
+        "decision_hash": forged_decision_hash,
+    }
+    forged_family_payload.pop("fingerprint_hash")
+    with pytest.raises(ValueError, match="family fingerprint/decision"):
+        ArtifactRecord.seal_issue(
+            {
+                **issue_body,
+                "family_id": forged_family_id,
+                "family_decision": forged_family_payload,
+                "duplicate_clearance": {
+                    **forged_clearance_fields,
+                    "registry_signature": _duplicate_signature(forged_clearance_fields),
+                },
+            }
+        )
 
     for hash_field in ("original_validation_hash", "reduced_validation_hash"):
         rewritten = ArtifactRecord.seal_issue(

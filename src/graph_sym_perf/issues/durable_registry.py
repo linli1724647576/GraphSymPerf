@@ -84,10 +84,9 @@ def promote_unique_issue(
         )
         if existing_owner is not None:
             index.reissue_owner(fingerprint, issue_id=issue_id)
-            if not _record_provenance_matches(existing_owner, provenance):
-                return None, "owner_validation_provenance_drift"
-            if _owner_commit_is_current(root_path, existing_owner):
+            if _recover_owner_terminal_unlocked(root_path, existing_owner):
                 return None, "owner_already_committed"
+            return None, "owner_terminal_evidence_unavailable"
         decision = (
             index.reissue_owner(fingerprint, issue_id=issue_id)
             if existing_owner is not None
@@ -226,36 +225,19 @@ def committed_owner_outcome(root: str | Path, *, issue_id: str) -> dict[str, obj
             for record in records
             if record.issue_id == issue_id and record.stage is PipelineStage.SUBMIT_READY
         )
-        if len(owners) != 1 or not _owner_commit_is_current(root_path, owners[0]):
+        if len(owners) != 1 or not _recover_owner_terminal_unlocked(root_path, owners[0]):
             raise ValueError("committed family owner outcome is unavailable")
         record = owners[0]
-        commit = json.loads((root_path / "commits" / f"{issue_id}.json").read_text(encoding="utf-8"))
-        index_path = root_path / "index" / f"{issue_id}.json"
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-        receipt_fields = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
-        if any(index.get(name) != commit.get(name) for name in receipt_fields):
-            raise ValueError("committed family owner receipt is inconsistent")
-        from graph_sym_perf.artifacts.store import (
-            ContentAddressedStore,
-            load_artifact_record,
-            verify_issue_hash_chain,
-        )
-
-        run_dir = root_path.parent.resolve()
-        store_path = (run_dir / str(commit["artifact_store"])).resolve()
-        export_path = (run_dir / str(commit["export_path"])).resolve()
-        if run_dir not in store_path.parents or run_dir not in export_path.parents:
-            raise ValueError("committed family owner receipt escapes the run directory")
-        store = ContentAddressedStore(store_path, budget_bytes=(1 << 63) - 1)
-        issue_record = load_artifact_record(store, commit["issue_ref"])
-        verify_issue_hash_chain(store, issue_record)
-        if not _durable_family_payload_is_current_unlocked(
+        _receipt, issue_record, store, _export_path = _load_owner_evidence_unlocked(
             root_path,
-            issue_record.payload,
-        ):
-            raise ValueError("committed family owner artifact is stale")
-        if hashlib.sha256(export_path.read_bytes()).hexdigest() != commit["export_sha256"]:
-            raise ValueError("committed family owner export is stale")
+            record,
+            require_current_family=True,
+            require_commit=True,
+        )
+        reduction_summary = json.loads(store.read(issue_record.payload["reduction_ref"]))
+        if not isinstance(reduction_summary, dict):
+            raise ValueError("committed family owner reduction summary is unavailable")
+        index_path = root_path / "index" / f"{issue_id}.json"
         return {
             "issue_id": issue_id,
             "issue_index": str(index_path.relative_to(root_path.parent)),
@@ -263,6 +245,7 @@ def committed_owner_outcome(root: str | Path, *, issue_id: str) -> dict[str, obj
             "reduced_validation_hash": record.reduced_validation_hash,
             "original_validation_ref": dict(record.original_validation_ref or {}),
             "reduced_validation_ref": dict(record.reduced_validation_ref or {}),
+            "reduction_summary": reduction_summary,
         }
 
 
@@ -293,6 +276,104 @@ def _before_owner_artifact_renewal(_root: Path) -> None:
     """Test-only crash seam after durable union and before artifact renewal."""
 
 
+def _recover_owner_terminal_unlocked(
+    root: Path,
+    record: VersionedIssueRecord,
+) -> bool:
+    """Complete registry->commit recovery only from the owner's sealed old evidence."""
+
+    if _owner_commit_is_current(root, record):
+        try:
+            _load_owner_evidence_unlocked(
+                root,
+                record,
+                require_current_family=True,
+                require_commit=True,
+            )
+        except FileNotFoundError:
+            return False
+        return True
+    commit_path = root / "commits" / f"{record.issue_id}.json"
+    if commit_path.exists():
+        return False
+    try:
+        receipt, _issue, _store, _export = _load_owner_evidence_unlocked(
+            root,
+            record,
+            require_current_family=True,
+            require_commit=False,
+        )
+    except FileNotFoundError:
+        return False
+    _write_commit(root, record, receipt)
+    return True
+
+
+def _load_owner_evidence_unlocked(
+    root: Path,
+    record: VersionedIssueRecord,
+    *,
+    require_current_family: bool,
+    require_commit: bool,
+) -> tuple[dict[str, object], object, object, Path]:
+    """Validate a durable receipt, sealed issue chain, export, and owner binding."""
+
+    from graph_sym_perf.artifacts.store import (
+        ContentAddressedStore,
+        load_artifact_record,
+        verify_issue_hash_chain,
+    )
+
+    required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
+    index_path = root / "index" / f"{record.issue_id}.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    if not isinstance(index, dict) or set(index) != required:
+        raise ValueError("family owner index receipt is incomplete")
+    receipt = {name: index[name] for name in required}
+    if receipt.get("issue_id") != record.issue_id:
+        raise ValueError("family owner index receipt has the wrong identity")
+    commit_path = root / "commits" / f"{record.issue_id}.json"
+    if require_commit or commit_path.exists():
+        commit = json.loads(commit_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(commit, dict)
+            or any(commit.get(name) != receipt.get(name) for name in required)
+            or (
+                require_commit
+                and commit.get("registry_record_hash") != _record_hash(record)
+            )
+        ):
+            raise ValueError("committed family owner receipt is inconsistent")
+    run_dir = root.parent.resolve()
+    store_path = (run_dir / str(receipt["artifact_store"])).resolve()
+    export_path = (run_dir / str(receipt["export_path"])).resolve()
+    if run_dir not in store_path.parents or run_dir not in export_path.parents:
+        raise ValueError("family owner receipt escapes the run directory")
+    store = ContentAddressedStore(store_path, budget_bytes=(1 << 63) - 1)
+    issue_record = load_artifact_record(store, receipt["issue_ref"])
+    verify_issue_hash_chain(store, issue_record)
+    payload = issue_record.payload
+    family = payload.get("family_decision")
+    if (
+        payload.get("issue_id") != record.issue_id
+        or payload.get("original_validation_hash") != record.original_validation_hash
+        or payload.get("reduced_validation_hash") != record.reduced_validation_hash
+        or stable_json_dumps(payload.get("original_validation_ref"))
+        != stable_json_dumps(record.original_validation_ref)
+        or stable_json_dumps(payload.get("final_validation_ref"))
+        != stable_json_dumps(record.reduced_validation_ref)
+        or not isinstance(family, Mapping)
+        or stable_json_dumps(family.get("fingerprint"))
+        != stable_json_dumps(asdict(_record_fingerprint(record)))
+    ):
+        raise ValueError("sealed family owner evidence does not bind the registry record")
+    if require_current_family and not _durable_family_payload_is_current_unlocked(root, payload):
+        raise ValueError("committed family owner artifact is stale")
+    if hashlib.sha256(export_path.read_bytes()).hexdigest() != receipt["export_sha256"]:
+        raise ValueError("committed family owner export is stale")
+    return receipt, issue_record, store, export_path
+
+
 def _renew_current_family_owner_unlocked(
     root: Path,
     *,
@@ -318,24 +399,15 @@ def _renew_current_family_owner_unlocked(
     owner_record = owner_records[0]
     if _owner_commit_is_current(root, owner_record):
         return False
-    commit_path = root / "commits" / f"{owner_issue_id}.json"
-    if not commit_path.is_file():
+    try:
+        receipt, old_issue, store, export_path = _load_owner_evidence_unlocked(
+            root,
+            owner_record,
+            require_current_family=False,
+            require_commit=False,
+        )
+    except FileNotFoundError:
         return False
-    commit = json.loads(commit_path.read_text(encoding="utf-8"))
-    required = {"artifact_store", "export_path", "export_sha256", "issue_id", "issue_ref"}
-    if not isinstance(commit, dict) or not required <= set(commit):
-        raise ValueError("family owner commit receipt is incomplete")
-    run_dir = root.parent.resolve()
-    store_path = (run_dir / str(commit["artifact_store"])).resolve()
-    export_path = (run_dir / str(commit["export_path"])).resolve()
-    if run_dir not in store_path.parents or run_dir not in export_path.parents:
-        raise ValueError("family owner receipt escapes the run directory")
-    if not store_path.is_dir():
-        # Unit-level durable-registry tests use receipt-only materializers.
-        return False
-    store = ContentAddressedStore(store_path, budget_bytes=(1 << 63) - 1)
-    old_issue = load_artifact_record(store, commit["issue_ref"])
-    verify_issue_hash_chain(store, old_issue)
     old_payload = dict(old_issue.payload)
     old_family = old_payload.get("family_decision")
     if not isinstance(old_family, Mapping) or old_family.get("issue_id") != owner_issue_id:
@@ -421,8 +493,8 @@ def _renew_current_family_owner_unlocked(
     }
     _write_json_atomic(export_path, exported)
     receipt = {
-        "artifact_store": commit["artifact_store"],
-        "export_path": commit["export_path"],
+        "artifact_store": receipt["artifact_store"],
+        "export_path": receipt["export_path"],
         "export_sha256": hashlib.sha256(export_path.read_bytes()).hexdigest(),
         "issue_id": owner_issue_id,
         "issue_ref": asdict(issue_ref),
@@ -1147,21 +1219,6 @@ def _record_payload(record: VersionedIssueRecord) -> dict[str, object]:
 def _record_hash(record: VersionedIssueRecord) -> str:
     encoded = json.dumps(_record_payload(record), sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
-
-def _record_provenance_matches(
-    record: VersionedIssueRecord,
-    provenance: Mapping[str, object],
-) -> bool:
-    return bool(
-        record.original_validation_hash == provenance.get("original_validation_hash")
-        and record.reduced_validation_hash == provenance.get("reduced_validation_hash")
-        and stable_json_dumps(record.original_validation_ref)
-        == stable_json_dumps(provenance.get("original_validation_ref"))
-        and stable_json_dumps(record.reduced_validation_ref)
-        == stable_json_dumps(provenance.get("reduced_validation_ref"))
-        and record.validation_provenance_hash == provenance.get("validation_provenance_hash")
-    )
 
 
 def _owner_commit_is_current(root: Path, record: VersionedIssueRecord) -> bool:

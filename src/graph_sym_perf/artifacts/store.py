@@ -379,20 +379,40 @@ def verify_candidate_outcome_validation_chain(
         or original.payload.get("stage") != validation.get("stage")
     ):
         raise ValueError("candidate outcome validation reference breaks identity")
-    if reduction.get("status") != "reduced_valid":
+    status = reduction.get("status")
+    validation_statuses = {
+        "reduced_valid",
+        "reduction_invalidated",
+        "reduction_partial",
+    }
+    if status not in validation_statuses:
         return
     reduction_ref = reduction.get("reduction_ref")
     if not isinstance(reduction_ref, Mapping):
-        raise ValueError("reduced-valid outcome has no reduction reference")
+        raise ValueError("candidate outcome validation provenance has no reduction reference")
     summary = json.loads(store.read(reduction_ref))
     if not isinstance(summary, Mapping):
         raise ValueError("candidate outcome reduction summary is unavailable")
+    if (
+        summary.get("candidate_hash") != outcome.get("candidate_hash")
+        or summary.get("status") != status
+        or summary.get("reduced_candidate_hash")
+        != (reduction.get("reduced_candidate_hash") or "")
+    ):
+        raise ValueError("candidate outcome reduction summary breaks identity")
     fields = (
         "original_validation_hash",
         "reduced_validation_hash",
         "original_validation_ref",
         "reduced_validation_ref",
     )
+    provenance_present = any(name in summary or name in reduction for name in fields)
+    if not provenance_present:
+        if status != "reduction_partial":
+            raise ValueError("candidate outcome validation provenance is unavailable")
+        return
+    if any(name not in summary or name not in reduction for name in fields):
+        raise ValueError("candidate outcome validation provenance is incomplete")
     if any(summary.get(name) != reduction.get(name) for name in fields):
         raise ValueError("candidate outcome validation provenance differs from reduction summary")
     if summary.get("original_validation_ref") != dict(validation_ref):

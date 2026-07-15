@@ -83,6 +83,8 @@ class IssueFingerprint:
     dbms_fingerprint: str
     graph_snapshot_hash: str
     canonical_rule_id: str
+    reduced_query_a: str
+    reduced_query_b: str
     query_a_hash: str
     query_b_hash: str
     runtime_direction: str
@@ -95,13 +97,53 @@ class IssueFingerprint:
     fingerprint_hash: str
 
     def verify(self) -> bool:
+        required_strings = (
+            self.dbms,
+            self.dbms_version,
+            self.dbms_fingerprint,
+            self.graph_snapshot_hash,
+            self.canonical_rule_id,
+            self.reduced_query_a,
+            self.reduced_query_b,
+            self.query_a_hash,
+            self.query_b_hash,
+            self.runtime_direction,
+            self.site_class,
+            self.submission_path,
+            self.reduced_validation_phenotype,
+            self.exact,
+            self.fingerprint_hash,
+        )
+        if (
+            any(not isinstance(value, str) for value in required_strings)
+            or not self.reduced_query_a.strip()
+            or not self.reduced_query_b.strip()
+            or self.structural is not None
+            and not isinstance(self.structural, str)
+            or self.normalized_pair is not None
+            and (
+                not isinstance(self.normalized_pair, tuple)
+                or len(self.normalized_pair) != 2
+                or any(not isinstance(value, str) for value in self.normalized_pair)
+            )
+        ):
+            return False
+        query_a_hash = _query_hash(self.reduced_query_a)
+        query_b_hash = _query_hash(self.reduced_query_b)
+        normalized_a = _normalize_parser_proven_query(self.reduced_query_a)
+        normalized_b = _normalize_parser_proven_query(self.reduced_query_b)
+        normalized_pair = (
+            (normalized_a, normalized_b)
+            if normalized_a is not None and normalized_b is not None
+            else None
+        )
         exact = _exact_signature(
             dbms=self.dbms,
             dbms_version=self.dbms_version,
             dbms_fingerprint=self.dbms_fingerprint,
             canonical_rule_id=self.canonical_rule_id,
-            query_a_hash=self.query_a_hash,
-            query_b_hash=self.query_b_hash,
+            query_a_hash=query_a_hash,
+            query_b_hash=query_b_hash,
             runtime_direction=self.runtime_direction,
         )
         structural = _structural_signature(
@@ -110,12 +152,15 @@ class IssueFingerprint:
             dbms_fingerprint=self.dbms_fingerprint,
             canonical_rule_id=self.canonical_rule_id,
             site_class=self.site_class,
-            normalized_pair=self.normalized_pair,
+            normalized_pair=normalized_pair,
             runtime_direction=self.runtime_direction,
         )
         return bool(
             self.runtime_direction in {"a", "b"}
             and re.fullmatch(r"[0-9a-f]{64}", self.graph_snapshot_hash) is not None
+            and query_a_hash == self.query_a_hash
+            and query_b_hash == self.query_b_hash
+            and normalized_pair == self.normalized_pair
             and exact == self.exact
             and structural == self.structural
             and self.fingerprint_hash == _fingerprint_hash(self, exact=exact, structural=structural)
@@ -327,15 +372,11 @@ class IssueFamilyDecision:
             and all(member_fingerprint.verify() for _member, member_fingerprint in self.family_fingerprints)
             and self.family_id
             == min(_new_family_id(member_fingerprint) for _member, member_fingerprint in self.family_fingerprints)
-            and (
-                len({_new_family_id(member_fingerprint) for _member, member_fingerprint in self.family_fingerprints})
-                == 1
-                or self.owner_issue_id
-                == min(
-                    self.family_fingerprints,
-                    key=lambda item: (_new_family_id(item[1]), item[0]),
-                )[0]
-            )
+            and self.owner_issue_id
+            == min(
+                self.family_fingerprints,
+                key=lambda item: (_new_family_id(item[1]), item[0]),
+            )[0]
             and (self.is_new_family == (self.match_kind is FamilyMatchKind.FRESH))
         )
         return bool(
@@ -441,11 +482,10 @@ class IssueFamilyIndex:
         self._fingerprints[issue_id] = fingerprint
         self._issue_families[issue_id] = family_id
         self._family_seeds[family_id].add(seed)
-        if len(self._family_seeds[family_id]) > 1:
-            self._owners[family_id] = min(
-                members,
-                key=lambda member: (_new_family_id(self._fingerprints[member]), member),
-            )
+        self._owners[family_id] = min(
+            members,
+            key=lambda member: (_new_family_id(self._fingerprints[member]), member),
+        )
         self._rebuild_match_indexes()
         if changed:
             for decision in self._decisions[family_id]:
@@ -649,6 +689,8 @@ def fingerprint_issue(subject: FingerprintSubject) -> IssueFingerprint:
         "dbms_fingerprint": subject.dbms_fingerprint,
         "graph_snapshot_hash": subject.graph_snapshot_hash,
         "canonical_rule_id": subject.canonical_rule_id,
+        "reduced_query_a": subject.reduced_query_a,
+        "reduced_query_b": subject.reduced_query_b,
         "query_a_hash": query_a_hash,
         "query_b_hash": query_b_hash,
         "runtime_direction": subject.runtime_direction,
@@ -1078,6 +1120,8 @@ def _fingerprint_hash(fingerprint: IssueFingerprint, *, exact: str, structural: 
             "dbms_fingerprint": fingerprint.dbms_fingerprint,
             "graph_snapshot_hash": fingerprint.graph_snapshot_hash,
             "canonical_rule_id": fingerprint.canonical_rule_id,
+            "reduced_query_a": fingerprint.reduced_query_a,
+            "reduced_query_b": fingerprint.reduced_query_b,
             "query_a_hash": fingerprint.query_a_hash,
             "query_b_hash": fingerprint.query_b_hash,
             "runtime_direction": fingerprint.runtime_direction,
