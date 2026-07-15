@@ -145,6 +145,24 @@ class _SensitiveSealedResultWorker:
         }
 
 
+class _FieldSemanticResultWorker:
+    def __call__(self, _task):
+        return {
+            "accepted_pairs": 1,
+            "query": "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n",
+            "results": [
+                "Authorization: literal result",
+                {"value": "/Users/example/literal result", "password": "row-secret"},
+            ],
+            "records": [{"value": "bolt://literal-record"}],
+            "diagnostics": (
+                "config.neo4j.password = probe-password; "
+                "{'driver_token': 'probe-token'}; "
+                'failed at "/Users/sakuraq/My Secret Folder/probe output.json"'
+            ),
+        }
+
+
 def test_large_worker_result_is_persisted_by_reference_without_queue_deadlock(tmp_path) -> None:
     context = _attempt_context(tmp_path)
     monitor = ProcessMonitor(
@@ -200,6 +218,35 @@ def test_worker_rejects_sealed_result_that_would_need_boundary_sanitization(
     assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
     assert "sealed-ipc-secret" not in str(captured.value)
     assert not (context.attempt_dir / "result.json").exists()
+
+
+def test_process_monitor_preserves_evidence_fields_and_cleans_diagnostics(
+    tmp_path,
+) -> None:
+    context = _attempt_context(tmp_path)
+    monitor = ProcessMonitor(
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.2,
+        hard_timeout_seconds=0.5,
+    )
+
+    result = monitor.run(_FieldSemanticResultWorker(), object(), context)
+
+    assert result["query"] == (
+        "MATCH (n) WHERE auth = 'public' AND token = 'visible' RETURN n"
+    )
+    assert result["results"][0] == "Authorization: literal result"
+    assert result["results"][1]["value"] == "/Users/example/literal result"
+    assert result["results"][1]["password"] == "<redacted>"
+    assert result["records"] == [{"value": "bolt://literal-record"}]
+    persisted = (context.attempt_dir / "result.json").read_text(encoding="utf-8")
+    for forbidden in (
+        "probe-password",
+        "probe-token",
+        "/Users/sakuraq",
+        "My Secret Folder",
+    ):
+        assert forbidden not in persisted
 
 
 class _MarkerWorker:
