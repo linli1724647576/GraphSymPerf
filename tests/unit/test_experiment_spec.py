@@ -131,6 +131,79 @@ def test_schema_v3_requires_a_preregistered_neo4j_measurement_target_id(
         load_experiment_spec(path)
 
 
+@pytest.mark.parametrize(
+    ("targets", "measurement_target_id"),
+    (
+        (["memgraph"], "neo4j-formal-runtime-target-v1"),
+        (["memgraph"], "independent-memgraph-target-v1"),
+        (["neo4j", "memgraph"], "neo4j-formal-runtime-target-v1"),
+        (["neo4j", "memgraph"], "independent-memgraph-target-v1"),
+    ),
+)
+def test_schema_v3_rejects_non_neo4j_scope_regardless_of_measurement_target_id(
+    tmp_path: Path,
+    targets: list[str],
+    measurement_target_id: str,
+) -> None:
+    experiment = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    systems = yaml.safe_load(Path("config/systems.yaml").read_text(encoding="utf-8"))
+    experiment["targets"] = targets
+    systems["systems"]["memgraph"]["measurement_target_id"] = measurement_target_id
+    path = _write_config_bundle(tmp_path, experiment=experiment, systems=systems)
+
+    with pytest.raises(
+        ConfigError,
+        match=r"schema-v3 targets.*exactly.*neo4j",
+    ):
+        load_experiment_spec(path)
+
+
+@pytest.mark.parametrize("target", ("Neo4J", " neo4j "))
+def test_schema_v3_requires_the_canonical_neo4j_target_name(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    experiment = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    experiment["targets"] = [target]
+    path = _write_config_bundle(tmp_path, experiment=experiment)
+
+    with pytest.raises(ConfigError, match=r"schema-v3 targets.*exactly.*neo4j"):
+        load_experiment_spec(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("generation_backend", "memgraph"),
+        ("dialect", "open_cypher"),
+        ("graph_isolation", "graph_key"),
+        ("capabilities", ["multiple_node_labels"]),
+        ("rule_capabilities", []),
+    ),
+)
+def test_schema_v3_requires_the_canonical_neo4j_capability_contract(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    experiment = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    systems = yaml.safe_load(Path("config/systems.yaml").read_text(encoding="utf-8"))
+    systems["systems"]["neo4j"][field] = value
+    path = _write_config_bundle(tmp_path, experiment=experiment, systems=systems)
+
+    with pytest.raises(
+        ConfigError,
+        match=r"schema-v3.*canonical Neo4j capability contract",
+    ):
+        load_experiment_spec(path)
+
+
 def test_schema_v3_config_cannot_override_registry_safety_facts(tmp_path: Path) -> None:
     raw = yaml.safe_load(
         Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")

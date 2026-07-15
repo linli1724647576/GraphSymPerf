@@ -110,6 +110,14 @@ _V3_POLICY_SCHEMAS: Mapping[str, Mapping[str, object | None]] = {
 
 MAX_P2_RULE_SCALE_CELLS = 6
 
+_SCHEMA_V3_NEO4J_CAPABILITY_CONTRACT: Mapping[str, object] = {
+    "generation_backend": "neo4j",
+    "capabilities": ["multiple_node_labels", "native_parameters"],
+    "rule_capabilities": ["multi_label_intersection"],
+    "dialect": "cypher",
+    "graph_isolation": "database",
+}
+
 
 def load_experiment_spec(path: str | Path) -> ExperimentSpec | ValidatedYieldExperimentSpec:
     source_path = Path(path)
@@ -261,12 +269,11 @@ def _load_schema_v3(
     targets_raw = raw["targets"]
     if not isinstance(targets_raw, list) or not targets_raw:
         raise ConfigError("targets must be a non-empty list")
-    try:
-        targets = tuple(TargetSystem.parse(str(item)) for item in targets_raw)
-    except ValueError as exc:
-        raise ConfigError(f"unknown target: {exc}") from exc
-    if len(set(targets)) != len(targets):
-        raise ConfigError("targets must not contain duplicates")
+    if targets_raw != [TargetSystem.NEO4J.value]:
+        raise ConfigError(
+            "schema-v3 targets must be exactly the canonical single target [neo4j]"
+        )
+    targets = (TargetSystem.NEO4J,)
 
     matrix_raw = _mapping(raw["matrix"], "matrix")
     _exact_keys(matrix_raw, {"graph_scales"}, "matrix")
@@ -351,7 +358,9 @@ def _load_schema_v3(
 
     rules_raw = _mapping(raw["rules"], "rules")
     _exact_keys(rules_raw, {"discovery_rule_ids", "control_rule_ids"}, "rules")
-    systems = _load_systems(source_path.parent / "systems.yaml", targets)
+    systems_path = source_path.parent / "systems.yaml"
+    _require_schema_v3_neo4j_capability_contract(systems_path)
+    systems = _load_systems(systems_path, targets)
     if (
         TargetSystem.NEO4J in systems
         and systems[TargetSystem.NEO4J].measurement_target_id is None
@@ -427,6 +436,19 @@ def _load_schema_v3(
         rules_source_path=rules_path.resolve(),
         source_path=source_path.resolve(),
     )
+
+
+def _require_schema_v3_neo4j_capability_contract(path: Path) -> None:
+    raw = _load_yaml(path, "systems configuration")
+    systems = _mapping(raw.get("systems"), "systems")
+    neo4j = _mapping(systems.get(TargetSystem.NEO4J.value), "systems.neo4j")
+    if any(
+        neo4j.get(field) != expected
+        for field, expected in _SCHEMA_V3_NEO4J_CAPABILITY_CONTRACT.items()
+    ):
+        raise ConfigError(
+            "schema-v3 requires the canonical Neo4j capability contract"
+        )
 
 
 def _phase_budget(value: Any, label: str, *, allow_cell_limit: bool) -> PhaseBudgetSpec:
