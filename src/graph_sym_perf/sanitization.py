@@ -289,11 +289,17 @@ def _require_valid_canonical_envelope_if_recognized(
         return False
     content_hash = value.get("content_hash")
     body = {"payload": value.get("payload")}
-    if (
-        not isinstance(content_hash, str)
-        or _CANONICAL_HASH.fullmatch(content_hash) is None
-        or _project_canonical_hash(body) != content_hash
-    ):
+    if not isinstance(content_hash, str) or _CANONICAL_HASH.fullmatch(content_hash) is None:
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: invalid canonical evidence envelope"
+        )
+    try:
+        expected_hash = _project_canonical_hash(body)
+    except (TypeError, ValueError, ArithmeticError) as exc:
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: canonical evidence envelope is not hashable"
+        ) from exc
+    if expected_hash != content_hash:
         raise SanitizationIntegrityError(
             "EVIDENCE_INTEGRITY_ERROR: invalid canonical evidence envelope"
         )

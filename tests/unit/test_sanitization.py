@@ -4,6 +4,7 @@ import pickle
 
 import pytest
 
+import graph_sym_perf.sanitization as sanitization_module
 from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.sanitization import (
     EvidencePayload,
@@ -151,6 +152,47 @@ def test_invalid_canonical_envelope_claim_fails_closed(content_hash: str) -> Non
         match="EVIDENCE_INTEGRITY_ERROR",
     ):
         sanitize_structure(envelope)
+
+
+@pytest.mark.parametrize(
+    "error",
+    (TypeError("type"), ValueError("value"), ArithmeticError("arithmetic")),
+)
+def test_canonical_hash_errors_are_wrapped_as_sanitization_integrity(
+    monkeypatch,
+    error: Exception,
+) -> None:
+    def fail_hash(_payload):
+        raise error
+
+    monkeypatch.setattr(sanitization_module, "_project_canonical_hash", fail_hash)
+
+    with pytest.raises(
+        SanitizationIntegrityError,
+        match="EVIDENCE_INTEGRITY_ERROR",
+    ):
+        sanitize_structure(
+            {
+                "payload": {"message": "ordinary value"},
+                "content_hash": "a" * 64,
+            }
+        )
+
+
+@pytest.mark.parametrize("non_finite", (float("nan"), float("inf")))
+def test_non_finite_canonical_envelope_payload_fails_with_integrity_error(
+    non_finite: float,
+) -> None:
+    with pytest.raises(
+        SanitizationIntegrityError,
+        match="EVIDENCE_INTEGRITY_ERROR",
+    ):
+        sanitize_structure(
+            {
+                "payload": {"message": non_finite},
+                "content_hash": "a" * 64,
+            }
+        )
 
 
 def test_marker_named_fields_do_not_claim_a_generic_seal() -> None:
