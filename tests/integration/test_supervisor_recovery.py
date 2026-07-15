@@ -338,12 +338,102 @@ def test_rule_plan_attempt_guard_fails_closed_before_retry(tmp_path) -> None:
     assert summary.infrastructure_failed == plan.entries
     assert worker_calls == 1
     terminal = json.loads(
-        next((tmp_path / "entries").glob("*/attempt-001/terminal_result.json")).read_text(
+        next((tmp_path / "entries").glob("*/attempt-000/terminal_result.json")).read_text(
             encoding="utf-8"
         )
     )
     assert terminal["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
     assert "source provenance changed" in terminal["infrastructure_reason"]
+    assert terminal["secondary_terminal"]["infrastructure_error_kind"] == (
+        ErrorKind.INFRASTRUCTURE_ERROR.value
+    )
+    assert "retryable worker failure" in terminal["secondary_terminal"][
+        "infrastructure_reason"
+    ]
+
+
+def test_rule_plan_post_guard_runs_after_child_crash_and_preserves_typed_failure(
+    tmp_path,
+) -> None:
+    plan = _p1_rule_plan()
+    guard_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls >= 2:
+            raise ManifestMismatchError("source provenance changed after crash")
+
+    def worker(_entry):
+        os._exit(17)
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        process_isolation=True,
+        heartbeat_seconds=0.05,
+        stale_after_seconds=1.0,
+        attempt_guard=guard,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    terminal = json.loads(
+        next((tmp_path / "entries").glob("*/attempt-000/terminal_result.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert terminal["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    assert terminal["secondary_terminal"]["infrastructure_error_kind"] == (
+        ErrorKind.WORKER_CRASHED.value
+    )
+    assert "source provenance changed" in terminal["infrastructure_reason"]
+
+
+def test_rule_plan_post_guard_drift_overrides_resource_exhaustion_with_secondary_evidence(
+    tmp_path,
+) -> None:
+    plan = _p1_rule_plan()
+    plan = replace(
+        plan,
+        entries=(replace(plan.entries[0], max_entry_runtime_seconds=1),),
+    )
+    guard_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls >= 2:
+            raise ManifestMismatchError("source provenance changed during timeout")
+
+    def worker(_entry):
+        time.sleep(2.0)
+        raise AssertionError("hard timeout should terminate the child first")
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        process_isolation=True,
+        heartbeat_seconds=0.05,
+        stale_after_seconds=1.0,
+        attempt_guard=guard,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    assert summary.resource_exhausted == ()
+    terminal = json.loads(
+        next((tmp_path / "entries").glob("*/attempt-000/terminal_result.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert terminal["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    assert terminal["secondary_terminal"]["terminal_state"] == (
+        EntryState.RESOURCE_EXHAUSTED.value
+    )
+    assert terminal["secondary_terminal"]["resource_exhaustion_kind"] == (
+        ErrorKind.RESOURCE_EXHAUSTED.value
+    )
 
 
 def test_rule_plan_attempt_guard_fails_closed_after_worker(tmp_path) -> None:
@@ -381,6 +471,7 @@ def test_rule_plan_attempt_guard_fails_closed_after_worker(tmp_path) -> None:
         )
     )
     assert terminal["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    assert terminal["secondary_terminal"]["terminal_state"] == EntryState.COMPLETED.value
 
 
 def test_rule_plan_supervisor_classifies_child_crash_without_killing_campaign(
@@ -597,6 +688,12 @@ def test_attempt_guard_fails_closed_when_provenance_drifts_before_retry(tmp_path
     ]
     assert events[-1]["error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
     assert "source provenance changed" in events[-1]["reason"]
+    override = json.loads(
+        (tmp_path / "shards" / "task-000" / "attempt-000" / "post_guard_override.json")
+        .read_text(encoding="utf-8")
+    )
+    assert override["secondary_terminal"]["error_kind"] == ErrorKind.WORKER_CRASHED.value
+    assert "retry once" in override["secondary_terminal"]["reason"]
 
 
 def test_attempt_guard_fails_closed_when_provenance_drifts_during_worker(tmp_path) -> None:
@@ -618,6 +715,43 @@ def test_attempt_guard_fails_closed_when_provenance_drifts_during_worker(tmp_pat
     ]
     assert events[-1]["error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
     assert "source provenance changed" in events[-1]["reason"]
+
+
+def test_shard_post_guard_runs_after_typed_worker_process_error(tmp_path) -> None:
+    plan = RunPlan("test", 2, ("task",), 1, SourceRevision(None, None, None))  # type: ignore[arg-type]
+    guard_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls >= 2:
+            raise RuntimeError("source provenance changed after WPE")
+
+    def worker(_task):
+        raise supervisor_module.WorkerProcessError(
+            ErrorKind.WORKER_HUNG,
+            "typed worker process failure",
+        )
+
+    summary = ShardSupervisor(
+        tmp_path,
+        retry_limit=0,
+        attempt_guard=guard,
+    ).run(plan, worker)
+
+    assert summary.failed == ("task",)
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "shards" / "task-000" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert events[-1]["error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    override = json.loads(
+        (tmp_path / "shards" / "task-000" / "attempt-000" / "post_guard_override.json")
+        .read_text(encoding="utf-8")
+    )
+    assert override["secondary_terminal"]["error_kind"] == ErrorKind.WORKER_HUNG.value
 
 
 def test_supervisor_uses_task_specific_accepted_pair_target(tmp_path) -> None:

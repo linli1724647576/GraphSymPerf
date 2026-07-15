@@ -249,22 +249,51 @@ class RulePlanSupervisor:
             try:
                 if self.attempt_guard is not None:
                     self.attempt_guard()
-                if self.process_isolation:
-                    value = ProcessMonitor(
-                        heartbeat_seconds=self.heartbeat_seconds,
-                        stale_after_seconds=self.stale_after_seconds,
-                        hard_timeout_seconds=float(entry.max_entry_runtime_seconds),
-                        hard_timeout_error_kind=ErrorKind.RESOURCE_EXHAUSTED,
-                    ).run(worker, entry, context)
-                else:
-                    bind_worker_attempt(worker, context)
-                    value = worker(entry)
+                value: object | None = None
+                worker_error: BaseException | None = None
+                try:
+                    if self.process_isolation:
+                        value = ProcessMonitor(
+                            heartbeat_seconds=self.heartbeat_seconds,
+                            stale_after_seconds=self.stale_after_seconds,
+                            hard_timeout_seconds=float(entry.max_entry_runtime_seconds),
+                            hard_timeout_error_kind=ErrorKind.RESOURCE_EXHAUSTED,
+                        ).run(worker, entry, context)
+                    else:
+                        bind_worker_attempt(worker, context)
+                        value = worker(entry)
+                except BaseException as exc:
+                    worker_error = exc
+                post_guard_error: BaseException | None = None
                 if self.attempt_guard is not None:
-                    self.attempt_guard()
-                if not isinstance(value, Mapping):
-                    raise EntryResultIntegrityError("entry worker must return a mapping")
-                final_result = dict(value)
-                final_state = classify_rule_plan_result(entry, final_result)
+                    try:
+                        self.attempt_guard()
+                    except BaseException as exc:
+                        post_guard_error = exc
+                if post_guard_error is not None:
+                    non_retryable_failure = True
+                    final_state = EntryState.INFRASTRUCTURE_FAILED
+                    final_result = {
+                        "accepted_pairs": 0,
+                        "artifact_complete": False,
+                        "certificate_complete": False,
+                        "entry_id": entry.entry_id,
+                        "infrastructure_error_kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
+                        "infrastructure_reason": str(post_guard_error),
+                        "secondary_terminal": _secondary_rule_plan_terminal(
+                            entry,
+                            value=value,
+                            worker_error=worker_error,
+                        ),
+                        "terminal_state": final_state.value,
+                    }
+                elif worker_error is not None:
+                    raise worker_error
+                else:
+                    if not isinstance(value, Mapping):
+                        raise EntryResultIntegrityError("entry worker must return a mapping")
+                    final_result = dict(value)
+                    final_state = classify_rule_plan_result(entry, final_result)
             except WorkerProcessError as exc:
                 if exc.kind is ErrorKind.RESOURCE_EXHAUSTED:
                     final_state = EntryState.RESOURCE_EXHAUSTED
@@ -416,6 +445,97 @@ def _sanitize_terminal_result(
             ErrorKind.RESOURCE_EXHAUSTED.value,
         )
     return sanitized
+
+
+def _secondary_rule_plan_terminal(
+    entry: RulePlanEntry,
+    *,
+    value: object | None,
+    worker_error: BaseException | None,
+) -> dict[str, object]:
+    if isinstance(worker_error, WorkerProcessError):
+        if worker_error.kind is ErrorKind.RESOURCE_EXHAUSTED:
+            state = EntryState.RESOURCE_EXHAUSTED
+            result: Mapping[str, object] = {
+                "accepted_pairs": 0,
+                "artifact_complete": False,
+                "certificate_complete": False,
+                "entry_id": entry.entry_id,
+                "resource_exhaustion_kind": worker_error.kind.value,
+                "resource_exhaustion_reason": str(worker_error),
+                "terminal_state": state.value,
+            }
+        else:
+            state = EntryState.INFRASTRUCTURE_FAILED
+            result = {
+                "accepted_pairs": 0,
+                "artifact_complete": False,
+                "certificate_complete": False,
+                "entry_id": entry.entry_id,
+                "infrastructure_error_kind": worker_error.kind.value,
+                "infrastructure_reason": str(worker_error),
+                "terminal_state": state.value,
+            }
+    elif worker_error is not None:
+        state = EntryState.INFRASTRUCTURE_FAILED
+        typed_kind = getattr(worker_error, "kind", None)
+        result = {
+            "accepted_pairs": 0,
+            "artifact_complete": False,
+            "certificate_complete": False,
+            "entry_id": entry.entry_id,
+            "infrastructure_error_kind": (
+                typed_kind.value
+                if isinstance(typed_kind, ErrorKind)
+                else ErrorKind.INFRASTRUCTURE_ERROR.value
+            ),
+            "infrastructure_reason": f"{type(worker_error).__name__}: {worker_error}",
+            "terminal_state": state.value,
+        }
+    elif isinstance(value, Mapping):
+        try:
+            result = dict(value)
+            state = classify_rule_plan_result(entry, result)
+        except BaseException as exc:
+            state = EntryState.INFRASTRUCTURE_FAILED
+            result = {
+                "accepted_pairs": 0,
+                "artifact_complete": False,
+                "certificate_complete": False,
+                "entry_id": entry.entry_id,
+                "infrastructure_error_kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
+                "infrastructure_reason": f"{type(exc).__name__}: {exc}",
+                "terminal_state": state.value,
+            }
+    else:
+        state = EntryState.INFRASTRUCTURE_FAILED
+        result = {
+            "accepted_pairs": 0,
+            "artifact_complete": False,
+            "certificate_complete": False,
+            "entry_id": entry.entry_id,
+            "infrastructure_error_kind": ErrorKind.INFRASTRUCTURE_ERROR.value,
+            "infrastructure_reason": "worker did not produce a mapping",
+            "terminal_state": state.value,
+        }
+    sanitized = _sanitize_terminal_result(result, state)
+    keys = (
+        "accepted_pairs",
+        "artifact_complete",
+        "certificate_complete",
+        "entry_id",
+        "infrastructure_error_kind",
+        "infrastructure_reason",
+        "resource_exhaustion_kind",
+        "resource_exhaustion_reason",
+    )
+    secondary = {
+        key: sanitized[key]
+        for key in keys
+        if key in sanitized
+    }
+    secondary["terminal_state"] = state.value
+    return secondary
 
 
 def cell_summary_from_result(
@@ -792,16 +912,12 @@ class ShardSupervisor:
                 task_identity=task_identity,
             )
             try:
-                if self.attempt_guard is not None:
-                    self.attempt_guard()
-                result = self._run_worker(
+                result = self._run_worker_with_attempt_guard(
                     worker,
                     task,
                     context,
                     remaining_runtime_seconds=remaining_runtime,
                 )
-                if self.attempt_guard is not None:
-                    self.attempt_guard()
             except WorkerProcessError as exc:
                 journal = ShardJournal(shard_dir, manifest_hash=manifest_hash, task_identity=task_identity)
                 query_hash = _recoverable_query_timeout_hash(exc)
@@ -1083,6 +1199,52 @@ class ShardSupervisor:
             remaining_runtime_seconds=remaining_runtime_seconds,
         )
 
+    def _run_worker_with_attempt_guard(
+        self,
+        worker: Callable[[object], dict],
+        task: object,
+        context: AttemptContext,
+        *,
+        remaining_runtime_seconds: float | None,
+    ) -> dict:
+        if self.attempt_guard is not None:
+            self.attempt_guard()
+        result: dict | None = None
+        worker_error: BaseException | None = None
+        try:
+            result = self._run_worker(
+                worker,
+                task,
+                context,
+                remaining_runtime_seconds=remaining_runtime_seconds,
+            )
+        except BaseException as exc:
+            worker_error = exc
+        post_guard_error: BaseException | None = None
+        if self.attempt_guard is not None:
+            try:
+                self.attempt_guard()
+            except BaseException as exc:
+                post_guard_error = exc
+        if post_guard_error is not None:
+            secondary = _secondary_shard_terminal(result, worker_error)
+            body = {
+                "error_kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
+                "reason": sanitize_terminal_error(post_guard_error),
+                "secondary_terminal": secondary,
+            }
+            _atomic_write_json(
+                context.attempt_dir / "post_guard_override.json",
+                {**body, "content_hash": canonical_hash(body)},
+            )
+            raise ManifestMismatchError(
+                sanitize_terminal_error(post_guard_error)
+            ) from worker_error
+        if worker_error is not None:
+            raise worker_error
+        assert result is not None
+        return result
+
     def _run_worker_in_process(
         self,
         worker: Callable[[object], dict],
@@ -1276,6 +1438,34 @@ def _optional_task_seed(task: object) -> int | None:
 def _generator_progress(result: Mapping[str, object]) -> Mapping[str, object]:
     value = result.get("generation", {})
     return value if isinstance(value, Mapping) else {}
+
+
+def _secondary_shard_terminal(
+    result: Mapping[str, object] | None,
+    worker_error: BaseException | None,
+) -> dict[str, object]:
+    if worker_error is not None:
+        kind = _classify_exception(worker_error)
+        return {
+            "error_kind": kind.value,
+            "reason": sanitize_terminal_error(
+                f"{type(worker_error).__name__}: {worker_error}"
+            ),
+            "terminal_state": (
+                EntryState.RESOURCE_EXHAUSTED.value
+                if kind is ErrorKind.RESOURCE_EXHAUSTED
+                else EntryState.INFRASTRUCTURE_FAILED.value
+            ),
+        }
+    accepted_pairs = result.get("accepted_pairs", 0) if result is not None else 0
+    return {
+        "accepted_pairs": (
+            accepted_pairs
+            if type(accepted_pairs) is int and accepted_pairs >= 0
+            else 0
+        ),
+        "terminal_state": "worker_returned",
+    }
 
 
 def _classify_exception(exc: BaseException) -> ErrorKind:
