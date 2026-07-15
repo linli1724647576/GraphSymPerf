@@ -516,7 +516,10 @@ def test_rule_plan_terminal_error_is_typed_sanitized_and_bounded(
         "bolt://neo4j:hunter2@db.internal:7687 "
         "GRAPHSYMPERF_NEO4J_PASSWORD=hunter2 "
         "NEO4J_PASSWORD=driver-password "
-        "Authorization: Bearer opaque-authorization-value; "
+        "NEO4J_AUTH=neo4j/driver-auth "
+        '{"quoted_password": "json-password"}; '
+        "{'quoted_secret': 'python-secret'}; "
+        "Authorization: Custom Multi Word opaque-authorization-value; "
         + ("x" * 1000)
     )
 
@@ -553,6 +556,9 @@ def test_rule_plan_terminal_error_is_typed_sanitized_and_bounded(
     assert "/Users/sakuraq" not in reason
     assert "hunter2" not in reason
     assert "driver-password" not in reason
+    assert "driver-auth" not in reason
+    assert "json-password" not in reason
+    assert "python-secret" not in reason
     assert "opaque-authorization-value" not in reason
     assert "bolt://" not in reason
     cell_summary = next(
@@ -560,6 +566,9 @@ def test_rule_plan_terminal_error_is_typed_sanitized_and_bounded(
     ).read_text(encoding="utf-8")
     assert "hunter2" not in cell_summary
     assert "driver-password" not in cell_summary
+    assert "driver-auth" not in cell_summary
+    assert "json-password" not in cell_summary
+    assert "python-secret" not in cell_summary
     assert "opaque-authorization-value" not in cell_summary
 
 
@@ -579,7 +588,9 @@ def test_cell_summary_failure_reason_is_sanitized(tmp_path, monkeypatch) -> None
         raise ValueError(
             "/Users/sakuraq/private/cell.py "
             "postgresql://admin:hunter2@db.internal/graph "
-            "PASSWORD=hunter2"
+            "PASSWORD=hunter2 "
+            "Authorization: Custom Multi Word cell-auth-tail; "
+            "{'cell_token': 'cell-token-secret'}"
         )
 
     monkeypatch.setattr(
@@ -605,6 +616,55 @@ def test_cell_summary_failure_reason_is_sanitized(tmp_path, monkeypatch) -> None
     assert "/Users/sakuraq" not in reason
     assert "hunter2" not in reason
     assert "postgresql://" not in reason
+    assert "cell-auth-tail" not in reason
+    assert "cell-token-secret" not in reason
+
+
+@pytest.mark.parametrize("process_isolation", (False, True))
+def test_terminal_result_is_recursively_sanitized_without_rewriting_query_results(
+    tmp_path,
+    process_isolation,
+) -> None:
+    plan = _p1_rule_plan()
+
+    def worker(entry):
+        return {
+            "accepted_pairs": entry.accepted_pair_quota,
+            "artifact_complete": True,
+            "certificate_complete": True,
+            "entry_id": entry.entry_id,
+            "terminal_state": "completed",
+            "diagnostics": {
+                "NEO4J_AUTH": "neo4j/terminal-auth",
+                "nested": [{"adapter_password": "terminal-password"}],
+            },
+            "query": "MATCH (n) RETURN n",
+            "result_rows": [{"value": 7}],
+        }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=0,
+        process_isolation=process_isolation,
+        heartbeat_seconds=0.05,
+        stale_after_seconds=1.0,
+    ).run(plan, worker)
+
+    assert summary.completed == plan.entries
+    terminal_path = next(
+        (tmp_path / "entries").glob("*/attempt-000/terminal_result.json")
+    )
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+    assert terminal["query"] == "MATCH (n) RETURN n"
+    assert terminal["result_rows"] == [{"value": 7}]
+    raw = terminal_path.read_text(encoding="utf-8")
+    assert "terminal-auth" not in raw
+    assert "terminal-password" not in raw
+    assert "terminal-auth" not in next(
+        (tmp_path / "entries").glob("*/cell_summary.json")
+    ).read_text(encoding="utf-8")
 
 
 def _hash_for(label: str) -> str:

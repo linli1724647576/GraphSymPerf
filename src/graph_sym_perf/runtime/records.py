@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from graph_sym_perf.core import to_jsonable
 from graph_sym_perf.runtime.models import RuntimeEvidence
+from graph_sym_perf.sanitization import sanitize_structure
 
 if TYPE_CHECKING:
     from graph_sym_perf.workload.models import CertifiedQueryPair
@@ -219,13 +220,15 @@ class CompactRuntimeStore:
         reason: str,
         rollback_error: str | None,
     ) -> OSError | None:
-        payload = {
+        payload = sanitize_structure({
             "previous_size": previous_size,
             "reason": reason,
             "record_digest": record_digest,
             "rollback_error": rollback_error,
             "schema_version": 1,
-        }
+        })
+        if not isinstance(payload, dict):  # pragma: no cover - dict contract
+            raise TypeError("runtime poison sanitizer must return an object")
         self.poison_path.parent.mkdir(parents=True, exist_ok=True)
         temporary: str | None = None
         try:

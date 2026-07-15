@@ -20,6 +20,7 @@ from graph_sym_perf.runtime.models import (
     RuntimePolicy,
     RuntimeVerdict,
 )
+from graph_sym_perf.sanitization import sanitize_structure, sanitize_text
 from graph_sym_perf.validation.models import (
     CandidateBundle,
     EquivalenceEvidence,
@@ -147,7 +148,10 @@ class SpawnedValidationSessionRunner:
             queue.cancel_join_thread()
             process.close()
         if status != "ok":
-            raise RuntimeError(f"VALIDATION_SESSION_FAILED: {payload}")
+            raise RuntimeError(
+                "VALIDATION_SESSION_FAILED: "
+                f"{sanitize_text(payload, limit=512, single_line=True)}"
+            )
         equivalence, session = payload
         exited = exitcode == 0
         if session.lifecycle is not None:
@@ -183,9 +187,21 @@ def _validation_session_entry(
             max_result_rows,
         )
     except BaseException as exc:
-        queue.put(("error", f"{type(exc).__name__}: {exc}"))
+        _publish_validation_result(
+            queue,
+            "error",
+            sanitize_text(
+                f"{type(exc).__name__}: {exc}",
+                limit=512,
+                single_line=True,
+            ),
+        )
     else:
-        queue.put(("ok", payload))
+        _publish_validation_result(
+            queue,
+            "ok",
+            _sanitize_validation_payload(payload),
+        )
     finally:
         queue.close()
 
@@ -371,6 +387,77 @@ def _run_validation_session(
             schedule_seed=request.policy.seed,
         )
     return equivalence, session
+
+
+def _publish_validation_result(queue: Any, status: str, payload: object) -> None:
+    queue.put(sanitize_structure((status, payload)))
+
+
+def _sanitize_validation_payload(
+    payload: tuple[EquivalenceEvidence, ValidationSession],
+) -> tuple[EquivalenceEvidence, ValidationSession]:
+    equivalence, session = payload
+    safe_equivalence = replace(
+        equivalence,
+        reason_codes=tuple(sanitize_text(reason) for reason in equivalence.reason_codes),
+    )
+    safe_lifecycle = (
+        replace(
+            session.lifecycle,
+            connection_id=sanitize_text(session.lifecycle.connection_id),
+        )
+        if session.lifecycle is not None
+        else None
+    )
+    safe_session = replace(
+        session,
+        graph_fingerprint=sanitize_text(session.graph_fingerprint),
+        dbms_fingerprint=sanitize_text(session.dbms_fingerprint),
+        evidence=_sanitize_runtime_evidence(session.evidence),
+        negative_controls=tuple(
+            _sanitize_runtime_evidence(evidence)
+            for evidence in session.negative_controls
+        ),
+        health_event=(
+            sanitize_text(session.health_event)
+            if session.health_event is not None
+            else None
+        ),
+        lifecycle=safe_lifecycle,
+    )
+    return safe_equivalence, safe_session
+
+
+def _sanitize_runtime_evidence(evidence: RuntimeEvidence) -> RuntimeEvidence:
+    return replace(
+        evidence,
+        reason_codes=tuple(sanitize_text(reason) for reason in evidence.reason_codes),
+        slow_query=(
+            sanitize_text(evidence.slow_query)
+            if evidence.slow_query is not None
+            else None
+        ),
+        graph_snapshot_hash=(
+            sanitize_text(evidence.graph_snapshot_hash)
+            if evidence.graph_snapshot_hash is not None
+            else None
+        ),
+        dbms_fingerprint=(
+            sanitize_text(evidence.dbms_fingerprint)
+            if evidence.dbms_fingerprint is not None
+            else None
+        ),
+        measurement_source=(
+            sanitize_text(evidence.measurement_source)
+            if evidence.measurement_source is not None
+            else None
+        ),
+        measurement_protocol=(
+            sanitize_text(evidence.measurement_protocol)
+            if evidence.measurement_protocol is not None
+            else None
+        ),
+    )
 
 
 def _connection_identity(adapter: Any) -> str:

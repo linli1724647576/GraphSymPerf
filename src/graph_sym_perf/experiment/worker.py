@@ -112,6 +112,7 @@ from graph_sym_perf.runtime.screening import (
     select_control_validation_pairs,
     stage1_top_k,
 )
+from graph_sym_perf.sanitization import sanitize_structure
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
 from graph_sym_perf.transforms.provider import CoreRulePairProvider
 from graph_sym_perf.transforms.rule_models import RuleRegistry
@@ -2834,8 +2835,11 @@ class RuntimeFirstShardWorker:
             summary["infrastructure_reason"] = sanitize_terminal_error(
                 infrastructure_reason
             )
-        _atomic_write_json(attempt_dir / "summary.json", summary)
-        return summary
+        safe_summary = sanitize_structure(summary)
+        if not isinstance(safe_summary, dict):  # pragma: no cover - dict contract
+            raise TypeError("entry summary sanitizer must return an object")
+        _atomic_write_json(attempt_dir / "summary.json", safe_summary)
+        return safe_summary
 
     def _run_schema_v2_compat(self, task: ShardTask) -> dict[str, object]:
         """Explicit historical adapter; schema-v3 never falls back through it."""
@@ -3130,7 +3134,10 @@ class RuntimeFirstShardWorker:
                     },
                 }
             )
-        _atomic_write_json(attempt_dir / "summary.json", summary)
+        safe_summary = sanitize_structure(summary)
+        if not isinstance(safe_summary, dict):  # pragma: no cover - dict contract
+            raise TypeError("shard summary sanitizer must return an object")
+        _atomic_write_json(attempt_dir / "summary.json", safe_summary)
         budget_bytes = int(self.spec.artifacts["shard_budget_mb"]) * 1024 * 1024
         budget_report = enforce_shard_budget(
             shard_dir,
@@ -3143,8 +3150,11 @@ class RuntimeFirstShardWorker:
                 _append_jsonl(shard_dir / "artifact_warnings.jsonl", {"warning": warning})
         summary["shard_artifact_bytes"] = budget_report.used_bytes
         summary["artifact_warnings"] = budget_report.warnings
-        _atomic_write_json(attempt_dir / "summary.json", summary)
-        return summary
+        safe_summary = sanitize_structure(summary)
+        if not isinstance(safe_summary, dict):  # pragma: no cover - dict contract
+            raise TypeError("shard summary sanitizer must return an object")
+        _atomic_write_json(attempt_dir / "summary.json", safe_summary)
+        return safe_summary
 
     def _transition_attempt(self, state: ShardState) -> None:
         transition_attempt = getattr(self._attempt_context, "transition", None)
@@ -3186,7 +3196,7 @@ class RuntimeFirstShardWorker:
             return
         _atomic_write_json(
             attempt_dir / "runtime_invalidated.json",
-            {
+            sanitize_structure({
                 "after": actual_fingerprint.value,
                 "before": expected_fingerprint.value,
                 "fingerprint_after": actual_fingerprint.value,
@@ -3198,7 +3208,7 @@ class RuntimeFirstShardWorker:
                     or actual_epoch.reason
                     or "dbms_fingerprint_or_health_epoch_changed"
                 ),
-            },
+            }),
         )
         raise WorkerFailure(ErrorKind.DBMS_CRASHED, "DBMS fingerprint or boot health epoch changed during shard execution")
 
@@ -4420,7 +4430,7 @@ def _write_entry_noise_failure(
         }
         for index, samples in enumerate(raw_probe_samples)
     ]
-    body = {
+    body = sanitize_structure({
         "schema_version": 1,
         "status": "incomplete",
         "entry_id": entry.entry_id,
@@ -4436,7 +4446,9 @@ def _write_entry_noise_failure(
         "reason_codes": list(reason_codes),
         "error_kind": error_kind.value,
         "error_reason": error_reason,
-    }
+    })
+    if not isinstance(body, dict):  # pragma: no cover - dict contract
+        raise TypeError("noise failure sanitizer must return an object")
     content_hash = canonical_hash(body)
     persist_intent(content_hash)
     _atomic_write_json(path, {**body, "content_hash": content_hash})

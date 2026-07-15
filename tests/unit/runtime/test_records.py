@@ -137,3 +137,39 @@ def test_store_rolls_back_and_poisons_a_full_line_when_fsync_reports_failure(
     assert path.with_name("pair_runtime.poison.json").exists()
     with pytest.raises(ArtifactWriteError, match="poison"):
         CompactRuntimeStore(path)
+
+
+def test_runtime_write_poison_sanitizes_fsync_and_rollback_diagnostics(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    path = tmp_path / "pair_runtime.jsonl"
+    store = CompactRuntimeStore(path)
+    monkeypatch.setattr(
+        store,
+        "_write_line",
+        lambda _line: (_ for _ in ()).throw(
+            OSError(
+                '{"storage_password": "fsync-password"} '
+                "Authorization: Custom Scheme fsync-auth-tail; "
+                "/Users/private/runtime"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        store,
+        "_rollback",
+        lambda _size: OSError("NEO4J_AUTH=neo4j/rollback-secret"),
+    )
+
+    with pytest.raises(ArtifactWriteError):
+        store.append(_record())
+
+    poison = path.with_name("pair_runtime.poison.json").read_text(encoding="utf-8")
+    for forbidden in (
+        "fsync-password",
+        "fsync-auth-tail",
+        "rollback-secret",
+        "/Users/private",
+    ):
+        assert forbidden not in poison

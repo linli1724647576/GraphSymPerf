@@ -118,6 +118,22 @@ class _LargeResultWorker:
         return {"accepted_pairs": 1000, "accepted_pair_hashes": hashes}
 
 
+class _SensitiveStructuredResultWorker:
+    def __call__(self, _task):
+        return {
+            "accepted_pairs": 1,
+            "diagnostics": {
+                "NEO4J_AUTH": "neo4j/ipc-auth-secret",
+                "nested": [
+                    {"vendor_password": "ipc-password"},
+                    "bolt://neo4j:ipc-uri-secret@db.internal:7687 /Users/private/result",
+                ],
+            },
+            "query": "MATCH (n) RETURN n",
+            "result_rows": [{"value": 7}],
+        }
+
+
 def test_large_worker_result_is_persisted_by_reference_without_queue_deadlock(tmp_path) -> None:
     context = _attempt_context(tmp_path)
     monitor = ProcessMonitor(
@@ -132,6 +148,29 @@ def test_large_worker_result_is_persisted_by_reference_without_queue_deadlock(tm
     assert time.monotonic() - started < 0.5
     assert len(result["accepted_pair_hashes"]) == 1000
     assert (context.attempt_dir / "result.json").is_file()
+
+
+def test_worker_result_is_recursively_sanitized_before_ipc_reference(tmp_path) -> None:
+    context = _attempt_context(tmp_path)
+    monitor = ProcessMonitor(
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.2,
+        hard_timeout_seconds=0.5,
+    )
+
+    result = monitor.run(_SensitiveStructuredResultWorker(), object(), context)
+
+    assert result["query"] == "MATCH (n) RETURN n"
+    assert result["result_rows"] == [{"value": 7}]
+    persisted = (context.attempt_dir / "result.json").read_text(encoding="utf-8")
+    for forbidden in (
+        "ipc-auth-secret",
+        "ipc-password",
+        "ipc-uri-secret",
+        "/Users/private",
+        "bolt://",
+    ):
+        assert forbidden not in persisted
 
 
 class _MarkerWorker:

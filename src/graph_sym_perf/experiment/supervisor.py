@@ -45,6 +45,7 @@ from graph_sym_perf.experiment.state import (
     can_transition,
 )
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
+from graph_sym_perf.sanitization import sanitize_structure
 
 
 @dataclass(frozen=True)
@@ -396,7 +397,7 @@ class RulePlanSupervisor:
                 campaign_id=self.campaign_id,
                 input_manifest_hash=self.input_manifest_hash,
             )
-        body = asdict(cell)
+        body = sanitize_structure(asdict(cell))
         _atomic_write_json(entry_dir / "cell_summary.json", {**body, "content_hash": canonical_hash(body)})
         return final_state
 
@@ -423,7 +424,9 @@ def _sanitize_terminal_result(
     result: Mapping[str, object],
     state: EntryState,
 ) -> dict[str, object]:
-    sanitized = dict(result)
+    sanitized = sanitize_structure(result)
+    if not isinstance(sanitized, dict):  # pragma: no cover - Mapping contract
+        raise TypeError("terminal result sanitizer must return an object")
     for key in (
         "error_reason",
         "failure_reason",

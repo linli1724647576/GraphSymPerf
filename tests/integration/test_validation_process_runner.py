@@ -23,7 +23,11 @@ from graph_sym_perf.validation.validator import IssueValidator, SubprocessSessio
 class LifecycleAdapter:
     def __init__(self, candidate: CandidateBundle) -> None:
         self.candidate = candidate
-        self.connection_identity = f"driver-{os.getpid()}"
+        self.connection_identity = (
+            "bolt://neo4j:evidence-uri-secret@db.internal:7687"
+            if candidate.resolved_config.get("mode") == "sensitive_evidence"
+            else f"driver-{os.getpid()}"
+        )
         self._graph_fingerprint = ""
         self._runtime_calls = 0
 
@@ -38,6 +42,12 @@ class LifecycleAdapter:
         if query_kind == "runtime":
             self._runtime_calls += 1
         mode = self.candidate.resolved_config.get("mode")
+        if mode == "sensitive_evidence" and query_kind == "validation_equivalence_b":
+            raise RuntimeError(
+                "{'evidence_token': 'evidence-token-secret'} "
+                "Authorization: Custom Multi Word evidence-auth-tail; "
+                "/Users/private/evidence"
+            )
         if query_kind == "validation_graph_nodes":
             properties = {"id": 2 if mode == "graph_mismatch" else 1}
             rows = ({"node_id": 1, "labels": ["Person"], "properties": properties},)
@@ -98,6 +108,19 @@ def _crashing_adapter_factory(_candidate: CandidateBundle):
 
 def _raising_adapter_factory(_candidate: CandidateBundle):
     raise RuntimeError("adapter factory exploded")
+
+
+class _SensitiveFatalValidationError(BaseException):
+    pass
+
+
+def _sensitive_fatal_adapter_factory(_candidate: CandidateBundle):
+    raise _SensitiveFatalValidationError(
+        '{"validation_password": "queue-password"} '
+        "NEO4J_AUTH=neo4j/queue-auth "
+        "Authorization: Custom Multi Word queue-auth-tail; "
+        "/Users/private/validation"
+    )
 
 
 class ProductionFactoryContractAdapter:
@@ -336,6 +359,63 @@ def test_spawned_runner_empty_queue_or_child_failure_fails_closed(
             noise_floor_ms=0.0,
             timer_resolution_ms=0.001,
         )
+
+
+def test_validation_queue_error_is_sanitized_before_crossing_process_boundary(
+    tmp_path: Path,
+) -> None:
+    candidate = _bundle(tmp_path / "sensitive-child-events.log")
+
+    with pytest.raises(RuntimeError, match="VALIDATION_SESSION_FAILED") as captured:
+        SpawnedValidationSessionRunner(
+            _sensitive_fatal_adapter_factory
+        ).run_session(
+            candidate,
+            1,
+            expected_slow_query="b",
+            noise_floor_ms=0.0,
+            timer_resolution_ms=0.001,
+        )
+
+    rendered = str(captured.value)
+    for forbidden in (
+        "queue-password",
+        "queue-auth",
+        "queue-auth-tail",
+        "/Users/private",
+    ):
+        assert forbidden not in rendered
+
+
+def test_validation_typed_evidence_is_sanitized_before_queue_publish(
+    tmp_path: Path,
+) -> None:
+    candidate = _bundle(
+        tmp_path / "sensitive-evidence-events.log",
+        mode="sensitive_evidence",
+    )
+
+    equivalence, session = SpawnedValidationSessionRunner(
+        _adapter_factory
+    ).run_session(
+        candidate,
+        1,
+        expected_slow_query="b",
+        noise_floor_ms=0.0,
+        timer_resolution_ms=0.001,
+    )
+
+    assert isinstance(session.schedule_seed, int)
+    assert session.lifecycle is not None
+    rendered = repr((equivalence, session))
+    for forbidden in (
+        "evidence-token-secret",
+        "evidence-auth-tail",
+        "evidence-uri-secret",
+        "/Users/private",
+        "bolt://",
+    ):
+        assert forbidden not in rendered
 
 
 def test_spawned_runner_closes_adapter_when_session_work_fails(tmp_path: Path) -> None:

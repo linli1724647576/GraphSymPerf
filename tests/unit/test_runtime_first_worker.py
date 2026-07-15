@@ -562,10 +562,21 @@ def test_entry_summary_sanitizes_runtime_diagnostics_before_first_write(tmp_path
         generated=None,
         infrastructure_error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
         infrastructure_reason=sensitive,
+        cell_metrics={
+            "diagnostics": {
+                "service_token": "summary-token-secret",
+                "nested": ["/Users/private/summary.json"],
+            },
+            "query": "MATCH (n) RETURN n",
+            "result_rows": [{"value": 7}],
+        },
     )
 
     raw = (attempt_dir / "summary.json").read_text(encoding="utf-8")
-    assert result["infrastructure_reason"] == json.loads(raw)["infrastructure_reason"]
+    payload = json.loads(raw)
+    assert result["infrastructure_reason"] == payload["infrastructure_reason"]
+    assert payload["query"] == "MATCH (n) RETURN n"
+    assert payload["result_rows"] == [{"value": 7}]
     for forbidden in (
         "uri-password",
         "env-password",
@@ -573,6 +584,49 @@ def test_entry_summary_sanitizes_runtime_diagnostics_before_first_write(tmp_path
         "opaque-authorization-value",
         "/Users/sakuraq",
         "Traceback",
+        "bolt://",
+        "summary-token-secret",
+        "/Users/private",
+    ):
+        assert forbidden not in raw
+
+
+def test_noise_failure_artifact_recursively_sanitizes_diagnostics(tmp_path) -> None:
+    path = tmp_path / "noise_calibration_failure.json"
+    intent_hashes: list[str] = []
+    worker_module._write_entry_noise_failure(
+        path,
+        entry=_rule_plan_entry(),
+        graph_snapshot_hash="a" * 64,
+        dbms_fingerprint="b" * 64,
+        dbms_health_epoch="c" * 64,
+        expected_probe_hashes=("d" * 64,),
+        raw_probe_samples=(),
+        reason_codes=(
+            '{"driver_secret": "noise-secret"}',
+            "Traceback /Users/private/noise.py",
+        ),
+        error_kind=ErrorKind.INFRASTRUCTURE_ERROR,
+        error_reason=(
+            "NEO4J_AUTH=neo4j/noise-auth "
+            "Authorization: Custom Multi Word noise-auth-tail; "
+            "bolt://neo4j:noise-uri-password@db.internal:7687"
+        ),
+        persist_intent=intent_hashes.append,
+    )
+
+    raw = path.read_text(encoding="utf-8")
+    payload = json.loads(raw)
+    assert intent_hashes == [payload["content_hash"]]
+    assert payload["content_hash"] == canonical_hash(
+        {key: value for key, value in payload.items() if key != "content_hash"}
+    )
+    for forbidden in (
+        "noise-secret",
+        "/Users/private",
+        "noise-auth",
+        "noise-auth-tail",
+        "noise-uri-password",
         "bolt://",
     ):
         assert forbidden not in raw

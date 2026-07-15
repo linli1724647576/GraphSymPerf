@@ -7,7 +7,6 @@ import json
 import multiprocessing
 import os
 import queue
-import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -17,6 +16,7 @@ from typing import Any
 from graph_sym_perf.experiment.process_control import terminate_process_group
 from graph_sym_perf.experiment.scheduling import AttemptContext
 from graph_sym_perf.experiment.state import ErrorKind, _atomic_write_json
+from graph_sym_perf.sanitization import sanitize_structure, sanitize_text
 
 
 class WorkerProcessError(RuntimeError):
@@ -223,9 +223,9 @@ def _isolated_worker_entry(
 ) -> None:
     try:
         pid, pgid = _establish_process_group()
-        control_queue.put(("ready", {"pid": pid, "pgid": pgid}))
+        _publish_control(control_queue, "ready", {"pid": pid, "pgid": pgid})
     except BaseException as exc:
-        control_queue.put(("bootstrap_error", _bounded_error(exc)))
+        _publish_control(control_queue, "bootstrap_error", _bounded_error(exc))
         return
     try:
         bind_worker_attempt(worker, context)
@@ -234,33 +234,36 @@ def _isolated_worker_entry(
             if not isinstance(result, Mapping):
                 raise TypeError("worker must return a mapping")
             result_path = context.attempt_dir / "result.json"
-            _atomic_write_json(result_path, result)
+            safe_result = sanitize_structure(result)
+            _atomic_write_json(result_path, safe_result)
             digest = hashlib.sha256(result_path.read_bytes()).hexdigest()
-            control_queue.put(("result_ready", {"name": result_path.name, "sha256": digest}))
+            _publish_control(
+                control_queue,
+                "result_ready",
+                {"name": result_path.name, "sha256": digest},
+            )
     except BaseException as exc:
         kind = getattr(exc, "kind", None)
         if isinstance(kind, ErrorKind):
-            control_queue.put(
-                (
-                    "typed_error",
-                    {
-                        "kind": kind.value,
-                        "message": sanitize_terminal_error(str(exc)),
-                    },
-                )
+            _publish_control(
+                control_queue,
+                "typed_error",
+                {
+                    "kind": kind.value,
+                    "message": sanitize_terminal_error(str(exc)),
+                },
             )
         elif isinstance(exc, ValueError):
-            control_queue.put(
-                (
-                    "typed_error",
-                    {
-                        "kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
-                        "message": sanitize_terminal_error(str(exc)),
-                    },
-                )
+            _publish_control(
+                control_queue,
+                "typed_error",
+                {
+                    "kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
+                    "message": sanitize_terminal_error(str(exc)),
+                },
             )
         else:
-            control_queue.put(("error", _bounded_error(exc)))
+            _publish_control(control_queue, "error", _bounded_error(exc))
 
 
 def _bounded_error(exc: BaseException) -> str:
@@ -268,67 +271,16 @@ def _bounded_error(exc: BaseException) -> str:
 
 
 _TERMINAL_ERROR_LIMIT = 512
-_CONNECTION_URI = re.compile(
-    r"\b[a-z][a-z0-9+.-]*://[^\s'\"<>]+",
-    re.IGNORECASE,
-)
-_AUTHORIZATION_ASSIGNMENT = re.compile(
-    r"(?i)(\b(?:[a-z0-9]+[_-])*authorization\b\s*[:=]\s*)"
-    r"(?:(?:bearer|basic|token)\s+)?(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
-)
-_SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)(\b(?:[a-z0-9]+[_-])*(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|credential)\b\s*[:=]\s*)"
-    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
-)
-_SECRET_BEARING_TOKEN = re.compile(
-    r"(?i)\b[^\s,;]*secret[^\s,;]*\b",
-)
-_WINDOWS_ABSOLUTE_PATH = re.compile(
-    r"(?i)\b[a-z]:\\(?:[^\s'\"<>]+\\)*[^\s'\"<>:,;)]*",
-)
-_POSIX_ABSOLUTE_PATH = re.compile(
-    r"(?<![A-Za-z0-9_.-])/(?:[^/\s'\"<>]+/)*[^/\s'\"<>:,;)]*",
-)
-_TRACEBACK_FILE_LINE = re.compile(
-    r"^File\s+[\"'].*[\"'],\s*line\s+\d+",
-    re.IGNORECASE,
-)
-_TRACEBACK_HEADER = re.compile(
-    r"traceback\s*\(most recent call last\)\s*:?,?",
-    re.IGNORECASE,
-)
 
 
 def sanitize_terminal_error(value: object, *, limit: int = _TERMINAL_ERROR_LIMIT) -> str:
     """Render one bounded, single-line, secret-free terminal diagnostic."""
 
-    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-        raise ValueError("terminal error limit must be a positive integer")
-    safe_lines: list[str] = []
-    for line in str(value).splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        lowered = stripped.lower()
-        if lowered.startswith("traceback (most recent call last)"):
-            continue
-        if _TRACEBACK_FILE_LINE.match(stripped):
-            continue
-        safe_lines.append(stripped)
-    rendered = " ".join(safe_lines)
-    rendered = _TRACEBACK_HEADER.sub("", rendered)
-    rendered = _CONNECTION_URI.sub("<connection-uri>", rendered)
-    rendered = _AUTHORIZATION_ASSIGNMENT.sub(r"\1<redacted>", rendered)
-    rendered = _SENSITIVE_ASSIGNMENT.sub(r"\1<redacted>", rendered)
-    rendered = _SECRET_BEARING_TOKEN.sub("<redacted>", rendered)
-    rendered = _WINDOWS_ABSOLUTE_PATH.sub("<absolute-path>", rendered)
-    rendered = _POSIX_ABSOLUTE_PATH.sub("<absolute-path>", rendered)
-    rendered = re.sub(r"\s+", " ", rendered).strip()
-    if not rendered:
-        rendered = "terminal error details redacted"
-    if len(rendered) > limit:
-        rendered = rendered[: max(0, limit - 1)].rstrip() + "…"
-    return rendered
+    return sanitize_text(value, limit=limit, single_line=True)
+
+
+def _publish_control(control_queue: Any, kind: str, payload: object) -> None:
+    control_queue.put((kind, sanitize_structure(payload)))
 
 
 def _validate_ready(payload: object, *, expected_pid: int) -> int:
