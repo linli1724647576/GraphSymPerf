@@ -352,6 +352,7 @@ def load_pilot_selection(
     expected_campaign_id: str | None = None,
     expected_p1_manifest_hash: str | None = None,
     expected_p1_cell_summary_root: str | None = None,
+    expected_max_cells: int | None = None,
 ) -> PilotSelection:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -381,6 +382,10 @@ def load_pilot_selection(
         and selection.input_p1_cell_summary_root != expected_p1_cell_summary_root
     ):
         raise SelectionIntegrityError("pilot selection P1 cell summary root mismatch")
+    if expected_max_cells is not None and selection.max_cells != expected_max_cells:
+        raise SelectionIntegrityError(
+            "pilot selection max_cells differs from the preregistered campaign limit"
+        )
     selected_by_identity = {cell.identity: cell for cell in selection.cells}
     if len(selected_by_identity) != len(selection.cells):
         raise SelectionIntegrityError("pilot selection contains duplicate selected cells")
@@ -393,7 +398,11 @@ def load_pilot_selection(
             raise SelectionIntegrityError("selected cell is not bound to one eligible input decision")
     replayed = select_p2_cells(
         tuple(decision.summary for decision in selection.decisions),
-        max_cells=selection.max_cells,
+        max_cells=(
+            expected_max_cells
+            if expected_max_cells is not None
+            else selection.max_cells
+        ),
         campaign_id=selection.campaign_id,
         input_p1_manifest_hash=selection.input_p1_manifest_hash,
         input_p1_cell_summary_root=selection.input_p1_cell_summary_root,

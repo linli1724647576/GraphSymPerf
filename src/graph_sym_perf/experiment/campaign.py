@@ -32,6 +32,7 @@ from graph_sym_perf.experiment.selection import (
     AffectedVersionRegressionReport,
     CellSummary,
     PilotSelection,
+    SelectionIntegrityError,
     evaluate_p0_gate,
     load_pilot_selection,
     select_p2_cells,
@@ -141,6 +142,7 @@ class CampaignLifecycle:
             config_hash=config_hash,
         )
         pilot, selection_ref = self._selection_for_phase(
+            spec,
             phase,
             selection,
             campaign_id=campaign_id,
@@ -363,6 +365,7 @@ class CampaignLifecycle:
 
     def _selection_for_phase(
         self,
+        spec: ValidatedYieldExperimentSpec,
         phase: CampaignPhase,
         selection_path: str | Path | None,
         *,
@@ -381,18 +384,27 @@ class CampaignLifecycle:
         parent_cell_summary_root = parent.get("cell_summary_root")
         if not _is_sha256(parent_cell_summary_root):
             raise PhaseAncestryError("P2 parent cell summary root is missing")
-        pilot = load_pilot_selection(
-            selection_path,
-            expected_campaign_id=campaign_id,
-            expected_p1_manifest_hash=parent_manifest_hash,
-            expected_p1_cell_summary_root=parent_cell_summary_root,
-        )
+        preregistered_max_cells = spec.campaign.p2.max_rule_scale_cells
+        if preregistered_max_cells is None:
+            raise PhaseAncestryError(
+                "P2 preregistered max_rule_scale_cells is missing"
+            )
+        try:
+            pilot = load_pilot_selection(
+                selection_path,
+                expected_campaign_id=campaign_id,
+                expected_p1_manifest_hash=parent_manifest_hash,
+                expected_p1_cell_summary_root=parent_cell_summary_root,
+                expected_max_cells=preregistered_max_cells,
+            )
+        except SelectionIntegrityError as exc:
+            raise PhaseAncestryError(str(exc)) from exc
         parent_run = parent.get("run_id")
         if not isinstance(parent_run, str):
             raise PhaseAncestryError("P2 parent run identity is missing")
         expected = select_p2_cells(
             self.cell_summaries(parent_run),
-            max_cells=pilot.max_cells,
+            max_cells=preregistered_max_cells,
             campaign_id=campaign_id,
             input_p1_manifest_hash=parent_manifest_hash,
             input_p1_cell_summary_root=parent_cell_summary_root,

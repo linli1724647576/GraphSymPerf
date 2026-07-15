@@ -438,6 +438,47 @@ def test_p2_rejects_self_consistent_selection_not_built_from_parent_p1_cells(
         )
 
 
+def test_p2_rejects_self_consistent_selection_with_non_preregistered_max_cells(
+    tmp_path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+    p0 = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(),
+        phase=CampaignPhase.P0,
+        run_id="p0",
+    )
+    p1 = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(),
+        phase=CampaignPhase.P1,
+        run_id="p1",
+        parent_run=p0.run_id,
+    )
+    selection = select_p2_cells(
+        lifecycle.cell_summaries(p1.run_id),
+        max_cells=2,
+        campaign_id=p1.campaign_id,
+        input_p1_manifest_hash=p1.manifest_hash,
+        input_p1_cell_summary_root=_cell_summary_root(p1),
+    )
+    selection_path = tmp_path / "max-two-selection.json"
+    write_pilot_selection(selection, selection_path)
+
+    with pytest.raises(PhaseAncestryError, match="preregistered"):
+        lifecycle.run(
+            spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P2,
+            run_id="p2",
+            parent_run=p1.run_id,
+            selection=selection_path,
+        )
+
+    assert not (tmp_path / "p2").exists()
+
+
 def test_measurement_session_is_cross_process_exclusive_and_owner_only(tmp_path) -> None:
     lock = MeasurementSessionLock(tmp_path)
     lease = lock.acquire()
