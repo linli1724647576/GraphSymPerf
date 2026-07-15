@@ -1,10 +1,17 @@
 import pytest
 import hashlib
+import copy
 from dataclasses import asdict
 
 from graph_sym_perf.artifacts.policy import ArtifactLevel, ArtifactPolicy
 from graph_sym_perf.artifacts.schema import ArtifactRecord, ArtifactReference
-from graph_sym_perf.validation.models import candidate_hash_from_content_hashes, canonical_content_hash
+from graph_sym_perf.issues.dedup import FingerprintSubject, IssueFamilyIndex, fingerprint_issue
+from graph_sym_perf.validation.models import (
+    DuplicateClearance,
+    _DUPLICATE_CLEARANCE_TOKEN,
+    candidate_hash_from_content_hashes,
+    canonical_content_hash,
+)
 from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.transforms.safety_points import SafetyCertificate
 
@@ -96,6 +103,7 @@ def _session(session_id: str, process_id: int) -> dict[str, object]:
     return {
         "session_id": session_id,
         "process_id": process_id,
+        "schedule_seed": process_id,
         "graph_fingerprint": "a" * 64,
         "dbms_fingerprint": "c" * 64,
         "query_a_hash": hashlib.sha256(query_a.encode()).hexdigest(),
@@ -116,6 +124,7 @@ def _session(session_id: str, process_id: int) -> dict[str, object]:
 
 def _validation_payload() -> dict[str, object]:
     return {
+        "report_hash": "9" * 64,
         "candidate_hash": "b" * 64,
         "candidate_ref": _reference(),
         "stage": "validation_passed",
@@ -136,6 +145,7 @@ def _validation_payload() -> dict[str, object]:
         "pooled_ratio_ci_low": 4.0,
         "pooled_delta_ci_low_ms": 3.0,
         "submission_path": "relative",
+        "magnitude_stability": "stable",
         "noise_floor_ms": 0.0,
         "timer_resolution_ms": 0.001,
         "metadata": {"absolute_also_passed": False},
@@ -150,46 +160,80 @@ def test_validation_session_requires_runtime_verdict_and_reason_codes() -> None:
         ArtifactRecord.seal_validation(payload)
 
 
+def test_validation_report_hash_binds_magnitude_stability_and_schedule_seed() -> None:
+    baseline = ArtifactRecord.seal_validation(_validation_payload())
+    changed_stability = ArtifactRecord.seal_validation(
+        {**_validation_payload(), "magnitude_stability": "unstable"}
+    )
+    changed_seed_payload = copy.deepcopy(_validation_payload())
+    changed_seed_payload["sessions"][0]["schedule_seed"] = 101
+    changed_seed = ArtifactRecord.seal_validation(changed_seed_payload)
+
+    assert changed_stability.payload["report_hash"] != baseline.payload["report_hash"]
+    assert changed_seed.payload["report_hash"] != baseline.payload["report_hash"]
+
+
 def _issue_payload() -> dict[str, object]:
     query_a = "MATCH (n) RETURN n"
     query_b = "MATCH (n) WHERE true RETURN n"
-    family_id = "8" * 64
-    family_version_hash = "9" * 64
-    family_decision_hash = "a" * 64
-    exact_signature = "e" * 64
+    fingerprint = fingerprint_issue(
+        FingerprintSubject(
+            dbms="neo4j",
+            dbms_version="dbms/1",
+            dbms_fingerprint="c" * 64,
+            graph_snapshot_hash="a" * 64,
+            canonical_rule_id="constant_true_disjunction",
+            reduced_query_a=query_a,
+            reduced_query_b=query_b,
+            runtime_direction="b",
+            site_class="where_boolean",
+            submission_path="relative",
+            reduced_validation_phenotype="relative:stable:b",
+        )
+    )
+    decision = IssueFamilyIndex().add(fingerprint, issue_id="issue-1")
+    assert decision.family_id is not None
+    clearance = DuplicateClearance._from_registry(
+        issue_id="issue-1",
+        possible_duplicate=False,
+        cluster_members=("issue-1",),
+        cluster_version_hash=decision.family_version_hash,
+        evidence_url=None,
+        family_id=decision.family_id,
+        family_version_hash=decision.family_version_hash,
+        family_decision_hash=decision.decision_hash,
+        token=_DUPLICATE_CLEARANCE_TOKEN,
+    )
     return {
         "issue_id": "issue-1",
-        "family_id": family_id,
+        "family_id": decision.family_id,
         "stage": "submit_ready",
         "reduction_status": "reduced_valid",
         "certificate": _certificate_payload(),
         "duplicate_clearance": {
             "issue_id": "issue-1",
-            "possible_duplicate": False,
-            "cluster_members": ["issue-1"],
-            "cluster_version_hash": "a" * 64,
-            "evidence_url": None,
-            "registry_signature": "c" * 64,
-            "family_id": family_id,
-            "family_version_hash": family_version_hash,
-            "family_decision_hash": family_decision_hash,
+            "possible_duplicate": clearance.possible_duplicate,
+            "cluster_members": clearance.cluster_members,
+            "cluster_version_hash": clearance.cluster_version_hash,
+            "evidence_url": clearance.evidence_url,
+            "registry_signature": clearance.registry_signature,
+            "family_id": clearance.family_id,
+            "family_version_hash": clearance.family_version_hash,
+            "family_decision_hash": clearance.family_decision_hash,
         },
         "family_decision": {
-            "issue_id": "issue-1",
-            "family_id": family_id,
-            "fingerprint": {
-                "exact": exact_signature,
-                "structural": None,
-                "fingerprint_hash": "f" * 64,
-            },
-            "match_kind": "fresh",
-            "matched_issue_id": None,
-            "known_regression_match": False,
-            "known_regression_case_id": None,
-            "is_new_family": True,
-            "family_members": (("issue-1", exact_signature),),
-            "family_version_hash": family_version_hash,
-            "decision_hash": family_decision_hash,
+            "issue_id": decision.issue_id,
+            "owner_issue_id": decision.owner_issue_id,
+            "family_id": decision.family_id,
+            "fingerprint": asdict(decision.fingerprint),
+            "match_kind": decision.match_kind.value,
+            "matched_issue_id": decision.matched_issue_id,
+            "known_regression_match": decision.known_regression_match,
+            "known_regression_case_id": decision.known_regression_case_id,
+            "is_new_family": decision.is_new_family,
+            "family_members": decision.family_members,
+            "family_version_hash": decision.family_version_hash,
+            "decision_hash": decision.decision_hash,
         },
         "original_validation_hash": "1" * 64,
         "reduced_validation_hash": "2" * 64,
@@ -292,3 +336,11 @@ def test_candidate_validation_and_issue_levels_enforce_their_evidence_boundaries
 def test_artifact_reference_rejects_parent_traversal_inside_relative_path() -> None:
     with pytest.raises(ValueError, match="path must be relative"):
         ArtifactReference("a" * 64, "objects/../outside", 1)
+
+
+def test_resealed_issue_rejects_a_rewritten_family_fingerprint() -> None:
+    payload = copy.deepcopy(_issue_payload())
+    payload["family_decision"]["fingerprint"]["exact"] = "0" * 64
+
+    with pytest.raises(ValueError, match="family fingerprint"):
+        ArtifactRecord.seal_issue(payload)

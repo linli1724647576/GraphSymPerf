@@ -13,10 +13,11 @@ from graph_sym_perf.artifacts.store import (
     ArtifactBudgetExceeded,
     ContentAddressedStore,
     enforce_shard_budget,
+    verify_candidate_outcome_validation_chain,
     verify_issue_hash_chain,
 )
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
-from graph_sym_perf.core import ExecutionResult, TargetSystem
+from graph_sym_perf.core import ExecutionResult, TargetSystem, stable_json_dumps
 from graph_sym_perf.experiment.plan_models import ShardTask
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
@@ -34,6 +35,7 @@ from graph_sym_perf.validation.models import (
     VersionedIssueRecord,
     candidate_hash_from_content_hashes,
     canonical_content_hash,
+    canonical_validation_provenance_hash,
 )
 
 
@@ -241,6 +243,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         session = lambda name, pid: {
             "session_id": f"{suffix}-{name}",
             "process_id": pid,
+            "schedule_seed": pid,
             "graph_fingerprint": graph_ref["content_hash"],
             "dbms_fingerprint": "c" * 64,
             "query_a_hash": hashlib.sha256(query_a.encode()).hexdigest(),
@@ -259,6 +262,9 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         }
         return ArtifactRecord.seal_validation(
             {
+                "report_hash": canonical_content_hash(
+                    {"candidate_hash": candidate_hash, "session_group": suffix}
+                ),
                 "candidate_hash": candidate_hash,
                 "candidate_ref": candidate_ref,
                 "stage": "validation_passed",
@@ -278,7 +284,8 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 "pooled_delta_ms": 3.0,
                 "pooled_ratio_ci_low": 4.0,
                 "pooled_delta_ci_low_ms": 3.0,
-                "submission_path": "relative",
+                    "submission_path": "relative",
+                    "magnitude_stability": "stable",
                 "noise_floor_ms": 0.0,
                 "timer_resolution_ms": 0.001,
                 "metadata": {"absolute_also_passed": False},
@@ -381,8 +388,8 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         ),
     )
     certificate = _canonical_test_certificate()
-    original_validation_hash = original.payload["validation_hash"]
-    reduced_validation_hash = final.payload["validation_hash"]
+    original_validation_hash = original.payload["report_hash"]
+    reduced_validation_hash = final.payload["report_hash"]
     reduction_ref = asdict(
         store.put_json(
             "reduction",
@@ -416,6 +423,8 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
                 "certificate_hash": canonical_content_hash(certificate),
                 "original_validation_hash": original_validation_hash,
                 "reduced_validation_hash": reduced_validation_hash,
+                "original_validation_ref": original_ref,
+                "reduced_validation_ref": final_ref,
             },
         )
     )
@@ -425,6 +434,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
             dbms="neo4j",
             dbms_version="dbms/1",
             dbms_fingerprint="c" * 64,
+            graph_snapshot_hash=graph_ref["content_hash"],
             canonical_rule_id="constant_true_disjunction",
             reduced_query_a=query_a,
             reduced_query_b=query_b,
@@ -458,15 +468,27 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         reduced_query_b=query_b,
         submitted_at=None,
         dbms_fingerprint=fingerprint.dbms_fingerprint,
+        graph_snapshot_hash=fingerprint.graph_snapshot_hash,
         family_id=family_decision.family_id,
         family_version_hash=family_decision.family_version_hash,
         family_decision_hash=family_decision.decision_hash,
+        owner_issue_id=family_decision.owner_issue_id,
         exact_signature=fingerprint.exact,
         structural_signature=fingerprint.structural,
         fingerprint_hash=fingerprint.fingerprint_hash,
         submission_path=fingerprint.submission_path,
         reduced_phenotype=fingerprint.reduced_validation_phenotype,
         known_regression_match=False,
+        original_validation_hash=original_validation_hash,
+        reduced_validation_hash=reduced_validation_hash,
+        original_validation_ref=original_ref,
+        reduced_validation_ref=final_ref,
+        validation_provenance_hash=canonical_validation_provenance_hash(
+            original_validation_hash=original_validation_hash,
+            reduced_validation_hash=reduced_validation_hash,
+            original_validation_ref=original_ref,
+            reduced_validation_ref=final_ref,
+        ),
     )
     registry = IssueRegistry()
     registry.record(typed_registry_record)
@@ -497,6 +519,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
             },
             "family_decision": {
                 "issue_id": family_decision.issue_id,
+                "owner_issue_id": family_decision.owner_issue_id,
                 "family_id": family_decision.family_id,
                 "fingerprint": asdict(family_decision.fingerprint),
                 "match_kind": family_decision.match_kind.value,
@@ -525,7 +548,70 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     )
 
     verify_issue_hash_chain(store, issue)
+    candidate_outcome = {
+        "candidate_hash": original_candidate_hash,
+        "validation": {
+            "stage": "validation_passed",
+            "validation_ref": original_ref,
+        },
+        "reduction": {
+            "status": "reduced_valid",
+            "reduced_candidate_hash": reduced_candidate_hash,
+            "reduction_ref": reduction_ref,
+            "original_validation_hash": original_validation_hash,
+            "reduced_validation_hash": reduced_validation_hash,
+            "original_validation_ref": original_ref,
+            "reduced_validation_ref": final_ref,
+        },
+    }
+    verify_candidate_outcome_validation_chain(store, candidate_outcome)
+    with pytest.raises(ValueError, match="differs from reduction summary"):
+        verify_candidate_outcome_validation_chain(
+            store,
+            {
+                **candidate_outcome,
+                "reduction": {
+                    **candidate_outcome["reduction"],
+                    "reduced_validation_hash": "0" * 64,
+                },
+            },
+        )
+    forged_validation = dict(original.payload)
+    forged_validation.pop("validation_hash")
+    forged_validation["report_hash"] = "0" * 64
+    forged_validation["validation_hash"] = hashlib.sha256(
+        stable_json_dumps(forged_validation).encode("utf-8")
+    ).hexdigest()
+    forged_validation_ref = asdict(
+        store.put_json(
+            "forged-original-validation-projection",
+            {**original.to_dict(), **forged_validation},
+        )
+    )
+    synchronized_reduction = json.loads(store.read(reduction_ref))
+    synchronized_reduction["original_validation_hash"] = "0" * 64
+    synchronized_reduction["original_validation_ref"] = forged_validation_ref
+    synchronized_reduction_ref = asdict(
+        store.put_json("forged-synchronized-reduction", synchronized_reduction)
+    )
+    synchronized_issue = ArtifactRecord.seal_issue(
+        {
+            **{key: value for key, value in issue.payload.items() if key != "issue_hash"},
+            "original_validation_hash": "0" * 64,
+            "original_validation_ref": forged_validation_ref,
+            "reduction_ref": synchronized_reduction_ref,
+        }
+    )
+    with pytest.raises(ValueError, match="canonical report projection"):
+        verify_issue_hash_chain(store, synchronized_issue)
     issue_body = {key: value for key, value in issue.payload.items() if key != "issue_hash"}
+
+    for hash_field in ("original_validation_hash", "reduced_validation_hash"):
+        rewritten = ArtifactRecord.seal_issue(
+            {**issue_body, hash_field: "0" * 64}
+        )
+        with pytest.raises(ValueError, match="validation report hash"):
+            verify_issue_hash_chain(store, rewritten)
 
     foreign_dbms_body = json.loads(json.dumps(dict(final.payload)))
     foreign_dbms_body.pop("validation_hash")
@@ -625,6 +711,15 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
         "dbms_version": "dbms/1",
         "reduced_original": query_a,
         "reduced_transformed": query_b,
+        "family_id": family_decision.family_id,
+        "exact_signature": fingerprint.exact,
+        "structural_signature": fingerprint.structural,
+        "submission_path": fingerprint.submission_path,
+        "reduced_validation_phenotype": fingerprint.reduced_validation_phenotype,
+        "family_version_hash": family_decision.family_version_hash,
+        "family_decision_hash": family_decision.decision_hash,
+        "original_validation_hash": original_validation_hash,
+        "reduced_validation_hash": reduced_validation_hash,
     }
     export_path = run_dir / "issues" / "submit-ready" / "issue-1.json"
     export_path.parent.mkdir(parents=True)
@@ -663,6 +758,57 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     assert export_status == "ok", export_result
     exported = Path(export_result)
     assert json.loads(exported.read_text(encoding="utf-8"))["reduction_status"] == "reduced_valid"
+
+    synchronized_export = {
+        **typed_export,
+        "family_id": "0" * 64,
+        "exact_signature": "1" * 64,
+        "structural_signature": "2" * 64,
+        "submission_path": "absolute",
+        "reduced_validation_phenotype": "absolute:stable:a",
+        "family_version_hash": "3" * 64,
+        "family_decision_hash": "4" * 64,
+        "original_validation_hash": "5" * 64,
+        "reduced_validation_hash": "6" * 64,
+    }
+    export_path.write_text(json.dumps(synchronized_export) + "\n", encoding="utf-8")
+    synchronized_receipt = {
+        **receipt,
+        "export_sha256": hashlib.sha256(export_path.read_bytes()).hexdigest(),
+    }
+    index_path.write_text(json.dumps(synchronized_receipt), encoding="utf-8")
+    commit_path.write_text(
+        json.dumps(
+            {
+                **synchronized_receipt,
+                "registry_record_hash": hashlib.sha256(
+                    json.dumps(registry_record, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    synchronized_status, synchronized_result = _issue_export_with_timeout(
+        index_path,
+        tmp_path / "synchronized-developer.json",
+    )
+    assert synchronized_status == "error"
+    assert "IssueGateError" in synchronized_result
+
+    export_path.write_text(json.dumps(typed_export) + "\n", encoding="utf-8")
+    receipt["export_sha256"] = hashlib.sha256(export_path.read_bytes()).hexdigest()
+    index_path.write_text(json.dumps(receipt), encoding="utf-8")
+    commit_path.write_text(
+        json.dumps(
+            {
+                **receipt,
+                "registry_record_hash": hashlib.sha256(
+                    json.dumps(registry_record, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     replayed_index = IssueFamilyIndex()
     replayed_index.add(fingerprint, issue_id="issue-1")
@@ -725,6 +871,7 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
             },
             "family_decision": {
                 "issue_id": current_owner_decision.issue_id,
+                "owner_issue_id": current_owner_decision.owner_issue_id,
                 "family_id": current_owner_decision.family_id,
                 "fingerprint": asdict(current_owner_decision.fingerprint),
                 "match_kind": current_owner_decision.match_kind.value,
@@ -741,7 +888,17 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     repaired_issue_ref = asdict(
         store.put_json("issue-1-repaired", repaired_issue.to_dict())
     )
-    repaired_receipt = {**receipt, "issue_ref": repaired_issue_ref}
+    repaired_export = {
+        **typed_export,
+        "family_version_hash": current_owner_decision.family_version_hash,
+        "family_decision_hash": current_owner_decision.decision_hash,
+    }
+    export_path.write_text(json.dumps(repaired_export) + "\n", encoding="utf-8")
+    repaired_receipt = {
+        **receipt,
+        "issue_ref": repaired_issue_ref,
+        "export_sha256": hashlib.sha256(export_path.read_bytes()).hexdigest(),
+    }
     index_path.write_text(json.dumps(repaired_receipt), encoding="utf-8")
     commit_path.write_text(
         json.dumps(

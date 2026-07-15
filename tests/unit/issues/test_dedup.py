@@ -23,6 +23,7 @@ def _subject(**changes: object) -> FingerprintSubject:
         "dbms": "neo4j",
         "dbms_version": "2026.07.0-community",
         "dbms_fingerprint": "c" * 64,
+        "graph_snapshot_hash": "1" * 64,
         "canonical_rule_id": "pattern_order_symmetry",
         "reduced_query_a": "MATCH (a:Person {age: 10}), (b:City) RETURN a, b",
         "reduced_query_b": "MATCH (b:City), (a:Person {age: 10}) RETURN a, b",
@@ -286,6 +287,7 @@ def test_known_bug001_signature_comes_from_strict_task9_manifest_and_is_excluded
             reduced_query_a=(FIXTURES / "fast_query.cypher").read_text(encoding="utf-8").strip(),
             reduced_query_b=(FIXTURES / "slow_query.cypher").read_text(encoding="utf-8").strip(),
             dbms_version="a-current-version-that-may-still-reproduce",
+            graph_snapshot_hash=known.graph_snapshot_hash,
         )
     )
     decision = IssueFamilyIndex(known_regressions=(known,)).add(
@@ -298,6 +300,26 @@ def test_known_bug001_signature_comes_from_strict_task9_manifest_and_is_excluded
     assert decision.match_kind is FamilyMatchKind.KNOWN_REGRESSION
     assert decision.family_id is None
     assert not decision.is_new_family
+
+
+def test_known_bug001_signature_does_not_exclude_the_same_pair_on_another_graph() -> None:
+    known = known_regression_signature_from_manifest(FIXTURES / "manifest.yaml")
+    fast = (FIXTURES / "fast_query.cypher").read_text(encoding="utf-8").strip()
+    slow = (FIXTURES / "slow_query.cypher").read_text(encoding="utf-8").strip()
+
+    decision = IssueFamilyIndex(known_regressions=(known,)).add(
+        fingerprint_issue(
+            _subject(
+                reduced_query_a=fast,
+                reduced_query_b=slow,
+                graph_snapshot_hash="0" * 64,
+            )
+        ),
+        issue_id="different-graph",
+    )
+
+    assert not decision.known_regression_match
+    assert decision.is_new_family
 
 
 def test_known_regression_does_not_match_arbitrary_rule_direction_or_rewritten_pair() -> None:

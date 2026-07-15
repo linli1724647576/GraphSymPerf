@@ -9,7 +9,10 @@ from types import MappingProxyType
 from typing import Mapping
 
 from graph_sym_perf.core import stable_json_dumps
-from graph_sym_perf.validation.models import canonical_content_hash
+from graph_sym_perf.validation.models import (
+    canonical_content_hash,
+    canonical_validation_payload_hash,
+)
 from graph_sym_perf.runtime.statistics import bootstrap_delta_ci, bootstrap_ratio_ci, percentile
 from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 
@@ -94,7 +97,7 @@ class ArtifactRecord:
             required = {
                 "candidate_hash", "candidate_ref", "validation_hash", "sessions",
                 "environment", "dbms_fingerprint", "stage", "validation_protocol",
-                "equivalence",
+                "equivalence", "report_hash", "magnitude_stability",
             }
             allowed = required | {
                 "validated_ratio",
@@ -116,6 +119,9 @@ class ArtifactRecord:
                 raise ValueError("validation artifact requires exactly two independent sessions")
             _reject_explanation_payload(normalized, level)
             _validate_hash(normalized["candidate_hash"], "candidate_hash")
+            _validate_hash(normalized["report_hash"], "report_hash")
+            if normalized["report_hash"] != canonical_validation_payload_hash(normalized):
+                raise ValueError("validation report_hash does not bind canonical report projection")
             _validate_hash(normalized["dbms_fingerprint"], "dbms_fingerprint")
             _validate_reference(normalized["candidate_ref"], "candidate_ref")
             if "environment_ref" in normalized:
@@ -170,6 +176,7 @@ class ArtifactRecord:
         normalized = dict(payload)
         if "validation_hash" in normalized:
             raise ValueError("validation_hash is computed by seal_validation")
+        normalized["report_hash"] = canonical_validation_payload_hash(normalized)
         normalized["validation_hash"] = _sealed_hash(normalized)
         return cls(level="validation", payload=normalized)
 
@@ -294,6 +301,7 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
     sessions = payload["sessions"]
     session_ids: set[str] = set()
     process_ids: set[int] = set()
+    schedule_seeds: set[int] = set()
     connection_ids: set[str] = set()
     session_directions: list[str] = []
     combined_samples: list[tuple[float, float]] = []
@@ -308,15 +316,25 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
             "query_a_hash", "query_b_hash", "slow_query", "measurement_source",
             "measurement_protocol", "runtime_verdict", "runtime_reason_codes",
             "paired_timing", "negative_controls", "lifecycle",
+            "schedule_seed",
         }
         if not required_session <= set(session):
             raise ValueError("validation session evidence is incomplete")
         session_id = session["session_id"]
         process_id = session["process_id"]
-        if not isinstance(session_id, str) or not session_id or not isinstance(process_id, int) or isinstance(process_id, bool):
+        schedule_seed = session["schedule_seed"]
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(process_id, int)
+            or isinstance(process_id, bool)
+            or not isinstance(schedule_seed, int)
+            or isinstance(schedule_seed, bool)
+        ):
             raise ValueError("validation session identity is invalid")
         session_ids.add(session_id)
         process_ids.add(process_id)
+        schedule_seeds.add(schedule_seed)
         _validate_hash(session["query_a_hash"], f"sessions[{index}].query_a_hash")
         _validate_hash(session["query_b_hash"], f"sessions[{index}].query_b_hash")
         runtime_reasons = session["runtime_reason_codes"]
@@ -404,6 +422,7 @@ def _validate_validation_payload(payload: Mapping[str, object]) -> None:
     if (
         len(session_ids) != 2
         or len(process_ids) != 2
+        or len(schedule_seeds) != 2
         or (incomplete_sessions == 0 and len(connection_ids) != 2)
     ):
         raise ValueError("validation sessions are not independent")
@@ -536,6 +555,11 @@ def _validate_paired_timing(value: object, field: str) -> None:
 
 
 def _validate_issue_payload(payload: Mapping[str, object]) -> None:
+    # Import lazily: ``issues.__init__`` exposes the CLI, which imports the
+    # artifact store/schema.  Semantic verification still happens for every
+    # issue construction, after module initialization is complete.
+    from graph_sym_perf.issues.dedup import serialized_family_decision_is_valid
+    from graph_sym_perf.validation.models import serialized_duplicate_clearance_is_valid
     if payload["stage"] != "submit_ready" or payload["reduction_status"] != "reduced_valid":
         raise ValueError("issue artifact is not at the submit-ready reduced-valid gate")
     ratio = payload["validated_ratio"]
@@ -580,6 +604,8 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     }
     if not isinstance(clearance, Mapping) or set(clearance) != required_clearance:
         raise ValueError("issue artifact duplicate clearance is incomplete")
+    if not serialized_duplicate_clearance_is_valid(clearance):
+        raise ValueError("issue artifact duplicate clearance signature is invalid")
     if clearance.get("issue_id") != payload.get("issue_id"):
         raise ValueError("issue artifact duplicate clearance identity mismatch")
     if not isinstance(clearance.get("possible_duplicate"), bool):
@@ -605,14 +631,17 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     _validate_hash(payload.get("reduced_validation_hash"), "reduced_validation_hash")
     family = payload.get("family_decision")
     required_family = {
-        "issue_id", "family_id", "fingerprint", "match_kind", "matched_issue_id",
+        "issue_id", "owner_issue_id", "family_id", "fingerprint", "match_kind", "matched_issue_id",
         "known_regression_match", "known_regression_case_id", "is_new_family",
         "family_members", "family_version_hash", "decision_hash",
     }
     if not isinstance(family, Mapping) or set(family) != required_family:
         raise ValueError("issue artifact family decision is incomplete")
+    if not serialized_family_decision_is_valid(family):
+        raise ValueError("issue artifact family fingerprint/decision is invalid")
     if (
         family.get("issue_id") != payload.get("issue_id")
+        or family.get("owner_issue_id") != payload.get("issue_id")
         or family.get("family_id") != payload.get("family_id")
         or family.get("match_kind") != "fresh"
         or family.get("known_regression_match") is not False
@@ -633,6 +662,7 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     if (
         clearance.get("family_id") != family.get("family_id")
         or clearance.get("family_version_hash") != family.get("family_version_hash")
+        or clearance.get("cluster_version_hash") != family.get("family_version_hash")
         or clearance.get("family_decision_hash") != family.get("decision_hash")
     ):
         raise ValueError("issue artifact duplicate clearance is stale for its family decision")
@@ -645,6 +675,13 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     actual_b = hashlib.sha256(str(payload["reduced_query_b"]).encode("utf-8")).hexdigest()
     if hashes["query_a"] != actual_a or hashes["query_b"] != actual_b:
         raise ValueError("issue reduced query text does not match reduced_content_hashes")
+    if (
+        fingerprint.get("query_a_hash") != actual_a
+        or fingerprint.get("query_b_hash") != actual_b
+        or fingerprint.get("dbms_version") != payload.get("dbms_version")
+        or fingerprint.get("canonical_rule_id") != certificate.get("rule_id")
+    ):
+        raise ValueError("issue family fingerprint does not bind the reduced issue identity")
 
 
 def _sealed_hash(payload: Mapping[str, object]) -> str:

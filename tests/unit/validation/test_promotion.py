@@ -6,7 +6,7 @@ from dataclasses import asdict, replace
 
 import pytest
 
-from graph_sym_perf.artifacts.chain import ArtifactChainWriter, _session_payload
+from graph_sym_perf.artifacts.chain import ArtifactChainWriter
 from graph_sym_perf.artifacts.policy import ArtifactLevel
 from graph_sym_perf.artifacts.schema import ArtifactRecord
 from graph_sym_perf.artifacts.store import ContentAddressedStore, load_artifact_record
@@ -41,6 +41,8 @@ from graph_sym_perf.validation.models import (
     ValidationPolicy,
     FrozenMapping,
     canonical_content_hash,
+    canonical_validation_report_hash,
+    validation_session_projection,
     safety_certificate_hash,
     _DUPLICATE_CLEARANCE_TOKEN,
     _VALIDATION_REPORT_TOKEN,
@@ -124,7 +126,7 @@ def test_validation_session_artifact_preserves_terminal_runtime_reason() -> None
         lifecycle=SessionLifecycle(True, True, True, True, True, False, True, True, "connection-1"),
     )
 
-    payload = _session_payload(session, 0)
+    payload = validation_session_projection(session, 0)
 
     assert payload["runtime_verdict"] == "invalid"
     assert payload["runtime_reason_codes"] == ("graph_fingerprint_mismatch",)
@@ -136,6 +138,9 @@ def _report(
     pair: EquivalentQueryPair | None = None,
     stage: PipelineStage = PipelineStage.VALIDATION_PASSED,
     submission_path: SubmissionPath = SubmissionPath.RELATIVE,
+    graph_snapshot: GraphSnapshot | None = None,
+    dbms_version: str = "dbms-version",
+    resolved_config=None,
     metadata=None,
 ) -> IssueValidationReport:
     pair = pair or _original_pair()
@@ -166,15 +171,22 @@ def _report(
             evidence,
             (_control(), _control()),
             lifecycle=_lifecycle(index),
+            schedule_seed=index,
         )
         for index in (1, 2)
     )
-    snapshot = GraphSnapshot.from_statements(("CREATE (n:Person {id: 1})",))
+    snapshot = graph_snapshot or GraphSnapshot.from_statements(
+        ("CREATE (n:Person {id: 1})",)
+    )
     candidate = CandidateBundle.create(
         pair,
         graph_snapshot=snapshot,
-        dbms_version="dbms-version",
-        resolved_config={"target": "neo4j", "runtime": {"validation_pairs": 20}},
+        dbms_version=dbms_version,
+        resolved_config=(
+            {"target": "neo4j", "runtime": {"validation_pairs": 20}}
+            if resolved_config is None
+            else resolved_config
+        ),
         discovery_slow_query="b",
         discovery_ratio=8.0,
         certificate=_certificate(),
@@ -227,8 +239,10 @@ def _reduction(
             ),
         ),
         final_validation=final_validation,
-        original_validation_hash=canonical_content_hash(_report(pair=original_pair, submission_path=submission_path)),
-        reduced_validation_hash=canonical_content_hash(final_validation),
+        original_validation_hash=canonical_validation_report_hash(
+            _report(pair=original_pair, submission_path=submission_path)
+        ),
+        reduced_validation_hash=canonical_validation_report_hash(final_validation),
         reduced_candidate_hash=final_validation.candidate_hash,
         validation_policy_hash=final_validation.policy_hash,
         certificate_hash=safety_certificate_hash(_certificate()),
@@ -339,7 +353,11 @@ def _duplicate_clearance(
         issue_id=issue_id,
         possible_duplicate=possible,
         cluster_members=members,
-        cluster_version_hash="f" * 64,
+        cluster_version_hash=(
+            family_decision.family_version_hash
+            if family_decision is not None
+            else "f" * 64
+        ),
         evidence_url="https://example.test/dedup" if resolved else None,
         token=_DUPLICATE_CLEARANCE_TOKEN,
         **family_fields,
@@ -362,6 +380,7 @@ def _family_decision(
             dbms="neo4j",
             dbms_version=report.manifest.dbms_version,
             dbms_fingerprint=report.manifest.pair.dbms_fingerprint,
+            graph_snapshot_hash=report.manifest.graph_snapshot.content_hash,
             canonical_rule_id=_certificate().rule_id,
             reduced_query_a=reduction.reduced_pair.query_a,
             reduced_query_b=reduction.reduced_pair.query_b,
@@ -379,6 +398,97 @@ def _family_decision(
         fingerprint,
         issue_id=_expected_issue_id(report, reduction),
     )
+
+
+def _promotion_inputs_with_identity_drift(kind: str):
+    report = _report()
+    reduction = _reduction()
+    if kind == "graph_snapshot":
+        snapshot = GraphSnapshot.from_statements(("CREATE (n:Other {id: 2})",))
+        pair = replace(report.manifest.pair, graph_snapshot_hash=snapshot.content_hash)
+        report = _report(pair=pair, graph_snapshot=snapshot)
+        reduction = replace(
+            reduction,
+            original_validation_hash=canonical_validation_report_hash(report),
+        )
+    elif kind == "dbms_fingerprint":
+        pair = replace(report.manifest.pair, dbms_fingerprint="d" * 64)
+        report = _report(pair=pair)
+        reduction = replace(
+            reduction,
+            original_validation_hash=canonical_validation_report_hash(report),
+        )
+    elif kind == "dbms_version":
+        final = _report(pair=reduction.reduced_pair, dbms_version="other-version")
+        reduction = replace(
+            reduction,
+            final_validation=final,
+            reduced_candidate_hash=final.candidate_hash,
+            reduced_validation_hash=canonical_content_hash(final),
+        )
+    elif kind == "target":
+        final = _report(
+            pair=reduction.reduced_pair,
+            resolved_config={"target": "memgraph", "runtime": {"validation_pairs": 20}},
+        )
+        reduction = replace(
+            reduction,
+            final_validation=final,
+            reduced_candidate_hash=final.candidate_hash,
+            reduced_validation_hash=canonical_content_hash(final),
+        )
+    elif kind == "resolved_config":
+        final = _report(
+            pair=reduction.reduced_pair,
+            resolved_config={"target": "neo4j", "runtime": {"validation_pairs": 999}},
+        )
+        reduction = replace(
+            reduction,
+            final_validation=final,
+            reduced_candidate_hash=final.candidate_hash,
+            reduced_validation_hash=canonical_content_hash(final),
+        )
+    elif kind == "parameters":
+        pair = replace(
+            report.manifest.pair,
+            parameters=FrozenMapping.from_mapping({"limit": 7}),
+        )
+        report = _report(pair=pair)
+        reduction = replace(
+            reduction,
+            original_validation_hash=canonical_validation_report_hash(report),
+        )
+    else:  # pragma: no cover - test helper contract
+        raise AssertionError(kind)
+    decision = _family_decision(report, reduction)
+    clearance = _duplicate_clearance(
+        issue_id=_expected_issue_id(report, reduction),
+        family_decision=decision,
+    )
+    return report, reduction, decision, clearance
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "graph_snapshot",
+        "dbms_fingerprint",
+        "dbms_version",
+        "target",
+        "resolved_config",
+        "parameters",
+    ),
+)
+def test_promotion_rejects_each_cross_validation_identity_drift(drift: str) -> None:
+    report, reduction, decision, clearance = _promotion_inputs_with_identity_drift(drift)
+
+    assert promote(
+        report,
+        reduction_report=reduction,
+        certificate=_certificate(),
+        duplicate_clearance=clearance,
+        family_decision=decision,
+    ) is None
 
 
 def test_promotion_requires_a_current_content_bound_family_decision() -> None:
@@ -467,6 +577,7 @@ def test_known_regression_family_decision_cannot_promote_a_fresh_candidate() -> 
                 dbms="neo4j",
                 dbms_version="current-version",
                 dbms_fingerprint="c" * 64,
+                graph_snapshot_hash=known.graph_snapshot_hash,
                 canonical_rule_id="pattern_order_symmetry",
                 reduced_query_a=(fixture / "fast_query.cypher").read_text(encoding="utf-8").strip(),
                 reduced_query_b=(fixture / "slow_query.cypher").read_text(encoding="utf-8").strip(),
@@ -681,7 +792,7 @@ def test_manually_resolved_possible_duplicate_can_promote_with_evidence() -> Non
     report = _report()
     reduction = replace(
         _reduction(),
-        original_validation_hash=canonical_content_hash(report),
+        original_validation_hash=canonical_validation_report_hash(report),
     )
     decision = _family_decision(report, reduction)
     issue = promote(
@@ -875,7 +986,7 @@ def test_promotion_uses_combined_samples_not_single_session_ci_or_oriented_delta
     report = _tamper_report(report, sessions=(aggregate_only, report.sessions[1]))
     reduction = replace(
         _reduction(),
-        original_validation_hash=canonical_content_hash(report),
+        original_validation_hash=canonical_validation_report_hash(report),
     )
     decision = _family_decision(report, reduction)
 

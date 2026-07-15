@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from enum import Enum
 
 from graph_sym_perf.core import stable_json_dumps
@@ -247,6 +247,128 @@ def canonical_content_hash(value: object) -> str:
     return _content_hash(value)
 
 
+_VALIDATION_REPORT_PROJECTION_FIELDS = (
+    "candidate_hash",
+    "stage",
+    "validation_protocol",
+    "equivalence",
+    "sessions",
+    "dbms_fingerprint",
+    "validated_ratio",
+    "pooled_delta_ms",
+    "pooled_ratio_ci_low",
+    "pooled_delta_ci_low_ms",
+    "submission_path",
+    "magnitude_stability",
+    "noise_floor_ms",
+    "timer_resolution_ms",
+    "metadata",
+    "reason_codes",
+)
+
+
+def canonical_validation_payload_projection(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Canonical, disk-recomputable projection of a typed validation report."""
+
+    projection = {name: payload.get(name) for name in _VALIDATION_REPORT_PROJECTION_FIELDS}
+    projection["metadata"] = payload.get("metadata", {})
+    projection["reason_codes"] = payload.get("reason_codes", ())
+    return projection
+
+
+def canonical_validation_payload_hash(payload: Mapping[str, object]) -> str:
+    return _content_hash(canonical_validation_payload_projection(payload))
+
+
+def canonical_validation_report_projection(report: "IssueValidationReport") -> dict[str, object]:
+    if not isinstance(report, IssueValidationReport):
+        raise TypeError("validation projection requires IssueValidationReport")
+    return canonical_validation_payload_projection(
+        {
+            "candidate_hash": report.candidate_hash,
+            "stage": report.stage.value,
+            "validation_protocol": report.validation_protocol,
+            "equivalence": asdict(report.equivalence),
+            "sessions": tuple(
+                validation_session_projection(session, index)
+                for index, session in enumerate(report.sessions)
+            ),
+            "dbms_fingerprint": report.manifest.pair.dbms_fingerprint,
+            "validated_ratio": report.validated_ratio,
+            "pooled_delta_ms": report.pooled_delta_ms,
+            "pooled_ratio_ci_low": report.pooled_ratio_ci_low,
+            "pooled_delta_ci_low_ms": report.pooled_delta_ci_low_ms,
+            "submission_path": (
+                report.submission_path.value if report.submission_path is not None else None
+            ),
+            "magnitude_stability": report.magnitude_stability,
+            "noise_floor_ms": report.validation_policy.noise_floor_ms,
+            "timer_resolution_ms": report.validation_policy.timer_resolution_ms,
+            "metadata": dict(report.metadata),
+            "reason_codes": report.reason_codes,
+        }
+    )
+
+
+def canonical_validation_report_hash(report: "IssueValidationReport") -> str:
+    return _content_hash(canonical_validation_report_projection(report))
+
+
+def validation_session_projection(session: "ValidationSession", index: int) -> dict[str, object]:
+    lifecycle = session.lifecycle
+    lifecycle_payload = (
+        {"complete": False}
+        if lifecycle is None
+        else {**asdict(lifecycle), "complete": bool(lifecycle.complete)}
+    )
+    evidence = session.evidence
+    return {
+        "session_id": session.session_id,
+        "process_id": session.process_id,
+        "graph_fingerprint": session.graph_fingerprint,
+        "dbms_fingerprint": session.dbms_fingerprint,
+        "query_a_hash": evidence.query_a_hash,
+        "query_b_hash": evidence.query_b_hash,
+        "slow_query": evidence.slow_query,
+        "measurement_source": evidence.measurement_source,
+        "measurement_protocol": evidence.measurement_protocol,
+        "runtime_verdict": evidence.verdict.value,
+        "runtime_reason_codes": evidence.reason_codes,
+        "paired_timing": tuple(asdict(sample) for sample in evidence.paired_samples),
+        "negative_controls": tuple(
+            {
+                "kind": "A/A" if control_index == 0 else "B/B",
+                "paired_timing": tuple(asdict(sample) for sample in control.paired_samples),
+            }
+            for control_index, control in enumerate(session.negative_controls)
+        ),
+        "lifecycle": lifecycle_payload,
+        "health_event": session.health_event,
+        "session_number": index + 1,
+        "schedule_seed": session.schedule_seed,
+    }
+
+
+def canonical_validation_provenance_hash(
+    *,
+    original_validation_hash: str,
+    reduced_validation_hash: str,
+    original_validation_ref: Mapping[str, object],
+    reduced_validation_ref: Mapping[str, object],
+) -> str:
+    return _content_hash(
+        {
+            "version": "validation-provenance-v1",
+            "original_validation_hash": original_validation_hash,
+            "reduced_validation_hash": reduced_validation_hash,
+            "original_validation_ref": original_validation_ref,
+            "reduced_validation_ref": reduced_validation_ref,
+        }
+    )
+
+
 def query_text_hash(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError("query hash requires text")
@@ -366,6 +488,38 @@ def _duplicate_signature(fields: Mapping[str, object]) -> str:
     return hashlib.sha256(
         ("graph-sym-perf-duplicate-clearance-v1\0" + stable_json_dumps(fields)).encode("utf-8")
     ).hexdigest()
+
+
+def serialized_duplicate_clearance_is_valid(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    try:
+        members = tuple(sorted(str(member) for member in value["cluster_members"]))
+        fields = {
+            "issue_id": str(value["issue_id"]),
+            "possible_duplicate": value["possible_duplicate"],
+            "cluster_members": members,
+            "cluster_version_hash": str(value["cluster_version_hash"]),
+            "evidence_url": value["evidence_url"],
+            "family_id": value["family_id"],
+            "family_version_hash": str(value["family_version_hash"]),
+            "family_decision_hash": str(value["family_decision_hash"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return False
+    return bool(
+        isinstance(fields["possible_duplicate"], bool)
+        and fields["issue_id"] in members
+        and value.get("registry_signature") == _duplicate_signature(fields)
+        and fields["family_id"]
+        and fields["family_version_hash"]
+        and fields["family_decision_hash"]
+        and (
+            not fields["possible_duplicate"]
+            or isinstance(fields["evidence_url"], str)
+            and bool(fields["evidence_url"].strip())
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -584,6 +738,7 @@ class VersionedIssueRecord:
     reduced_query_b: str | None = None
     submitted_at: str | None = None
     dbms_fingerprint: str = ""
+    graph_snapshot_hash: str = ""
     family_id: str = ""
     family_version_hash: str = ""
     family_decision_hash: str = ""
@@ -593,6 +748,12 @@ class VersionedIssueRecord:
     submission_path: str = ""
     reduced_phenotype: str = ""
     known_regression_match: bool = False
+    original_validation_hash: str = ""
+    reduced_validation_hash: str = ""
+    original_validation_ref: Mapping[str, object] | None = None
+    reduced_validation_ref: Mapping[str, object] | None = None
+    validation_provenance_hash: str = ""
+    owner_issue_id: str = ""
 
 
 @dataclass(frozen=True)

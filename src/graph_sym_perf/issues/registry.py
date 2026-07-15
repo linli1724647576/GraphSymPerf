@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import date
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.cypher.parser import alpha_normalize_query
@@ -15,6 +15,7 @@ from graph_sym_perf.validation.models import (
     PipelineStage,
     VersionedIssueRecord,
     _DUPLICATE_CLEARANCE_TOKEN,
+    canonical_validation_provenance_hash,
 )
 
 
@@ -282,13 +283,20 @@ class IssueRegistry:
             raise ValueError(f"missing issue provenance field(s): {', '.join(missing)}")
         formal_fields = {
             "dbms_fingerprint": record.dbms_fingerprint,
+            "graph_snapshot_hash": record.graph_snapshot_hash,
             "family_id": record.family_id,
+            "owner_issue_id": record.owner_issue_id,
             "family_version_hash": record.family_version_hash,
             "family_decision_hash": record.family_decision_hash,
             "exact_signature": record.exact_signature,
             "fingerprint_hash": record.fingerprint_hash,
             "submission_path": record.submission_path,
             "reduced_phenotype": record.reduced_phenotype,
+            "original_validation_hash": record.original_validation_hash,
+            "reduced_validation_hash": record.reduced_validation_hash,
+            "original_validation_ref": record.original_validation_ref,
+            "reduced_validation_ref": record.reduced_validation_ref,
+            "validation_provenance_hash": record.validation_provenance_hash,
         }
         if any(formal_fields.values()):
             missing_formal = tuple(
@@ -299,6 +307,8 @@ class IssueRegistry:
                     "incomplete formal issue family provenance: "
                     + ", ".join(missing_formal or ("known_regression_match",))
                 )
+            if not _record_validation_provenance_is_intact(record):
+                raise ValueError("formal issue validation provenance is invalid")
             expected_hash = record.exact_signature
         else:
             expected_hash = canonical_reduced_pair_hash(
@@ -311,3 +321,32 @@ class IssueRegistry:
 def canonical_reduced_pair_hash(query_a: str, query_b: str) -> str:
     payload = f"{alpha_normalize_query(query_a)}\0{alpha_normalize_query(query_b)}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _record_validation_provenance_is_intact(record: VersionedIssueRecord) -> bool:
+    original_ref = record.original_validation_ref
+    reduced_ref = record.reduced_validation_ref
+    if (
+        not _is_sha256(record.original_validation_hash)
+        or not _is_sha256(record.reduced_validation_hash)
+        or not isinstance(original_ref, Mapping)
+        or not isinstance(reduced_ref, Mapping)
+        or not _is_sha256(original_ref.get("content_hash"))
+        or not _is_sha256(reduced_ref.get("content_hash"))
+        or original_ref.get("content_hash") == reduced_ref.get("content_hash")
+    ):
+        return False
+    return record.validation_provenance_hash == canonical_validation_provenance_hash(
+        original_validation_hash=record.original_validation_hash,
+        reduced_validation_hash=record.reduced_validation_hash,
+        original_validation_ref=original_ref,
+        reduced_validation_ref=reduced_ref,
+    )
+
+
+def _is_sha256(value: object) -> bool:
+    return bool(
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )

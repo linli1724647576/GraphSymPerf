@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable, Mapping
 
+from graph_sym_perf.artifacts.schema import ArtifactReference
 from graph_sym_perf.core import stable_json_dumps
 from graph_sym_perf.issues.dedup import (
     FamilyMatchKind,
@@ -27,6 +28,9 @@ from graph_sym_perf.validation.models import (
     DeveloperStatus,
     PipelineStage,
     VersionedIssueRecord,
+    canonical_content_hash,
+    canonical_validation_report_hash,
+    canonical_validation_provenance_hash,
 )
 from graph_sym_perf.validation.promotion import deterministic_issue_id
 from graph_sym_perf.validation.promotion import promote
@@ -40,6 +44,8 @@ def promote_unique_issue(
     certificate: object,
     dbms: str,
     known_regression_manifest: str | Path,
+    original_validation_ref: ArtifactReference,
+    reduced_validation_ref: ArtifactReference,
     materialize: Callable[[object], dict[str, object]],
 ) -> tuple[object | None, str]:
     """Promote and atomically reserve a unique issue, or return a duplicate reason."""
@@ -52,15 +58,20 @@ def promote_unique_issue(
     registry_path = root_path / "registry.jsonl"
     review_path = root_path / "dedup_review.jsonl"
     known_path = root_path / "known_regressions.jsonl"
+    provenance = _validation_provenance(
+        validation,
+        reduction,
+        original_validation_ref=original_validation_ref,
+        reduced_validation_ref=reduced_validation_ref,
+    )
     issue_id = deterministic_issue_id(validation, reduction)
     fingerprint = _validated_fingerprint(validation, reduction, certificate, dbms=dbms)
     known = (known_regression_signature_from_manifest(known_regression_manifest),)
     with lock_path.open("a+", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        _validate_known_diagnostics(known_path)
         records = _load_records(registry_path, review_path)
-        index = IssueFamilyIndex(known_regressions=known)
-        for existing in records:
-            index.add(_record_fingerprint(existing), issue_id=existing.issue_id)
+        index = _replay_family_index(records, known_regressions=known)
         existing_ids = {item.issue_id for item in records}
         decision = (
             index.reissue_owner(fingerprint, issue_id=issue_id)
@@ -71,14 +82,19 @@ def promote_unique_issue(
             else index.add(fingerprint, issue_id=issue_id)
         )
         if decision.known_regression_match:
+            diagnostic = {
+                "case_id": decision.known_regression_case_id,
+                "decision_hash": decision.decision_hash,
+                "fingerprint_hash": fingerprint.fingerprint_hash,
+                "issue_id": issue_id,
+                "known_regression_match": True,
+                **provenance,
+            }
             _append_payload(
                 known_path,
                 {
-                    "case_id": decision.known_regression_case_id,
-                    "decision_hash": decision.decision_hash,
-                    "fingerprint_hash": fingerprint.fingerprint_hash,
-                    "issue_id": issue_id,
-                    "known_regression_match": True,
+                    **diagnostic,
+                    "diagnostic_hash": _hash_payload("known-regression-diagnostic-v1", diagnostic),
                 },
             )
             return None, "known_regression_excluded"
@@ -90,6 +106,7 @@ def promote_unique_issue(
             dbms,
             fingerprint=fingerprint,
             family_decision=decision,
+            validation_provenance=provenance,
             stage=PipelineStage.REDUCED_VALID,
         )
         if not decision.is_new_family:
@@ -160,12 +177,10 @@ def durable_family_credentials_are_current(
                 root_path / "registry.jsonl",
                 root_path / "dedup_review.jsonl",
             )
-            index = IssueFamilyIndex()
-            fingerprints: dict[str, IssueFingerprint] = {}
-            for record in records:
-                fingerprint = _record_fingerprint(record)
-                fingerprints[record.issue_id] = fingerprint
-                index.add(fingerprint, issue_id=record.issue_id)
+            index = _replay_family_index(records)
+            fingerprints = {
+                record.issue_id: _record_fingerprint(record) for record in records
+            }
             owner_fingerprint = fingerprints.get(decision.issue_id)
             if owner_fingerprint is None:
                 return False
@@ -175,6 +190,8 @@ def durable_family_credentials_are_current(
     return bool(
         current.verify()
         and current.is_new_family
+        and current.owner_issue_id == decision.issue_id
+        and decision.owner_issue_id == decision.issue_id
         and current.family_id == decision.family_id
         and current.family_version_hash == decision.family_version_hash
         and current.decision_hash == decision.decision_hash
@@ -221,6 +238,7 @@ def _durable_family_payload_is_current_unlocked(
         return False
     expected_family = {
         "issue_id": current.issue_id,
+        "owner_issue_id": current.owner_issue_id,
         "family_id": current.family_id,
         "fingerprint": asdict(current.fingerprint),
         "match_kind": current.match_kind.value,
@@ -255,12 +273,11 @@ def _replay_family_owner(root: Path, issue_id: str) -> tuple[object, object]:
         root / "registry.jsonl",
         root / "dedup_review.jsonl",
     )
-    index = IssueFamilyIndex()
-    fingerprints: dict[str, IssueFingerprint] = {}
-    for record in records:
-        fingerprint = _record_fingerprint(record)
-        fingerprints[record.issue_id] = fingerprint
-        index.add(fingerprint, issue_id=record.issue_id)
+    index = _replay_family_index(records)
+    fingerprints = {record.issue_id: _record_fingerprint(record) for record in records}
+    owner_records = tuple(record for record in records if record.owner_issue_id == issue_id)
+    if len(owner_records) < 1 or any(record.family_id != owner_records[0].family_id for record in owner_records):
+        raise ValueError("durable family owner binding is ambiguous")
     owner_fingerprint = fingerprints.get(issue_id)
     if owner_fingerprint is None:
         raise ValueError("durable family owner is absent")
@@ -273,6 +290,134 @@ def _replay_family_owner(root: Path, issue_id: str) -> tuple[object, object]:
     return current, current_clearance
 
 
+def _replay_family_index(
+    records: tuple[VersionedIssueRecord, ...],
+    *,
+    known_regressions: tuple[object, ...] = (),
+) -> IssueFamilyIndex:
+    """Rebuild families from explicit owners, independently of append order."""
+
+    if not records:
+        return IssueFamilyIndex(known_regressions=known_regressions)
+    by_family: dict[str, list[VersionedIssueRecord]] = {}
+    for record in records:
+        if not record.family_id or not record.owner_issue_id:
+            raise ValueError("durable family has no explicit owner binding")
+        by_family.setdefault(record.family_id, []).append(record)
+    index = IssueFamilyIndex(known_regressions=known_regressions)
+    for family_id, members in sorted(by_family.items()):
+        owner_ids = {member.owner_issue_id for member in members}
+        if len(owner_ids) != 1:
+            raise ValueError("durable family has conflicting owners")
+        owner_id = next(iter(owner_ids))
+        owners = [member for member in members if member.issue_id == owner_id]
+        submit_ready = [member for member in members if member.stage is PipelineStage.SUBMIT_READY]
+        if len(owners) != 1 or len(submit_ready) != 1 or submit_ready[0].issue_id != owner_id:
+            raise ValueError("durable family must have exactly one submit-ready owner")
+        ordered = owners + sorted(
+            (member for member in members if member.issue_id != owner_id),
+            key=lambda member: member.issue_id,
+        )
+        for member in ordered:
+            decision = index.add(_record_fingerprint(member), issue_id=member.issue_id)
+            if decision.family_id != family_id or decision.owner_issue_id != owner_id:
+                raise ValueError("durable family owner/family identity does not replay")
+    return index
+
+
+def _validation_provenance(
+    validation: object,
+    reduction: object,
+    *,
+    original_validation_ref: ArtifactReference,
+    reduced_validation_ref: ArtifactReference,
+) -> dict[str, object]:
+    if not isinstance(original_validation_ref, ArtifactReference) or not isinstance(
+        reduced_validation_ref,
+        ArtifactReference,
+    ):
+        raise TypeError("durable promotion requires typed validation artifact references")
+    original_hash = str(getattr(reduction, "original_validation_hash", ""))
+    reduced_hash = str(getattr(reduction, "reduced_validation_hash", ""))
+    final_validation = getattr(reduction, "final_validation", None)
+    if (
+        original_hash != canonical_validation_report_hash(validation)
+        or reduced_hash != canonical_validation_report_hash(final_validation)
+        or original_validation_ref.content_hash == reduced_validation_ref.content_hash
+    ):
+        raise ValueError("validation artifact provenance does not bind both reports")
+    original_ref = asdict(original_validation_ref)
+    reduced_ref = asdict(reduced_validation_ref)
+    provenance = {
+        "original_validation_hash": original_hash,
+        "reduced_validation_hash": reduced_hash,
+        "original_validation_ref": original_ref,
+        "reduced_validation_ref": reduced_ref,
+    }
+    provenance["validation_provenance_hash"] = canonical_validation_provenance_hash(
+        original_validation_hash=original_hash,
+        reduced_validation_hash=reduced_hash,
+        original_validation_ref=original_ref,
+        reduced_validation_ref=reduced_ref,
+    )
+    return provenance
+
+
+def _validate_known_diagnostics(path: Path) -> None:
+    if not path.is_file():
+        return
+    with path.open("r", encoding="utf-8") as stream:
+        for line in stream:
+            payload = json.loads(line)
+            if not isinstance(payload, dict):
+                raise ValueError("known regression diagnostic must be an object")
+            diagnostic_hash = payload.pop("diagnostic_hash", None)
+            if (
+                not _validation_provenance_is_intact(payload)
+                or diagnostic_hash
+                != _hash_payload("known-regression-diagnostic-v1", payload)
+            ):
+                raise ValueError("known regression diagnostic provenance is invalid")
+
+
+def _validation_provenance_is_intact(payload: Mapping[str, object]) -> bool:
+    original_hash = payload.get("original_validation_hash")
+    reduced_hash = payload.get("reduced_validation_hash")
+    original_ref = payload.get("original_validation_ref")
+    reduced_ref = payload.get("reduced_validation_ref")
+    if (
+        not _is_sha256(original_hash)
+        or not _is_sha256(reduced_hash)
+        or not isinstance(original_ref, Mapping)
+        or not isinstance(reduced_ref, Mapping)
+        or not _is_sha256(original_ref.get("content_hash"))
+        or not _is_sha256(reduced_ref.get("content_hash"))
+        or original_ref.get("content_hash") == reduced_ref.get("content_hash")
+    ):
+        return False
+    expected = canonical_validation_provenance_hash(
+        original_validation_hash=str(original_hash),
+        reduced_validation_hash=str(reduced_hash),
+        original_validation_ref=original_ref,
+        reduced_validation_ref=reduced_ref,
+    )
+    return payload.get("validation_provenance_hash") == expected
+
+
+def _is_sha256(value: object) -> bool:
+    return bool(
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _hash_payload(domain: str, payload: object) -> str:
+    return hashlib.sha256(
+        (domain + "\0" + stable_json_dumps(payload)).encode("utf-8")
+    ).hexdigest()
+
+
 def _record(
     issue_id: str,
     validation: object,
@@ -282,6 +427,7 @@ def _record(
     *,
     fingerprint: IssueFingerprint,
     family_decision: object,
+    validation_provenance: Mapping[str, object],
     stage: PipelineStage,
 ) -> VersionedIssueRecord:
     pair = getattr(reduction, "reduced_pair")
@@ -317,15 +463,22 @@ def _record(
         reduced_query_a=query_a,
         reduced_query_b=query_b,
         dbms_fingerprint=fingerprint.dbms_fingerprint,
+        graph_snapshot_hash=fingerprint.graph_snapshot_hash,
         family_id=str(getattr(family_decision, "family_id") or ""),
         family_version_hash=str(getattr(family_decision, "family_version_hash")),
         family_decision_hash=str(getattr(family_decision, "decision_hash")),
+        owner_issue_id=str(getattr(family_decision, "owner_issue_id") or ""),
         exact_signature=fingerprint.exact,
         structural_signature=fingerprint.structural,
         fingerprint_hash=fingerprint.fingerprint_hash,
         submission_path=fingerprint.submission_path,
         reduced_phenotype=fingerprint.reduced_validation_phenotype,
         known_regression_match=bool(getattr(family_decision, "known_regression_match")),
+        original_validation_hash=str(validation_provenance["original_validation_hash"]),
+        reduced_validation_hash=str(validation_provenance["reduced_validation_hash"]),
+        original_validation_ref=dict(validation_provenance["original_validation_ref"]),
+        reduced_validation_ref=dict(validation_provenance["reduced_validation_ref"]),
+        validation_provenance_hash=str(validation_provenance["validation_provenance_hash"]),
     )
 
 
@@ -352,6 +505,7 @@ def _record_fingerprint(record: VersionedIssueRecord) -> IssueFingerprint:
             dbms=record.dbms,
             dbms_version=record.dbms_version,
             dbms_fingerprint=record.dbms_fingerprint,
+            graph_snapshot_hash=record.graph_snapshot_hash,
             canonical_rule_id=record.rule_id,
             reduced_query_a=record.reduced_query_a or "",
             reduced_query_b=record.reduced_query_b or "",

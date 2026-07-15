@@ -290,6 +290,11 @@ def verify_issue_hash_chain(
         raise ValueError("original validation does not bind the issue candidate")
     if final.payload["candidate_hash"] != payload["reduced_candidate_hash"]:
         raise ValueError("final validation does not bind the reduced candidate")
+    if (
+        original.payload.get("report_hash") != payload.get("original_validation_hash")
+        or final.payload.get("report_hash") != payload.get("reduced_validation_hash")
+    ):
+        raise ValueError("issue validation report hash does not bind referenced validation")
     final_hashes = resolved_candidates[1].payload.get("content_hashes")
     original_hashes = resolved_candidates[0].payload.get("content_hashes")
     if not isinstance(original_hashes, Mapping) or not isinstance(final_hashes, Mapping) or (
@@ -306,11 +311,25 @@ def verify_issue_hash_chain(
         )
     ):
         raise ValueError("reduction candidate identity does not preserve the sealed environment")
+    family = payload.get("family_decision")
+    fingerprint = family.get("fingerprint") if isinstance(family, Mapping) else None
+    if (
+        not isinstance(fingerprint, Mapping)
+        or fingerprint.get("graph_snapshot_hash")
+        != resolved_candidates[1].payload.get("graph_snapshot_hash")
+        or fingerprint.get("dbms_fingerprint")
+        != resolved_candidates[1].payload.get("dbms_fingerprint")
+    ):
+        raise ValueError("issue family fingerprint does not bind reduced candidate identity")
     reduction = json.loads(store.read(payload["reduction_ref"]))
     if not isinstance(reduction, dict) or (
         reduction.get("candidate_hash") != payload["candidate_hash"]
         or reduction.get("reduced_candidate_hash") != payload["reduced_candidate_hash"]
         or reduction.get("reduced_content_hashes") != dict(payload["reduced_content_hashes"])
+        or reduction.get("original_validation_hash") != payload.get("original_validation_hash")
+        or reduction.get("reduced_validation_hash") != payload.get("reduced_validation_hash")
+        or reduction.get("original_validation_ref") != dict(payload["original_validation_ref"])
+        or reduction.get("reduced_validation_ref") != dict(payload["final_validation_ref"])
     ):
         raise ValueError("reduction artifact breaks the issue hash chain")
     reduction_evidence = reduction.get("final_evidence")
@@ -338,6 +357,57 @@ def verify_issue_hash_chain(
     store.read(payload["reproducer_ref"])
     if payload.get("explanation_ref") is not None:
         store.read(payload["explanation_ref"])
+
+
+def verify_candidate_outcome_validation_chain(
+    store: ContentAddressedStore,
+    outcome: Mapping[str, object],
+) -> None:
+    """Verify the independently stored validation/reduction provenance on resume."""
+
+    validation = outcome.get("validation")
+    reduction = outcome.get("reduction")
+    if not isinstance(validation, Mapping) or not isinstance(reduction, Mapping):
+        raise ValueError("candidate outcome validation/reduction evidence is unavailable")
+    validation_ref = validation.get("validation_ref")
+    if not isinstance(validation_ref, Mapping):
+        raise ValueError("candidate outcome validation reference is unavailable")
+    original = load_artifact_record(store, validation_ref)
+    if (
+        getattr(original.level, "value", original.level) != "validation"
+        or original.payload.get("candidate_hash") != outcome.get("candidate_hash")
+        or original.payload.get("stage") != validation.get("stage")
+    ):
+        raise ValueError("candidate outcome validation reference breaks identity")
+    if reduction.get("status") != "reduced_valid":
+        return
+    reduction_ref = reduction.get("reduction_ref")
+    if not isinstance(reduction_ref, Mapping):
+        raise ValueError("reduced-valid outcome has no reduction reference")
+    summary = json.loads(store.read(reduction_ref))
+    if not isinstance(summary, Mapping):
+        raise ValueError("candidate outcome reduction summary is unavailable")
+    fields = (
+        "original_validation_hash",
+        "reduced_validation_hash",
+        "original_validation_ref",
+        "reduced_validation_ref",
+    )
+    if any(summary.get(name) != reduction.get(name) for name in fields):
+        raise ValueError("candidate outcome validation provenance differs from reduction summary")
+    if summary.get("original_validation_ref") != dict(validation_ref):
+        raise ValueError("candidate outcome original validation reference is inconsistent")
+    reduced_ref = summary.get("reduced_validation_ref")
+    if not isinstance(reduced_ref, Mapping):
+        raise ValueError("candidate outcome reduced validation reference is unavailable")
+    reduced = load_artifact_record(store, reduced_ref)
+    if (
+        getattr(reduced.level, "value", reduced.level) != "validation"
+        or original.payload.get("report_hash") != summary.get("original_validation_hash")
+        or reduced.payload.get("report_hash") != summary.get("reduced_validation_hash")
+        or reduced.payload.get("candidate_hash") != reduction.get("reduced_candidate_hash")
+    ):
+        raise ValueError("candidate outcome validation report hash/identity is invalid")
 
 
 def _verify_reduction_promotion_evidence(
@@ -454,5 +524,6 @@ __all__ = [
     "enforce_shard_budget",
     "load_artifact_record",
     "verify_candidate_record_reference",
+    "verify_candidate_outcome_validation_chain",
     "verify_issue_hash_chain",
 ]

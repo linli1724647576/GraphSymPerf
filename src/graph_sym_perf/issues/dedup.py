@@ -47,6 +47,7 @@ class FingerprintSubject:
     dbms: str
     dbms_version: str
     dbms_fingerprint: str
+    graph_snapshot_hash: str
     canonical_rule_id: str
     reduced_query_a: str
     reduced_query_b: str
@@ -60,6 +61,7 @@ class FingerprintSubject:
             "dbms": self.dbms,
             "dbms_version": self.dbms_version,
             "dbms_fingerprint": self.dbms_fingerprint,
+            "graph_snapshot_hash": self.graph_snapshot_hash,
             "canonical_rule_id": self.canonical_rule_id,
             "reduced_query_a": self.reduced_query_a,
             "reduced_query_b": self.reduced_query_b,
@@ -79,6 +81,7 @@ class IssueFingerprint:
     dbms: str
     dbms_version: str
     dbms_fingerprint: str
+    graph_snapshot_hash: str
     canonical_rule_id: str
     query_a_hash: str
     query_b_hash: str
@@ -112,6 +115,7 @@ class IssueFingerprint:
         )
         return bool(
             self.runtime_direction in {"a", "b"}
+            and re.fullmatch(r"[0-9a-f]{64}", self.graph_snapshot_hash) is not None
             and exact == self.exact
             and structural == self.structural
             and self.fingerprint_hash == _fingerprint_hash(self, exact=exact, structural=structural)
@@ -124,6 +128,7 @@ class KnownRegressionSignature:
     manifest_sha256: str
     dbms: str
     canonical_rule_id: str
+    graph_snapshot_hash: str
     query_a_hash: str
     query_b_hash: str
     runtime_direction: str
@@ -141,6 +146,7 @@ class KnownRegressionSignature:
         manifest_sha256: str,
         dbms: str,
         canonical_rule_id: str,
+        graph_snapshot_hash: str,
         query_a_hash: str,
         query_b_hash: str,
         runtime_direction: str,
@@ -154,6 +160,7 @@ class KnownRegressionSignature:
             "manifest_sha256": manifest_sha256,
             "dbms": dbms,
             "canonical_rule_id": canonical_rule_id,
+            "graph_snapshot_hash": graph_snapshot_hash,
             "query_a_hash": query_a_hash,
             "query_b_hash": query_b_hash,
             "runtime_direction": runtime_direction,
@@ -181,6 +188,7 @@ class KnownRegressionSignature:
             and (
                 fingerprint.dbms,
                 fingerprint.canonical_rule_id,
+                fingerprint.graph_snapshot_hash,
                 fingerprint.query_a_hash,
                 fingerprint.query_b_hash,
                 fingerprint.runtime_direction,
@@ -188,6 +196,7 @@ class KnownRegressionSignature:
             == (
                 self.dbms,
                 self.canonical_rule_id,
+                self.graph_snapshot_hash,
                 self.query_a_hash,
                 self.query_b_hash,
                 self.runtime_direction,
@@ -198,6 +207,7 @@ class KnownRegressionSignature:
 @dataclass(frozen=True, init=False)
 class IssueFamilyDecision:
     issue_id: str
+    owner_issue_id: str | None
     family_id: str | None
     fingerprint: IssueFingerprint
     match_kind: FamilyMatchKind
@@ -218,6 +228,7 @@ class IssueFamilyDecision:
         cls,
         *,
         issue_id: str,
+        owner_issue_id: str | None,
         family_id: str | None,
         fingerprint: IssueFingerprint,
         match_kind: FamilyMatchKind,
@@ -234,6 +245,7 @@ class IssueFamilyDecision:
         version_hash = _family_version_hash(family_id, family_members, known_regression_case_id)
         fields: dict[str, object] = {
             "issue_id": issue_id,
+            "owner_issue_id": owner_issue_id,
             "family_id": family_id,
             "fingerprint_hash": fingerprint.fingerprint_hash,
             "match_kind": match_kind.value,
@@ -246,6 +258,7 @@ class IssueFamilyDecision:
         }
         for name, value in {
             "issue_id": issue_id,
+            "owner_issue_id": owner_issue_id,
             "family_id": family_id,
             "fingerprint": fingerprint,
             "match_kind": match_kind,
@@ -264,6 +277,7 @@ class IssueFamilyDecision:
     def verify(self) -> bool:
         fields: dict[str, object] = {
             "issue_id": self.issue_id,
+            "owner_issue_id": self.owner_issue_id,
             "family_id": self.family_id,
             "fingerprint_hash": self.fingerprint.fingerprint_hash,
             "match_kind": self.match_kind.value,
@@ -278,6 +292,7 @@ class IssueFamilyDecision:
             self.family_id is None
             and self.match_kind is FamilyMatchKind.KNOWN_REGRESSION
             and self.known_regression_case_id == "neo4j_bug001_pattern_order"
+            and self.owner_issue_id is None
             and not self.is_new_family
         )
         fresh_invariants = (
@@ -286,6 +301,8 @@ class IssueFamilyDecision:
             and not self.known_regression_match
             and self.known_regression_case_id is None
             and bool(self.family_members)
+            and self.owner_issue_id is not None
+            and any(member == self.owner_issue_id for member, _exact in self.family_members)
             and (self.is_new_family == (self.match_kind is FamilyMatchKind.FRESH))
         )
         return bool(
@@ -325,6 +342,7 @@ class IssueFamilyIndex:
             if known.matches(fingerprint):
                 return IssueFamilyDecision._from_index(
                     issue_id=issue_id,
+                    owner_issue_id=None,
                     family_id=None,
                     fingerprint=fingerprint,
                     match_kind=FamilyMatchKind.KNOWN_REGRESSION,
@@ -369,6 +387,7 @@ class IssueFamilyIndex:
         frozen_members = tuple(sorted(members.items()))
         decision = IssueFamilyDecision._from_index(
             issue_id=issue_id,
+            owner_issue_id=self._owners[family_id],
             family_id=family_id,
             fingerprint=fingerprint,
             match_kind=match_kind,
@@ -401,6 +420,7 @@ class IssueFamilyIndex:
             raise ValueError("issue is not the current family owner")
         decision = IssueFamilyDecision._from_index(
             issue_id=issue_id,
+            owner_issue_id=issue_id,
             family_id=family_id,
             fingerprint=fingerprint,
             match_kind=FamilyMatchKind.FRESH,
@@ -445,6 +465,7 @@ def fingerprint_issue(subject: FingerprintSubject) -> IssueFingerprint:
         "dbms": subject.dbms,
         "dbms_version": subject.dbms_version,
         "dbms_fingerprint": subject.dbms_fingerprint,
+        "graph_snapshot_hash": subject.graph_snapshot_hash,
         "canonical_rule_id": subject.canonical_rule_id,
         "query_a_hash": query_a_hash,
         "query_b_hash": query_b_hash,
@@ -470,12 +491,21 @@ def fingerprint_validated_reduction(
     """Derive the only promotion fingerprint from sealed validation evidence."""
 
     from graph_sym_perf.validation.models import IssueValidationReport
+    from graph_sym_perf.validation.promotion import (
+        validated_reduction_identity_is_consistent,
+    )
 
     final_validation = getattr(reduction, "final_validation", None)
     if not isinstance(validation, IssueValidationReport) or not isinstance(
         final_validation, IssueValidationReport
     ):
         raise TypeError("family fingerprint requires original and reduced validation reports")
+    if not validated_reduction_identity_is_consistent(
+        validation,
+        reduction,
+        certificate,
+    ):
+        raise ValueError("family fingerprint requires one verified validation identity")
     target = validation.manifest.resolved_config.get("target")
     if not isinstance(target, str) or target != dbms:
         raise ValueError("family fingerprint DBMS does not match sealed target")
@@ -487,6 +517,7 @@ def fingerprint_validated_reduction(
             dbms=dbms,
             dbms_version=validation.manifest.dbms_version,
             dbms_fingerprint=validation.manifest.pair.dbms_fingerprint,
+            graph_snapshot_hash=validation.manifest.graph_snapshot.content_hash,
             canonical_rule_id=str(getattr(certificate, "rule_id")),
             reduced_query_a=str(getattr(reduction, "reduced_pair").query_a),
             reduced_query_b=str(getattr(reduction, "reduced_pair").query_b),
@@ -510,10 +541,64 @@ def known_regression_signature_from_manifest(manifest_path: str | Path) -> Known
         manifest_sha256=manifest.manifest_sha256,
         dbms=manifest.dbms,
         canonical_rule_id=manifest.canonical_rule_id,
+        graph_snapshot_hash=manifest.graph_snapshot.content_hash,
         query_a_hash=_query_hash(manifest.fast_query),
         query_b_hash=_query_hash(manifest.slow_query),
         runtime_direction=manifest.expected_slow_query,
         token=_KNOWN_REGRESSION_TOKEN,
+    )
+
+
+def serialized_family_decision_is_valid(value: object) -> bool:
+    """Rebuild every content-bound family field from a sealed artifact payload."""
+
+    if not isinstance(value, Mapping):
+        return False
+    fingerprint_value = value.get("fingerprint")
+    if not isinstance(fingerprint_value, Mapping):
+        return False
+    try:
+        fingerprint_fields = dict(fingerprint_value)
+        normalized_pair = fingerprint_fields.get("normalized_pair")
+        if normalized_pair is not None:
+            fingerprint_fields["normalized_pair"] = tuple(normalized_pair)
+        fingerprint = IssueFingerprint(**fingerprint_fields)
+        family_members = tuple(
+            (str(member[0]), str(member[1])) for member in value.get("family_members", ())
+        )
+        match_kind = FamilyMatchKind(str(value.get("match_kind")))
+        family_id = str(value.get("family_id"))
+        issue_id = str(value.get("issue_id"))
+        expected = IssueFamilyDecision._from_index(
+            issue_id=issue_id,
+            owner_issue_id=value.get("owner_issue_id"),
+            family_id=family_id,
+            fingerprint=fingerprint,
+            match_kind=match_kind,
+            matched_issue_id=value.get("matched_issue_id"),
+            known_regression_match=bool(value.get("known_regression_match")),
+            known_regression_case_id=value.get("known_regression_case_id"),
+            is_new_family=bool(value.get("is_new_family")),
+            family_members=family_members,
+            token=_DECISION_TOKEN,
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return bool(
+        fingerprint.verify()
+        and match_kind is FamilyMatchKind.FRESH
+        and value.get("matched_issue_id") is None
+        and value.get("owner_issue_id") == issue_id
+        and value.get("known_regression_match") is False
+        and value.get("known_regression_case_id") is None
+        and value.get("is_new_family") is True
+        and family_id == _new_family_id(fingerprint)
+        and family_members == tuple(sorted(family_members))
+        and len({member for member, _exact in family_members}) == len(family_members)
+        and (issue_id, fingerprint.exact) in family_members
+        and value.get("family_version_hash") == expected.family_version_hash
+        and value.get("decision_hash") == expected.decision_hash
+        and expected.verify()
     )
 
 
@@ -785,6 +870,7 @@ def _fingerprint_hash(fingerprint: IssueFingerprint, *, exact: str, structural: 
             "dbms": fingerprint.dbms,
             "dbms_version": fingerprint.dbms_version,
             "dbms_fingerprint": fingerprint.dbms_fingerprint,
+            "graph_snapshot_hash": fingerprint.graph_snapshot_hash,
             "canonical_rule_id": fingerprint.canonical_rule_id,
             "query_a_hash": fingerprint.query_a_hash,
             "query_b_hash": fingerprint.query_b_hash,
@@ -807,6 +893,7 @@ def _known_signature_hash(signature: KnownRegressionSignature) -> str:
             "manifest_sha256": signature.manifest_sha256,
             "dbms": signature.dbms,
             "canonical_rule_id": signature.canonical_rule_id,
+            "graph_snapshot_hash": signature.graph_snapshot_hash,
             "query_a_hash": signature.query_a_hash,
             "query_b_hash": signature.query_b_hash,
             "runtime_direction": signature.runtime_direction,
@@ -864,4 +951,5 @@ __all__ = [
     "fingerprint_issue",
     "fingerprint_validated_reduction",
     "known_regression_signature_from_manifest",
+    "serialized_family_decision_is_valid",
 ]

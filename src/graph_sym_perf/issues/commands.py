@@ -19,6 +19,7 @@ from pathlib import Path
 from graph_sym_perf.artifacts.store import (
     ContentAddressedStore,
     load_artifact_record,
+    verify_candidate_outcome_validation_chain,
     verify_candidate_record_reference,
     verify_issue_hash_chain,
 )
@@ -86,7 +87,7 @@ class IssueCommands:
             fcntl.flock(registry_lock.fileno(), fcntl.LOCK_SH)
             if _revoked(run_dir / "issues" / "revocations.jsonl", str(index["issue_id"])):
                 raise ValueError("submit-ready issue was revoked by a later possible-duplicate cluster")
-            _verify_registry_commit(run_dir / "issues", index)
+            committed_record = _verify_registry_commit(run_dir / "issues", index)
             store_path = _within(run_dir, str(index["artifact_store"]))
             export_path = _within(run_dir, str(index["export_path"]))
             if (
@@ -101,6 +102,7 @@ class IssueCommands:
                 raise ValueError("referenced record is not an issue")
             if record.payload.get("issue_id") != index["issue_id"]:
                 raise ValueError("issue index identity does not match the sealed issue")
+            _verify_issue_registry_binding(record.payload, committed_record)
             clearance = record.payload.get("duplicate_clearance")
             formal_family = isinstance(clearance, Mapping) and bool(clearance.get("family_id"))
             if not formal_family and _has_current_possible_duplicate(
@@ -113,8 +115,12 @@ class IssueCommands:
             if hashlib.sha256(payload).hexdigest() != index["export_sha256"]:
                 raise ValueError("typed export hash mismatch")
             exported = json.loads(payload)
+            family = record.payload.get("family_decision")
+            fingerprint = family.get("fingerprint") if isinstance(family, Mapping) else None
             if (
                 not isinstance(exported, dict)
+                or not isinstance(family, Mapping)
+                or not isinstance(fingerprint, Mapping)
                 or exported.get("issue_id") != index["issue_id"]
                 or exported.get("stage") != "submit_ready"
                 or exported.get("reduction_status") != "reduced_valid"
@@ -124,6 +130,18 @@ class IssueCommands:
                 or exported.get("dbms_version") != record.payload.get("dbms_version")
                 or exported.get("reduced_original") != record.payload.get("reduced_query_a")
                 or exported.get("reduced_transformed") != record.payload.get("reduced_query_b")
+                or exported.get("family_id") != record.payload.get("family_id")
+                or exported.get("exact_signature") != fingerprint.get("exact")
+                or exported.get("structural_signature") != fingerprint.get("structural")
+                or exported.get("submission_path") != fingerprint.get("submission_path")
+                or exported.get("reduced_validation_phenotype")
+                != fingerprint.get("reduced_validation_phenotype")
+                or exported.get("family_version_hash") != family.get("family_version_hash")
+                or exported.get("family_decision_hash") != family.get("decision_hash")
+                or exported.get("original_validation_hash")
+                != record.payload.get("original_validation_hash")
+                or exported.get("reduced_validation_hash")
+                != record.payload.get("reduced_validation_hash")
             ):
                 raise ValueError("typed export identity does not match the issue index")
             destination = Path(output)
@@ -173,6 +191,7 @@ def _verified_candidate_outcome(candidate: str | Path) -> tuple[dict[str, object
             store,
             {**candidate_record.to_dict(), "record_ref": value["candidate_ref"]},
         )
+        verify_candidate_outcome_validation_chain(store, value)
         return value, store
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise IssueGateError(
@@ -192,7 +211,7 @@ def _revoked(path: Path, issue_id: str) -> bool:
     return False
 
 
-def _verify_registry_commit(root: Path, index: dict[str, object]) -> None:
+def _verify_registry_commit(root: Path, index: dict[str, object]) -> dict[str, object]:
     issue_id = str(index["issue_id"])
     commit_path = root / "commits" / f"{issue_id}.json"
     commit = json.loads(commit_path.read_text(encoding="utf-8"))
@@ -216,6 +235,36 @@ def _verify_registry_commit(root: Path, index: dict[str, object]) -> None:
     ).hexdigest()
     if commit.get("registry_record_hash") != record_hash:
         raise ValueError("issue registry commit hash mismatch")
+    return committed_record
+
+
+def _verify_issue_registry_binding(
+    issue: Mapping[str, object],
+    registry: Mapping[str, object],
+) -> None:
+    family = issue.get("family_decision")
+    fingerprint = family.get("fingerprint") if isinstance(family, Mapping) else None
+    if not isinstance(family, Mapping) or not isinstance(fingerprint, Mapping):
+        raise ValueError("sealed issue family provenance is unavailable")
+    expected = {
+        "issue_id": issue.get("issue_id"),
+        "family_id": issue.get("family_id"),
+        "owner_issue_id": family.get("owner_issue_id"),
+        "family_version_hash": family.get("family_version_hash"),
+        "family_decision_hash": family.get("decision_hash"),
+        "exact_signature": fingerprint.get("exact"),
+        "structural_signature": fingerprint.get("structural"),
+        "fingerprint_hash": fingerprint.get("fingerprint_hash"),
+        "graph_snapshot_hash": fingerprint.get("graph_snapshot_hash"),
+        "submission_path": fingerprint.get("submission_path"),
+        "reduced_phenotype": fingerprint.get("reduced_validation_phenotype"),
+        "original_validation_hash": issue.get("original_validation_hash"),
+        "reduced_validation_hash": issue.get("reduced_validation_hash"),
+        "original_validation_ref": issue.get("original_validation_ref"),
+        "reduced_validation_ref": issue.get("final_validation_ref"),
+    }
+    if any(registry.get(name) != value for name, value in expected.items()):
+        raise ValueError("sealed issue provenance does not match committed registry record")
 
 
 def _has_current_possible_duplicate(root: Path, issue_id: str) -> bool:

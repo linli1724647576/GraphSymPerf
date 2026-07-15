@@ -32,6 +32,7 @@ from graph_sym_perf.artifacts.store import (
     enforce_shard_budget,
     load_artifact_record,
     verify_candidate_record_reference,
+    verify_candidate_outcome_validation_chain,
 )
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
 from graph_sym_perf.core import (
@@ -6051,6 +6052,7 @@ def _load_terminal_candidate_outcome(
             not in {"not_applicable", "reduced_valid", "reduction_partial", "reduction_invalidated"}
         ):
             raise ValueError("candidate outcome is not terminal")
+        verify_candidate_outcome_validation_chain(store, value)
         return value
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise WorkerFailure(

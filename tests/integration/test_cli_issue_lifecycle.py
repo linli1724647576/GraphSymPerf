@@ -65,6 +65,15 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
         "dbms_version": "dbms/1",
         "reduced_original": "RETURN 1",
         "reduced_transformed": "RETURN 1 AS x",
+        "family_id": "f" * 64,
+        "exact_signature": "e" * 64,
+        "structural_signature": None,
+        "submission_path": "relative",
+        "reduced_validation_phenotype": "relative:stable:b",
+        "family_version_hash": "c" * 64,
+        "family_decision_hash": "d" * 64,
+        "original_validation_hash": "1" * 64,
+        "reduced_validation_hash": "2" * 64,
     }
     payload = (json.dumps(exported) + "\n").encode()
     typed_export = export_dir / "issue-1.json"
@@ -114,6 +123,19 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
                 "dbms_version": "dbms/1",
                 "reduced_query_a": "RETURN 1",
                 "reduced_query_b": "RETURN 1 AS x",
+                "family_id": "f" * 64,
+                "original_validation_hash": "1" * 64,
+                "reduced_validation_hash": "2" * 64,
+                "family_decision": {
+                    "family_version_hash": "c" * 64,
+                    "decision_hash": "d" * 64,
+                    "fingerprint": {
+                        "exact": "e" * 64,
+                        "structural": None,
+                        "submission_path": "relative",
+                        "reduced_validation_phenotype": "relative:stable:b",
+                    },
+                },
                 "duplicate_clearance": {
                     "issue_id": clearance.issue_id,
                     "possible_duplicate": clearance.possible_duplicate,
@@ -126,6 +148,10 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
         ),
     )
     monkeypatch.setattr("graph_sym_perf.issues.commands.verify_issue_hash_chain", lambda _store, _issue: None)
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.commands._verify_issue_registry_binding",
+        lambda *_args: None,
+    )
     destination = tmp_path / "developer-issue.json"
 
     assert main(["issue", "export", "--issue", str(index), "--output", str(destination)]) == 0

@@ -16,6 +16,7 @@ from graph_sym_perf.validation.models import (
     _PROMOTION_TOKEN,
     safety_certificate_hash,
     canonical_content_hash,
+    canonical_validation_report_hash,
 )
 from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 
@@ -140,8 +141,11 @@ def _reduction_gate_complete(
         and reduction.minimality_proof.verify(reduction.reduced_pair)
         and isinstance(final_validation, IssueValidationReport)
         and issue_validation_report_is_complete(final_validation)
-        and reduction.original_validation_hash == canonical_content_hash(original_validation)
-        and reduction.reduced_validation_hash == canonical_content_hash(final_validation)
+        and validated_reduction_identity_is_consistent(
+            original_validation,
+            reduction,
+            certificate,
+        )
         and original_validation.query_a_hash == original_a_hash
         and original_validation.query_b_hash == original_b_hash
         and evidence.query_a_hash == reduced_a_hash
@@ -189,6 +193,71 @@ def _reduction_gate_complete(
             for session in final_validation.sessions
         )
         and final_validation.sessions[0].evidence.slow_query == evidence.slow_query
+    )
+
+
+def validated_reduction_identity_is_consistent(
+    original_validation: object,
+    reduction: object,
+    certificate: object,
+) -> bool:
+    """Bind both sealed validations to one graph, target and transformation identity."""
+
+    if (
+        not isinstance(original_validation, IssueValidationReport)
+        or not isinstance(reduction, ReductionReport)
+        or not isinstance(certificate, SafetyCertificate)
+        or not isinstance(reduction.final_validation, IssueValidationReport)
+        or not issue_validation_report_is_complete(original_validation)
+        or not issue_validation_report_is_complete(reduction.final_validation)
+    ):
+        return False
+    final_validation = reduction.final_validation
+    original_manifest = original_validation.manifest
+    final_manifest = final_validation.manifest
+    original_pair = reduction.original_pair
+    reduced_pair = reduction.reduced_pair
+    graph_hash = original_manifest.graph_snapshot.content_hash
+    dbms_fingerprint = original_manifest.pair.dbms_fingerprint
+    target = original_manifest.resolved_config.get("target")
+    parameters_hash = canonical_content_hash(original_manifest.pair.parameters)
+    return bool(
+        reduction.original_validation_hash == canonical_validation_report_hash(original_validation)
+        and reduction.reduced_validation_hash == canonical_validation_report_hash(final_validation)
+        and original_manifest.pair.query_a == original_pair.query_a
+        and original_manifest.pair.query_b == original_pair.query_b
+        and final_manifest.pair.query_a == reduced_pair.query_a
+        and final_manifest.pair.query_b == reduced_pair.query_b
+        and parameters_hash == canonical_content_hash(original_pair.parameters)
+        and parameters_hash == canonical_content_hash(reduced_pair.parameters)
+        and parameters_hash == canonical_content_hash(final_manifest.pair.parameters)
+        and graph_hash == original_manifest.pair.graph_snapshot_hash
+        and graph_hash == original_pair.graph_snapshot_hash
+        and graph_hash == reduced_pair.graph_snapshot_hash
+        and graph_hash == final_manifest.graph_snapshot.content_hash
+        and graph_hash == final_manifest.pair.graph_snapshot_hash
+        and original_manifest.graph_snapshot == final_manifest.graph_snapshot
+        and dbms_fingerprint == original_pair.dbms_fingerprint
+        and dbms_fingerprint == reduced_pair.dbms_fingerprint
+        and dbms_fingerprint == final_manifest.pair.dbms_fingerprint
+        and original_manifest.dbms_version == final_manifest.dbms_version
+        and isinstance(target, str)
+        and bool(target.strip())
+        and target == final_manifest.resolved_config.get("target")
+        and canonical_content_hash(original_manifest.resolved_config)
+        == canonical_content_hash(final_manifest.resolved_config)
+        and original_validation.policy_hash == final_validation.policy_hash
+        and original_validation.validation_policy == final_validation.validation_policy
+        and original_manifest.certificate == certificate
+        and final_manifest.certificate == certificate
+        and original_manifest.discovery_slow_query == reduction.final_evidence.slow_query
+        and final_manifest.discovery_slow_query == reduction.final_evidence.slow_query
+        and all(
+            session.graph_fingerprint == graph_hash
+            and session.dbms_fingerprint == dbms_fingerprint
+            for report in (original_validation, final_validation)
+            for session in report.sessions
+        )
     )
 
 

@@ -9,8 +9,15 @@ import pytest
 import graph_sym_perf.experiment.worker as worker_module
 
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
+from graph_sym_perf.artifacts.schema import ArtifactRecord
 from graph_sym_perf.artifacts.store import ContentAddressedStore, verify_candidate_record_reference
-from graph_sym_perf.core import ExecutionResult, QueryExecutionError, QueryTimeoutError, TargetSystem
+from graph_sym_perf.core import (
+    ExecutionResult,
+    QueryExecutionError,
+    QueryTimeoutError,
+    TargetSystem,
+    stable_json_dumps,
+)
 from graph_sym_perf.experiment.plan_models import (
     CampaignPhase,
     FrozenMapping,
@@ -30,6 +37,7 @@ from graph_sym_perf.experiment.worker import (
     _generation_query_limit,
     _graph_snapshot_hash,
     _query_hash,
+    _load_terminal_candidate_outcome,
 )
 from graph_sym_perf.generation.corpus import GraphCorpus
 from graph_sym_perf.runtime.models import (
@@ -56,6 +64,7 @@ from tests.helpers.regression_gate import (
     build_verified_regression_gate_template,
     install_verified_regression_gate,
 )
+from tests.unit.test_artifact_policy import _candidate_payload, _validation_payload
 
 
 class _Adapter:
@@ -5415,7 +5424,10 @@ def test_worker_persists_discovery_slow_query_for_validation_replay(tmp_path) ->
         candidate_artifact_hashes(tmp_path / "shards" / "neo4j-000", required=True)
 
 
-def test_formal_worker_runs_every_candidate_through_terminal_validation_and_reduction(tmp_path) -> None:
+def test_formal_worker_runs_every_candidate_through_terminal_validation_and_reduction(
+    monkeypatch,
+    tmp_path,
+) -> None:
     observed = []
 
     class _Pipeline:
@@ -5466,11 +5478,145 @@ def test_formal_worker_runs_every_candidate_through_terminal_validation_and_redu
     )
     resumed_worker.bind_run_dir(tmp_path)
     resumed_worker.bind_attempt_dir(resume_attempt)
+    # This focused worker-contract test uses a synthetic pipeline that does not
+    # materialize validation CAS artifacts. Provenance replay is exercised by
+    # the artifact-chain integration tests.
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.worker.verify_candidate_outcome_validation_chain",
+        lambda *_args, **_kwargs: None,
+    )
 
     resumed = resumed_worker(ShardTask(TargetSystem.NEO4J, 0, 7, 1, 1, 60))
 
     assert resumed["candidate_hashes"] == result["candidate_hashes"]
     assert (tmp_path / "shards" / "neo4j-000" / "candidate-outcomes").is_dir()
+
+
+def test_terminal_candidate_resume_verifies_complete_validation_provenance(tmp_path) -> None:
+    store = ContentAddressedStore(tmp_path / "artifacts", budget_bytes=10 * 1024 * 1024)
+    candidate = ArtifactRecord(level="candidate", payload=_candidate_payload())
+    candidate_ref = store.put_json("candidate", candidate.to_dict())
+    validation_body = {
+        **_validation_payload(),
+        "candidate_hash": candidate.payload["candidate_hash"],
+        "candidate_ref": asdict(candidate_ref),
+    }
+    original = ArtifactRecord.seal_validation(validation_body)
+    original_ref = store.put_json("original-validation", original.to_dict())
+    reduced = ArtifactRecord.seal_validation(
+        {
+            **validation_body,
+            "candidate_hash": "d" * 64,
+        }
+    )
+    reduced_ref = store.put_json("reduced-validation", reduced.to_dict())
+    summary = {
+        "candidate_hash": candidate.payload["candidate_hash"],
+        "reduced_candidate_hash": "d" * 64,
+        "status": "reduced_valid",
+        "original_validation_hash": original.payload["report_hash"],
+        "reduced_validation_hash": reduced.payload["report_hash"],
+        "original_validation_ref": asdict(original_ref),
+        "reduced_validation_ref": asdict(reduced_ref),
+    }
+    reduction_ref = store.put_json("reduction", summary)
+    outcome = {
+        "candidate_hash": candidate.payload["candidate_hash"],
+        "candidate_ref": asdict(candidate_ref),
+        "validation": {
+            "stage": "validation_passed",
+            "validation_ref": asdict(original_ref),
+        },
+        "reduction": {
+            **summary,
+            "reduction_ref": asdict(reduction_ref),
+        },
+    }
+    path = tmp_path / "outcome.json"
+    path.write_text(json.dumps(outcome), encoding="utf-8")
+
+    resumed = _load_terminal_candidate_outcome(
+        path,
+        store=store,
+        candidate_hash=str(candidate.payload["candidate_hash"]),
+        candidate_ref=candidate_ref,
+    )
+    assert resumed["reduction"]["reduced_validation_hash"] == reduced.payload["report_hash"]
+
+    missing_ref = {
+        "content_hash": "f" * 64,
+        "relative_path": "objects/ff/" + "f" * 64,
+        "size_bytes": 1,
+        "media_type": "application/json",
+        "schema_version": 1,
+    }
+    missing_summary = {
+        **summary,
+        "reduced_validation_ref": missing_ref,
+    }
+    missing_reduction_ref = store.put_json("missing-reduction", missing_summary)
+    path.write_text(
+        json.dumps(
+            {
+                **outcome,
+                "reduction": {
+                    **missing_summary,
+                    "reduction_ref": asdict(missing_reduction_ref),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(WorkerFailure, match="cannot resume terminal candidate outcome"):
+        _load_terminal_candidate_outcome(
+            path,
+            store=store,
+            candidate_hash=str(candidate.payload["candidate_hash"]),
+            candidate_ref=candidate_ref,
+        )
+
+    missing_report_payload = dict(reduced.payload)
+    missing_report_payload.pop("report_hash")
+    missing_report_payload.pop("validation_hash")
+    missing_report_payload["validation_hash"] = hashlib.sha256(
+        stable_json_dumps(missing_report_payload).encode("utf-8")
+    ).hexdigest()
+    missing_report_ref = store.put_json(
+        "missing-report-validation",
+        {
+            "schema_version": 2,
+            "level": "validation",
+            "measurement_protocol": "independent-two-session-v1",
+            **missing_report_payload,
+        },
+    )
+    missing_report_summary = {
+        **summary,
+        "reduced_validation_ref": asdict(missing_report_ref),
+    }
+    missing_report_reduction_ref = store.put_json(
+        "missing-report-reduction",
+        missing_report_summary,
+    )
+    path.write_text(
+        json.dumps(
+            {
+                **outcome,
+                "reduction": {
+                    **missing_report_summary,
+                    "reduction_ref": asdict(missing_report_reduction_ref),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(WorkerFailure, match="cannot resume terminal candidate outcome"):
+        _load_terminal_candidate_outcome(
+            path,
+            store=store,
+            candidate_hash=str(candidate.payload["candidate_hash"]),
+            candidate_ref=candidate_ref,
+        )
 
 
 def test_resume_does_not_reinterpret_a_durable_non_candidate_as_a_new_candidate(tmp_path) -> None:

@@ -221,10 +221,6 @@ class ProductionCandidatePipeline:
             checkpoint_path=attempt_dir / f"reducer-{candidate.candidate_hash}.json",
             rule_witness=rule_witness,
         )
-        reduction_ref = store.put_json(
-            f"reduction-report-{candidate.candidate_hash}.json",
-            _reduction_summary(reduction, original_candidate_hash=candidate.candidate_hash),
-        )
         issue_outcome = self._materialize_issue(
             candidate,
             validation,
@@ -238,6 +234,15 @@ class ProductionCandidatePipeline:
                 task,
                 self.environment,
                 driver_version=driver_version,
+            ),
+        )
+        reduction_ref = store.put_json(
+            f"reduction-report-{candidate.candidate_hash}.json",
+            _reduction_summary(
+                reduction,
+                original_candidate_hash=candidate.candidate_hash,
+                original_validation_ref=issue_outcome.get("original_validation_ref"),
+                reduced_validation_ref=issue_outcome.get("reduced_validation_ref"),
             ),
         )
         return {
@@ -298,6 +303,12 @@ class ProductionCandidatePipeline:
             candidate_ref=reduced_ref,
             environment=environment,
         )
+        validation_provenance = {
+            "original_validation_hash": reduction.original_validation_hash,
+            "reduced_validation_hash": reduction.reduced_validation_hash,
+            "original_validation_ref": asdict(original_validation_ref),
+            "reduced_validation_ref": asdict(final_record.reference),
+        }
         materialized: dict[str, object] = {}
 
         def materialize(issue: object) -> dict[str, object]:
@@ -343,14 +354,21 @@ class ProductionCandidatePipeline:
             certificate=original_candidate.certificate,
             dbms=task.target.value,
             known_regression_manifest=_required_regression_manifest(self.spec),
+            original_validation_ref=original_validation_ref,
+            reduced_validation_ref=final_record.reference,
             materialize=materialize,
         )
         if issue is None:
-            return {"promotion": "blocked", "duplicate_status": duplicate_status}
+            return {
+                "promotion": "blocked",
+                "duplicate_status": duplicate_status,
+                **validation_provenance,
+            }
         return {
             "promotion": "submit_ready",
             "issue_id": materialized["issue_id"],
             "issue_index": str(materialized["index_path"].relative_to(self.run_dir)),
+            **validation_provenance,
         }
 
     def _reduce(
@@ -452,8 +470,14 @@ def _validation_environment(
     }
 
 
-def _reduction_summary(report: object, *, original_candidate_hash: str) -> dict[str, object]:
-    return {
+def _reduction_summary(
+    report: object,
+    *,
+    original_candidate_hash: str,
+    original_validation_ref: ArtifactReference | Mapping[str, object] | None = None,
+    reduced_validation_ref: ArtifactReference | Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    summary = {
         "accepted_steps": [asdict(step) for step in getattr(report, "accepted_steps", ())],
         "candidate_hash": original_candidate_hash,
         "bundle_hash": getattr(report, "bundle_hash", ""),
@@ -464,6 +488,22 @@ def _reduction_summary(report: object, *, original_candidate_hash: str) -> dict[
         "status": getattr(report, "status").value,
         "stop_reason": getattr(report, "stop_reason", ""),
     }
+    if original_validation_ref is not None or reduced_validation_ref is not None:
+        if original_validation_ref is None or reduced_validation_ref is None:
+            raise ValueError("reduction summary requires both validation references")
+        summary.update(
+            original_validation_hash=getattr(report, "original_validation_hash", ""),
+            reduced_validation_hash=getattr(report, "reduced_validation_hash", ""),
+            original_validation_ref=_reference_mapping(original_validation_ref),
+            reduced_validation_ref=_reference_mapping(reduced_validation_ref),
+        )
+    return summary
+
+
+def _reference_mapping(
+    reference: ArtifactReference | Mapping[str, object],
+) -> dict[str, object]:
+    return asdict(reference) if isinstance(reference, ArtifactReference) else dict(reference)
 
 
 def _candidate_record(

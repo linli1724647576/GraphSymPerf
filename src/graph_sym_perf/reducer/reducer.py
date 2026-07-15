@@ -469,6 +469,13 @@ def _gate_failure(
 
 
 def _evidence_hash(evidence: object) -> str:
+    from graph_sym_perf.validation.models import (
+        IssueValidationReport,
+        canonical_validation_report_hash,
+    )
+
+    if isinstance(evidence, IssueValidationReport):
+        return canonical_validation_report_hash(evidence)
     try:
         payload = stable_json_dumps(evidence)
     except (TypeError, ValueError):

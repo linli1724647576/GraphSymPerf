@@ -7,6 +7,7 @@ from graph_sym_perf.experiment.candidate_pipeline import (
     ProductionCandidatePipeline,
     _ReducerNotApplicable,
     _RuntimeScreen,
+    _reduction_summary,
 )
 from graph_sym_perf.experiment.plan_models import ShardTask
 from graph_sym_perf.experiment.spec import load_experiment_spec
@@ -16,6 +17,7 @@ from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.transforms.safety_points import SafetyCertificate as TransformCertificate
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.models import CandidateBundle, PipelineStage, SafetyCertificate
+from tests.unit.validation.test_promotion import _reduction
 
 
 def _candidate() -> CandidateBundle:
@@ -125,6 +127,34 @@ def test_reducer_screen_rejects_a_runtime_direction_reversal() -> None:
 
     assert evidence.slow_query == "b"
     assert "direction_mismatch" in evidence.reason_codes
+
+
+def test_reduction_summary_retains_both_validation_hashes_and_references() -> None:
+    reduction = _reduction()
+    original_ref = ArtifactReference(
+        "1" * 64,
+        "objects/11/" + "1" * 64,
+        100,
+        "application/json",
+    )
+    reduced_ref = ArtifactReference(
+        "2" * 64,
+        "objects/22/" + "2" * 64,
+        100,
+        "application/json",
+    )
+
+    summary = _reduction_summary(
+        reduction,
+        original_candidate_hash="a" * 64,
+        original_validation_ref=original_ref,
+        reduced_validation_ref=reduced_ref,
+    )
+
+    assert summary["original_validation_hash"] == reduction.original_validation_hash
+    assert summary["reduced_validation_hash"] == reduction.reduced_validation_hash
+    assert summary["original_validation_ref"]["content_hash"] == "1" * 64
+    assert summary["reduced_validation_ref"]["content_hash"] == "2" * 64
 
 
 def test_validated_candidate_without_safe_dependency_graph_does_not_fail_shard(

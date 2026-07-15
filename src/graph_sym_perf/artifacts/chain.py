@@ -10,7 +10,11 @@ from graph_sym_perf.artifacts.store import (
     load_artifact_record,
     verify_issue_hash_chain,
 )
-from graph_sym_perf.validation.models import IssueValidationReport, SubmitReadyIssue
+from graph_sym_perf.validation.models import (
+    IssueValidationReport,
+    SubmitReadyIssue,
+    canonical_validation_report_projection,
+)
 from graph_sym_perf.validation.promotion import submit_ready_issue_is_valid
 from graph_sym_perf.core import stable_json_dumps
 
@@ -41,30 +45,12 @@ class ArtifactChainWriter:
             raise ValueError("validation candidate_ref must reference a candidate artifact")
         if candidate.payload.get("candidate_hash") != report.candidate_hash:
             raise ValueError("candidate reference does not bind the validation report")
-        sessions = tuple(_session_payload(session, index) for index, session in enumerate(report.sessions))
+        projection = canonical_validation_report_projection(report)
         record = ArtifactRecord.seal_validation(
             {
-                "candidate_hash": report.candidate_hash,
+                **projection,
                 "candidate_ref": _reference_payload(candidate_ref),
-                "sessions": sessions,
                 "environment": dict(environment),
-                "dbms_fingerprint": report.manifest.pair.dbms_fingerprint,
-                "stage": report.stage.value,
-                "validation_protocol": report.validation_protocol,
-                "equivalence": asdict(report.equivalence),
-                "validated_ratio": report.validated_ratio,
-                "pooled_delta_ms": report.pooled_delta_ms,
-                "pooled_ratio_ci_low": report.pooled_ratio_ci_low,
-                "pooled_delta_ci_low_ms": report.pooled_delta_ci_low_ms,
-                "submission_path": (
-                    report.submission_path.value
-                    if report.submission_path is not None
-                    else None
-                ),
-                "noise_floor_ms": report.validation_policy.noise_floor_ms,
-                "timer_resolution_ms": report.validation_policy.timer_resolution_ms,
-                "metadata": dict(report.metadata),
-                "reason_codes": report.reason_codes,
             }
         )
         reference = self.store.put_json(f"validation-{record.payload['validation_hash']}.json", record.to_dict())
@@ -105,6 +91,8 @@ class ArtifactChainWriter:
             "certificate_hash": issue.reduction.certificate_hash,
             "original_validation_hash": issue.reduction.original_validation_hash,
             "reduced_validation_hash": issue.reduction.reduced_validation_hash,
+            "original_validation_ref": _reference_payload(original_validation_ref),
+            "reduced_validation_ref": _reference_payload(final_validation_ref),
         }
         reduction_ref = self.store.put_json(
             f"reduction-{issue.reduction.reduced_candidate_hash}.json",
@@ -130,6 +118,7 @@ class ArtifactChainWriter:
             },
             "family_decision": {
                 "issue_id": issue.family_decision.issue_id,
+                "owner_issue_id": issue.family_decision.owner_issue_id,
                 "family_id": issue.family_decision.family_id,
                 "fingerprint": asdict(issue.family_decision.fingerprint),
                 "match_kind": issue.family_decision.match_kind.value,
@@ -163,66 +152,12 @@ class ArtifactChainWriter:
         return StoredArtifactRecord(record, reference)
 
 
-def _session_payload(session: object, index: int) -> dict[str, object]:
-    lifecycle = getattr(session, "lifecycle", None)
-    if lifecycle is None:
-        lifecycle_payload: dict[str, object] = {"complete": False}
-    else:
-        lifecycle_payload = {**asdict(lifecycle), "complete": bool(lifecycle.complete)}
-    controls = tuple(
-        {
-            "kind": "A/A" if control_index == 0 else "B/B",
-            "paired_timing": tuple(asdict(sample) for sample in control.paired_samples),
-        }
-        for control_index, control in enumerate(getattr(session, "negative_controls", ()))
-    )
-    evidence = getattr(session, "evidence")
-    return {
-        "session_id": getattr(session, "session_id"),
-        "process_id": getattr(session, "process_id"),
-        "graph_fingerprint": getattr(session, "graph_fingerprint"),
-        "dbms_fingerprint": getattr(session, "dbms_fingerprint"),
-        "query_a_hash": evidence.query_a_hash,
-        "query_b_hash": evidence.query_b_hash,
-        "slow_query": evidence.slow_query,
-        "measurement_source": evidence.measurement_source,
-        "measurement_protocol": evidence.measurement_protocol,
-        "runtime_verdict": evidence.verdict.value,
-        "runtime_reason_codes": evidence.reason_codes,
-        "paired_timing": tuple(asdict(sample) for sample in evidence.paired_samples),
-        "negative_controls": controls,
-        "lifecycle": lifecycle_payload,
-        "health_event": getattr(session, "health_event", None),
-        "session_number": index + 1,
-    }
-
-
 def _reference_payload(reference: ArtifactReference | dict[str, object]) -> dict[str, object]:
     return asdict(reference) if isinstance(reference, ArtifactReference) else dict(reference)
 
 
 def _require_report_binding(record: ArtifactRecord, report: IssueValidationReport) -> None:
-    expected = {
-        "candidate_hash": report.candidate_hash,
-        "stage": report.stage.value,
-        "validation_protocol": report.validation_protocol,
-        "equivalence": asdict(report.equivalence),
-        "sessions": tuple(_session_payload(session, index) for index, session in enumerate(report.sessions)),
-        "dbms_fingerprint": report.manifest.pair.dbms_fingerprint,
-        "validated_ratio": report.validated_ratio,
-        "pooled_delta_ms": report.pooled_delta_ms,
-        "pooled_ratio_ci_low": report.pooled_ratio_ci_low,
-        "pooled_delta_ci_low_ms": report.pooled_delta_ci_low_ms,
-        "submission_path": (
-            report.submission_path.value
-            if report.submission_path is not None
-            else None
-        ),
-        "noise_floor_ms": report.validation_policy.noise_floor_ms,
-        "timer_resolution_ms": report.validation_policy.timer_resolution_ms,
-        "metadata": dict(report.metadata),
-        "reason_codes": report.reason_codes,
-    }
+    expected = canonical_validation_report_projection(report)
     for name, value in expected.items():
         if stable_json_dumps(record.payload.get(name)) != stable_json_dumps(value):
             raise ValueError(f"validation reference does not bind typed report field: {name}")
