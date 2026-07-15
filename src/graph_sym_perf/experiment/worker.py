@@ -1447,6 +1447,7 @@ class RuntimeFirstShardWorker:
                         ErrorKind.EVIDENCE_INTEGRITY_ERROR,
                         "legacy accepted-pair migration failed typed equivalence revalidation",
                     )
+                applicable_query_ordinals.add(ordinal)
                 migrated = _pending_acceptance(
                     pair_hash,
                     ordinal,
@@ -6189,6 +6190,11 @@ def _load_entry_progress(path: Path, *, entry: RulePlanEntry) -> dict[str, objec
         or attempted != last_ordinal
         or not valid_rejects
         or not valid_accepted
+        or (
+            schema_version == 1
+            and last_ordinal == 0
+            and bool(accepted)
+        )
         or (schema_version in {2, 3, 4, 5, 6} and (not valid_pending or not valid_migration))
         or (schema_version in {3, 4, 5, 6} and (not valid_identity or not valid_intent))
         or (

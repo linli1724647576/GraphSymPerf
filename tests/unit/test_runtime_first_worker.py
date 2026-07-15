@@ -4685,6 +4685,135 @@ def test_task5_legacy_nonempty_progress_without_applicability_ledger_fails_close
     assert not (entry_dir / "pair_runtime.jsonl").exists()
 
 
+def test_schema1_zero_progress_rejects_nonempty_accepted_hashes(tmp_path) -> None:
+    entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
+    body = {
+        "schema_version": 1,
+        "entry_id": entry.entry_id,
+        "elapsed_seconds": 0.0,
+        "last_query_ordinal": 0,
+        "attempted_query_records": 0,
+        "reject_counts": {},
+        "accepted_pair_hashes": ["a" * 64],
+    }
+    path = tmp_path / "acceptance_progress.json"
+    path.write_text(
+        json.dumps({**body, "content_hash": canonical_hash(body)}, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkerFailure) as captured:
+        worker_module._load_entry_progress(path, entry=entry)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+
+
+def test_schema1_zero_progress_migrates_one_appended_pair_with_atomic_applicability(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = _rule_plan_entry(
+        rule_id="null_partition_tautology",
+        family="bool",
+        accepted_pair_quota=1,
+        max_generated_seed_budget=1,
+    )
+    query = "MATCH (n) WHERE n.id = 1 RETURN n"
+    statements = ("CREATE (n:Node {id: 1})",)
+    built = worker_module.RulePairFactory(worker_module.RuleRegistry.default()).build(
+        query,
+        entry,
+        entry.target,
+    )
+    assert built.pair is not None
+    pair = built.pair
+    entry_dir = tmp_path / "entries" / worker_module._entry_directory_name(entry.entry_id)
+    entry_dir.mkdir(parents=True)
+    legacy_record = {
+        "certificate": worker_module.to_jsonable(asdict(pair.certificate)),
+        "dbms_fingerprint": "a" * 64,
+        "entry_id": entry.entry_id,
+        "equivalence": "complete_typed_equivalent",
+        "family": entry.family,
+        "graph_snapshot_hash": _graph_snapshot_hash(statements),
+        "pair_hash": pair.pair_hash,
+        "parameters": worker_module.to_jsonable(pair.parameters),
+        "proof_version": pair.certificate.proof_version,
+        "query_a": pair.query_a,
+        "query_b": pair.query_b,
+        "query_hash": worker_module.portable_ast_hash(pair.query_a),
+        "rule_id": entry.rule_id,
+        "semantic_proof_sha256": pair.transform_metadata["semantic_proof_sha256"],
+        "site": pair.certificate.site_class,
+        "source_query_ordinal": 1,
+        "stream": entry.stream.value,
+        "tier": entry.tier,
+        "transform_metadata": worker_module.to_jsonable(pair.transform_metadata),
+    }
+    legacy_path = entry_dir / "accepted_pairs.jsonl"
+    legacy_path.write_text(
+        json.dumps(legacy_record, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    progress_body = {
+        "schema_version": 1,
+        "entry_id": entry.entry_id,
+        "elapsed_seconds": 0.0,
+        "last_query_ordinal": 0,
+        "attempted_query_records": 0,
+        "reject_counts": {},
+        "accepted_pair_hashes": [],
+    }
+    progress_path = entry_dir / "acceptance_progress.json"
+    progress_path.write_text(
+        json.dumps(
+            {**progress_body, "content_hash": canonical_hash(progress_body)},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    generated = GeneratedShard(
+        graph_statements=statements,
+        query_texts=(query,),
+        generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+    )
+
+    def worker():
+        value = RuntimeFirstShardWorker(
+            load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+            generation_runner=lambda *_args: generated,
+            adapter_factory=lambda *_args: _Adapter(),
+        )
+        value.bind_run_dir(tmp_path)
+        return value
+
+    real_unlink = worker_module._unlink_fsync
+    monkeypatch.setattr(
+        worker_module,
+        "_unlink_fsync",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("migration crash window")),
+    )
+    with pytest.raises(RuntimeError, match="migration crash window"):
+        worker()(entry)
+
+    crashed_progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert crashed_progress["schema_version"] == 6
+    assert crashed_progress["last_query_ordinal"] == 1
+    assert crashed_progress["applicable_query_ordinals"] == [1]
+    assert legacy_path.exists()
+
+    monkeypatch.setattr(worker_module, "_unlink_fsync", real_unlink)
+    for _attempt in range(2):
+        result = worker()(entry)
+        assert result["accepted_pairs"] == 1
+        assert result["applicability_count"] == 1
+        assert json.loads(progress_path.read_text(encoding="utf-8"))[
+            "applicable_query_ordinals"
+        ] == [1]
+    assert not legacy_path.exists()
+
+
 def test_rule_entry_retry_keeps_reject_progress_and_does_not_repeat_completed_seed(
     tmp_path,
     monkeypatch,
