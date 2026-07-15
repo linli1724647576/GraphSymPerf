@@ -14,7 +14,9 @@ from graph_sym_perf.validation.models import (
     IssueValidationReport,
     SubmitReadyIssue,
     canonical_validation_report_projection,
+    compact_duplicate_clearance_payload,
 )
+from graph_sym_perf.issues.dedup import compact_family_decision_payload
 from graph_sym_perf.validation.promotion import submit_ready_issue_is_valid
 from graph_sym_perf.core import stable_json_dumps
 
@@ -105,35 +107,10 @@ class ArtifactChainWriter:
             "stage": issue.stage.value,
             "reduction_status": issue.reduction.status.value,
             "certificate": asdict(issue.certificate),
-            "duplicate_clearance": {
-                "issue_id": issue.duplicate_clearance.issue_id,
-                "possible_duplicate": issue.duplicate_clearance.possible_duplicate,
-                "cluster_members": issue.duplicate_clearance.cluster_members,
-                "cluster_version_hash": issue.duplicate_clearance.cluster_version_hash,
-                "evidence_url": issue.duplicate_clearance.evidence_url,
-                "registry_signature": issue.duplicate_clearance.registry_signature,
-                "family_id": issue.duplicate_clearance.family_id,
-                "family_version_hash": issue.duplicate_clearance.family_version_hash,
-                "family_decision_hash": issue.duplicate_clearance.family_decision_hash,
-            },
-            "family_decision": {
-                "issue_id": issue.family_decision.issue_id,
-                "owner_issue_id": issue.family_decision.owner_issue_id,
-                "family_id": issue.family_decision.family_id,
-                "fingerprint": asdict(issue.family_decision.fingerprint),
-                "match_kind": issue.family_decision.match_kind.value,
-                "matched_issue_id": issue.family_decision.matched_issue_id,
-                "known_regression_match": issue.family_decision.known_regression_match,
-                "known_regression_case_id": issue.family_decision.known_regression_case_id,
-                "is_new_family": issue.family_decision.is_new_family,
-                "family_members": issue.family_decision.family_members,
-                "family_fingerprints": tuple(
-                    (member, asdict(fingerprint))
-                    for member, fingerprint in issue.family_decision.family_fingerprints
-                ),
-                "family_version_hash": issue.family_decision.family_version_hash,
-                "decision_hash": issue.family_decision.decision_hash,
-            },
+            "duplicate_clearance": compact_duplicate_clearance_payload(
+                issue.duplicate_clearance
+            ),
+            "family_decision": compact_family_decision_payload(issue.family_decision),
             "validated_ratio": issue.reduction.final_validation.validated_ratio,
             "dbms_version": issue.validation.manifest.dbms_version,
             "candidate_hash": issue.validation.candidate_hash,
@@ -151,7 +128,11 @@ class ArtifactChainWriter:
         if explanation_ref is not None:
             payload["explanation_ref"] = _reference_payload(explanation_ref)
         record = ArtifactRecord.seal_issue(payload)
-        verify_issue_hash_chain(self.store, record)
+        verify_issue_hash_chain(
+            self.store,
+            record,
+            family_fingerprints=issue.family_decision.family_fingerprints,
+        )
         reference = self.store.put_json(f"issue-{issue.issue_id}.json", record.to_dict())
         return StoredArtifactRecord(record, reference)
 

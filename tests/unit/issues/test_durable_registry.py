@@ -18,13 +18,17 @@ from graph_sym_perf.issues.durable_registry import (
     _recover_family_transaction,
     _write_payload_lines_atomic,
     _replay_family_index,
+    verify_durable_family_artifact_proof,
 )
 from graph_sym_perf.issues.dedup import (
     FingerprintSubject,
     IssueFamilyIndex,
     fingerprint_issue,
     known_regression_signature_from_manifest,
+    compact_family_decision_payload,
 )
+from graph_sym_perf.issues.registry import IssueRegistry
+from graph_sym_perf.validation.models import compact_duplicate_clearance_payload
 from graph_sym_perf.issues.commands import _has_current_possible_duplicate
 from graph_sym_perf.issues.registry import canonical_reduced_pair_hash
 from graph_sym_perf.validation.models import (
@@ -39,6 +43,16 @@ from tests.unit.validation.test_promotion import _certificate, _reduction, _repo
 REGRESSION_MANIFEST = (
     Path(__file__).parents[2] / "fixtures" / "regressions" / "neo4j_bug001" / "manifest.yaml"
 )
+
+
+@pytest.fixture(autouse=True)
+def _receipt_only_materialization_seam(monkeypatch) -> None:
+    """This unit module uses synthetic receipts; production E2E keeps real replay."""
+
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._verify_owner_materialization_against_durable",
+        lambda *_args, **_kwargs: None,
+    )
 
 
 def _validation_refs() -> dict[str, ArtifactReference]:
@@ -329,6 +343,108 @@ def test_concurrent_replay_under_flock_commits_one_family(tmp_path) -> None:
     assert len((tmp_path / "registry.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
+def test_family_budget_overflow_is_atomic_deduplicated_and_has_no_raw_query(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    oversized = fingerprint_issue(
+        FingerprintSubject(
+            **{
+                **_subject_values(),
+                "reduced_query_a": "MATCH (n) RETURN n // " + "x" * (64 * 1024),
+            }
+        )
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._validated_fingerprint",
+        lambda *_args, **_kwargs: oversized,
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry.deterministic_issue_id",
+        lambda *_args: "oversized-issue",
+    )
+    report = _report()
+    reduction = _reduction()
+    for _attempt in range(2):
+        issue, status = promote_unique_issue(
+            tmp_path,
+            validation=report,
+            reduction=reduction,
+            certificate=_certificate(),
+            dbms="neo4j",
+            known_regression_manifest=REGRESSION_MANIFEST,
+            materialize=lambda _issue: (_ for _ in ()).throw(
+                AssertionError("overflow must not materialize")
+            ),
+            **_validation_refs(),
+        )
+        assert issue is None and status == "family_budget_exceeded"
+
+    diagnostics = (tmp_path / "family_overflow.jsonl").read_text(encoding="utf-8")
+    assert len(diagnostics.splitlines()) == 1
+    assert "x" * 100 not in diagnostics
+    assert not (tmp_path / "registry.jsonl").exists()
+    assert not (tmp_path / "dedup_review.jsonl").exists()
+    assert not (tmp_path / "commits").exists()
+
+
+def test_family_member_limit_preflight_does_not_change_registry_or_owner(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    issue_ids = iter(("issue-1", "issue-2"))
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry.deterministic_issue_id",
+        lambda *_args: next(issue_ids),
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry.promote",
+        lambda *_args, family_decision, duplicate_clearance, **_kwargs: SimpleNamespace(
+            issue_id=family_decision.issue_id,
+            family_id=family_decision.family_id,
+            family_decision=family_decision,
+            duplicate_clearance=duplicate_clearance,
+        ),
+    )
+    report = _report()
+    reduction = _reduction()
+    first, status = promote_unique_issue(
+        tmp_path,
+        validation=report,
+        reduction=reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=_dynamic_receipt,
+        **_validation_refs(),
+    )
+    assert first is not None and status == "unique_family", status
+    registry_before = (tmp_path / "registry.jsonl").read_bytes()
+    commit_before = (tmp_path / "commits" / "issue-1.json").read_bytes()
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry.MAX_FAMILY_MEMBERS",
+        1,
+    )
+
+    blocked, blocked_status = promote_unique_issue(
+        tmp_path,
+        validation=report,
+        reduction=reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=lambda _issue: (_ for _ in ()).throw(
+            AssertionError("member overflow must not materialize")
+        ),
+        **_validation_refs(),
+    )
+
+    assert blocked is None and blocked_status == "family_budget_exceeded"
+    assert (tmp_path / "registry.jsonl").read_bytes() == registry_before
+    assert (tmp_path / "commits" / "issue-1.json").read_bytes() == commit_before
+    assert not (tmp_path / "dedup_review.jsonl").exists()
+
+
 def _subject_values(*, changed: bool = False) -> dict[str, str]:
     return {
         "dbms": "neo4j",
@@ -439,6 +555,62 @@ def test_durable_family_replay_uses_explicit_owner_independent_of_record_order()
 
     assert current.owner_issue_id == "owner"
     assert current.family_members == owner_decision.family_members
+
+
+def test_compact_family_refs_recompute_raw_members_and_reject_missing_mismatch_and_symlink(
+    tmp_path,
+) -> None:
+    run_dir = tmp_path / "run"
+    root = run_dir / "issues"
+    root.mkdir(parents=True)
+    owner_fingerprint = _fingerprint()
+    duplicate_fingerprint = _fingerprint(changed=True)
+    issued = IssueFamilyIndex()
+    issued.add(owner_fingerprint, issue_id="owner")
+    issued.add(duplicate_fingerprint, issue_id="z-duplicate")
+    owner_decision = issued.reissue_owner(owner_fingerprint, issue_id="owner")
+    duplicate_decision = issued.reissue_member(
+        duplicate_fingerprint,
+        issue_id="z-duplicate",
+    )
+    owner = _formal_family_record(
+        owner_fingerprint,
+        owner_decision,
+        stage=PipelineStage.SUBMIT_READY,
+    )
+    duplicate = _formal_family_record(
+        duplicate_fingerprint,
+        duplicate_decision,
+        stage=PipelineStage.REDUCED_VALID,
+    )
+    _write_payload_lines_atomic(root / "registry.jsonl", [_record_payload(owner)])
+    _write_payload_lines_atomic(root / "dedup_review.jsonl", [_record_payload(duplicate)])
+    clearance = IssueRegistry().duplicate_clearance_for_family(
+        owner_decision,
+        (owner, duplicate),
+    )
+    family_payload = compact_family_decision_payload(owner_decision)
+    clearance_payload = compact_duplicate_clearance_payload(clearance)
+
+    verify_durable_family_artifact_proof(root, family_payload, clearance_payload)
+
+    (root / "dedup_review.jsonl").unlink()
+    with pytest.raises(ValueError, match="durable family"):
+        verify_durable_family_artifact_proof(root, family_payload, clearance_payload)
+
+    _write_payload_lines_atomic(root / "dedup_review.jsonl", [_record_payload(duplicate)])
+    mismatched = _record_payload(duplicate)
+    mismatched["reduced_query_b"] = "MATCH (forged) RETURN forged"
+    _write_payload_lines_atomic(root / "dedup_review.jsonl", [mismatched])
+    with pytest.raises(ValueError, match="fingerprint no longer verifies"):
+        verify_durable_family_artifact_proof(root, family_payload, clearance_payload)
+
+    _write_payload_lines_atomic(root / "dedup_review.jsonl", [_record_payload(duplicate)])
+    registry_real = root / "registry.real.jsonl"
+    (root / "registry.jsonl").replace(registry_real)
+    (root / "registry.jsonl").symlink_to(registry_real)
+    with pytest.raises(ValueError, match="symlink"):
+        verify_durable_family_artifact_proof(root, family_payload, clearance_payload)
 
 
 def test_exact_single_seed_owner_replays_deterministically_after_restart() -> None:

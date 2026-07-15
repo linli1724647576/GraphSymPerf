@@ -116,7 +116,7 @@ class IssueCommands:
             ):
                 raise ValueError("submit-ready issue is in the current possible-duplicate cluster")
             _verify_current_duplicate_clearance(run_dir / "issues", record.payload)
-            verify_issue_hash_chain(store, record)
+            verify_issue_hash_chain(store, record, run_dir=run_dir)
             payload = export_path.read_bytes()
             if hashlib.sha256(payload).hexdigest() != index["export_sha256"]:
                 raise ValueError("typed export hash mismatch")

@@ -241,6 +241,9 @@ def verify_candidate_record_reference(
 def verify_issue_hash_chain(
     store: ContentAddressedStore,
     issue: ArtifactRecord,
+    *,
+    family_fingerprints: object | None = None,
+    run_dir: str | Path | None = None,
 ) -> None:
     if getattr(issue.level, "value", issue.level) != "issue":
         raise TypeError("issue hash-chain verification requires an issue artifact")
@@ -321,6 +324,58 @@ def verify_issue_hash_chain(
         != resolved_candidates[1].payload.get("dbms_fingerprint")
     ):
         raise ValueError("issue family fingerprint does not bind reduced candidate identity")
+    if isinstance(family, Mapping) and "member_proof_root" in family:
+        clearance = payload.get("duplicate_clearance")
+        if not isinstance(clearance, Mapping):
+            raise ValueError("issue compact duplicate clearance is unavailable")
+        if family_fingerprints is not None:
+            from graph_sym_perf.issues.dedup import compact_family_proof_is_valid
+            from graph_sym_perf.validation.models import compact_cluster_members_root
+
+            try:
+                proof = tuple(family_fingerprints)
+                member_ids = tuple(member for member, _fingerprint in proof)
+            except (TypeError, ValueError):
+                raise ValueError("issue compact family proof is unavailable") from None
+            if (
+                not compact_family_proof_is_valid(family, proof)
+                or clearance.get("cluster_member_count") != len(member_ids)
+                or clearance.get("cluster_members_root")
+                != compact_cluster_members_root(member_ids)
+            ):
+                raise ValueError("issue compact family proof does not bind raw members")
+        elif run_dir is not None:
+            from graph_sym_perf.issues.durable_registry import (
+                verify_durable_family_artifact_proof,
+            )
+
+            verify_durable_family_artifact_proof(
+                Path(run_dir) / "issues",
+                family,
+                clearance,
+            )
+        elif family.get("member_count") == 1:
+            from graph_sym_perf.issues.dedup import IssueFingerprint, compact_family_proof_is_valid
+            from graph_sym_perf.validation.models import compact_cluster_members_root
+
+            owner_fields = dict(fingerprint)
+            normalized_pair = owner_fields.get("normalized_pair")
+            if normalized_pair is not None:
+                owner_fields["normalized_pair"] = tuple(normalized_pair)
+            try:
+                owner = IssueFingerprint(**owner_fields)
+            except (TypeError, ValueError):
+                raise ValueError("issue owner fingerprint proof is malformed") from None
+            proof = ((str(family.get("issue_id")), owner),)
+            if (
+                not compact_family_proof_is_valid(family, proof)
+                or clearance.get("cluster_member_count") != 1
+                or clearance.get("cluster_members_root")
+                != compact_cluster_members_root((str(family.get("issue_id")),))
+            ):
+                raise ValueError("issue standalone owner proof is invalid")
+        else:
+            raise ValueError("issue compact family proof requires durable registry resolution")
     reduction = json.loads(store.read(payload["reduction_ref"]))
     if not isinstance(reduction, dict) or (
         reduction.get("candidate_hash") != payload["candidate_hash"]
@@ -408,7 +463,7 @@ def verify_candidate_outcome_validation_chain(
     )
     provenance_present = any(name in summary or name in reduction for name in fields)
     if not provenance_present:
-        if status != "reduction_partial":
+        if status not in {"reduction_partial", "reduction_invalidated"}:
             raise ValueError("candidate outcome validation provenance is unavailable")
         return
     if any(name not in summary or name not in reduction for name in fields):

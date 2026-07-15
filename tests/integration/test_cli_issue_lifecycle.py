@@ -147,7 +147,10 @@ def test_issue_export_copies_only_a_preexported_typed_issue_with_verified_chain(
             },
         ),
     )
-    monkeypatch.setattr("graph_sym_perf.issues.commands.verify_issue_hash_chain", lambda _store, _issue: None)
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.commands.verify_issue_hash_chain",
+        lambda _store, _issue, **_kwargs: None,
+    )
     monkeypatch.setattr(
         "graph_sym_perf.issues.commands._verify_issue_registry_binding",
         lambda *_args: None,

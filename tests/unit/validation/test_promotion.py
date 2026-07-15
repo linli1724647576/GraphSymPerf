@@ -9,7 +9,11 @@ import pytest
 from graph_sym_perf.artifacts.chain import ArtifactChainWriter
 from graph_sym_perf.artifacts.policy import ArtifactLevel
 from graph_sym_perf.artifacts.schema import ArtifactRecord
-from graph_sym_perf.artifacts.store import ContentAddressedStore, load_artifact_record
+from graph_sym_perf.artifacts.store import (
+    ContentAddressedStore,
+    load_artifact_record,
+    verify_issue_hash_chain,
+)
 from graph_sym_perf.reducer.models import (
     MinimalityProof,
     MinimalityUniverse,
@@ -739,11 +743,53 @@ def test_typed_submit_ready_issue_persists_a_resolvable_artifact_hash_chain(
     )
 
     loaded_payload = load_artifact_record(store, stored_issue.reference).payload
+    verify_issue_hash_chain(store, stored_issue.record)
     assert loaded_payload["issue_hash"] == stored_issue.record.payload["issue_hash"]
     assert loaded_payload["family_id"] == issue.family_id
     assert loaded_payload["family_decision"]["decision_hash"] == issue.family_decision.decision_hash
+    assert "family_members" not in loaded_payload["family_decision"]
+    assert "family_fingerprints" not in loaded_payload["family_decision"]
+    assert loaded_payload["family_decision"]["member_count"] == 1
+    assert len(loaded_payload["family_decision"]["member_proof_root"]) == 64
+    assert loaded_payload["family_decision"]["registry_proof_ref"] == {
+        "schema": "durable-family-proof-v1",
+        "registry_rel": "issues/registry.jsonl",
+        "review_rel": "issues/dedup_review.jsonl",
+    }
+    assert "cluster_members" not in loaded_payload["duplicate_clearance"]
+    assert loaded_payload["duplicate_clearance"]["cluster_member_count"] == 1
     assert loaded_payload["original_validation_hash"] == issue.reduction.original_validation_hash
     assert loaded_payload["reduced_validation_hash"] == issue.reduction.reduced_validation_hash
+
+    expanded_index = IssueFamilyIndex()
+    expanded_index.add(issue.family_decision.fingerprint, issue_id=issue.issue_id)
+    expanded_index.add(issue.family_decision.fingerprint, issue_id="z" * 64)
+    expanded_decision = expanded_index.reissue_owner(
+        issue.family_decision.fingerprint,
+        issue_id=issue.issue_id,
+    )
+    expanded_clearance = DuplicateClearance._from_registry(
+        issue_id=issue.issue_id,
+        possible_duplicate=False,
+        cluster_members=(issue.issue_id, "z" * 64),
+        cluster_version_hash=expanded_decision.family_version_hash,
+        evidence_url=None,
+        family_id=expanded_decision.family_id,
+        family_version_hash=expanded_decision.family_version_hash,
+        family_decision_hash=expanded_decision.decision_hash,
+        token=_DUPLICATE_CLEARANCE_TOKEN,
+    )
+    expanded_issue = copy.copy(issue)
+    object.__setattr__(expanded_issue, "family_decision", expanded_decision)
+    object.__setattr__(expanded_issue, "duplicate_clearance", expanded_clearance)
+    expanded_stored = writer.persist_issue(
+        expanded_issue,
+        original_validation_ref=original_validation.reference,
+        final_validation_ref=final_validation.reference,
+        reproducer_ref=reproducer,
+    )
+    with pytest.raises(ValueError, match="durable registry resolution"):
+        verify_issue_hash_chain(store, expanded_stored.record)
 
 
 def test_unchanged_pair_cannot_promote_as_reduced_valid() -> None:

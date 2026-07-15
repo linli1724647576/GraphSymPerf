@@ -22,6 +22,12 @@ from graph_sym_perf.reducer.dependencies import analyze_query
 
 _FINGERPRINT_VERSION = "issue-fingerprint-v1"
 _FAMILY_VERSION = "issue-family-v1"
+_DURABLE_FAMILY_PROOF_SCHEMA = "durable-family-proof-v1"
+_DURABLE_FAMILY_PROOF_REF = {
+    "schema": _DURABLE_FAMILY_PROOF_SCHEMA,
+    "registry_rel": "issues/registry.jsonl",
+    "review_rel": "issues/dedup_review.jsonl",
+}
 _DECISION_TOKEN = object()
 _KNOWN_REGRESSION_TOKEN = object()
 _SUPPORTED_RELATIONSHIP_RE = re.compile(
@@ -262,6 +268,8 @@ class IssueFamilyDecision:
     is_new_family: bool
     family_members: tuple[tuple[str, str], ...]
     family_fingerprints: tuple[tuple[str, IssueFingerprint], ...]
+    member_count: int
+    member_proof_root: str
     family_version_hash: str
     decision_hash: str
     _active: bool
@@ -289,6 +297,8 @@ class IssueFamilyDecision:
         if token is not _DECISION_TOKEN:
             raise TypeError("IssueFamilyDecision can only be issued by IssueFamilyIndex")
         instance = object.__new__(cls)
+        member_proof_root = family_member_proof_root(family_fingerprints)
+        member_count = len(family_fingerprints)
         version_hash = _family_version_hash(
             family_id,
             family_members,
@@ -305,8 +315,8 @@ class IssueFamilyDecision:
             "known_regression_match": known_regression_match,
             "known_regression_case_id": known_regression_case_id,
             "is_new_family": is_new_family,
-            "family_members": family_members,
-            "family_fingerprints": family_fingerprints,
+            "member_count": member_count,
+            "member_proof_root": member_proof_root,
             "family_version_hash": version_hash,
         }
         for name, value in {
@@ -321,6 +331,8 @@ class IssueFamilyDecision:
             "is_new_family": is_new_family,
             "family_members": family_members,
             "family_fingerprints": family_fingerprints,
+            "member_count": member_count,
+            "member_proof_root": member_proof_root,
             "family_version_hash": version_hash,
             "decision_hash": _hash_payload("family-decision-v1", fields),
             "_active": True,
@@ -339,8 +351,8 @@ class IssueFamilyDecision:
             "known_regression_match": self.known_regression_match,
             "known_regression_case_id": self.known_regression_case_id,
             "is_new_family": self.is_new_family,
-            "family_members": self.family_members,
-            "family_fingerprints": self.family_fingerprints,
+            "member_count": self.member_count,
+            "member_proof_root": self.member_proof_root,
             "family_version_hash": self.family_version_hash,
         }
         known_invariants = (
@@ -391,6 +403,9 @@ class IssueFamilyDecision:
                 self.family_fingerprints,
                 self.known_regression_case_id,
             )
+            and self.member_count == len(self.family_fingerprints)
+            and self.member_proof_root
+            == family_member_proof_root(self.family_fingerprints)
             and self.decision_hash == _hash_payload("family-decision-v1", fields)
         )
 
@@ -773,11 +788,102 @@ def known_regression_signature_from_manifest(manifest_path: str | Path) -> Known
     )
 
 
+def compact_family_decision_payload(decision: IssueFamilyDecision) -> dict[str, object]:
+    """Serialize a family owner without copying every member's raw queries."""
+
+    if not isinstance(decision, IssueFamilyDecision) or not decision.verify():
+        raise ValueError("compact family proof requires a current family decision")
+    return {
+        "issue_id": decision.issue_id,
+        "owner_issue_id": decision.owner_issue_id,
+        "family_id": decision.family_id,
+        "fingerprint": decision.fingerprint.__dict__,
+        "match_kind": decision.match_kind.value,
+        "matched_issue_id": decision.matched_issue_id,
+        "known_regression_match": decision.known_regression_match,
+        "known_regression_case_id": decision.known_regression_case_id,
+        "is_new_family": decision.is_new_family,
+        "member_count": decision.member_count,
+        "member_proof_root": decision.member_proof_root,
+        "registry_proof_ref": dict(_DURABLE_FAMILY_PROOF_REF),
+        "family_version_hash": decision.family_version_hash,
+        "decision_hash": decision.decision_hash,
+    }
+
+
+def family_member_proof_root(
+    family_fingerprints: Iterable[tuple[str, IssueFingerprint]],
+) -> str:
+    """Bind compact descriptors while keeping each member's raw proof elsewhere."""
+
+    descriptors: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for issue_id, fingerprint in sorted(family_fingerprints, key=lambda item: item[0]):
+        if (
+            not isinstance(issue_id, str)
+            or not issue_id.strip()
+            or issue_id in seen
+            or not isinstance(fingerprint, IssueFingerprint)
+            or not fingerprint.verify()
+        ):
+            raise ValueError("family member proof is invalid or duplicated")
+        seen.add(issue_id)
+        descriptors.append(
+            {
+                "issue_id": issue_id,
+                "exact": fingerprint.exact,
+                "fingerprint_hash": fingerprint.fingerprint_hash,
+                "canonical_seed": _new_family_id(fingerprint),
+            }
+        )
+    if not descriptors:
+        raise ValueError("family member proof cannot be empty")
+    return _hash_payload("durable-family-member-root-v1", descriptors)
+
+
+def compact_family_proof_is_valid(
+    value: Mapping[str, object],
+    family_fingerprints: Iterable[tuple[str, IssueFingerprint]],
+) -> bool:
+    """Recompute a compact artifact snapshot from raw member fingerprints."""
+
+    try:
+        proof = tuple(sorted(family_fingerprints, key=lambda item: item[0]))
+        root = family_member_proof_root(proof)
+        owner_issue_id = str(value["owner_issue_id"])
+        family_id = str(value["family_id"])
+        serialized_fingerprint = value["fingerprint"]
+        if not isinstance(serialized_fingerprint, Mapping):
+            return False
+        fingerprint = next(
+            member_fingerprint
+            for member, member_fingerprint in proof
+            if member == owner_issue_id
+        )
+        expected_owner = min(
+            proof,
+            key=lambda item: (_new_family_id(item[1]), item[0]),
+        )[0]
+    except (KeyError, StopIteration, TypeError, ValueError):
+        return False
+    return bool(
+        len(proof) == value.get("member_count")
+        and root == value.get("member_proof_root")
+        and expected_owner == owner_issue_id
+        and family_id == min(_new_family_id(item[1]) for item in proof)
+        and fingerprint.verify()
+        and fingerprint.fingerprint_hash
+        == serialized_fingerprint.get("fingerprint_hash")
+    )
+
+
 def serialized_family_decision_is_valid(value: object) -> bool:
     """Rebuild every content-bound family field from a sealed artifact payload."""
 
     if not isinstance(value, Mapping):
         return False
+    if "family_members" not in value and "family_fingerprints" not in value:
+        return _serialized_compact_family_decision_is_valid(value)
     fingerprint_value = value.get("fingerprint")
     if not isinstance(fingerprint_value, Mapping):
         return False
@@ -847,6 +953,64 @@ def serialized_family_decision_is_valid(value: object) -> bool:
         and value.get("family_version_hash") == expected.family_version_hash
         and value.get("decision_hash") == expected.decision_hash
         and expected.verify()
+    )
+
+
+def _serialized_compact_family_decision_is_valid(value: Mapping[str, object]) -> bool:
+    fingerprint_value = value.get("fingerprint")
+    if not isinstance(fingerprint_value, Mapping):
+        return False
+    try:
+        fingerprint_fields = dict(fingerprint_value)
+        normalized_pair = fingerprint_fields.get("normalized_pair")
+        if normalized_pair is not None:
+            fingerprint_fields["normalized_pair"] = tuple(normalized_pair)
+        fingerprint = IssueFingerprint(**fingerprint_fields)
+        issue_id = str(value["issue_id"])
+        family_id = str(value["family_id"])
+        member_count = value["member_count"]
+        member_proof_root = str(value["member_proof_root"])
+        proof_ref = value["registry_proof_ref"]
+        family_version_hash = _compact_family_version_hash(
+            family_id,
+            member_count,
+            member_proof_root,
+            None,
+        )
+        fields = {
+            "issue_id": issue_id,
+            "owner_issue_id": value.get("owner_issue_id"),
+            "family_id": family_id,
+            "fingerprint_hash": fingerprint.fingerprint_hash,
+            "match_kind": value.get("match_kind"),
+            "matched_issue_id": value.get("matched_issue_id"),
+            "known_regression_match": value.get("known_regression_match"),
+            "known_regression_case_id": value.get("known_regression_case_id"),
+            "is_new_family": value.get("is_new_family"),
+            "member_count": member_count,
+            "member_proof_root": member_proof_root,
+            "family_version_hash": family_version_hash,
+        }
+    except (KeyError, TypeError, ValueError):
+        return False
+    return bool(
+        fingerprint.verify()
+        and isinstance(member_count, int)
+        and not isinstance(member_count, bool)
+        and member_count >= 1
+        and re.fullmatch(r"[0-9a-f]{64}", member_proof_root) is not None
+        and isinstance(proof_ref, Mapping)
+        and dict(proof_ref) == _DURABLE_FAMILY_PROOF_REF
+        and value.get("owner_issue_id") == issue_id
+        and value.get("match_kind") == FamilyMatchKind.FRESH.value
+        and value.get("matched_issue_id") is None
+        and value.get("known_regression_match") is False
+        and value.get("known_regression_case_id") is None
+        and value.get("is_new_family") is True
+        and family_id == _new_family_id(fingerprint)
+        and value.get("family_version_hash") == family_version_hash
+        and value.get("decision_hash")
+        == _hash_payload("family-decision-v1", fields)
     )
 
 
@@ -1173,12 +1337,26 @@ def _family_version_hash(
     fingerprints: tuple[tuple[str, IssueFingerprint], ...],
     known_case_id: str | None,
 ) -> str:
+    return _compact_family_version_hash(
+        family_id,
+        len(fingerprints),
+        family_member_proof_root(fingerprints),
+        known_case_id,
+    )
+
+
+def _compact_family_version_hash(
+    family_id: str | None,
+    member_count: int,
+    member_proof_root: str,
+    known_case_id: str | None,
+) -> str:
     return _hash_payload(
-        "issue-family-members-v1",
+        "issue-family-members-v2",
         {
             "family_id": family_id,
-            "members": members,
-            "fingerprints": fingerprints,
+            "member_count": member_count,
+            "member_proof_root": member_proof_root,
             "known_regression_case_id": known_case_id,
         },
     )
@@ -1206,6 +1384,9 @@ __all__ = [
     "KnownRegressionSignature",
     "fingerprint_issue",
     "fingerprint_validated_reduction",
+    "compact_family_decision_payload",
+    "compact_family_proof_is_valid",
+    "family_member_proof_root",
     "known_regression_signature_from_manifest",
     "serialized_family_decision_is_valid",
 ]

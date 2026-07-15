@@ -409,6 +409,36 @@ def test_failed_final_independent_validation_invalidates_reduction() -> None:
     assert report.reduced_candidate_hash == report.final_validation.candidate_hash
 
 
+def test_conclusive_fast_screen_loss_invalidates_without_final_validation() -> None:
+    class LostSymptomScreen(OrdinaryFivePairScreen):
+        def evaluate(self, pair: EquivalentQueryPair) -> RuntimeEvidence:
+            evidence = super().evaluate(pair)
+            samples = tuple(
+                PairedSample(order, 10.0, 10.0)
+                for order in ("AB", "BA", "AB", "BA", "AB")
+            )
+            return replace(
+                evidence,
+                paired_samples=samples,
+                median_ratio=1.0,
+                median_delta_ms=0.0,
+                ci_ratio_low=1.0,
+                ci_ratio_high=1.0,
+                direction_consistency=0.0,
+                reason_codes=(),
+            )
+
+    final = FinalIssueValidator()
+    report = CandidateReducer(max_attempts=500).reduce(
+        _bundle(screen=LostSymptomScreen(), final=final)
+    )
+
+    assert report.status is ReductionStatus.REDUCTION_INVALIDATED
+    assert report.final_validation is None
+    assert report.stop_reason == "final_runtime_failed"
+    assert final.candidates == []
+
+
 def test_explicit_final_typed_equivalence_mismatch_invalidates_reduction() -> None:
     class MismatchRunner(IndependentRunner):
         def run_session(self, candidate, session_number, **kwargs):

@@ -394,14 +394,22 @@ def test_nonvalid_final_validation_enters_candidate_outcome_and_reduction_summar
         verify_candidate_outcome_validation_chain(store, forged)
 
 
-def test_partial_without_final_validation_uses_explicit_no_final_provenance_schema(
+@pytest.mark.parametrize(
+    "terminal_status",
+    (
+        ReductionStatus.REDUCTION_PARTIAL,
+        ReductionStatus.REDUCTION_INVALIDATED,
+    ),
+)
+def test_no_final_validation_uses_explicit_terminal_provenance_schema_and_resumes(
     monkeypatch,
     tmp_path,
+    terminal_status,
 ) -> None:
     original_validation = _report()
     candidate = _candidate_for_report(original_validation)
     reduction = replace(
-        _reduction(status=ReductionStatus.REDUCTION_PARTIAL),
+        _reduction(status=terminal_status),
         final_validation=None,
         screen_evidence=None,
         original_validation_hash="",
@@ -470,10 +478,30 @@ def test_partial_without_final_validation_uses_explicit_no_final_provenance_sche
         "original_validation_ref",
         "reduced_validation_ref",
     }
-    assert reduction_outcome["status"] == "reduction_partial"
+    assert reduction_outcome["status"] == terminal_status.value
     assert not provenance_fields.intersection(reduction_outcome)
     assert not provenance_fields.intersection(summary)
     verify_candidate_outcome_validation_chain(store, outcome)
+
+    # Exercise the exact disk -> worker terminal-resume path, not only the
+    # lower-level provenance helper.
+    from graph_sym_perf.experiment.worker import _load_terminal_candidate_outcome
+
+    durable_outcome = {
+        **outcome,
+        "candidate_ref": candidate_ref.__dict__,
+        "pair_hash": "p" * 64,
+    }
+    outcome_path = tmp_path / "candidate-outcome.json"
+    outcome_path.write_text(json.dumps(durable_outcome), encoding="utf-8")
+    resumed = _load_terminal_candidate_outcome(
+        outcome_path,
+        store=store,
+        candidate_hash=candidate.candidate_hash,
+        candidate_ref=candidate_ref,
+    )
+    assert resumed["reduction"]["status"] == terminal_status.value
+    assert resumed["reduction"]["promotion"] == "not_applicable"
 
     forged = copy.deepcopy(outcome)
     forged["reduction"]["original_validation_hash"] = "0" * 64

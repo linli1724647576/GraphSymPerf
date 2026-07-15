@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import TYPE_CHECKING
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
 
@@ -490,9 +491,76 @@ def _duplicate_signature(fields: Mapping[str, object]) -> str:
     ).hexdigest()
 
 
+def compact_cluster_members_root(members: Iterable[str]) -> str:
+    frozen = tuple(sorted(str(member) for member in members))
+    if not frozen or len(set(frozen)) != len(frozen) or any(not member for member in frozen):
+        raise ValueError("duplicate cluster members must be unique and non-empty")
+    return hashlib.sha256(
+        ("graph-sym-perf-duplicate-cluster-v1\0" + stable_json_dumps(frozen)).encode("utf-8")
+    ).hexdigest()
+
+
+def compact_duplicate_clearance_payload(clearance: DuplicateClearance) -> dict[str, object]:
+    """Serialize formal family clearance without repeating the member list."""
+
+    if not isinstance(clearance, DuplicateClearance) or not clearance.verify():
+        raise ValueError("compact duplicate clearance requires a current credential")
+    fields = {
+        "issue_id": clearance.issue_id,
+        "possible_duplicate": clearance.possible_duplicate,
+        "cluster_member_count": len(clearance.cluster_members),
+        "cluster_members_root": compact_cluster_members_root(clearance.cluster_members),
+        "cluster_version_hash": clearance.cluster_version_hash,
+        "evidence_url": clearance.evidence_url,
+        "family_id": clearance.family_id,
+        "family_version_hash": clearance.family_version_hash,
+        "family_decision_hash": clearance.family_decision_hash,
+    }
+    return {
+        **fields,
+        "registry_signature": hashlib.sha256(
+            ("graph-sym-perf-duplicate-clearance-v2\0" + stable_json_dumps(fields)).encode("utf-8")
+        ).hexdigest(),
+    }
+
+
 def serialized_duplicate_clearance_is_valid(value: object) -> bool:
     if not isinstance(value, Mapping):
         return False
+    if "cluster_members" not in value:
+        try:
+            fields = {
+                "issue_id": str(value["issue_id"]),
+                "possible_duplicate": value["possible_duplicate"],
+                "cluster_member_count": value["cluster_member_count"],
+                "cluster_members_root": str(value["cluster_members_root"]),
+                "cluster_version_hash": str(value["cluster_version_hash"]),
+                "evidence_url": value["evidence_url"],
+                "family_id": value["family_id"],
+                "family_version_hash": str(value["family_version_hash"]),
+                "family_decision_hash": str(value["family_decision_hash"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            return False
+        expected = hashlib.sha256(
+            ("graph-sym-perf-duplicate-clearance-v2\0" + stable_json_dumps(fields)).encode("utf-8")
+        ).hexdigest()
+        return bool(
+            isinstance(fields["possible_duplicate"], bool)
+            and isinstance(fields["cluster_member_count"], int)
+            and not isinstance(fields["cluster_member_count"], bool)
+            and fields["cluster_member_count"] >= 1
+            and re.fullmatch(r"[0-9a-f]{64}", fields["cluster_members_root"])
+            and value.get("registry_signature") == expected
+            and fields["family_id"]
+            and fields["family_version_hash"]
+            and fields["family_decision_hash"]
+            and (
+                not fields["possible_duplicate"]
+                or isinstance(fields["evidence_url"], str)
+                and bool(fields["evidence_url"].strip())
+            )
+        )
     try:
         members = tuple(sorted(str(member) for member in value["cluster_members"]))
         fields = {

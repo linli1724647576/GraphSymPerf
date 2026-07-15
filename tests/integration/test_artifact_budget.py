@@ -32,11 +32,14 @@ from graph_sym_perf.issues.dedup import (
     FingerprintSubject,
     IssueFamilyIndex,
     _family_version_hash,
+    _compact_family_version_hash,
     _fingerprint_hash,
     _hash_payload as _dedup_hash_payload,
     _new_family_id,
     _structural_signature,
+    family_member_proof_root,
     fingerprint_issue,
+    serialized_family_decision_is_valid,
 )
 from graph_sym_perf.issues.registry import IssueRegistry
 from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
@@ -52,6 +55,8 @@ from graph_sym_perf.validation.models import (
     canonical_content_hash,
     canonical_validation_provenance_hash,
     _duplicate_signature,
+    compact_cluster_members_root,
+    serialized_duplicate_clearance_is_valid,
 )
 
 
@@ -649,12 +654,14 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     forged_family_id = _new_family_id(forged_fingerprint)
     forged_members = (("issue-1", forged_fingerprint.exact),)
     forged_fingerprints = (("issue-1", forged_fingerprint),)
-    forged_family_version = _family_version_hash(
-        forged_family_id,
-        forged_members,
-        forged_fingerprints,
-        None,
-    )
+    with pytest.raises(ValueError, match="family member proof"):
+        _family_version_hash(
+            forged_family_id,
+            forged_members,
+            forged_fingerprints,
+            None,
+        )
+    forged_family_version = "f" * 64
     forged_decision_fields = {
         "issue_id": "issue-1",
         "owner_issue_id": "issue-1",
@@ -1151,8 +1158,16 @@ def test_issue_artifact_resolves_original_reduction_and_final_validation_hash_ch
     assert renewed_issue.payload["final_validation_ref"] == pattern_validation_ref
     assert renewed_issue.payload["original_validation_hash"] == original_validation_hash
     assert renewed_issue.payload["reduced_validation_hash"] == pattern_validation.payload["report_hash"]
+    assert "family_members" not in renewed_issue.payload["family_decision"]
+    assert "family_fingerprints" not in renewed_issue.payload["family_decision"]
+    assert renewed_issue.payload["family_decision"]["member_count"] == 3
+    assert "cluster_members" not in renewed_issue.payload["duplicate_clearance"]
+    verify_issue_hash_chain(store, renewed_issue, run_dir=run_dir)
     assert not durable_family_payload_is_current(run_dir / "issues", old_issue_payload)
-    assert len((run_dir / "issues" / "family_unions.jsonl").read_text().splitlines()) == 1
+    union_audit = (run_dir / "issues" / "family_unions.jsonl").read_text()
+    assert len(union_audit.splitlines()) == 1
+    assert pattern_a not in union_audit
+    assert renamed_a not in union_audit
 
     for path, payload in original_files.items():
         path.write_bytes(payload)
@@ -1471,3 +1486,180 @@ def test_complete_one_thousand_accepted_pair_worker_shard_stays_below_500_mb(tmp
     assert result["acceptance_status"] == "complete"
     assert len((shard / "accepted_pairs.jsonl").read_text().splitlines()) == 1000
     assert sum(path.stat().st_size for path in shard.rglob("*") if path.is_file()) <= 500 * 1024 * 1024
+
+
+def test_one_thousand_member_compact_family_growth_is_bounded_and_near_linear(
+    tmp_path,
+) -> None:
+    fingerprints = tuple(
+        fingerprint_issue(
+            FingerprintSubject(
+                dbms="neo4j",
+                dbms_version="dbms/1",
+                dbms_fingerprint="c" * 64,
+                graph_snapshot_hash="1" * 64,
+                canonical_rule_id="pattern_order_symmetry",
+                reduced_query_a=(
+                    f"MATCH (a:Person {{age: {index}}}), (b:City) RETURN a, b"
+                ),
+                reduced_query_b=(
+                    f"MATCH (b:City), (a:Person {{age: {index}}}) RETURN a, b"
+                ),
+                runtime_direction="b",
+                site_class="match_pattern_component",
+                submission_path="relative",
+                reduced_validation_phenotype="relative:stable:b",
+            )
+        )
+        for index in range(1000)
+    )
+    assert len({fingerprint.structural for fingerprint in fingerprints}) == 1
+    proof = tuple(
+        (f"issue-{index:04d}", fingerprint)
+        for index, fingerprint in enumerate(fingerprints)
+    )
+    family_root = family_member_proof_root(proof)
+    family_id = min(_new_family_id(fingerprint) for fingerprint in fingerprints)
+    owner_issue_id, owner_fingerprint = min(
+        proof,
+        key=lambda item: (_new_family_id(item[1]), item[0]),
+    )
+
+    durable_records = tuple(
+        {
+            "issue_id": issue_id,
+            "family_id": family_id,
+            "owner_issue_id": owner_issue_id,
+            "reduced_query_a": fingerprint.reduced_query_a,
+            "reduced_query_b": fingerprint.reduced_query_b,
+            "exact_signature": fingerprint.exact,
+            "structural_signature": fingerprint.structural,
+            "fingerprint_hash": fingerprint.fingerprint_hash,
+        }
+        for issue_id, fingerprint in proof
+    )
+    registry_review_raw_bytes = sum(
+        len(stable_json_dumps(record).encode("utf-8")) + 1
+        for record in durable_records
+    )
+
+    store = ContentAddressedStore(
+        tmp_path / "family-cas",
+        budget_bytes=500 * 1024 * 1024,
+    )
+    before_cas_bytes = sum(
+        path.stat().st_size for path in store.root.rglob("*") if path.is_file()
+    )
+    owner_payload_sizes: list[int] = []
+    serialized_versions: list[bytes] = []
+    descriptors: list[dict[str, object]] = []
+    for member_count, (member_id, member_fingerprint) in enumerate(proof, start=1):
+        descriptors.append(
+            {
+                "issue_id": member_id,
+                "exact": member_fingerprint.exact,
+                "fingerprint_hash": member_fingerprint.fingerprint_hash,
+                "canonical_seed": _new_family_id(member_fingerprint),
+            }
+        )
+        member_proof_root = _dedup_hash_payload(
+            "durable-family-member-root-v1",
+            descriptors,
+        )
+        family_version_hash = _compact_family_version_hash(
+            family_id,
+            member_count,
+            member_proof_root,
+            None,
+        )
+        decision_fields = {
+            "issue_id": owner_issue_id,
+            "owner_issue_id": owner_issue_id,
+            "family_id": family_id,
+            "fingerprint_hash": owner_fingerprint.fingerprint_hash,
+            "match_kind": "fresh",
+            "matched_issue_id": None,
+            "known_regression_match": False,
+            "known_regression_case_id": None,
+            "is_new_family": True,
+            "member_count": member_count,
+            "member_proof_root": member_proof_root,
+            "family_version_hash": family_version_hash,
+        }
+        family_payload = {
+            "issue_id": owner_issue_id,
+            "owner_issue_id": owner_issue_id,
+            "family_id": family_id,
+            "fingerprint": asdict(owner_fingerprint),
+            "match_kind": "fresh",
+            "matched_issue_id": None,
+            "known_regression_match": False,
+            "known_regression_case_id": None,
+            "is_new_family": True,
+            "member_count": member_count,
+            "member_proof_root": member_proof_root,
+            "registry_proof_ref": {
+                "schema": "durable-family-proof-v1",
+                "registry_rel": "issues/registry.jsonl",
+                "review_rel": "issues/dedup_review.jsonl",
+            },
+            "family_version_hash": family_version_hash,
+            "decision_hash": _dedup_hash_payload(
+                "family-decision-v1",
+                decision_fields,
+            ),
+        }
+        clearance_fields = {
+            "issue_id": owner_issue_id,
+            "possible_duplicate": False,
+            "cluster_member_count": member_count,
+            "cluster_members_root": compact_cluster_members_root(
+                member for member, _fingerprint in proof[:member_count]
+            ),
+            "cluster_version_hash": family_version_hash,
+            "evidence_url": None,
+            "family_id": family_id,
+            "family_version_hash": family_version_hash,
+            "family_decision_hash": family_payload["decision_hash"],
+        }
+        clearance_payload = {
+            **clearance_fields,
+            "registry_signature": hashlib.sha256(
+                (
+                    "graph-sym-perf-duplicate-clearance-v2\0"
+                    + stable_json_dumps(clearance_fields)
+                ).encode("utf-8")
+            ).hexdigest(),
+        }
+        assert serialized_family_decision_is_valid(family_payload)
+        assert serialized_duplicate_clearance_is_valid(clearance_payload)
+        # Every immutable owner version carries only the owner's standalone raw
+        # proof and constant-size rolling roots/refs, never the N member raws.
+        version_payload = {
+            "family_decision": family_payload,
+            "duplicate_clearance": clearance_payload,
+        }
+        encoded = stable_json_dumps(version_payload).encode("utf-8")
+        serialized_versions.append(encoded)
+        owner_payload_sizes.append(len(encoded))
+        store.put_json(f"owner-family-version-{member_count}", version_payload)
+    after_cas_bytes = sum(
+        path.stat().st_size for path in store.root.rglob("*") if path.is_file()
+    )
+    cas_new_bytes = after_cas_bytes - before_cas_bytes
+    max_owner_artifact_payload_bytes = max(owner_payload_sizes)
+    compact_union_audit_upper_bound = 1000 * 2048
+    total_storage_upper_bound = (
+        registry_review_raw_bytes
+        + cas_new_bytes
+        + compact_union_audit_upper_bound
+    )
+
+    assert family_payload["member_proof_root"] == family_root
+    assert fingerprints[-1].reduced_query_a.encode("utf-8") not in b"\n".join(
+        serialized_versions
+    )
+    assert max_owner_artifact_payload_bytes < 16 * 1024
+    assert registry_review_raw_bytes < 2 * 1024 * 1024
+    assert cas_new_bytes < 16 * 1024 * 1024
+    assert total_storage_upper_bound < 500 * 1024 * 1024

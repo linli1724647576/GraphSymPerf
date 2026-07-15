@@ -22,6 +22,9 @@ from graph_sym_perf.issues.dedup import (
     fingerprint_issue,
     fingerprint_validated_reduction,
     known_regression_signature_from_manifest,
+    compact_family_decision_payload,
+    compact_family_proof_is_valid,
+    family_member_proof_root,
 )
 from graph_sym_perf.issues.registry import IssueRegistry
 from graph_sym_perf.validation.models import (
@@ -31,9 +34,16 @@ from graph_sym_perf.validation.models import (
     canonical_content_hash,
     canonical_validation_report_hash,
     canonical_validation_provenance_hash,
+    compact_cluster_members_root,
+    compact_duplicate_clearance_payload,
 )
 from graph_sym_perf.validation.promotion import deterministic_issue_id
 from graph_sym_perf.validation.promotion import promote
+
+
+MAX_FAMILY_MEMBERS = 4096
+MAX_MEMBER_RAW_QUERY_BYTES = 64 * 1024
+MAX_COMPACT_FAMILY_PAYLOAD_BYTES = 16 * 1024
 
 
 def promote_unique_issue(
@@ -71,8 +81,8 @@ def promote_unique_issue(
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         _recover_family_transaction(root_path)
         _validate_known_diagnostics(known_path)
+        _validate_family_overflow_diagnostics(root_path / "family_overflow.jsonl")
         records = _load_records(registry_path, review_path)
-        index = _replay_family_index(records, known_regressions=known)
         existing_ids = {item.issue_id for item in records}
         existing_owner = next(
             (
@@ -83,16 +93,17 @@ def promote_unique_issue(
             None,
         )
         if existing_owner is not None:
+            index = _replay_family_index(records, known_regressions=known)
             index.reissue_owner(fingerprint, issue_id=issue_id)
             if _recover_owner_terminal_unlocked(root_path, existing_owner):
                 return None, "owner_already_committed"
             return None, "owner_terminal_evidence_unavailable"
-        decision = (
-            index.reissue_owner(fingerprint, issue_id=issue_id)
-            if existing_owner is not None
-            else index.add(fingerprint, issue_id=issue_id)
-        )
-        if decision.known_regression_match:
+        known_match = next((signature for signature in known if signature.matches(fingerprint)), None)
+        if known_match is not None:
+            decision = IssueFamilyIndex(known_regressions=known).add(
+                fingerprint,
+                issue_id=issue_id,
+            )
             diagnostic = {
                 "case_id": decision.known_regression_case_id,
                 "decision_hash": decision.decision_hash,
@@ -109,6 +120,71 @@ def promote_unique_issue(
                 },
             )
             return None, "known_regression_excluded"
+        raw_query_bytes = len(fingerprint.reduced_query_a.encode("utf-8")) + len(
+            fingerprint.reduced_query_b.encode("utf-8")
+        )
+        matched_family_ids, prospective_count = _prospective_family_size(
+            records,
+            fingerprint,
+            issue_id=issue_id,
+        )
+        compact_projection_bytes = len(
+            stable_json_dumps(
+                {
+                    "member_count": prospective_count,
+                    "member_proof_root": "f" * 64,
+                    "registry_proof_ref": {
+                        "schema": "durable-family-proof-v1",
+                        "registry_rel": "issues/registry.jsonl",
+                        "review_rel": "issues/dedup_review.jsonl",
+                    },
+                }
+            ).encode("utf-8")
+        )
+        budget_failure = next(
+            (
+                failure
+                for failure in (
+                    (
+                        "member_raw_query_bytes",
+                        MAX_MEMBER_RAW_QUERY_BYTES,
+                        raw_query_bytes,
+                    )
+                    if raw_query_bytes > MAX_MEMBER_RAW_QUERY_BYTES
+                    else None,
+                    ("family_member_count", MAX_FAMILY_MEMBERS, prospective_count)
+                    if prospective_count > MAX_FAMILY_MEMBERS
+                    else None,
+                    (
+                        "compact_family_payload_bytes",
+                        MAX_COMPACT_FAMILY_PAYLOAD_BYTES,
+                        compact_projection_bytes,
+                    )
+                    if compact_projection_bytes > MAX_COMPACT_FAMILY_PAYLOAD_BYTES
+                    else None,
+                )
+                if failure is not None
+            ),
+            None,
+        )
+        if budget_failure is not None:
+            reason, limit, observed = budget_failure
+            _append_family_overflow_once(
+                root_path / "family_overflow.jsonl",
+                issue_id=issue_id,
+                family_id=min(matched_family_ids) if matched_family_ids else None,
+                fingerprint_hash=fingerprint.fingerprint_hash,
+                reason=reason,
+                limit=limit,
+                observed=observed,
+            )
+            return None, "family_budget_exceeded"
+        index = _replay_family_index(records, known_regressions=known)
+        decision = (
+            index.reissue_owner(fingerprint, issue_id=issue_id)
+            if existing_owner is not None
+            else index.add(fingerprint, issue_id=issue_id)
+        )
         record = _record(
             issue_id,
             validation,
@@ -208,7 +284,17 @@ def promote_unique_issue(
         else:
             _append_record(registry_path, committed)
             status = "unique_family"
+        _verify_owner_materialization_against_durable(
+            root_path,
+            committed,
+            require_commit=False,
+        )
         _write_commit(root_path, committed, materialized)
+        _verify_owner_materialization_against_durable(
+            root_path,
+            committed,
+            require_commit=True,
+        )
         return issue, status
 
 
@@ -306,6 +392,11 @@ def _recover_owner_terminal_unlocked(
     except FileNotFoundError:
         return False
     _write_commit(root, record, receipt)
+    _verify_owner_materialization_against_durable(
+        root,
+        record,
+        require_commit=True,
+    )
     return True
 
 
@@ -351,7 +442,7 @@ def _load_owner_evidence_unlocked(
         raise ValueError("family owner receipt escapes the run directory")
     store = ContentAddressedStore(store_path, budget_bytes=(1 << 63) - 1)
     issue_record = load_artifact_record(store, receipt["issue_ref"])
-    verify_issue_hash_chain(store, issue_record)
+    verify_issue_hash_chain(store, issue_record, run_dir=run_dir)
     payload = issue_record.payload
     family = payload.get("family_decision")
     if (
@@ -372,6 +463,22 @@ def _load_owner_evidence_unlocked(
     if hashlib.sha256(export_path.read_bytes()).hexdigest() != receipt["export_sha256"]:
         raise ValueError("committed family owner export is stale")
     return receipt, issue_record, store, export_path
+
+
+def _verify_owner_materialization_against_durable(
+    root: Path,
+    record: VersionedIssueRecord,
+    *,
+    require_commit: bool,
+) -> None:
+    """Require the materialized artifact to replay from durable family records."""
+
+    _load_owner_evidence_unlocked(
+        root,
+        record,
+        require_current_family=True,
+        require_commit=require_commit,
+    )
 
 
 def _renew_current_family_owner_unlocked(
@@ -426,35 +533,8 @@ def _renew_current_family_owner_unlocked(
         asdict(current.fingerprint)
     ):
         raise ValueError("family renewal cannot replace owner fingerprint")
-    family_payload = {
-        "issue_id": current.issue_id,
-        "owner_issue_id": current.owner_issue_id,
-        "family_id": current.family_id,
-        "fingerprint": asdict(current.fingerprint),
-        "match_kind": current.match_kind.value,
-        "matched_issue_id": current.matched_issue_id,
-        "known_regression_match": current.known_regression_match,
-        "known_regression_case_id": current.known_regression_case_id,
-        "is_new_family": current.is_new_family,
-        "family_members": current.family_members,
-        "family_fingerprints": tuple(
-            (member, asdict(fingerprint))
-            for member, fingerprint in current.family_fingerprints
-        ),
-        "family_version_hash": current.family_version_hash,
-        "decision_hash": current.decision_hash,
-    }
-    clearance_payload = {
-        "issue_id": clearance.issue_id,
-        "possible_duplicate": clearance.possible_duplicate,
-        "cluster_members": clearance.cluster_members,
-        "cluster_version_hash": clearance.cluster_version_hash,
-        "evidence_url": clearance.evidence_url,
-        "registry_signature": clearance.registry_signature,
-        "family_id": clearance.family_id,
-        "family_version_hash": clearance.family_version_hash,
-        "family_decision_hash": clearance.family_decision_hash,
-    }
+    family_payload = compact_family_decision_payload(current)
+    clearance_payload = compact_duplicate_clearance_payload(clearance)
     old_payload.pop("issue_hash", None)
     renewed = ArtifactRecord.seal_issue(
         {
@@ -464,7 +544,7 @@ def _renew_current_family_owner_unlocked(
             "duplicate_clearance": clearance_payload,
         }
     )
-    verify_issue_hash_chain(store, renewed)
+    verify_issue_hash_chain(store, renewed, run_dir=root.parent)
     issue_ref = store.put_json(f"issue-{owner_issue_id}.json", renewed.to_dict())
     fingerprint = family_payload["fingerprint"]
     certificate = renewed.payload.get("certificate")
@@ -501,6 +581,12 @@ def _renew_current_family_owner_unlocked(
     }
     _write_json_atomic(root / "index" / f"{owner_issue_id}.json", receipt)
     _write_commit(root, owner_record, receipt)
+    _load_owner_evidence_unlocked(
+        root,
+        owner_record,
+        require_current_family=True,
+        require_commit=True,
+    )
     return True
 
 
@@ -613,7 +699,9 @@ def _durable_family_payload_is_current_unlocked(
         current, current_clearance = _replay_family_owner(root, str(issue_id))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return False
-    expected_family = {
+    expected_family = compact_family_decision_payload(current)
+    expected_clearance = compact_duplicate_clearance_payload(current_clearance)
+    legacy_family = {
         "issue_id": current.issue_id,
         "owner_issue_id": current.owner_issue_id,
         "family_id": current.family_id,
@@ -631,7 +719,7 @@ def _durable_family_payload_is_current_unlocked(
         "family_version_hash": current.family_version_hash,
         "decision_hash": current.decision_hash,
     }
-    expected_clearance = {
+    legacy_clearance = {
         "issue_id": current_clearance.issue_id,
         "possible_duplicate": current_clearance.possible_duplicate,
         "cluster_members": current_clearance.cluster_members,
@@ -642,10 +730,16 @@ def _durable_family_payload_is_current_unlocked(
         "family_version_hash": current_clearance.family_version_hash,
         "family_decision_hash": current_clearance.family_decision_hash,
     }
+    supplied_family = stable_json_dumps(dict(family))
+    supplied_clearance = stable_json_dumps(dict(clearance))
     return bool(
         issue_payload.get("family_id") == current.family_id
-        and stable_json_dumps(dict(family)) == stable_json_dumps(expected_family)
-        and stable_json_dumps(dict(clearance)) == stable_json_dumps(expected_clearance)
+        and (
+            supplied_family == stable_json_dumps(expected_family)
+            and supplied_clearance == stable_json_dumps(expected_clearance)
+            or supplied_family == stable_json_dumps(legacy_family)
+            and supplied_clearance == stable_json_dumps(legacy_clearance)
+        )
     )
 
 
@@ -669,6 +763,93 @@ def _replay_family_owner(root: Path, issue_id: str) -> tuple[object, object]:
         family_records,
     )
     return current, current_clearance
+
+
+def verify_durable_family_artifact_proof(
+    root: str | Path,
+    family_payload: Mapping[str, object],
+    clearance_payload: Mapping[str, object],
+) -> None:
+    """Resolve compact refs and recompute every member from durable raw queries."""
+
+    root_path = Path(root)
+    run_dir = root_path.parent
+    proof_ref = family_payload.get("registry_proof_ref")
+    if not isinstance(proof_ref, Mapping) or proof_ref.get("schema") != "durable-family-proof-v1":
+        raise ValueError("durable family proof reference is invalid")
+    registry_path = _resolve_family_proof_ref(
+        run_dir,
+        proof_ref.get("registry_rel"),
+        expected=root_path / "registry.jsonl",
+    )
+    review_path = _resolve_family_proof_ref(
+        run_dir,
+        proof_ref.get("review_rel"),
+        expected=root_path / "dedup_review.jsonl",
+    )
+    records = _load_records(registry_path, review_path)
+    index = _replay_family_index(records)
+    owner_id = str(family_payload.get("owner_issue_id", ""))
+    owner_record = next(
+        (
+            record
+            for record in records
+            if record.issue_id == owner_id and record.stage is PipelineStage.SUBMIT_READY
+        ),
+        None,
+    )
+    if owner_record is None:
+        raise ValueError("durable family proof owner is missing")
+    current = index.reissue_owner(_record_fingerprint(owner_record), issue_id=owner_id)
+    family_records = tuple(
+        record for record in records if record.family_id == current.family_id
+    )
+    proof = tuple(
+        sorted(
+            (record.issue_id, _record_fingerprint(record))
+            for record in family_records
+        )
+    )
+    current_clearance = IssueRegistry().duplicate_clearance_for_family(
+        current,
+        family_records,
+    )
+    if (
+        not compact_family_proof_is_valid(family_payload, proof)
+        or stable_json_dumps(dict(family_payload))
+        != stable_json_dumps(compact_family_decision_payload(current))
+        or stable_json_dumps(dict(clearance_payload))
+        != stable_json_dumps(compact_duplicate_clearance_payload(current_clearance))
+    ):
+        raise ValueError("durable family proof does not match the compact artifact")
+
+
+def _resolve_family_proof_ref(
+    run_dir: Path,
+    relative_value: object,
+    *,
+    expected: Path,
+) -> Path:
+    if not isinstance(relative_value, str):
+        raise ValueError("durable family proof path is unavailable")
+    relative = Path(relative_value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("durable family proof path escapes the run directory")
+    run_resolved = run_dir.resolve()
+    candidate = run_dir / relative
+    cursor = run_dir
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError("durable family proof path cannot traverse a symlink")
+    resolved = candidate.resolve()
+    if (
+        resolved != expected.resolve()
+        or resolved == run_resolved
+        or run_resolved not in resolved.parents
+    ):
+        raise ValueError("durable family proof path is outside the expected registry")
+    return resolved
 
 
 def _replay_family_index(
@@ -771,6 +952,81 @@ def _validate_known_diagnostics(path: Path) -> None:
                 != _hash_payload("known-regression-diagnostic-v1", payload)
             ):
                 raise ValueError("known regression diagnostic provenance is invalid")
+
+
+def _prospective_family_size(
+    records: tuple[VersionedIssueRecord, ...],
+    fingerprint: IssueFingerprint,
+    *,
+    issue_id: str,
+) -> tuple[set[str], int]:
+    """Read-only budget preflight before constructing or mutating an index."""
+
+    matched_family_ids: set[str] = set()
+    for record in records:
+        existing = _record_fingerprint(record)
+        if existing.exact == fingerprint.exact or (
+            fingerprint.structural is not None
+            and existing.structural == fingerprint.structural
+            and existing.submission_path == fingerprint.submission_path
+            and existing.reduced_validation_phenotype
+            == fingerprint.reduced_validation_phenotype
+        ):
+            matched_family_ids.add(record.family_id)
+    existing_members = {
+        record.issue_id
+        for record in records
+        if record.family_id in matched_family_ids
+    }
+    prospective_count = len(existing_members | {issue_id})
+    return matched_family_ids, prospective_count
+
+
+def _validate_family_overflow_diagnostics(path: Path) -> None:
+    if not path.is_file():
+        return
+    seen: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        value = json.loads(line)
+        if not isinstance(value, dict):
+            raise ValueError("family overflow diagnostic must be an object")
+        diagnostic_hash = value.pop("diagnostic_hash", None)
+        expected = _hash_payload("family-overflow-diagnostic-v1", value)
+        if diagnostic_hash != expected or diagnostic_hash in seen:
+            raise ValueError("family overflow diagnostic hash is invalid or duplicated")
+        seen.add(str(diagnostic_hash))
+
+
+def _append_family_overflow_once(
+    path: Path,
+    *,
+    issue_id: str,
+    family_id: str | None,
+    fingerprint_hash: str,
+    reason: str,
+    limit: int,
+    observed: int,
+) -> None:
+    body: dict[str, object] = {
+        "family_id": family_id,
+        "fingerprint_hash": fingerprint_hash,
+        "issue_id": issue_id,
+        "limit": limit,
+        "observed": observed,
+        "reason": reason,
+    }
+    diagnostic_hash = _hash_payload("family-overflow-diagnostic-v1", body)
+    existing: list[object] = []
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            value = json.loads(line)
+            if value.get("diagnostic_hash") == diagnostic_hash:
+                return
+            existing.append(value)
+    _write_payload_lines_atomic(
+        path,
+        [*existing, {**body, "diagnostic_hash": diagnostic_hash}],
+    )
 
 
 def _validation_provenance_is_intact(payload: Mapping[str, object]) -> bool:
@@ -1038,8 +1294,16 @@ def _commit_family_transaction(
     audit = {
         "family_ids_before": sorted({record.family_id for record in before_component}),
         "family_ids_after": sorted({record.family_id for record in after_component}),
-        "members_before": sorted(record.issue_id for record in before_component),
-        "members_after": sorted(record.issue_id for record in after_component),
+        "member_count_before": len(before_component),
+        "member_count_after": len(after_component),
+        "members_root_before": _hash_payload(
+            "durable-family-audit-members-v1",
+            sorted(record.issue_id for record in before_component),
+        ),
+        "members_root_after": _hash_payload(
+            "durable-family-audit-members-v1",
+            sorted(record.issue_id for record in after_component),
+        ),
         "owners_before": sorted(
             record.issue_id
             for record in before_component
@@ -1050,16 +1314,21 @@ def _commit_family_transaction(
             for record in after_component
             if record.stage is PipelineStage.SUBMIT_READY
         ),
-        "fingerprints_after": [
-            {
-                "issue_id": record.issue_id,
-                "fingerprint": asdict(_record_fingerprint(record)),
-            }
-            for record in sorted(after_component, key=lambda item: item.issue_id)
-        ],
-        "decision_hashes_after": {
-            record.issue_id: record.family_decision_hash for record in after_component
-        },
+        "member_proof_root_after": (
+            family_member_proof_root(
+                (record.issue_id, _record_fingerprint(record))
+                for record in after_component
+            )
+            if after_component
+            else None
+        ),
+        "decision_hashes_root_after": _hash_payload(
+            "durable-family-audit-decisions-v1",
+            sorted(
+                (record.issue_id, record.family_decision_hash)
+                for record in after_component
+            ),
+        ),
     }
     audit["union_id"] = _hash_payload("durable-family-union-v1", audit)
     payload: dict[str, object] = {
@@ -1266,9 +1535,13 @@ def _fsync_directory(path: Path) -> None:
 
 
 __all__ = [
+    "MAX_COMPACT_FAMILY_PAYLOAD_BYTES",
+    "MAX_FAMILY_MEMBERS",
+    "MAX_MEMBER_RAW_QUERY_BYTES",
     "committed_owner_outcome",
     "durable_family_credentials_are_current",
     "durable_family_payload_is_current",
     "promote_unique_issue",
     "renew_current_family_owner",
+    "verify_durable_family_artifact_proof",
 ]

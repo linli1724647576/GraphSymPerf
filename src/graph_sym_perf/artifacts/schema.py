@@ -597,12 +597,20 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     ):
         raise ValueError("issue artifact certificate does not match the audited CORE registry")
     clearance = payload["duplicate_clearance"]
-    required_clearance = {
+    legacy_clearance = {
         "issue_id", "possible_duplicate", "cluster_members", "cluster_version_hash",
         "evidence_url", "registry_signature", "family_id", "family_version_hash",
         "family_decision_hash",
     }
-    if not isinstance(clearance, Mapping) or set(clearance) != required_clearance:
+    compact_clearance = {
+        "issue_id", "possible_duplicate", "cluster_member_count", "cluster_members_root",
+        "cluster_version_hash", "evidence_url", "registry_signature", "family_id",
+        "family_version_hash", "family_decision_hash",
+    }
+    if (
+        not isinstance(clearance, Mapping)
+        or frozenset(clearance) not in {frozenset(legacy_clearance), frozenset(compact_clearance)}
+    ):
         raise ValueError("issue artifact duplicate clearance is incomplete")
     if not serialized_duplicate_clearance_is_valid(clearance):
         raise ValueError("issue artifact duplicate clearance signature is invalid")
@@ -611,8 +619,16 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     if not isinstance(clearance.get("possible_duplicate"), bool):
         raise ValueError("issue artifact duplicate clearance type is invalid")
     members = clearance.get("cluster_members")
-    if not isinstance(members, list | tuple) or clearance.get("issue_id") not in members:
-        raise ValueError("issue artifact duplicate cluster is invalid")
+    if "cluster_members" in clearance:
+        if not isinstance(members, list | tuple) or clearance.get("issue_id") not in members:
+            raise ValueError("issue artifact duplicate cluster is invalid")
+    else:
+        if not isinstance(clearance.get("cluster_member_count"), int):
+            raise ValueError("issue artifact duplicate cluster count is invalid")
+        _validate_hash(
+            clearance.get("cluster_members_root"),
+            "duplicate_clearance.cluster_members_root",
+        )
     _validate_hash(clearance.get("cluster_version_hash"), "duplicate_clearance.cluster_version_hash")
     _validate_hash(clearance.get("registry_signature"), "duplicate_clearance.registry_signature")
     _validate_hash(clearance.get("family_id"), "duplicate_clearance.family_id")
@@ -630,12 +646,21 @@ def _validate_issue_payload(payload: Mapping[str, object]) -> None:
     _validate_hash(payload.get("original_validation_hash"), "original_validation_hash")
     _validate_hash(payload.get("reduced_validation_hash"), "reduced_validation_hash")
     family = payload.get("family_decision")
-    required_family = {
+    legacy_family = {
         "issue_id", "owner_issue_id", "family_id", "fingerprint", "match_kind", "matched_issue_id",
         "known_regression_match", "known_regression_case_id", "is_new_family",
         "family_members", "family_fingerprints", "family_version_hash", "decision_hash",
     }
-    if not isinstance(family, Mapping) or set(family) != required_family:
+    compact_family = {
+        "issue_id", "owner_issue_id", "family_id", "fingerprint", "match_kind", "matched_issue_id",
+        "known_regression_match", "known_regression_case_id", "is_new_family",
+        "member_count", "member_proof_root", "registry_proof_ref", "family_version_hash",
+        "decision_hash",
+    }
+    if (
+        not isinstance(family, Mapping)
+        or frozenset(family) not in {frozenset(legacy_family), frozenset(compact_family)}
+    ):
         raise ValueError("issue artifact family decision is incomplete")
     if not serialized_family_decision_is_valid(family):
         raise ValueError("issue artifact family fingerprint/decision is invalid")
