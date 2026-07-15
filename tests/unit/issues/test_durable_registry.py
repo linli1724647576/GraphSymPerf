@@ -8,11 +8,20 @@ from dataclasses import replace
 import pytest
 
 from graph_sym_perf.artifacts.schema import ArtifactReference
+from graph_sym_perf.core import stable_json_dumps
+from graph_sym_perf.reducer.models import (
+    MinimalityProof,
+    MinimalityUniverse,
+    ReductionReport,
+    ReductionStatus,
+)
+from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.issues.durable_registry import (
     durable_family_credentials_are_current,
     promote_unique_issue,
     _load_records,
     _commit_family_transaction,
+    _historical_family_fingerprint_proof,
     _record_payload,
     _records_with_current_family,
     _recover_family_transaction,
@@ -24,6 +33,7 @@ from graph_sym_perf.issues.dedup import (
     FingerprintSubject,
     IssueFamilyIndex,
     fingerprint_issue,
+    fingerprint_validated_reduction,
     known_regression_signature_from_manifest,
     compact_family_decision_payload,
 )
@@ -36,7 +46,10 @@ from graph_sym_perf.validation.models import (
     PipelineStage,
     VersionedIssueRecord,
     canonical_validation_provenance_hash,
+    canonical_validation_report_hash,
+    safety_certificate_hash,
 )
+from graph_sym_perf.validation.evidence import combined_runtime_evidence
 from tests.unit.validation.test_promotion import _certificate, _reduction, _report
 
 
@@ -445,6 +458,253 @@ def test_family_member_limit_preflight_does_not_change_registry_or_owner(
     assert not (tmp_path / "dedup_review.jsonl").exists()
 
 
+def test_compact_family_budget_measures_reviewer_prospective_owner_payload(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    query_b = "MATCH (b:City), (a:Person) RETURN a, b"
+    prefix = "MATCH (a:Person), (b:City) RETURN a, b // "
+    query_a = (
+        prefix
+        + '"'
+        + "x" * (60_020 - len(prefix.encode()) - len(query_b.encode()))
+    )
+    base = _reduction().reduced_pair
+    pair = EquivalentQueryPair(
+        query_a,
+        query_b,
+        {},
+        base.graph_snapshot_hash,
+        base.dbms_fingerprint,
+    )
+    report, reduction = _promotion_evidence(pair, suffix="reviewer-fixture")
+    reviewer_fingerprint = fingerprint_validated_reduction(
+        report,
+        reduction,
+        _certificate(),
+        dbms="neo4j",
+    )
+    reviewer_decision = IssueFamilyIndex().add(reviewer_fingerprint, issue_id="ii")
+
+    assert len(query_a.encode()) + len(query_b.encode()) == 60_021
+    assert len(
+        stable_json_dumps(compact_family_decision_payload(reviewer_decision)).encode()
+    ) == 61_515
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry.deterministic_issue_id",
+        lambda *_args: "ii",
+    )
+
+    issue, status = promote_unique_issue(
+        tmp_path,
+        validation=report,
+        reduction=reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=lambda _issue: (_ for _ in ()).throw(
+            AssertionError("prospective compact overflow must not materialize")
+        ),
+        **_validation_refs(),
+    )
+
+    assert issue is None and status == "family_budget_exceeded"
+    diagnostic = json.loads((tmp_path / "family_overflow.jsonl").read_text())
+    assert diagnostic["reason"] == "compact_family_payload_bytes"
+    assert diagnostic["observed"] > 61_515
+    assert not (tmp_path / "registry.jsonl").exists()
+    assert not (tmp_path / "dedup_review.jsonl").exists()
+    assert not (tmp_path / "commits").exists()
+
+
+def test_long_nonowner_passes_when_actual_owner_compact_envelope_fits(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    long_pair = _long_structural_pair(raw_bytes=60_021)
+    small_pair = _small_structural_pair()
+    issue_id = lambda _report, reduction: (
+        "z-long-nonowner"
+        if len(reduction.reduced_pair.query_a) > 10_000
+        else "a-small-owner"
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry.deterministic_issue_id", issue_id
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.validation.promotion.deterministic_issue_id", issue_id
+    )
+    original_report, first_reduction = _promotion_evidence(small_pair, suffix="small-owner")
+
+    first, first_status = promote_unique_issue(
+        tmp_path,
+        validation=original_report,
+        reduction=first_reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=_dynamic_receipt,
+        **_validation_refs(),
+    )
+    long_report, long_reduction = _promotion_evidence(long_pair, suffix="long-nonowner")
+    duplicate, duplicate_status = promote_unique_issue(
+        tmp_path,
+        validation=long_report,
+        reduction=long_reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=lambda _issue: (_ for _ in ()).throw(
+            AssertionError("a non-owner duplicate must not materialize")
+        ),
+        **_validation_refs(),
+    )
+
+    assert first is not None and first_status == "unique_family"
+    assert duplicate is None and duplicate_status == "structural_family_duplicate"
+    assert not (tmp_path / "family_overflow.jsonl").exists()
+
+
+def test_long_deterministic_new_owner_overflow_is_atomic_and_restart_deduplicated(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    long_pair = _long_structural_pair(raw_bytes=60_021)
+    small_pair = _small_structural_pair()
+    issue_id = lambda _report, reduction: (
+        "a-long-new-owner"
+        if len(reduction.reduced_pair.query_a) > 10_000
+        else "z-small-member"
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry.deterministic_issue_id", issue_id
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.validation.promotion.deterministic_issue_id", issue_id
+    )
+    original_report, first_reduction = _promotion_evidence(small_pair, suffix="small-member")
+    first, first_status = promote_unique_issue(
+        tmp_path,
+        validation=original_report,
+        reduction=first_reduction,
+        certificate=_certificate(),
+        dbms="neo4j",
+        known_regression_manifest=REGRESSION_MANIFEST,
+        materialize=_dynamic_receipt,
+        **_validation_refs(),
+    )
+    assert first is not None and first_status == "unique_family"
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file() and path.name != ".registry.lock"
+    }
+    long_report, long_reduction = _promotion_evidence(long_pair, suffix="long-new-owner")
+
+    for _attempt in range(2):
+        blocked, status = promote_unique_issue(
+            tmp_path,
+            validation=long_report,
+            reduction=long_reduction,
+            certificate=_certificate(),
+            dbms="neo4j",
+            known_regression_manifest=REGRESSION_MANIFEST,
+            materialize=lambda _issue: (_ for _ in ()).throw(
+                AssertionError("prospective owner overflow must not materialize")
+            ),
+            **_validation_refs(),
+        )
+        assert blocked is None and status == "family_budget_exceeded"
+
+    after_non_diagnostic = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+        and path.name not in {".registry.lock", "family_overflow.jsonl"}
+    }
+    diagnostics = (tmp_path / "family_overflow.jsonl").read_text().splitlines()
+    assert after_non_diagnostic == before
+    assert len(diagnostics) == 1
+    assert "x" * 100 not in diagnostics[0]
+    assert json.loads(diagnostics[0])["reason"] == "compact_family_payload_bytes"
+
+
+def _promotion_evidence(
+    pair: EquivalentQueryPair,
+    *,
+    suffix: str,
+) -> tuple[object, ReductionReport]:
+    original_pair = EquivalentQueryPair(
+        pair.query_a + " ",
+        pair.query_b + " ",
+        pair.parameters,
+        pair.graph_snapshot_hash,
+        pair.dbms_fingerprint,
+    )
+    original = _report(pair=original_pair, metadata={"phase": f"original-{suffix}"})
+    final = _report(pair=pair, metadata={"phase": f"final-{suffix}"})
+    evidence = combined_runtime_evidence(final)
+    assert evidence is not None
+    universe = MinimalityUniverse.recompute(pair)
+    proof = MinimalityProof.from_results(
+        pair,
+        tuple(
+            (deletion.canonical_id, "symptom_not_preserved", f"{index:064x}")
+            for index, deletion in enumerate(universe.deletions, start=1)
+        ),
+    )
+    reduction = ReductionReport(
+        ReductionStatus.REDUCED_VALID,
+        original_pair,
+        pair,
+        (),
+        (),
+        evidence,
+        screen_evidence=evidence,
+        minimality_proof=proof,
+        final_validation=final,
+        original_validation_hash=canonical_validation_report_hash(original),
+        reduced_validation_hash=canonical_validation_report_hash(final),
+        reduced_candidate_hash=final.candidate_hash,
+        validation_policy_hash=final.policy_hash,
+        certificate_hash=safety_certificate_hash(_certificate()),
+        stop_reason="exhausted_and_validated",
+    )
+    return original, reduction
+
+
+def _long_structural_pair(*, raw_bytes: int) -> EquivalentQueryPair:
+    base = _reduction().reduced_pair
+    fixed_bytes = 72
+    variable_length = (raw_bytes - fixed_bytes) // 4
+    padding = raw_bytes - fixed_bytes - 4 * variable_length
+    variable = "x" * variable_length
+    query_a = (
+        f"MATCH ({variable}:Person), (b:City) RETURN {variable}, b"
+        + " " * padding
+    )
+    query_b = f"MATCH (b:City), ({variable}:Person) RETURN {variable}, b"
+    assert len(query_a.encode()) + len(query_b.encode()) == raw_bytes
+    return EquivalentQueryPair(
+        query_a,
+        query_b,
+        {},
+        base.graph_snapshot_hash,
+        base.dbms_fingerprint,
+    )
+
+
+def _small_structural_pair() -> EquivalentQueryPair:
+    base = _reduction().reduced_pair
+    return EquivalentQueryPair(
+        "MATCH (a:Person), (b:City) RETURN a, b",
+        "MATCH (b:City), (a:Person) RETURN a, b",
+        {},
+        base.graph_snapshot_hash,
+        base.dbms_fingerprint,
+    )
+
+
 def _subject_values(*, changed: bool = False) -> dict[str, str]:
     return {
         "dbms": "neo4j",
@@ -842,6 +1102,146 @@ def test_durable_bridge_union_recovers_a_crash_after_registry_replace(
     assert len(current.family_members) == 3
     assert not (tmp_path / "family_transaction.pending.json").exists()
     assert len((tmp_path / "family_unions.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_historical_compact_proof_rebuild_splits_an_abc_bridge_from_raw_records(
+    tmp_path,
+) -> None:
+    fingerprint_a = fingerprint_issue(
+        FingerprintSubject(
+            **{**_subject_values(changed=False), "site_class": "where_boolean"}
+        )
+    )
+    fingerprint_b = _fingerprint(changed=True)
+    fingerprint_c = _fingerprint(changed=False)
+    index = IssueFamilyIndex()
+    decision_a = index.add(fingerprint_a, issue_id="a-owner")
+    decision_b = index.add(fingerprint_b, issue_id="b-owner")
+    record_a = _formal_family_record(
+        fingerprint_a, decision_a, stage=PipelineStage.SUBMIT_READY
+    )
+    record_b = _formal_family_record(
+        fingerprint_b, decision_b, stage=PipelineStage.SUBMIT_READY
+    )
+    old_clearance = IssueRegistry().duplicate_clearance_for_family(
+        decision_b, (record_b,)
+    )
+    old_family_payload = compact_family_decision_payload(decision_b)
+    old_clearance_payload = compact_duplicate_clearance_payload(old_clearance)
+    decision_c = index.add(fingerprint_c, issue_id="c-bridge")
+    candidate = _formal_family_record(
+        fingerprint_c, decision_c, stage=PipelineStage.REDUCED_VALID
+    )
+    after = _records_with_current_family(
+        index,
+        (record_a, record_b, candidate),
+        family_id=str(decision_c.family_id),
+    )
+
+    _commit_family_transaction(
+        tmp_path,
+        previous_records=(record_a, record_b),
+        records=after,
+    )
+    proof = _historical_family_fingerprint_proof(
+        tmp_path,
+        old_family_payload,
+        old_clearance_payload,
+    )
+
+    assert tuple(member for member, _fingerprint_value in proof) == ("b-owner",)
+
+
+def test_historical_compact_proof_rebuilds_an_exact_owner_change(
+    tmp_path,
+) -> None:
+    fingerprint = _fingerprint()
+    index = IssueFamilyIndex()
+    old_decision = index.add(fingerprint, issue_id="z-old-owner")
+    old_record = _formal_family_record(
+        fingerprint, old_decision, stage=PipelineStage.SUBMIT_READY
+    )
+    old_clearance = IssueRegistry().duplicate_clearance_for_family(
+        old_decision, (old_record,)
+    )
+    old_family_payload = compact_family_decision_payload(old_decision)
+    old_clearance_payload = compact_duplicate_clearance_payload(old_clearance)
+    new_decision = index.add(fingerprint, issue_id="a-new-owner")
+    candidate = _formal_family_record(
+        fingerprint, new_decision, stage=PipelineStage.REDUCED_VALID
+    )
+    after = _records_with_current_family(
+        index,
+        (old_record, candidate),
+        family_id=str(new_decision.family_id),
+    )
+
+    _commit_family_transaction(
+        tmp_path,
+        previous_records=(old_record,),
+        records=after,
+    )
+    proof = _historical_family_fingerprint_proof(
+        tmp_path,
+        old_family_payload,
+        old_clearance_payload,
+    )
+
+    assert tuple(member for member, _fingerprint_value in proof) == ("z-old-owner",)
+
+
+@pytest.mark.parametrize("attack", ("missing", "reordered", "rewritten"))
+def test_historical_compact_proof_rejects_missing_reordered_or_rewritten_audit(
+    tmp_path,
+    attack,
+) -> None:
+    fingerprint = _fingerprint()
+    index = IssueFamilyIndex()
+    old_decision = index.add(fingerprint, issue_id="z-old-owner")
+    old_record = _formal_family_record(
+        fingerprint, old_decision, stage=PipelineStage.SUBMIT_READY
+    )
+    old_clearance = IssueRegistry().duplicate_clearance_for_family(
+        old_decision, (old_record,)
+    )
+    old_family_payload = compact_family_decision_payload(old_decision)
+    old_clearance_payload = compact_duplicate_clearance_payload(old_clearance)
+    previous = (old_record,)
+    for issue_id in ("b-middle-owner", "a-current-owner"):
+        candidate_decision = index.add(fingerprint, issue_id=issue_id)
+        candidate = _formal_family_record(
+            fingerprint, candidate_decision, stage=PipelineStage.REDUCED_VALID
+        )
+        after = _records_with_current_family(
+            index,
+            (*previous, candidate),
+            family_id=str(candidate_decision.family_id),
+        )
+        _commit_family_transaction(
+            tmp_path,
+            previous_records=previous,
+            records=after,
+        )
+        previous = after
+    audit_path = tmp_path / "family_unions.jsonl"
+    lines = audit_path.read_text().splitlines()
+    assert len(lines) == 2
+    if attack == "missing":
+        lines = lines[1:]
+    elif attack == "reordered":
+        lines = list(reversed(lines))
+    else:
+        payload = json.loads(lines[0])
+        payload["added_issue_ids"] = ["rewritten-member"]
+        lines[0] = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    audit_path.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ValueError, match="audit"):
+        _historical_family_fingerprint_proof(
+            tmp_path,
+            old_family_payload,
+            old_clearance_payload,
+        )
 
 
 @pytest.mark.parametrize("attack", ("missing", "conflicting", "multiple_submit_ready", "owner_absent"))

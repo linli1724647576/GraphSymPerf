@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from graph_sym_perf.artifacts.policy import ArtifactLevel
+from graph_sym_perf.artifacts.chain import ArtifactChainWriter
 from graph_sym_perf.artifacts.schema import ArtifactRecord
 from graph_sym_perf.artifacts.store import (
     ArtifactBudgetExceeded,
@@ -20,6 +21,11 @@ from graph_sym_perf.artifacts.store import (
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.core import ExecutionResult, TargetSystem, stable_json_dumps
 from graph_sym_perf.experiment.plan_models import ShardTask
+from graph_sym_perf.experiment.candidate_pipeline import (
+    ProductionCandidatePipeline,
+    _candidate_record,
+    _reduction_summary,
+)
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.worker import GeneratedShard, RuntimeFirstShardWorker
 from graph_sym_perf.issues.commands import IssueCommands
@@ -42,7 +48,12 @@ from graph_sym_perf.issues.dedup import (
     serialized_family_decision_is_valid,
 )
 from graph_sym_perf.issues.registry import IssueRegistry
-from graph_sym_perf.reducer.models import MinimalityProof, MinimalityUniverse
+from graph_sym_perf.reducer.models import (
+    MinimalityProof,
+    MinimalityUniverse,
+    ReductionReport,
+    ReductionStatus,
+)
 from graph_sym_perf.runtime.models import EquivalentQueryPair
 from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.transforms.safety_points import SafetyCertificate
@@ -51,12 +62,21 @@ from graph_sym_perf.validation.models import (
     FrozenMapping,
     PipelineStage,
     VersionedIssueRecord,
+    CandidateBundle,
     candidate_hash_from_content_hashes,
     canonical_content_hash,
     canonical_validation_provenance_hash,
+    canonical_validation_report_hash,
     _duplicate_signature,
     compact_cluster_members_root,
+    safety_certificate_hash,
     serialized_duplicate_clearance_is_valid,
+)
+from graph_sym_perf.validation.evidence import combined_runtime_evidence
+from graph_sym_perf.validation.promotion import deterministic_issue_id
+from tests.unit.validation.test_promotion import (
+    _certificate as _typed_certificate,
+    _report as _typed_report,
 )
 
 
@@ -1488,7 +1508,7 @@ def test_complete_one_thousand_accepted_pair_worker_shard_stays_below_500_mb(tmp
     assert sum(path.stat().st_size for path in shard.rglob("*") if path.is_file()) <= 500 * 1024 * 1024
 
 
-def test_one_thousand_member_compact_family_growth_is_bounded_and_near_linear(
+def test_one_thousand_member_compact_family_proof_overhead_is_bounded_and_near_linear(
     tmp_path,
 ) -> None:
     fingerprints = tuple(
@@ -1649,7 +1669,7 @@ def test_one_thousand_member_compact_family_growth_is_bounded_and_near_linear(
     cas_new_bytes = after_cas_bytes - before_cas_bytes
     max_owner_artifact_payload_bytes = max(owner_payload_sizes)
     compact_union_audit_upper_bound = 1000 * 2048
-    total_storage_upper_bound = (
+    family_proof_overhead_upper_bound = (
         registry_review_raw_bytes
         + cas_new_bytes
         + compact_union_audit_upper_bound
@@ -1662,4 +1682,286 @@ def test_one_thousand_member_compact_family_growth_is_bounded_and_near_linear(
     assert max_owner_artifact_payload_bytes < 16 * 1024
     assert registry_review_raw_bytes < 2 * 1024 * 1024
     assert cas_new_bytes < 16 * 1024 * 1024
-    assert total_storage_upper_bound < 500 * 1024 * 1024
+    # This strict bound covers only durable family-proof records, rolling compact
+    # family envelopes and the union-audit reserve. Validation, reduction, runtime,
+    # candidate and other formal run artifacts are deliberately outside this metric.
+    assert family_proof_overhead_upper_bound < 500 * 1024 * 1024
+
+
+def test_complete_production_family_path_scales_near_linearly_at_eight_and_sixteen(
+    tmp_path,
+) -> None:
+    run_dir = tmp_path / "run"
+    store = ContentAddressedStore(
+        run_dir / "shards" / "neo4j-000" / "artifacts",
+        budget_bytes=500 * 1024 * 1024,
+    )
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    pipeline = ProductionCandidatePipeline(
+        spec,
+        environment={"GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "f" * 64},
+        run_dir=run_dir,
+    )
+    task = ShardTask(TargetSystem.NEO4J, 0, 7, 16, 16, 600)
+    cases = sorted(
+        (_production_family_case(index) for index in range(16)),
+        key=lambda case: deterministic_issue_id(case[0], case[1]),
+    )
+    graph_snapshot = cases[0][0].manifest.graph_snapshot
+    graph_ref = store.put(
+        "graph-snapshot.cypher",
+        "\n".join(graph_snapshot.statements).encode(),
+        media_type="text/plain; charset=utf-8",
+    )
+    baseline_bytes = _tree_file_bytes(run_dir)
+    complete_family_path_bytes: dict[int, int] = {}
+    owner_issue_id: str | None = None
+    owner_issue_refs: set[str] = set()
+
+    for member_count, (original, reduction, candidate) in enumerate(cases, start=1):
+        outcome = _persist_production_family_case(
+            pipeline,
+            store,
+            task,
+            (original, reduction, candidate),
+            graph_ref,
+        )
+
+        if member_count == 1:
+            assert outcome["promotion"] == "submit_ready"
+            owner_issue_id = str(outcome["issue_id"])
+        else:
+            assert outcome["promotion"] == "blocked"
+            assert outcome["duplicate_status"] == "structural_family_duplicate"
+        assert owner_issue_id is not None
+        owner_index_path = run_dir / "issues" / "index" / f"{owner_issue_id}.json"
+        owner_index = json.loads(owner_index_path.read_text())
+        owner_issue_refs.add(str(owner_index["issue_ref"]["content_hash"]))
+        owner_issue = load_artifact_record(store, owner_index["issue_ref"])
+        verify_issue_hash_chain(store, owner_issue, run_dir=run_dir)
+        if member_count > 1:
+            encoded_owner = stable_json_dumps(owner_issue.payload)
+            assert reduction.reduced_pair.query_a not in encoded_owner
+            assert reduction.reduced_pair.query_b not in encoded_owner
+
+        if member_count in {8, 16}:
+            exported = run_dir / "developer-exports" / f"owner-{member_count}.json"
+            IssueCommands().export(issue=owner_index_path, output=exported)
+            complete_family_path_bytes[member_count] = (
+                _tree_file_bytes(run_dir) - baseline_bytes
+            )
+
+    bytes_at_eight = complete_family_path_bytes[8]
+    bytes_at_sixteen = complete_family_path_bytes[16]
+    assert bytes_at_eight > 0
+    assert bytes_at_sixteen / bytes_at_eight <= 2.5
+    assert len(owner_issue_refs) == 16
+    assert len((run_dir / "issues" / "registry.jsonl").read_text().splitlines()) == 1
+    assert len((run_dir / "issues" / "dedup_review.jsonl").read_text().splitlines()) == 15
+    assert (run_dir / "issues" / "commits" / f"{owner_issue_id}.json").is_file()
+    assert _tree_file_bytes(run_dir) <= 500 * 1024 * 1024
+
+
+def test_compact_owner_commit_to_renew_crash_recovers_through_cli_export(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    run_dir = tmp_path / "run"
+    store = ContentAddressedStore(
+        run_dir / "shards" / "neo4j-000" / "artifacts",
+        budget_bytes=500 * 1024 * 1024,
+    )
+    pipeline = ProductionCandidatePipeline(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        environment={"GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "f" * 64},
+        run_dir=run_dir,
+    )
+    task = ShardTask(TargetSystem.NEO4J, 0, 7, 3, 3, 600)
+    cases = sorted(
+        (_production_family_case(index) for index in range(3)),
+        key=lambda case: deterministic_issue_id(case[0], case[1]),
+    )
+    graph_snapshot = cases[0][0].manifest.graph_snapshot
+    graph_ref = store.put(
+        "graph-snapshot.cypher",
+        "\n".join(graph_snapshot.statements).encode(),
+        media_type="text/plain; charset=utf-8",
+    )
+    renewals = 0
+
+    def crash_second_renewal(_root):
+        nonlocal renewals
+        renewals += 1
+        if renewals == 2:
+            raise OSError("injected commit-to-renew crash")
+
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._before_owner_artifact_renewal",
+        crash_second_renewal,
+    )
+    first = _persist_production_family_case(
+        pipeline, store, task, cases[0], graph_ref
+    )
+    second = _persist_production_family_case(
+        pipeline, store, task, cases[1], graph_ref
+    )
+    with pytest.raises(OSError, match="commit-to-renew"):
+        _persist_production_family_case(
+            pipeline, store, task, cases[2], graph_ref
+        )
+    assert first["promotion"] == "submit_ready"
+    assert second["duplicate_status"] == "structural_family_duplicate"
+    owner_issue_id = str(first["issue_id"])
+    owner_index = run_dir / "issues" / "index" / f"{owner_issue_id}.json"
+    stale_reference = json.loads(owner_index.read_text())["issue_ref"]
+    stale_issue = load_artifact_record(store, stale_reference)
+    with pytest.raises(ValueError, match="durable family proof"):
+        verify_issue_hash_chain(store, stale_issue, run_dir=run_dir)
+    monkeypatch.setattr(
+        "graph_sym_perf.issues.durable_registry._before_owner_artifact_renewal",
+        lambda _root: None,
+    )
+
+    status, result = _issue_export_with_timeout(
+        owner_index,
+        run_dir / "developer-exports" / "recovered-owner.json",
+    )
+
+    assert status == "ok", result
+    renewed_reference = json.loads(owner_index.read_text())["issue_ref"]
+    assert renewed_reference != stale_reference
+    renewed_issue = load_artifact_record(store, renewed_reference)
+    assert renewed_issue.payload["family_decision"]["member_count"] == 3
+    verify_issue_hash_chain(store, renewed_issue, run_dir=run_dir)
+    assert len((run_dir / "issues" / "family_unions.jsonl").read_text().splitlines()) == 2
+
+
+def _persist_production_family_case(
+    pipeline: ProductionCandidatePipeline,
+    store: ContentAddressedStore,
+    task: ShardTask,
+    case: tuple[object, ReductionReport, CandidateBundle],
+    graph_ref: object,
+) -> dict[str, object]:
+    original, reduction, candidate = case
+    environment = _production_validation_environment(original)
+    candidate_ref = store.put_json(
+        f"original-candidate-{candidate.candidate_hash}.json",
+        _candidate_record(
+            candidate,
+            original.sessions[0].evidence,
+            graph_snapshot_ref=asdict(graph_ref),
+        ),
+    )
+    original_validation = ArtifactChainWriter(store).persist_validation(
+        original,
+        candidate_ref=candidate_ref,
+        environment=environment,
+    )
+    outcome = pipeline._materialize_issue(
+        candidate,
+        original,
+        reduction,
+        task=task,
+        store=store,
+        original_validation_ref=original_validation.reference,
+        graph_snapshot_ref=asdict(graph_ref),
+        environment=environment,
+    )
+    store.put_json(
+        f"reduction-report-{candidate.candidate_hash}.json",
+        _reduction_summary(
+            reduction,
+            original_candidate_hash=candidate.candidate_hash,
+            original_validation_ref=outcome["original_validation_ref"],
+            reduced_validation_ref=outcome["reduced_validation_ref"],
+        ),
+    )
+    return outcome
+
+
+def _production_family_case(
+    index: int,
+) -> tuple[object, ReductionReport, CandidateBundle]:
+    template = _typed_report()
+    snapshot = template.manifest.graph_snapshot
+    dbms_fingerprint = template.manifest.pair.dbms_fingerprint
+    reduced_pair = EquivalentQueryPair(
+        f"MATCH (a:Person {{age: {index}}}), (b:City) RETURN a, b",
+        f"MATCH (b:City), (a:Person {{age: {index}}}) RETURN a, b",
+        {},
+        snapshot.content_hash,
+        dbms_fingerprint,
+    )
+    original_pair = EquivalentQueryPair(
+        reduced_pair.query_a + " ",
+        reduced_pair.query_b + " ",
+        {},
+        snapshot.content_hash,
+        dbms_fingerprint,
+    )
+    original = _typed_report(
+        pair=original_pair,
+        graph_snapshot=snapshot,
+        metadata={"family_scaling_member": index, "phase": "original"},
+    )
+    final = _typed_report(
+        pair=reduced_pair,
+        graph_snapshot=snapshot,
+        metadata={"family_scaling_member": index, "phase": "reduced"},
+    )
+    evidence = combined_runtime_evidence(final)
+    assert evidence is not None
+    universe = MinimalityUniverse.recompute(reduced_pair)
+    minimality = MinimalityProof.from_results(
+        reduced_pair,
+        tuple(
+            (deletion.canonical_id, "symptom_not_preserved", f"{offset:064x}")
+            for offset, deletion in enumerate(universe.deletions, start=1)
+        ),
+    )
+    reduction = ReductionReport(
+        ReductionStatus.REDUCED_VALID,
+        original_pair,
+        reduced_pair,
+        (),
+        (),
+        evidence,
+        screen_evidence=evidence,
+        minimality_proof=minimality,
+        final_validation=final,
+        original_validation_hash=canonical_validation_report_hash(original),
+        reduced_validation_hash=canonical_validation_report_hash(final),
+        reduced_candidate_hash=final.candidate_hash,
+        validation_policy_hash=final.policy_hash,
+        certificate_hash=safety_certificate_hash(_typed_certificate()),
+        stop_reason="exhausted_and_validated",
+    )
+    manifest = original.manifest
+    candidate = CandidateBundle.create(
+        manifest.pair,
+        graph_snapshot=manifest.graph_snapshot,
+        dbms_version=manifest.dbms_version,
+        resolved_config=manifest.resolved_config,
+        discovery_slow_query=manifest.discovery_slow_query,
+        discovery_ratio=manifest.discovery_ratio,
+        validation_policy=original.validation_policy,
+        certificate=manifest.certificate,
+    )
+    return original, reduction, candidate
+
+
+def _production_validation_environment(report: object) -> dict[str, object]:
+    manifest = report.manifest
+    return {
+        "dbms_version": manifest.dbms_version,
+        "driver_version": "driver/1",
+        "execution_mode": "container_image",
+        "execution_artifact_digest": "sha256:" + "f" * 64,
+        "cpu_architecture": "arm64",
+        "config_hash": manifest.content_hashes["resolved_config"],
+    }
+
+
+def _tree_file_bytes(root: Path) -> int:
+    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
