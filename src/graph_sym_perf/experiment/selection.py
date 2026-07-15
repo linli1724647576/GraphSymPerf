@@ -126,6 +126,7 @@ class PilotCellDecision:
 class PilotSelection:
     campaign_id: str
     input_p1_manifest_hash: str
+    input_p1_cell_summary_root: str
     selector_protocol_version: str
     max_cells: int
     status: str
@@ -215,6 +216,7 @@ def select_p2_cells(
     max_cells: int = 6,
     campaign_id: str,
     input_p1_manifest_hash: str,
+    input_p1_cell_summary_root: str,
 ) -> PilotSelection:
     if not isinstance(max_cells, int) or isinstance(max_cells, bool) or not 1 <= max_cells <= 6:
         raise SelectionIntegrityError("max_cells must be an integer between one and six")
@@ -222,6 +224,8 @@ def select_p2_cells(
         raise SelectionIntegrityError("campaign_id must be non-empty")
     if not _is_sha256(input_p1_manifest_hash):
         raise SelectionIntegrityError("input P1 manifest hash must be a lowercase sha256")
+    if not _is_sha256(input_p1_cell_summary_root):
+        raise SelectionIntegrityError("input P1 cell summary root must be a lowercase sha256")
     cells = tuple(summaries)
     identities: set[tuple[str, str, str, int]] = set()
     for cell in cells:
@@ -245,6 +249,7 @@ def select_p2_cells(
         return _selection_result(
             campaign_id,
             input_p1_manifest_hash,
+            input_p1_cell_summary_root,
             decisions,
             (),
             status="control_contamination",
@@ -269,6 +274,7 @@ def select_p2_cells(
         return _selection_result(
             campaign_id,
             input_p1_manifest_hash,
+            input_p1_cell_summary_root,
             decisions,
             (),
             status="selection_overflow",
@@ -304,6 +310,7 @@ def select_p2_cells(
     return _selection_result(
         campaign_id,
         input_p1_manifest_hash,
+        input_p1_cell_summary_root,
         decisions,
         selected_cells,
         status=status,
@@ -344,6 +351,7 @@ def load_pilot_selection(
     *,
     expected_campaign_id: str | None = None,
     expected_p1_manifest_hash: str | None = None,
+    expected_p1_cell_summary_root: str | None = None,
 ) -> PilotSelection:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -368,6 +376,11 @@ def load_pilot_selection(
         and selection.input_p1_manifest_hash != expected_p1_manifest_hash
     ):
         raise SelectionIntegrityError("pilot selection P1 manifest identity mismatch")
+    if (
+        expected_p1_cell_summary_root is not None
+        and selection.input_p1_cell_summary_root != expected_p1_cell_summary_root
+    ):
+        raise SelectionIntegrityError("pilot selection P1 cell summary root mismatch")
     selected_by_identity = {cell.identity: cell for cell in selection.cells}
     if len(selected_by_identity) != len(selection.cells):
         raise SelectionIntegrityError("pilot selection contains duplicate selected cells")
@@ -383,6 +396,7 @@ def load_pilot_selection(
         max_cells=selection.max_cells,
         campaign_id=selection.campaign_id,
         input_p1_manifest_hash=selection.input_p1_manifest_hash,
+        input_p1_cell_summary_root=selection.input_p1_cell_summary_root,
     )
     if replayed != selection:
         raise SelectionIntegrityError("pilot selection differs from deterministic replay")
@@ -392,6 +406,7 @@ def load_pilot_selection(
 def _selection_result(
     campaign_id: str,
     manifest_hash: str,
+    cell_summary_root: str,
     decisions: Iterable[PilotCellDecision],
     cells: tuple[CellSummary, ...],
     *,
@@ -418,6 +433,7 @@ def _selection_result(
     return PilotSelection(
         campaign_id=campaign_id,
         input_p1_manifest_hash=manifest_hash,
+        input_p1_cell_summary_root=cell_summary_root,
         selector_protocol_version=SELECTOR_PROTOCOL_VERSION,
         max_cells=max_cells,
         status=status,
@@ -466,6 +482,7 @@ def _selection_payload(selection: PilotSelection) -> dict[str, Any]:
     return {
         "campaign_id": selection.campaign_id,
         "input_p1_manifest_hash": selection.input_p1_manifest_hash,
+        "input_p1_cell_summary_root": selection.input_p1_cell_summary_root,
         "selector_protocol_version": selection.selector_protocol_version,
         "max_cells": selection.max_cells,
         "status": selection.status,
@@ -493,6 +510,7 @@ def _selection_from_payload(payload: Mapping[str, Any]) -> PilotSelection:
     return PilotSelection(
         campaign_id=_strict_str(payload["campaign_id"]),
         input_p1_manifest_hash=_strict_str(payload["input_p1_manifest_hash"]),
+        input_p1_cell_summary_root=_strict_str(payload["input_p1_cell_summary_root"]),
         selector_protocol_version=_strict_str(payload["selector_protocol_version"]),
         max_cells=_strict_positive_int(payload["max_cells"]),
         status=_strict_str(payload["status"]),

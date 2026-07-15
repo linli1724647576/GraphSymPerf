@@ -14,13 +14,19 @@ from graph_sym_perf.experiment.selection import (
     evaluate_p0_gate,
     evaluate_p1_cell,
     load_pilot_selection,
-    select_p2_cells,
+    select_p2_cells as _select_p2_cells,
     write_pilot_selection,
 )
 
 
 MANIFEST_HASH = "a" * 64
+CELL_SUMMARY_ROOT = "b" * 64
 CAMPAIGN_ID = "campaign-fixture"
+
+
+def select_p2_cells(*args, **kwargs):
+    kwargs.setdefault("input_p1_cell_summary_root", CELL_SUMMARY_ROOT)
+    return _select_p2_cells(*args, **kwargs)
 
 
 def _cell(
@@ -289,6 +295,7 @@ def test_pilot_selection_is_write_once_content_bound_and_context_checked(tmp_pat
         path,
         expected_campaign_id=CAMPAIGN_ID,
         expected_p1_manifest_hash=MANIFEST_HASH,
+        expected_p1_cell_summary_root=CELL_SUMMARY_ROOT,
     )
     assert loaded == selection
     with pytest.raises(FileExistsError):

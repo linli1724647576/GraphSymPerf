@@ -124,6 +124,12 @@ def _campaign_lifecycle(root):
     )
 
 
+def _cell_summary_root(result) -> str:
+    return json.loads(
+        (result.run_dir / "phase_outcome.json").read_text(encoding="utf-8")
+    )["cell_summary_root"]
+
+
 def test_campaign_phase_ancestry_selection_and_exact_p2_expansion(tmp_path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
     lifecycle = _campaign_lifecycle(tmp_path)
@@ -142,6 +148,7 @@ def test_campaign_phase_ancestry_selection_and_exact_p2_expansion(tmp_path) -> N
         lifecycle.cell_summaries("p1"),
         campaign_id=p1.campaign_id,
         input_p1_manifest_hash=p1.manifest_hash,
+        input_p1_cell_summary_root=_cell_summary_root(p1),
     )
     assert len(selection.cells) == 4  # two winners plus one deterministic fallback per family
     selection_path = tmp_path / "pilot_selection.json"
@@ -332,6 +339,72 @@ def test_phase_outcome_binds_rule_plan_ordered_cell_summary_root(tmp_path) -> No
         lifecycle.cell_summaries("p1")
 
 
+def test_p2_rejects_self_consistent_selection_not_built_from_parent_p1_cells(
+    tmp_path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+    lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
+    p1 = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(),
+        phase=CampaignPhase.P1,
+        run_id="p1",
+        parent_run="p0",
+    )
+    actual = lifecycle.cell_summaries("p1")
+    forged = tuple(
+        replace(
+            cell,
+            validation_passed_count=int(
+                cell.stream == "discovery"
+                and cell.rule_id == "constant_true_disjunction"
+                and cell.graph_scale == 256
+            ),
+            validation_pair_yield=(
+                0.5
+                if cell.stream == "discovery"
+                and cell.rule_id == "constant_true_disjunction"
+                and cell.graph_scale == 256
+                else 0.0
+            ),
+            validation_yield_ci_low=(
+                0.2
+                if cell.stream == "discovery"
+                and cell.rule_id == "constant_true_disjunction"
+                and cell.graph_scale == 256
+                else 0.0
+            ),
+            best_validated_delta_ms=(
+                500.0
+                if cell.stream == "discovery"
+                and cell.rule_id == "constant_true_disjunction"
+                and cell.graph_scale == 256
+                else 0.0
+            ),
+        )
+        for cell in actual
+    )
+    forged_selection = select_p2_cells(
+        forged,
+        campaign_id=p1.campaign_id,
+        input_p1_manifest_hash=p1.manifest_hash,
+        input_p1_cell_summary_root=_cell_summary_root(p1),
+    )
+    selection_path = tmp_path / "forged-selection.json"
+    write_pilot_selection(forged_selection, selection_path)
+
+    with pytest.raises(PhaseAncestryError, match="parent P1"):
+        lifecycle.run(
+            spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P2,
+            run_id="forged-p2",
+            parent_run="p1",
+            selection=selection_path,
+        )
+
+
 def test_measurement_session_is_cross_process_exclusive_and_owner_only(tmp_path) -> None:
     lock = MeasurementSessionLock(tmp_path)
     lease = lock.acquire()
@@ -394,6 +467,7 @@ def test_campaign_rejects_a_forged_p2_seed_overlap(monkeypatch, tmp_path) -> Non
             lifecycle.cell_summaries("p1"),
             campaign_id=p1.campaign_id,
             input_p1_manifest_hash=p1.manifest_hash,
+            input_p1_cell_summary_root=_cell_summary_root(p1),
         ),
         selection_path,
     )

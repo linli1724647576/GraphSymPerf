@@ -291,11 +291,15 @@ class CampaignLifecycle:
             raise PhaseAncestryError("P1 campaign identity is invalid")
         if expected_campaign_id is not None and campaign_id != expected_campaign_id:
             raise PhaseAncestryError("P1 campaign identity does not match the requested config")
+        cell_summary_root = evidence.outcome.get("cell_summary_root")
+        if not _is_sha256(cell_summary_root):
+            raise PhaseAncestryError("P1 cell summary root is invalid")
         selection = select_p2_cells(
             self.cell_summaries(p1_run),
             max_cells=max_cells,
             campaign_id=campaign_id,
             input_p1_manifest_hash=evidence.manifest_hash,
+            input_p1_cell_summary_root=cell_summary_root,
         )
         write_pilot_selection(selection, output)
         return selection
@@ -369,11 +373,29 @@ class CampaignLifecycle:
         parent_manifest_hash = parent.get("manifest_hash")
         if not isinstance(parent_manifest_hash, str):
             raise PhaseAncestryError("P2 parent manifest hash is missing")
+        parent_cell_summary_root = parent.get("cell_summary_root")
+        if not _is_sha256(parent_cell_summary_root):
+            raise PhaseAncestryError("P2 parent cell summary root is missing")
         pilot = load_pilot_selection(
             selection_path,
             expected_campaign_id=campaign_id,
             expected_p1_manifest_hash=parent_manifest_hash,
+            expected_p1_cell_summary_root=parent_cell_summary_root,
         )
+        parent_run = parent.get("run_id")
+        if not isinstance(parent_run, str):
+            raise PhaseAncestryError("P2 parent run identity is missing")
+        expected = select_p2_cells(
+            self.cell_summaries(parent_run),
+            max_cells=pilot.max_cells,
+            campaign_id=campaign_id,
+            input_p1_manifest_hash=parent_manifest_hash,
+            input_p1_cell_summary_root=parent_cell_summary_root,
+        )
+        if pilot != expected:
+            raise PhaseAncestryError(
+                "pilot selection does not match parent P1 RulePlan-ordered cell summaries"
+            )
         if pilot.status != "selected" or not pilot.cells:
             raise PhaseAncestryError("P2 requires a successful non-empty pilot selection")
         raw = read_json_object(Path(selection_path))
@@ -383,6 +405,7 @@ class CampaignLifecycle:
         return pilot, {
             "content_hash": content_hash,
             "input_p1_manifest_hash": pilot.input_p1_manifest_hash,
+            "input_p1_cell_summary_root": pilot.input_p1_cell_summary_root,
             "selector_protocol_version": pilot.selector_protocol_version,
         }
 
@@ -417,6 +440,11 @@ class CampaignLifecycle:
             "phase": required.value,
             "run_id": parent_run,
         }
+        if required is CampaignPhase.P1:
+            cell_summary_root = parent.outcome.get("cell_summary_root")
+            if not _is_sha256(cell_summary_root):
+                raise PhaseAncestryError("P1 parent cell summary root is invalid")
+            reference["cell_summary_root"] = cell_summary_root
         if required is CampaignPhase.P0:
             regression_artifact = parent.outcome.get("regression_artifact")
             if not isinstance(regression_artifact, Mapping):
@@ -898,6 +926,10 @@ def _load_sealed_json(path: Path, label: str) -> dict[str, object]:
     if content_hash != canonical_hash(payload):
         raise ValueError(f"{label} content hash mismatch")
     return payload
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
 def _create_owner_file(path: Path, payload: Mapping[str, object]) -> bytes:
