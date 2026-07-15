@@ -35,6 +35,7 @@ from graph_sym_perf.experiment.worker import (
 )
 from graph_sym_perf.experiment.worker import WorkerFailure
 from graph_sym_perf.experiment.state import ErrorKind
+from graph_sym_perf.sanitization import SanitizationIntegrityError
 from tests.gdsmith_artifact_fixture import (
     assume_schema_v3_sources_clean,
     verified_gdsmith_environment,
@@ -713,6 +714,39 @@ def test_terminal_boundary_rejects_stale_seal_instead_of_rewriting_receipt(
     assert terminal["infrastructure_error_kind"] == ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
     assert "terminal-sealed-secret" not in terminal_path.read_text(encoding="utf-8")
     assert terminal.get("nested_receipt") is None
+
+
+def test_nonisolated_sanitization_integrity_worker_error_is_nonretryable(
+    tmp_path,
+) -> None:
+    plan = _p1_rule_plan()
+    worker_calls = 0
+
+    def worker(_entry):
+        nonlocal worker_calls
+        worker_calls += 1
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: invalid producer envelope"
+        )
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=2,
+        process_isolation=False,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    assert worker_calls == 1
+    terminal = json.loads(
+        next(
+            (tmp_path / "entries").glob("*/attempt-000/terminal_result.json")
+        ).read_text(encoding="utf-8")
+    )
+    assert terminal["infrastructure_error_kind"] == (
+        ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    )
 
 
 def _hash_for(label: str) -> str:

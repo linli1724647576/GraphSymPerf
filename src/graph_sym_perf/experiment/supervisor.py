@@ -295,6 +295,18 @@ class RulePlanSupervisor:
                         raise EntryResultIntegrityError("entry worker must return a mapping")
                     final_result = dict(value)
                     final_state = classify_rule_plan_result(entry, final_result)
+            except SanitizationIntegrityError as exc:
+                non_retryable_failure = True
+                final_state = EntryState.INFRASTRUCTURE_FAILED
+                final_result = {
+                    "accepted_pairs": 0,
+                    "artifact_complete": False,
+                    "certificate_complete": False,
+                    "entry_id": entry.entry_id,
+                    "infrastructure_error_kind": ErrorKind.EVIDENCE_INTEGRITY_ERROR.value,
+                    "infrastructure_reason": str(exc),
+                    "terminal_state": final_state.value,
+                }
             except WorkerProcessError as exc:
                 if exc.kind is ErrorKind.RESOURCE_EXHAUSTED:
                     final_state = EntryState.RESOURCE_EXHAUSTED
