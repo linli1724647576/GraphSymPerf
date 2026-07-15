@@ -1014,6 +1014,24 @@ def test_measurement_target_identity_normalizes_ipv4_mapped_ipv6() -> None:
     )
 
 
+def test_canonical_scoped_ipv6_preserves_zone_identity() -> None:
+    assert campaign_module._canonical_ip_address("fe80::1%en0") == "fe80::1%en0"
+    assert campaign_module._canonical_ip_address("fe80::1%25en0") == "fe80::1%en0"
+    assert campaign_module._canonical_ip_address(
+        "fe80::1%en0"
+    ) != campaign_module._canonical_ip_address("fe80::1%en1")
+    assert campaign_module._canonical_measurement_host(
+        "fe80::1%en0",
+        7687,
+    ) != campaign_module._canonical_measurement_host("fe80::1%en1", 7687)
+
+
+@pytest.mark.parametrize("address", ("fe80::1%", "fe80::1%bad zone", "192.0.2.1%en0"))
+def test_canonical_ip_address_rejects_invalid_scope_ids(address) -> None:
+    with pytest.raises(ValueError):
+        campaign_module._canonical_ip_address(address)
+
+
 def test_busy_measurement_target_never_publishes_a_campaign_run(tmp_path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
     lifecycle = CampaignLifecycle(

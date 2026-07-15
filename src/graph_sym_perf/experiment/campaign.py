@@ -13,6 +13,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
+from urllib.parse import unquote
 from uuid import uuid4
 
 from graph_sym_perf.core import TargetSystem, to_jsonable
@@ -736,7 +737,12 @@ def measurement_target_identity(
 def _canonical_measurement_host(host: str | None, port: int) -> Mapping[str, object]:
     if host is None:
         return {"unresolved_hostname": "<missing>"}
-    normalized_host = host.strip().lower().rstrip(".")
+    decoded_host = unquote(host.strip())
+    normalized_host = (
+        decoded_host
+        if ":" in decoded_host
+        else decoded_host.lower().rstrip(".")
+    )
     if not normalized_host:
         return {"unresolved_hostname": "<missing>"}
     if normalized_host == "localhost":
@@ -766,12 +772,26 @@ def _canonical_measurement_host(host: str | None, port: int) -> Mapping[str, obj
 
 
 def _canonical_ip_address(raw: str) -> str:
-    address = ipaddress.ip_address(raw.split("%", 1)[0])
+    decoded = unquote(raw)
+    address_text, separator, zone_id = decoded.partition("%")
+    address = ipaddress.ip_address(address_text)
+    if separator:
+        if (
+            not isinstance(address, ipaddress.IPv6Address)
+            or not zone_id
+            or len(zone_id) > 64
+            or re.fullmatch(r"[A-Za-z0-9_.-]+", zone_id) is None
+        ):
+            raise ValueError("invalid scoped IP address")
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        if separator:
+            raise ValueError("IPv4-mapped IPv6 addresses cannot carry a scope ID")
         address = address.ipv4_mapped
     if address.is_loopback:
-        return "loopback"
-    return address.compressed
+        canonical = "loopback"
+    else:
+        canonical = address.compressed
+    return f"{canonical}%{zone_id}" if separator else canonical
 
 
 def _campaign_source_provenance_guard(
