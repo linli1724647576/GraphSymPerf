@@ -95,7 +95,7 @@ class ExperimentCommands:
             if phase is None or run_id is None:
                 raise ValueError("schema-v3 run requires --phase and --run-id")
             parsed_phase = phase if isinstance(phase, CampaignPhase) else CampaignPhase(str(phase))
-            return CampaignLifecycle(output_root).run(
+            return CampaignLifecycle(output_root, environment=environment).run(
                 spec,
                 FormalRuntimeFirstShardWorker(spec, environment=environment),
                 phase=parsed_phase,

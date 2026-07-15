@@ -97,9 +97,34 @@ class _CampaignFixtureWorker:
         }
 
 
+def _verified_regression_reference(_spec, run_dir, _environment):
+    return {
+        "artifact_complete": True,
+        "campaign_identity_hash": "d" * 64,
+        "case_id": "neo4j_bug001_pattern_order",
+        "environment_identity_hash": "e" * 64,
+        "passed": True,
+        "report_content_hash": "b" * 64,
+        "report_path": str(
+            (run_dir / "regressions" / "neo4j_bug001_pattern_order" / "regression_report.json")
+            .relative_to(run_dir)
+        ),
+        "report_sha256": "a" * 64,
+        "validation_evidence_sha256": "c" * 64,
+    }
+
+
+def _campaign_lifecycle(root):
+    return CampaignLifecycle(
+        root,
+        environment={"fixture": "1"},
+        regression_verifier=_verified_regression_reference,
+    )
+
+
 def test_campaign_phase_ancestry_selection_and_exact_p2_expansion(tmp_path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
-    lifecycle = CampaignLifecycle(tmp_path)
+    lifecycle = _campaign_lifecycle(tmp_path)
     p0 = lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
     assert p0.passed
     p1 = lifecycle.run(
@@ -140,9 +165,75 @@ def test_campaign_phase_ancestry_selection_and_exact_p2_expansion(tmp_path) -> N
     )
 
 
+def test_campaign_binds_p1_directly_to_p0_regression_artifact_root(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+
+    class _BoundWorker(_CampaignFixtureWorker):
+        def __init__(self):
+            super().__init__()
+            self.regression_roots = []
+
+        def bind_regression_artifact_root(self, root):
+            self.regression_roots.append(__import__("pathlib").Path(root))
+
+    p0_worker = _BoundWorker()
+    p0 = lifecycle.run(spec, p0_worker, phase=CampaignPhase.P0, run_id="p0")
+    p1_worker = _BoundWorker()
+    p1 = lifecycle.run(
+        spec,
+        p1_worker,
+        phase=CampaignPhase.P1,
+        run_id="p1",
+        parent_run="p0",
+    )
+    selection_path = tmp_path / "selection.json"
+    lifecycle.create_selection(p1_run="p1", output=selection_path)
+    p2_worker = _BoundWorker()
+    p2 = lifecycle.run(
+        spec,
+        p2_worker,
+        phase=CampaignPhase.P2,
+        run_id="p2",
+        parent_run="p1",
+        selection=selection_path,
+    )
+
+    assert p0.passed and p1.passed and p2.passed
+    assert p0_worker.regression_roots == [p0.run_dir]
+    assert p1_worker.regression_roots == [p0.run_dir]
+    assert p2_worker.regression_roots == [p0.run_dir]
+    p1_manifest = json.loads((p1.run_dir / "resolved_manifest.json").read_text(encoding="utf-8"))
+    assert p1_manifest["parent"]["regression_artifact"]["report_sha256"] == "a" * 64
+
+
+def test_p0_fails_closed_when_regression_artifact_cannot_be_verified(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+
+    def rejected_verifier(*_args, **_kwargs):
+        raise ValueError("regression_gate_artifact_identity_mismatch")
+
+    lifecycle = CampaignLifecycle(
+        tmp_path,
+        environment={"fixture": "1"},
+        regression_verifier=rejected_verifier,
+    )
+
+    result = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(),
+        phase=CampaignPhase.P0,
+        run_id="p0",
+    )
+
+    assert result.passed is False
+    outcome = json.loads((result.run_dir / "phase_outcome.json").read_text(encoding="utf-8"))
+    assert "regression_artifact_invalid" in outcome["reason_codes"]
+
+
 def test_campaign_requires_successful_matching_parent_and_preserves_manifests(tmp_path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
-    lifecycle = CampaignLifecycle(tmp_path)
+    lifecycle = _campaign_lifecycle(tmp_path)
     with pytest.raises(PhaseAncestryError, match="P0 parent"):
         lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P1, run_id="p1")
 
@@ -184,7 +275,7 @@ def test_campaign_requires_successful_matching_parent_and_preserves_manifests(tm
 
 def test_campaign_rejects_tampered_parent_and_selection_context(tmp_path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
-    lifecycle = CampaignLifecycle(tmp_path)
+    lifecycle = _campaign_lifecycle(tmp_path)
     p0 = lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
     outcome_path = p0.run_dir / "phase_outcome.json"
     outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
@@ -249,7 +340,7 @@ def test_measurement_session_is_cross_process_exclusive_and_owner_only(tmp_path)
 
 def test_campaign_holds_measurement_lock_across_worker_validation(tmp_path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
-    result = CampaignLifecycle(tmp_path).run(
+    result = _campaign_lifecycle(tmp_path).run(
         spec,
         _CampaignFixtureWorker(assert_lock_root=tmp_path),
         phase=CampaignPhase.P0,
@@ -260,7 +351,7 @@ def test_campaign_holds_measurement_lock_across_worker_validation(tmp_path) -> N
 
 def test_campaign_rejects_a_forged_p2_seed_overlap(monkeypatch, tmp_path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
-    lifecycle = CampaignLifecycle(tmp_path)
+    lifecycle = _campaign_lifecycle(tmp_path)
     lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
     p1 = lifecycle.run(
         spec,

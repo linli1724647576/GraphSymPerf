@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import socket
@@ -38,6 +39,14 @@ from graph_sym_perf.experiment.supervisor import (
     RulePlanRunSummary,
     RulePlanSupervisor,
     load_cell_summary,
+)
+from graph_sym_perf.validation.regression import (
+    RegressionManifest,
+    load_regression_case,
+    load_verified_regression_report,
+    probe_current_regression_environment_identity,
+    regression_campaign_identity,
+    regression_validation_evidence_path,
 )
 
 
@@ -79,8 +88,19 @@ class _PhaseEvidence:
 class CampaignLifecycle:
     """Coordinate phase identity and ancestry without duplicating worker logic."""
 
-    def __init__(self, campaign_root: str | Path) -> None:
+    def __init__(
+        self,
+        campaign_root: str | Path,
+        *,
+        environment: Mapping[str, str] | None = None,
+        regression_verifier: Callable[
+            [ValidatedYieldExperimentSpec, Path, Mapping[str, str]],
+            Mapping[str, object],
+        ] | None = None,
+    ) -> None:
         self.campaign_root = Path(campaign_root)
+        self.environment = dict(os.environ if environment is None else environment)
+        self._regression_verifier = regression_verifier or _verify_regression_artifact
 
     def run(
         self,
@@ -103,6 +123,7 @@ class CampaignLifecycle:
         campaign_id = campaign_identity(spec)
         config_hash = campaign_config_hash(spec)
         parent_ref = self._validate_ancestry(
+            spec,
             phase,
             parent_run=parent_run,
             campaign_id=campaign_id,
@@ -150,6 +171,16 @@ class CampaignLifecycle:
         manifest_hash = canonical_hash(manifest_body)
         _write_sealed_json(run_dir / "resolved_manifest.json", manifest_body)
 
+        bind_regression_root = getattr(worker, "bind_regression_artifact_root", None)
+        if callable(bind_regression_root):
+            bind_regression_root(
+                self._regression_root_for_phase(
+                    phase,
+                    run_dir=run_dir,
+                    parent=parent_ref,
+                )
+            )
+
         lease = MeasurementSessionLock(self.campaign_root).acquire()
         try:
             summary = RulePlanSupervisor(
@@ -161,7 +192,13 @@ class CampaignLifecycle:
         finally:
             lease.release()
 
-        passed, gate_reasons = self._phase_passed(phase, plan, summary, run_id)
+        passed, gate_reasons, regression_artifact = self._phase_passed(
+            spec,
+            phase,
+            plan,
+            summary,
+            run_id,
+        )
         outcome_body = {
             "campaign_id": campaign_id,
             "counts": {
@@ -178,6 +215,8 @@ class CampaignLifecycle:
             "rule_plan_hash": rule_plan_hash,
             "run_id": run_id,
         }
+        if regression_artifact is not None:
+            outcome_body["regression_artifact"] = dict(regression_artifact)
         _write_sealed_json(run_dir / "phase_outcome.json", outcome_body)
         return CampaignLifecycleResult(
             campaign_id=campaign_id,
@@ -245,11 +284,12 @@ class CampaignLifecycle:
 
     def _phase_passed(
         self,
+        spec: ValidatedYieldExperimentSpec,
         phase: CampaignPhase,
         plan: RulePlan,
         summary: RulePlanRunSummary,
         run_id: str,
-    ) -> tuple[bool, tuple[str, ...]]:
+    ) -> tuple[bool, tuple[str, ...], Mapping[str, object] | None]:
         if summary.failed:
             return False, tuple(
                 name
@@ -260,27 +300,30 @@ class CampaignLifecycle:
                     ("infrastructure_failed", summary.infrastructure_failed),
                 )
                 if values
-            )
+            ), None
         if len(summary.completed) != len(plan.entries):
-            return False, ("entry_count_mismatch",)
+            return False, ("entry_count_mismatch",), None
         if phase is not CampaignPhase.P0:
-            return True, ()
+            return True, (), None
         summaries = self.cell_summaries_without_outcome(run_id)
         core = tuple(cell for cell in summaries if cell.stream == "discovery")
         controls = tuple(cell for cell in summaries if cell.stream == "control")
-        regression_entries = tuple(entry for entry in plan.entries if entry.stream.value == "regression")
-        regression_complete = bool(regression_entries) and all(
-            entry in summary.completed for entry in regression_entries
-        )
+        try:
+            regression_artifact = self._verified_regression_reference(
+                spec,
+                self._run_dir(run_id),
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            return False, ("regression_artifact_invalid",), None
         gate = evaluate_p0_gate(
             core_cells=core,
             control_cells=controls,
             regression=AffectedVersionRegressionReport(
-                passed=regression_complete,
-                artifact_complete=regression_complete,
+                passed=regression_artifact.get("passed") is True,
+                artifact_complete=regression_artifact.get("artifact_complete") is True,
             ),
         )
-        return gate.passed, gate.reason_codes
+        return gate.passed, gate.reason_codes, regression_artifact
 
     def cell_summaries_without_outcome(self, run_id: str) -> tuple[CellSummary, ...]:
         run_dir = self._run_dir(run_id)
@@ -330,6 +373,7 @@ class CampaignLifecycle:
 
     def _validate_ancestry(
         self,
+        spec: ValidatedYieldExperimentSpec,
         phase: CampaignPhase,
         *,
         parent_run: str | None,
@@ -358,6 +402,16 @@ class CampaignLifecycle:
             "phase": required.value,
             "run_id": parent_run,
         }
+        if required is CampaignPhase.P0:
+            regression_artifact = parent.outcome.get("regression_artifact")
+            if not isinstance(regression_artifact, Mapping):
+                raise PhaseAncestryError("P0 regression artifact reference is missing")
+            self._verified_regression_reference(
+                spec,
+                self._run_dir(parent_run),
+                expected=regression_artifact,
+            )
+            reference["regression_artifact"] = dict(regression_artifact)
         if phase is CampaignPhase.P2:
             grandparent_ref = parent.manifest.get("parent")
             if not isinstance(grandparent_ref, Mapping) or grandparent_ref.get("phase") != "p0":
@@ -374,8 +428,67 @@ class CampaignLifecycle:
                 or grandparent.manifest.get("config_hash") != config_hash
             ):
                 raise PhaseAncestryError("P2 P0 ancestry drift")
+            regression_artifact = grandparent_ref.get("regression_artifact")
+            if not isinstance(regression_artifact, Mapping):
+                raise PhaseAncestryError("P2 P0 regression artifact reference is missing")
+            self._verified_regression_reference(
+                spec,
+                self._run_dir(grandparent_run),
+                expected=regression_artifact,
+            )
             reference["p0_ancestor"] = dict(grandparent_ref)
         return reference
+
+    def _verified_regression_reference(
+        self,
+        spec: ValidatedYieldExperimentSpec,
+        run_dir: Path,
+        *,
+        expected: Mapping[str, object] | None = None,
+    ) -> Mapping[str, object]:
+        reference = dict(self._regression_verifier(spec, run_dir, self.environment))
+        required_hashes = (
+            "campaign_identity_hash",
+            "environment_identity_hash",
+            "report_content_hash",
+            "report_sha256",
+            "validation_evidence_sha256",
+        )
+        if (
+            reference.get("passed") is not True
+            or reference.get("artifact_complete") is not True
+            or not isinstance(reference.get("case_id"), str)
+            or not isinstance(reference.get("report_path"), str)
+            or any(
+                not isinstance(reference.get(name), str)
+                or re.fullmatch(r"[0-9a-f]{64}", str(reference.get(name))) is None
+                for name in required_hashes
+            )
+        ):
+            raise PhaseAncestryError("regression artifact reference is incomplete")
+        if expected is not None and reference != dict(expected):
+            raise PhaseAncestryError("regression artifact ancestry drift")
+        return reference
+
+    def _regression_root_for_phase(
+        self,
+        phase: CampaignPhase,
+        *,
+        run_dir: Path,
+        parent: Mapping[str, object] | None,
+    ) -> Path:
+        if phase is CampaignPhase.P0:
+            return run_dir
+        if parent is None:
+            raise PhaseAncestryError("non-P0 phase lacks regression ancestry")
+        if phase is CampaignPhase.P1:
+            run_id = parent.get("run_id")
+        else:
+            ancestor = parent.get("p0_ancestor")
+            run_id = ancestor.get("run_id") if isinstance(ancestor, Mapping) else None
+        if not isinstance(run_id, str):
+            raise PhaseAncestryError("P0 regression artifact root identity is invalid")
+        return self._run_dir(run_id)
 
     def _validate_plan_ancestry(
         self,
@@ -433,6 +546,47 @@ class CampaignLifecycle:
         if candidate.parent != root:
             raise ValueError("campaign run id escapes the campaign root")
         return self.campaign_root / run_id
+
+
+def _verify_regression_artifact(
+    spec: ValidatedYieldExperimentSpec,
+    run_dir: Path,
+    environment: Mapping[str, str],
+) -> Mapping[str, object]:
+    manifest_path = spec.regression.get("manifest")
+    if not isinstance(manifest_path, Path):
+        raise ValueError("regression manifest is not configured")
+    manifest = RegressionManifest.load(manifest_path)
+    case = load_regression_case(manifest.path, environment)
+    identity = probe_current_regression_environment_identity(case)
+    regression_identity = regression_campaign_identity(
+        spec_name=spec.name,
+        schema_version=spec.schema_version,
+        manifest_sha256=manifest.manifest_sha256,
+    )
+    report_path = run_dir / "regressions" / manifest.case_id / "regression_report.json"
+    report = load_verified_regression_report(
+        report_path,
+        case=case,
+        campaign_identity_hash=regression_identity,
+        current_identity=identity,
+    )
+    raw = read_json_object(report_path)
+    report_content_hash = raw.get("content_hash")
+    evidence_path = regression_validation_evidence_path(report_path)
+    if not isinstance(report_content_hash, str):
+        raise ValueError("regression report content hash is missing")
+    return {
+        "artifact_complete": True,
+        "campaign_identity_hash": regression_identity,
+        "case_id": manifest.case_id,
+        "environment_identity_hash": report.environment_identity_hash,
+        "passed": True,
+        "report_content_hash": report_content_hash,
+        "report_path": str(report_path.relative_to(run_dir)),
+        "report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+        "validation_evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+    }
 
 
 class MeasurementSessionLock:
