@@ -305,6 +305,31 @@ def test_campaign_rejects_tampered_parent_and_selection_context(tmp_path) -> Non
         )
 
 
+def test_phase_outcome_binds_rule_plan_ordered_cell_summary_root(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+    lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
+    p1 = lifecycle.run(
+        spec,
+        _CampaignFixtureWorker(),
+        phase=CampaignPhase.P1,
+        run_id="p1",
+        parent_run="p0",
+    )
+    outcome = json.loads((p1.run_dir / "phase_outcome.json").read_text(encoding="utf-8"))
+    assert isinstance(outcome["cell_summary_root"], str)
+
+    summary_path = next((p1.run_dir / "entries").glob("*/cell_summary.json"))
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["best_validated_delta_ms"] = 9999.0
+    body = {key: value for key, value in summary.items() if key != "content_hash"}
+    summary["content_hash"] = canonical_hash(body)
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(PhaseAncestryError, match="cell summary root"):
+        lifecycle.cell_summaries("p1")
+
+
 def test_measurement_session_is_cross_process_exclusive_and_owner_only(tmp_path) -> None:
     lock = MeasurementSessionLock(tmp_path)
     lease = lock.acquire()

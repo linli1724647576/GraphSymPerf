@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from graph_sym_perf.core import to_jsonable
 from graph_sym_perf.experiment.evidence_validation import canonical_hash, read_json_object
+from graph_sym_perf.experiment.entry_paths import rule_plan_entry_directory_name
 from graph_sym_perf.experiment.plan_models import (
     CampaignPhase,
     RulePlan,
@@ -199,8 +200,10 @@ class CampaignLifecycle:
             summary,
             run_id,
         )
+        _ordered_summaries, cell_summary_root = self._ordered_cell_summaries(run_id)
         outcome_body = {
             "campaign_id": campaign_id,
+            "cell_summary_root": cell_summary_root,
             "counts": {
                 "completed": len(summary.completed),
                 "infrastructure_failed": len(summary.infrastructure_failed),
@@ -229,14 +232,11 @@ class CampaignLifecycle:
         )
 
     def cell_summaries(self, run_id: str) -> tuple[CellSummary, ...]:
-        run_dir = self._run_dir(run_id)
         evidence = self._load_phase(run_id)
-        manifest_hash = evidence.manifest_hash
-        summaries = tuple(
-            load_cell_summary(path)
-            for path in sorted((run_dir / "entries").glob("*/cell_summary.json"))
-        )
-        if any(summary.input_manifest_hash != manifest_hash for summary in summaries):
+        summaries, root = self._ordered_cell_summaries(run_id)
+        if root != evidence.outcome.get("cell_summary_root"):
+            raise PhaseAncestryError("phase cell summary root drift")
+        if any(summary.input_manifest_hash != evidence.manifest_hash for summary in summaries):
             raise PhaseAncestryError("cell summary manifest ancestry drift")
         return summaries
 
@@ -329,10 +329,7 @@ class CampaignLifecycle:
         run_dir = self._run_dir(run_id)
         manifest = _load_sealed_json(run_dir / "resolved_manifest.json", "phase manifest")
         manifest_hash = canonical_hash(manifest)
-        summaries = tuple(
-            load_cell_summary(path)
-            for path in sorted((run_dir / "entries").glob("*/cell_summary.json"))
-        )
+        summaries, _root = self._ordered_cell_summaries(run_id)
         if any(summary.input_manifest_hash != manifest_hash for summary in summaries):
             raise PhaseAncestryError("cell summary manifest ancestry drift")
         return summaries
@@ -532,7 +529,51 @@ class CampaignLifecycle:
             or outcome.get("rule_plan_hash") != manifest.get("rule_plan_hash")
         ):
             raise PhaseAncestryError("phase outcome identity drift")
+        _summaries, cell_summary_root = self._ordered_cell_summaries(run_id)
+        if outcome.get("cell_summary_root") != cell_summary_root:
+            raise PhaseAncestryError("phase cell summary root drift")
         return _PhaseEvidence(manifest, manifest_hash, outcome, outcome_hash)
+
+    def _ordered_cell_summaries(
+        self,
+        run_id: str,
+    ) -> tuple[tuple[CellSummary, ...], str]:
+        run_dir = self._run_dir(run_id)
+        rule_plan = read_json_object(run_dir / "rule_plan.json")
+        entries = rule_plan.get("entries")
+        if not isinstance(entries, list) or not all(isinstance(entry, Mapping) for entry in entries):
+            raise PhaseAncestryError("phase RulePlan entries are invalid")
+        summaries: list[CellSummary] = []
+        bindings: list[dict[str, object]] = []
+        expected_paths: set[Path] = set()
+        for entry in entries:
+            entry_id = entry.get("entry_id")
+            if not isinstance(entry_id, str) or not entry_id:
+                raise PhaseAncestryError("phase RulePlan entry identity is invalid")
+            path = (
+                run_dir
+                / "entries"
+                / rule_plan_entry_directory_name(entry_id)
+                / "cell_summary.json"
+            )
+            expected_paths.add(path)
+            payload = read_json_object(path)
+            content_hash = payload.get("content_hash")
+            if not isinstance(content_hash, str):
+                raise PhaseAncestryError("cell summary content hash is missing")
+            summary = load_cell_summary(path)
+            summaries.append(summary)
+            bindings.append(
+                {
+                    "cell_summary_content_hash": content_hash,
+                    "entry_id": entry_id,
+                    "relative_path": str(path.relative_to(run_dir)),
+                }
+            )
+        actual_paths = set((run_dir / "entries").glob("*/cell_summary.json"))
+        if actual_paths != expected_paths:
+            raise PhaseAncestryError("phase cell summary set differs from RulePlan")
+        return tuple(summaries), canonical_hash({"ordered_cell_summaries": bindings})
 
     def _run_dir(self, run_id: str) -> Path:
         if (

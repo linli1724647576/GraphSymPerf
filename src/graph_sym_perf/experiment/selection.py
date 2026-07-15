@@ -127,6 +127,7 @@ class PilotSelection:
     campaign_id: str
     input_p1_manifest_hash: str
     selector_protocol_version: str
+    max_cells: int
     status: str
     reason_codes: tuple[str, ...]
     decisions: tuple[PilotCellDecision, ...]
@@ -248,6 +249,7 @@ def select_p2_cells(
             (),
             status="control_contamination",
             reasons=("control_validation_pass",),
+            max_cells=max_cells,
         )
 
     eligible = [decision for decision in decisions if decision.eligible]
@@ -271,6 +273,7 @@ def select_p2_cells(
             (),
             status="selection_overflow",
             reasons=overflow_reasons,
+            max_cells=max_cells,
         )
 
     selected: list[PilotCellDecision] = list(winners)
@@ -305,6 +308,7 @@ def select_p2_cells(
         selected_cells,
         status=status,
         reasons=reasons,
+        max_cells=max_cells,
     )
 
 
@@ -374,6 +378,14 @@ def load_pilot_selection(
         decision = decision_by_identity.get(identity)
         if decision is None or decision.summary != cell or not decision.eligible:
             raise SelectionIntegrityError("selected cell is not bound to one eligible input decision")
+    replayed = select_p2_cells(
+        tuple(decision.summary for decision in selection.decisions),
+        max_cells=selection.max_cells,
+        campaign_id=selection.campaign_id,
+        input_p1_manifest_hash=selection.input_p1_manifest_hash,
+    )
+    if replayed != selection:
+        raise SelectionIntegrityError("pilot selection differs from deterministic replay")
     return selection
 
 
@@ -385,6 +397,7 @@ def _selection_result(
     *,
     status: str,
     reasons: tuple[str, ...],
+    max_cells: int,
 ) -> PilotSelection:
     selected = {cell.identity for cell in cells}
     finalized = tuple(
@@ -406,6 +419,7 @@ def _selection_result(
         campaign_id=campaign_id,
         input_p1_manifest_hash=manifest_hash,
         selector_protocol_version=SELECTOR_PROTOCOL_VERSION,
+        max_cells=max_cells,
         status=status,
         reason_codes=reasons,
         decisions=finalized,
@@ -453,6 +467,7 @@ def _selection_payload(selection: PilotSelection) -> dict[str, Any]:
         "campaign_id": selection.campaign_id,
         "input_p1_manifest_hash": selection.input_p1_manifest_hash,
         "selector_protocol_version": selection.selector_protocol_version,
+        "max_cells": selection.max_cells,
         "status": selection.status,
         "reason_codes": list(selection.reason_codes),
         "decisions": [asdict(decision) for decision in selection.decisions],
@@ -479,6 +494,7 @@ def _selection_from_payload(payload: Mapping[str, Any]) -> PilotSelection:
         campaign_id=_strict_str(payload["campaign_id"]),
         input_p1_manifest_hash=_strict_str(payload["input_p1_manifest_hash"]),
         selector_protocol_version=_strict_str(payload["selector_protocol_version"]),
+        max_cells=_strict_positive_int(payload["max_cells"]),
         status=_strict_str(payload["status"]),
         reason_codes=tuple(_strict_str_list(payload["reason_codes"])),
         decisions=decisions,
@@ -521,6 +537,12 @@ def _strict_str(value: object) -> str:
 def _strict_str_list(value: object) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise TypeError("expected string list")
+    return value
+
+
+def _strict_positive_int(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 6:
+        raise TypeError("expected integer between one and six")
     return value
 
 

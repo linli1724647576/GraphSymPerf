@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import random
 from dataclasses import replace
 
@@ -302,3 +303,39 @@ def test_pilot_selection_is_write_once_content_bound_and_context_checked(tmp_pat
             expected_campaign_id=CAMPAIGN_ID,
             expected_p1_manifest_hash=MANIFEST_HASH,
         )
+
+
+@pytest.mark.parametrize("tamper", ("ranking", "selection_reason"))
+def test_pilot_selection_loader_replays_hard_gates_ranking_and_selection(
+    tmp_path,
+    tamper,
+) -> None:
+    selection = select_p2_cells(
+        (
+            _winner("r1", "bool", 128, 0.5),
+            _cell("r2", "sym", 256, shard_seed=99),
+        ),
+        campaign_id=CAMPAIGN_ID,
+        input_p1_manifest_hash=MANIFEST_HASH,
+    )
+    path = tmp_path / "pilot_selection.json"
+    write_pilot_selection(selection, path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if tamper == "ranking":
+        raw["decisions"][0]["ranking_components"][1][2] = 999.0
+    else:
+        raw["decisions"][0]["selection_reason"] = "family_fallback"
+    body = {key: value for key, value in raw.items() if key != "content_hash"}
+    raw["content_hash"] = hashlib.sha256(
+        json.dumps(
+            body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(SelectionIntegrityError, match="replay"):
+        load_pilot_selection(path)
