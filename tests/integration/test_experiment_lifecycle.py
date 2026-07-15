@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 from dataclasses import asdict, replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -466,6 +467,31 @@ def test_campaign_source_guard_rehashes_gdsmith_artifacts_and_rejects_drift(
         stream.write(b"drift")
 
     with pytest.raises(ManifestMismatchError, match="source provenance changed"):
+        guard()
+
+
+def test_campaign_source_guard_rejects_gdsmith_drift_between_plan_and_guard(
+    tmp_path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = verified_gdsmith_environment(
+        tmp_path / "gdsmith-fixture",
+        spec.generation.expected_commit,
+    )
+    plan = campaign_module.build_rule_plan(
+        spec,
+        CampaignPhase.P0,
+        environment=environment,
+    )
+    jar_path = Path(environment["GRAPHSYMPERF_GDSMITH_JAR"])
+    jar_path.write_bytes(jar_path.read_bytes() + b"plan-to-guard-drift")
+
+    with pytest.raises(ManifestMismatchError, match="source provenance changed"):
+        guard = campaign_module._campaign_source_provenance_guard(
+            spec,
+            plan,
+            environment=environment,
+        )
         guard()
 
 

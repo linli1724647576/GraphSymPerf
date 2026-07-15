@@ -250,24 +250,18 @@ class _SourceProvenanceGuard:
     ) -> None:
         self.spec = spec
         self.expected = plan.source_revision
+        self.schema_version = plan.schema_version
         if plan.schema_version == 3 and not self.expected.provenance_complete:
             raise ManifestMismatchError("source provenance is incomplete")
         self.repository_root = spec.source_path.parents[1]
         self.environment = os.environ if environment is None else environment
+        self._verify_artifact_provenance()
         self.artifact_signature = self._artifact_signature()
 
     def __call__(self) -> None:
         signature = self._artifact_signature()
         if signature != self.artifact_signature:
-            tooling = check_gdsmith_tooling(
-                GdsmithConfig(expected_source_commit=self.spec.generation.expected_commit),
-                self.environment,
-            )
-            if (
-                tooling.jar_sha256 != self.expected.gdsmith_jar_sha256
-                or tooling.build_manifest_sha256 != self.expected.gdsmith_build_manifest_sha256
-            ):
-                raise ManifestMismatchError("source provenance changed during run")
+            self._verify_artifact_provenance()
             self.artifact_signature = signature
         try:
             rules_sha256 = hashlib.sha256(self.spec.rules_source_path.read_bytes()).hexdigest()
@@ -288,6 +282,19 @@ class _SourceProvenanceGuard:
             self.expected.rules_schema_sha256,
         )
         if current != expected:
+            raise ManifestMismatchError("source provenance changed during run")
+
+    def _verify_artifact_provenance(self) -> None:
+        tooling = check_gdsmith_tooling(
+            GdsmithConfig(expected_source_commit=self.spec.generation.expected_commit),
+            self.environment,
+        )
+        if (
+            (self.schema_version == 3 and not tooling.build_manifest_ok)
+            or tooling.jar_sha256 != self.expected.gdsmith_jar_sha256
+            or tooling.build_manifest_sha256
+            != self.expected.gdsmith_build_manifest_sha256
+        ):
             raise ManifestMismatchError("source provenance changed during run")
 
     def _artifact_signature(self) -> tuple[object, ...]:
