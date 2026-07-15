@@ -43,6 +43,8 @@ def build_rule_plan(
     spec: ValidatedYieldExperimentSpec,
     phase: CampaignPhase,
     selected_cells: tuple[tuple[str, int], ...] = (),
+    *,
+    environment: Mapping[str, str] | None = None,
 ) -> RulePlan:
     if not isinstance(spec, ValidatedYieldExperimentSpec):
         raise ConfigError("schema-v3 validated-yield spec is required for RulePlan")
@@ -141,7 +143,7 @@ def build_rule_plan(
     if len({entry.shard_seed for entry in entries}) != len(entries):
         raise ConfigError("deterministic RulePlan seed collision")
 
-    source_revision = _rule_plan_source_revision(spec)
+    source_revision = _rule_plan_source_revision(spec, environment=environment)
     resolved_entries = tuple(entries)
     return RulePlan(
         spec_name=spec.name,
@@ -332,7 +334,11 @@ def _entry_seed(
     return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") & ((1 << 63) - 1)
 
 
-def _rule_plan_source_revision(spec: ValidatedYieldExperimentSpec) -> SourceRevision:
+def _rule_plan_source_revision(
+    spec: ValidatedYieldExperimentSpec,
+    *,
+    environment: Mapping[str, str] | None,
+) -> SourceRevision:
     repository_root = spec.source_path.parents[1]
     gdsmith_commit = _git_output(spec.generation.checkout, "rev-parse", "HEAD")
     if gdsmith_commit != spec.generation.expected_commit:
@@ -340,13 +346,30 @@ def _rule_plan_source_revision(spec: ValidatedYieldExperimentSpec) -> SourceRevi
             "GDsmith checkout does not match generation.expected_commit: "
             f"expected {spec.generation.expected_commit}, got {gdsmith_commit or 'unavailable'}"
         )
-    return SourceRevision(
+    tooling = check_gdsmith_tooling(
+        GdsmithConfig(expected_source_commit=spec.generation.expected_commit),
+        os.environ if environment is None else environment,
+    )
+    if (
+        not tooling.build_manifest_ok
+        or not tooling.jar_sha256
+        or not tooling.build_manifest_sha256
+    ):
+        raise ConfigError(
+            "schema-v3 RulePlan requires a verified GDsmith artifact and build manifest"
+        )
+    revision = SourceRevision(
         repository_commit=_git_output(repository_root, "rev-parse", "HEAD"),
         repository_dirty=_git_dirty(repository_root),
         gdsmith_commit=gdsmith_commit,
         gdsmith_dirty=_git_dirty(spec.generation.checkout),
         rules_schema_sha256=spec.rules_schema_sha256,
+        gdsmith_jar_sha256=tooling.jar_sha256,
+        gdsmith_build_manifest_sha256=tooling.build_manifest_sha256,
     )
+    if not revision.provenance_complete:
+        raise ConfigError("schema-v3 RulePlan source provenance is incomplete")
+    return revision
 
 
 def build_run_plan(

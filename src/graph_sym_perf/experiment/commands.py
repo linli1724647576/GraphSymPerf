@@ -57,13 +57,19 @@ class ExperimentCommands:
                 pilot = load_pilot_selection(
                     selection,
                     expected_campaign_id=campaign_identity(spec),
+                    expected_max_cells=spec.campaign.p2.max_rule_scale_cells,
                 )
                 if pilot.status != "selected" or not pilot.cells:
                     raise ValueError("P2 planning requires a successful non-empty selection")
                 selected_cells = tuple((cell.rule_id, cell.graph_scale) for cell in pilot.cells)
             elif selection is not None:
                 raise ValueError("--selection is only valid for P2")
-            plan = build_rule_plan(spec, parsed_phase, selected_cells=selected_cells)
+            plan = build_rule_plan(
+                spec,
+                parsed_phase,
+                selected_cells=selected_cells,
+                environment=_formal_environment(config),
+            )
         else:
             if phase is not None or selection is not None:
                 raise ValueError("phase selection requires a schema-v3 config")

@@ -21,6 +21,17 @@ from graph_sym_perf.validation.regression import RegressionEnvironmentIdentity, 
 from graph_sym_perf.validation.session_runner import validation_schedule_seed
 from graph_sym_perf.validation.validator import IssueValidator
 from tests.integration.test_issue_validation import FakeIndependentRunner
+from tests.gdsmith_artifact_fixture import verified_gdsmith_environment
+
+
+@pytest.fixture(autouse=True)
+def _default_rule_plan_tooling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    for name, value in verified_gdsmith_environment(
+        tmp_path / "gdsmith-fixture",
+        spec.generation.expected_commit,
+    ).items():
+        monkeypatch.setenv(name, value)
 
 
 def _entry(phase: CampaignPhase):

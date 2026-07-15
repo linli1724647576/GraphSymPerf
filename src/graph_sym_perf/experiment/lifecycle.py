@@ -250,6 +250,8 @@ class _SourceProvenanceGuard:
     ) -> None:
         self.spec = spec
         self.expected = plan.source_revision
+        if plan.schema_version == 3 and not self.expected.provenance_complete:
+            raise ManifestMismatchError("source provenance is incomplete")
         self.repository_root = spec.source_path.parents[1]
         self.environment = os.environ if environment is None else environment
         self.artifact_signature = self._artifact_signature()

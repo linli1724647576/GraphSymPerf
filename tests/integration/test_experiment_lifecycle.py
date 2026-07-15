@@ -24,6 +24,7 @@ from graph_sym_perf.experiment.selection import select_p2_cells, write_pilot_sel
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.state import ManifestMismatchError
 from graph_sym_perf.experiment.supervisor import RunSummary
+from tests.gdsmith_artifact_fixture import verified_gdsmith_environment
 
 
 class _CompleteLifecycleWorker:
@@ -117,10 +118,15 @@ def _verified_regression_reference(_spec, run_dir, _environment):
 
 
 def _campaign_lifecycle(root):
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
     return CampaignLifecycle(
         root,
-        environment={"fixture": "1"},
+        environment=verified_gdsmith_environment(
+            root / "gdsmith-fixture",
+            spec.generation.expected_commit,
+        ),
         regression_verifier=_verified_regression_reference,
+        measurement_lock_root=root / "measurement-locks",
         process_isolation=False,
     )
 
@@ -225,8 +231,12 @@ def test_p0_fails_closed_when_regression_artifact_cannot_be_verified(tmp_path) -
 
     lifecycle = CampaignLifecycle(
         tmp_path,
-        environment={"fixture": "1"},
+        environment=verified_gdsmith_environment(
+            tmp_path / "gdsmith-fixture",
+            spec.generation.expected_commit,
+        ),
         regression_verifier=rejected_verifier,
+        measurement_lock_root=tmp_path / "measurement-locks",
     )
 
     result = lifecycle.run(
@@ -281,6 +291,65 @@ def test_campaign_requires_successful_matching_parent_and_preserves_manifests(tm
     (interrupted / "rule_plan.json").write_text("{}", encoding="utf-8")
     with pytest.raises(FileExistsError, match="run id"):
         lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="interrupted")
+
+
+def test_campaign_rejects_an_incomplete_rule_plan_source_revision_before_p0(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+    real_builder = campaign_module.build_rule_plan
+
+    def incomplete_builder(*args, **kwargs):
+        plan = real_builder(*args, **kwargs)
+        return replace(
+            plan,
+            source_revision=replace(
+                plan.source_revision,
+                gdsmith_build_manifest_sha256=None,
+            ),
+        )
+
+    monkeypatch.setattr(campaign_module, "build_rule_plan", incomplete_builder)
+
+    with pytest.raises(PhaseAncestryError, match="source revision is incomplete"):
+        lifecycle.run(
+            spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P0,
+            run_id="incomplete-p0",
+        )
+    assert not (tmp_path / "incomplete-p0").exists()
+
+
+def test_campaign_rejects_incomplete_parent_source_revision_even_when_resealed(
+    tmp_path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+    p0 = lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="p0")
+    rule_plan_path = p0.run_dir / "rule_plan.json"
+    rule_plan = json.loads(rule_plan_path.read_text(encoding="utf-8"))
+    rule_plan["source_revision"]["gdsmith_jar_sha256"] = None
+    rule_plan_path.write_text(json.dumps(rule_plan), encoding="utf-8")
+    manifest_path = p0.run_dir / "resolved_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("content_hash")
+    manifest["rule_plan_hash"] = canonical_hash(rule_plan)
+    manifest_path.write_text(
+        json.dumps({**manifest, "content_hash": canonical_hash(manifest)}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PhaseAncestryError, match="source revision is incomplete"):
+        lifecycle.run(
+            spec,
+            _CampaignFixtureWorker(),
+            phase=CampaignPhase.P1,
+            run_id="blocked-p1",
+            parent_run="p0",
+        )
 
 
 def test_campaign_rejects_tampered_parent_and_selection_context(tmp_path) -> None:
@@ -347,7 +416,9 @@ def test_campaign_runs_manifest_bound_source_guard_before_and_after_each_entry(
     observed = []
 
     def guard_factory(_spec, plan, *, environment):
-        assert environment == {"fixture": "1"}
+        assert environment["GRAPHSYMPERF_GDSMITH_JAR_SHA256"] == (
+            plan.source_revision.gdsmith_jar_sha256
+        )
 
         def guard():
             observed.append(plan.source_revision)
@@ -371,6 +442,31 @@ def test_campaign_runs_manifest_bound_source_guard_before_and_after_each_entry(
 
     assert len(observed) == 2 * len(rule_plan["entries"])
     assert all(asdict(source) == rule_plan["source_revision"] for source in observed)
+
+
+def test_campaign_source_guard_rehashes_gdsmith_artifacts_and_rejects_drift(
+    tmp_path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = verified_gdsmith_environment(
+        tmp_path / "gdsmith-fixture",
+        spec.generation.expected_commit,
+    )
+    plan = campaign_module.build_rule_plan(
+        spec,
+        CampaignPhase.P0,
+        environment=environment,
+    )
+    guard = campaign_module._campaign_source_provenance_guard(
+        spec,
+        plan,
+        environment=environment,
+    )
+    with open(environment["GRAPHSYMPERF_GDSMITH_JAR"], "ab") as stream:
+        stream.write(b"drift")
+
+    with pytest.raises(ManifestMismatchError, match="source provenance changed"):
+        guard()
 
 
 def test_p2_rejects_self_consistent_selection_not_built_from_parent_p1_cells(
@@ -785,7 +881,10 @@ def test_busy_measurement_target_never_publishes_a_campaign_run(tmp_path) -> Non
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
     lifecycle = CampaignLifecycle(
         tmp_path / "campaign",
-        environment={"fixture": "1"},
+        environment=verified_gdsmith_environment(
+            tmp_path / "gdsmith-fixture",
+            spec.generation.expected_commit,
+        ),
         regression_verifier=_verified_regression_reference,
         measurement_lock_root=tmp_path / "locks",
     )

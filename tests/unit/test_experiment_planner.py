@@ -24,37 +24,18 @@ from graph_sym_perf.experiment.planner import (
     write_resolved_manifest,
 )
 from graph_sym_perf.experiment.spec import load_experiment_spec
+from tests.gdsmith_artifact_fixture import verified_gdsmith_environment
 
 
-def _gdsmith_artifact_environment(root: Path, source_commit: str) -> dict[str, str]:
-    jar = root / "GDsmith.jar"
-    jar.write_bytes(b"planner-fixture")
-    digest = hashlib.sha256(jar.read_bytes()).hexdigest()
-    jar.with_suffix(jar.suffix + ".manifest.json").write_text(
-        json.dumps(
-            {
-                "sha256": digest,
-                "source_commit": source_commit,
-                "compatibility_guards": [
-                    "reject_multi_label_node_patterns",
-                    "render_safe_double_quoted_literals",
-                    "reject_unsafe_double_quoted_tokens",
-                    "jdbc_query_timeout_60s",
-                    "jdbc_result_row_cap_1000",
-                    "neo4j_transaction_timeout_30s",
-                    "neo4j_result_row_cap_1000",
-                    "memgraph_transaction_timeout_30s",
-                    "exclude_unbuildable_tugraph_provider",
-                    "shade_runnable_jar",
-                ],
-            }
-        ),
-        encoding="utf-8",
+@pytest.fixture(autouse=True)
+def _default_rule_plan_tooling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = verified_gdsmith_environment(
+        tmp_path / "default-gdsmith",
+        spec.generation.expected_commit,
     )
-    return {
-        "GRAPHSYMPERF_GDSMITH_JAR": str(jar),
-        "GRAPHSYMPERF_GDSMITH_JAR_SHA256": "sha256:" + digest,
-    }
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
 
 
 def test_planner_resolves_repository_commit_from_config_parent_by_default() -> None:
@@ -98,6 +79,23 @@ def test_p1_rule_plan_has_independent_rule_scale_budgets() -> None:
     assert by_rule["constant_true_disjunction"].tier == "core"
     assert by_rule["constant_true_disjunction"].proof_version == "1"
     assert by_rule["label_order_symmetry"].family == "sym"
+
+
+def test_rule_plan_seals_verified_gdsmith_artifact_digests_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = verified_gdsmith_environment(tmp_path, spec.generation.expected_commit)
+
+    plan = build_rule_plan(spec, CampaignPhase.P1, environment=environment)
+
+    assert plan.source_revision.gdsmith_jar_sha256 == environment[
+        "GRAPHSYMPERF_GDSMITH_JAR_SHA256"
+    ]
+    assert plan.source_revision.gdsmith_build_manifest_sha256
+    assert plan.source_revision.provenance_complete
+    with pytest.raises(ConfigError, match="verified GDsmith artifact"):
+        build_rule_plan(spec, CampaignPhase.P1, environment={})
 
 
 def test_p2_requires_bounded_explicit_rule_scale_cells() -> None:
@@ -357,7 +355,7 @@ def test_planner_records_exact_gdsmith_commit_and_clean_or_dirty_state(tmp_path:
         generation=replace(spec.generation, checkout=checkout, expected_commit=expected_commit),
     )
 
-    environment = _gdsmith_artifact_environment(tmp_path, expected_commit)
+    environment = verified_gdsmith_environment(tmp_path, expected_commit)
     clean = build_run_plan(spec, repository_root=checkout, environment=environment)
     (checkout / "README.md").write_text("dirty\n", encoding="utf-8")
     dirty = build_run_plan(spec, repository_root=checkout, environment=environment)

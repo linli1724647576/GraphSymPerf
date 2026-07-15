@@ -154,7 +154,12 @@ class CampaignLifecycle:
             if pilot is not None
             else ()
         )
-        plan = build_rule_plan(spec, phase, selected_cells=selected_cells)
+        plan = build_rule_plan(
+            spec,
+            phase,
+            selected_cells=selected_cells,
+            environment=self.environment,
+        )
         self._validate_plan_ancestry(plan, parent_ref)
         if phase is CampaignPhase.P2:
             assert parent_ref is not None
@@ -556,6 +561,8 @@ class CampaignLifecycle:
         plan: RulePlan,
         parent_ref: Mapping[str, object] | None,
     ) -> None:
+        if not plan.source_revision.provenance_complete:
+            raise PhaseAncestryError("RulePlan source revision is incomplete")
         if parent_ref is None:
             return
         parent_run = parent_ref.get("run_id")
@@ -580,8 +587,11 @@ class CampaignLifecycle:
         entries = rule_plan.get("entries")
         if not isinstance(entries, list) or not all(isinstance(entry, Mapping) for entry in entries):
             raise PhaseAncestryError("phase rule plan entries are invalid")
-        if not isinstance(rule_plan.get("source_revision"), Mapping):
-            raise PhaseAncestryError("phase rule plan source revision is invalid")
+        source_revision = rule_plan.get("source_revision")
+        if not isinstance(source_revision, Mapping) or not _source_revision_payload_complete(
+            source_revision
+        ):
+            raise PhaseAncestryError("phase rule plan source revision is incomplete")
         if rule_plan.get("phase") != manifest.get("phase"):
             raise PhaseAncestryError("phase rule plan identity drift")
         if outcome.get("manifest_hash") != manifest_hash:
@@ -770,6 +780,21 @@ def _campaign_source_provenance_guard(
     from graph_sym_perf.experiment.lifecycle import _SourceProvenanceGuard
 
     return _SourceProvenanceGuard(spec, plan, environment=environment)  # type: ignore[arg-type]
+
+
+def _source_revision_payload_complete(value: Mapping[str, object]) -> bool:
+    string_fields = (
+        "repository_commit",
+        "gdsmith_commit",
+        "rules_schema_sha256",
+        "gdsmith_jar_sha256",
+        "gdsmith_build_manifest_sha256",
+    )
+    return (
+        all(isinstance(value.get(name), str) and bool(str(value.get(name))) for name in string_fields)
+        and isinstance(value.get("repository_dirty"), bool)
+        and isinstance(value.get("gdsmith_dirty"), bool)
+    )
 
 
 class MeasurementSessionLock:
