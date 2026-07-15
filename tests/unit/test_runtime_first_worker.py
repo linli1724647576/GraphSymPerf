@@ -60,6 +60,7 @@ from graph_sym_perf.validation.models import (
     EquivalenceEvidence,
     SessionLifecycle,
     ValidationSession,
+    canonical_validation_report_hash,
 )
 from tests.helpers.regression_gate import (
     build_verified_regression_gate_template,
@@ -2491,6 +2492,13 @@ def test_worker_continues_validated_discovery_candidate_through_terminal_pipelin
     assert len(observed) == 1
     assert observed[0][1].stage.value == "validation_passed"
     assert observed[0][2]["task"] == entry
+    task8_ref = observed[0][2]["task8_validation_ref"]
+    assert task8_ref["schema_version"] == 2
+    assert task8_ref["report_hash"] == canonical_validation_report_hash(observed[0][1])
+    task8_path = tmp_path / task8_ref["relative_path"]
+    task8_payload = json.loads(task8_path.read_text(encoding="utf-8"))
+    assert task8_ref["content_hash"] == task8_payload["content_hash"]
+    assert task8_payload["candidate_hash"] == observed[0][0].candidate_hash
     assert next(tmp_path.glob("entries/*/candidate-outcomes/*.json")).is_file()
 
 

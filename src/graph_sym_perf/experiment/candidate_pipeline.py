@@ -17,28 +17,42 @@ from graph_sym_perf.artifacts.chain import ArtifactChainWriter
 from graph_sym_perf.artifacts.schema import ArtifactRecord, ArtifactReference
 from graph_sym_perf.artifacts.store import ContentAddressedStore
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
-from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.core import TargetSystem, to_jsonable
 from graph_sym_perf.equivalence.checker import compare_execution_results
 from graph_sym_perf.experiment.plan_models import (
+    CampaignPhase,
     ExperimentSpec,
     RulePlanEntry,
+    RuleStream,
     ShardTask,
     ValidatedYieldExperimentSpec,
 )
+from graph_sym_perf.experiment.entry_paths import rule_plan_entry_directory_name
+from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.provenance import verified_execution_provenance
 from graph_sym_perf.reducer import CandidateReducer, ReductionBundle, ReductionStatus, RuleWitness
 from graph_sym_perf.reducer.dependencies import analyze_query
 from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import EquivalentQueryPair, RuntimePolicy
 from graph_sym_perf.sampling.yield_store import ValidatedYieldStore
-from graph_sym_perf.transforms.rule_models import RuleRegistry
+from graph_sym_perf.transforms.rule_models import RuleRegistry, SafetyTier
 from graph_sym_perf.issues.durable_registry import committed_owner_outcome, promote_unique_issue
 from graph_sym_perf.issues.exporter import export_issue
 from graph_sym_perf.issues.receipts import canonical_issue_receipt_payload
-from graph_sym_perf.validation.models import CandidateBundle, EquivalenceEvidence, PipelineStage
+from graph_sym_perf.validation.evidence import issue_validation_report_is_complete
+from graph_sym_perf.validation.models import (
+    CandidateBundle,
+    CandidateManifest,
+    EquivalenceEvidence,
+    IssueValidationReport,
+    PipelineStage,
+    canonical_validation_report_hash,
+)
 from graph_sym_perf.validation.promotion import deterministic_issue_id
+from graph_sym_perf.validation.sealed_replay import replay_issue_validation_report
 from graph_sym_perf.validation.validator import IssueValidator
 from graph_sym_perf.validation.session_runner import SubprocessSessionRunner
+from graph_sym_perf.workload.rule_pairs import certified_pair_hash
 
 
 @dataclass(frozen=True)
@@ -207,6 +221,7 @@ class ProductionCandidatePipeline:
         graph_snapshot_ref = context.get("graph_snapshot_ref")
         driver_version = context.get("driver_version")
         adapter_factory = context.get("validation_adapter_factory")
+        task8_validation_ref = context.get("task8_validation_ref")
         if (
             not isinstance(task, RulePlanEntry)
             or not isinstance(store, ContentAddressedStore)
@@ -219,6 +234,12 @@ class ProductionCandidatePipeline:
             or not isinstance(getattr(validation, "stage", None), PipelineStage)
         ):
             raise TypeError("validated candidate pipeline requires a bound rule-entry artifact context")
+        self._preflight_validated_candidate(
+            candidate,
+            validation,
+            task=task,
+            task8_validation_ref=task8_validation_ref,
+        )
         return self._process_with_validation(
             candidate,
             validation,
@@ -229,6 +250,77 @@ class ProductionCandidatePipeline:
             graph_snapshot_ref=graph_snapshot_ref,
             driver_version=driver_version,
             adapter_factory=adapter_factory,
+        )
+
+    def _preflight_validated_candidate(
+        self,
+        candidate: CandidateBundle,
+        validation: object,
+        *,
+        task: RulePlanEntry,
+        task8_validation_ref: object,
+    ) -> None:
+        """Prove schema-v3 promotion eligibility before the first CAS write."""
+
+        if not isinstance(self.spec, ValidatedYieldExperimentSpec):
+            raise TypeError("validated candidate preflight requires a schema-v3 experiment")
+        try:
+            rule = RuleRegistry.default().get(task.rule_id)
+        except KeyError as exc:
+            raise ValueError("validated candidate RulePlan rule is unknown") from exc
+        if (
+            task.phase not in {CampaignPhase.P0, CampaignPhase.P1, CampaignPhase.P2}
+            or task.stream is not RuleStream.DISCOVERY
+            or task.tier != SafetyTier.CORE.value
+            or rule.tier is not SafetyTier.CORE
+            or rule.submit_eligible is not True
+            or task.rule_id != rule.rule_id
+            or task.family != rule.family.value
+            or task.proof_version != rule.proof_version
+        ):
+            raise ValueError(
+                "validated candidate requires one submit-eligible CORE DISCOVERY rule"
+            )
+        if not isinstance(candidate, CandidateBundle) or candidate.verify_integrity():
+            raise ValueError("validated candidate bundle integrity check failed")
+        certificate = candidate.certificate
+        config = candidate.resolved_config
+        if (
+            candidate.pair.rule_id != task.rule_id
+            or candidate.pair.safety_certificate != certificate
+            or certificate.rule_id != task.rule_id
+            or certificate.family != rule.family.value
+            or certificate.tier != SafetyTier.CORE.value
+            or certificate.submit_eligible is not True
+            or certificate.proof_id != rule.proof_id
+            or certificate.proof_version != rule.proof_version
+            or config.get("entry_id") != task.entry_id
+            or config.get("stream") != task.stream.value
+            or config.get("target") != task.target.value
+            or _plain_value(config.get("validation"))
+            != _plain_value(dict(self.spec.validation))
+        ):
+            raise ValueError("validated candidate identity differs from its RulePlan entry")
+        if (
+            not isinstance(validation, IssueValidationReport)
+            or validation.stage is not PipelineStage.VALIDATION_PASSED
+            or not issue_validation_report_is_complete(validation)
+            or validation.validation_policy != candidate.validation_policy
+            or to_jsonable(asdict(validation.manifest))
+            != to_jsonable(asdict(CandidateManifest.from_candidate(candidate)))
+            or validation.candidate_hash != candidate.candidate_hash
+            or validation.policy_hash != candidate.content_hashes.get("validation_policy")
+            or validation.certificate_hash != candidate.content_hashes.get("certificate")
+            or validation.rule_id != task.rule_id
+            or validation.proof_version != rule.proof_id
+        ):
+            raise ValueError("validated candidate report is not bound to the candidate")
+        _verify_task8_validation_reference(
+            self.run_dir,
+            task,
+            candidate,
+            validation,
+            task8_validation_ref,
         )
 
     def _process_with_validation(
@@ -540,6 +632,103 @@ class ProductionCandidatePipeline:
             ).reduce(bundle)
         finally:
             raw_adapter.close()
+
+
+_TASK8_VALIDATION_REFERENCE_FIELDS = frozenset(
+    {"content_hash", "relative_path", "report_hash", "schema_version"}
+)
+
+
+def _plain_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _plain_value(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [_plain_value(item) for item in value]
+    return value
+
+
+def _verify_task8_validation_reference(
+    run_dir: Path,
+    task: RulePlanEntry,
+    candidate: CandidateBundle,
+    validation: IssueValidationReport,
+    reference: object,
+) -> None:
+    if not isinstance(reference, Mapping) or set(reference) != _TASK8_VALIDATION_REFERENCE_FIELDS:
+        raise ValueError("Task-8 sealed validation reference is missing or malformed")
+    content_hash = reference.get("content_hash")
+    relative_path = reference.get("relative_path")
+    report_hash = reference.get("report_hash")
+    if (
+        not isinstance(content_hash, str)
+        or len(content_hash) != 64
+        or not isinstance(relative_path, str)
+        or not relative_path
+        or not isinstance(report_hash, str)
+        or len(report_hash) != 64
+        or type(reference.get("schema_version")) is not int
+        or reference.get("schema_version") != 2
+    ):
+        raise ValueError("Task-8 sealed validation reference fields are invalid")
+    certificate = candidate.certificate
+    expected_pair_hash = certified_pair_hash(
+        candidate.pair.query_a,
+        candidate.pair.query_b,
+        task.rule_id,
+        certificate.semantic_proof_hash,
+    )
+    expected_relative = (
+        Path("entries")
+        / rule_plan_entry_directory_name(task.entry_id)
+        / "validation"
+        / f"{expected_pair_hash}.json"
+    ).as_posix()
+    if relative_path != expected_relative:
+        raise ValueError("Task-8 sealed validation reference path differs from candidate identity")
+    root = run_dir.resolve()
+    path = (root / relative_path).resolve()
+    if root not in path.parents or path == root:
+        raise ValueError("Task-8 sealed validation reference escapes the run directory")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Task-8 sealed validation reference cannot be read") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Task-8 sealed validation artifact must be an object")
+    body = {key: value for key, value in payload.items() if key != "content_hash"}
+    expected_entry_identity = {
+        "entry_id": task.entry_id,
+        "family": task.family,
+        "graph_scale": task.graph_scale,
+        "measurement_protocol_id": task.measurement_protocol_id,
+        "phase": task.phase.value,
+        "rule_id": task.rule_id,
+        "shard_index": task.shard_index,
+        "shard_seed": task.shard_seed,
+        "stream": task.stream.value,
+        "target": task.target.value,
+        "tier": task.tier,
+    }
+    report_payload = body.get("report")
+    try:
+        replayed = replay_issue_validation_report(candidate, report_payload)
+        sealed_hash = canonical_hash(body)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Task-8 sealed validation report cannot be replayed") from exc
+    if (
+        payload.get("content_hash") != sealed_hash
+        or content_hash != sealed_hash
+        or report_hash != canonical_validation_report_hash(validation)
+        or body.get("schema_version") != 2
+        or body.get("candidate_hash") != candidate.candidate_hash
+        or body.get("pair_hash") != expected_pair_hash
+        or body.get("stage") != PipelineStage.VALIDATION_PASSED.value
+        or any(body.get(name) != value for name, value in expected_entry_identity.items())
+        or report_payload != to_jsonable(asdict(validation))
+        or to_jsonable(asdict(replayed)) != to_jsonable(asdict(validation))
+        or not issue_validation_report_is_complete(replayed)
+    ):
+        raise ValueError("Task-8 sealed validation reference is not bound to candidate evidence")
 
 
 def _rule_witness(candidate: CandidateBundle) -> RuleWitness:

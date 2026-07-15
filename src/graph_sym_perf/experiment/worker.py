@@ -121,8 +121,10 @@ from graph_sym_perf.transforms.safety_points import (
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
 from graph_sym_perf.validation.models import (
     CandidateBundle,
+    IssueValidationReport,
     PipelineStage,
     ValidationPolicy,
+    canonical_validation_report_hash,
 )
 from graph_sym_perf.validation.evidence import issue_validation_report_is_complete
 from graph_sym_perf.validation.regression import (
@@ -2420,6 +2422,7 @@ class RuntimeFirstShardWorker:
                     entry_dir,
                     candidate=candidate,
                     validation=report,
+                    validation_path=validation_path,
                     stage2_candidate=stage2_candidate,
                     graph_statements=graph_statements,
                     driver_version=driver_version,
@@ -2489,6 +2492,7 @@ class RuntimeFirstShardWorker:
                 entry_dir,
                 candidate=candidate,
                 validation=report,
+                validation_path=validation_path,
                 stage2_candidate=stage2_candidate,
                 graph_statements=graph_statements,
                 driver_version=driver_version,
@@ -2505,6 +2509,7 @@ class RuntimeFirstShardWorker:
         *,
         candidate: CandidateBundle,
         validation: object,
+        validation_path: Path,
         stage2_candidate: Stage2Candidate,
         graph_statements: tuple[str, ...],
         driver_version: str,
@@ -2578,6 +2583,11 @@ class RuntimeFirstShardWorker:
                         self.spec,
                         self.environment,
                         entry,
+                    ),
+                    task8_validation_ref=_task8_validation_reference(
+                        validation_path,
+                        run_dir=self._run_dir,
+                        validation=validation,
                     ),
                 )
             )
@@ -5035,6 +5045,39 @@ def _persist_stage2_validation_outcome(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
             "validation outcome differs from the sealed pooled evidence",
         )
+
+
+def _task8_validation_reference(
+    path: Path,
+    *,
+    run_dir: Path,
+    validation: object,
+) -> dict[str, object]:
+    if not isinstance(validation, IssueValidationReport):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Task-8 validation reference requires a typed report",
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        relative_path = path.relative_to(run_dir).as_posix()
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Task-8 validation reference cannot be constructed",
+        ) from exc
+    content_hash = payload.get("content_hash") if isinstance(payload, Mapping) else None
+    if not isinstance(content_hash, str):
+        raise WorkerFailure(
+            ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+            "Task-8 validation reference lacks a content hash",
+        )
+    return {
+        "content_hash": content_hash,
+        "relative_path": relative_path,
+        "report_hash": canonical_validation_report_hash(validation),
+        "schema_version": 2,
+    }
 
 
 def _load_stage2_validation_outcome(

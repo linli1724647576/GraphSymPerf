@@ -2,7 +2,7 @@ from types import SimpleNamespace
 import copy
 import hashlib
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -13,7 +13,7 @@ from graph_sym_perf.artifacts.store import (
     ContentAddressedStore,
     verify_candidate_outcome_validation_chain,
 )
-from graph_sym_perf.core import TargetSystem
+from graph_sym_perf.core import TargetSystem, to_jsonable
 from graph_sym_perf.experiment.candidate_pipeline import (
     ProductionCandidatePipeline,
     _ReducerNotApplicable,
@@ -21,6 +21,8 @@ from graph_sym_perf.experiment.candidate_pipeline import (
     _candidate_record,
     _reduction_summary,
 )
+from graph_sym_perf.experiment.entry_paths import rule_plan_entry_directory_name
+from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.plan_models import (
     CampaignPhase,
     RulePlanEntry,
@@ -43,7 +45,10 @@ from graph_sym_perf.validation.models import (
     canonical_validation_provenance_hash,
     canonical_validation_report_hash,
 )
+from graph_sym_perf.workload.rule_pairs import certified_pair_hash
 from graph_sym_perf.validation.evidence import combined_runtime_evidence
+from graph_sym_perf.validation.session_runner import validation_schedule_seed
+from graph_sym_perf.validation.validator import IssueValidator
 from tests.unit.validation.test_promotion import _reduction, _report
 
 
@@ -136,6 +141,116 @@ def _fresh_session_reduction(reduction, original_report, suffix: str):
     )
 
 
+def _core_entry(**changes: object) -> RulePlanEntry:
+    values: dict[str, object] = {
+        "entry_id": "p1:neo4j:discovery:pattern_order_symmetry:256:0",
+        "phase": CampaignPhase.P1,
+        "target": TargetSystem.NEO4J,
+        "rule_id": "pattern_order_symmetry",
+        "family": "sym",
+        "tier": "core",
+        "graph_scale": 256,
+        "shard_index": 0,
+        "shard_seed": 7,
+        "accepted_pair_quota": 1,
+        "max_generated_seed_budget": 2,
+        "max_variants_per_seed": 1,
+        "proof_version": "1",
+        "query_timeout_seconds": 30,
+        "max_entry_runtime_seconds": 600,
+        "measurement_protocol_id": "paired-runtime-v1",
+        "stream": RuleStream.DISCOVERY,
+    }
+    values.update(changes)
+    return RulePlanEntry(**values)  # type: ignore[arg-type]
+
+
+def _task8_validation_reference(
+    run_dir: Path,
+    entry: RulePlanEntry,
+    candidate: CandidateBundle,
+    report: IssueValidationReport,
+) -> dict[str, object]:
+    certificate = candidate.certificate
+    pair_hash = certified_pair_hash(
+        candidate.pair.query_a,
+        candidate.pair.query_b,
+        entry.rule_id,
+        certificate.semantic_proof_hash,
+    )
+    relative_path = (
+        Path("entries")
+        / rule_plan_entry_directory_name(entry.entry_id)
+        / "validation"
+        / f"{pair_hash}.json"
+    )
+    body = {
+        "schema_version": 2,
+        "candidate_hash": candidate.candidate_hash,
+        "pair_hash": pair_hash,
+        "entry_id": entry.entry_id,
+        "family": entry.family,
+        "graph_scale": entry.graph_scale,
+        "measurement_protocol_id": entry.measurement_protocol_id,
+        "phase": entry.phase.value,
+        "rule_id": entry.rule_id,
+        "shard_index": entry.shard_index,
+        "shard_seed": entry.shard_seed,
+        "stage": report.stage.value,
+        "stream": entry.stream.value,
+        "target": entry.target.value,
+        "tier": entry.tier,
+        "report": to_jsonable(asdict(report)),
+    }
+    content_hash = canonical_hash(body)
+    path = run_dir / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({**body, "content_hash": content_hash}),
+        encoding="utf-8",
+    )
+    return {
+        "content_hash": content_hash,
+        "relative_path": relative_path.as_posix(),
+        "report_hash": canonical_validation_report_hash(report),
+        "schema_version": 2,
+    }
+
+
+def _schema_v3_report(spec, entry: RulePlanEntry) -> IssueValidationReport:
+    template = _report()
+    certificate = template.manifest.certificate
+    pair = replace(
+        template.manifest.pair,
+        rule_id=certificate.rule_id,
+        safety_certificate=certificate,
+    )
+    report = _report(
+        pair=pair,
+        graph_snapshot=template.manifest.graph_snapshot,
+        resolved_config={
+            "entry_id": entry.entry_id,
+            "stream": entry.stream.value,
+            "target": entry.target.value,
+            "validation": dict(spec.validation),
+        },
+    )
+    candidate = _candidate_for_report(report)
+    sessions = tuple(
+        replace(
+            session,
+            schedule_seed=validation_schedule_seed(candidate.candidate_hash, index),
+        )
+        for index, session in enumerate(report.sessions, start=1)
+    )
+
+    class _Runner:
+        def run_session(self, _candidate, session_number, **_kwargs):
+            return report.equivalence, sessions[session_number - 1]
+
+    return IssueValidator().validate(candidate, _Runner())
+
+
 def test_failed_validation_is_terminal_and_never_enters_reducer(monkeypatch, tmp_path) -> None:
     reference = ArtifactReference("0" * 64, "objects/00/" + "0" * 64, 0, "application/json")
     persisted = []
@@ -196,7 +311,9 @@ def test_validated_schema_v3_candidate_reuses_sealed_report_and_enters_reducer(
     monkeypatch,
     tmp_path,
 ) -> None:
-    report = _report()
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    entry = _core_entry()
+    report = _schema_v3_report(spec, entry)
     candidate = _candidate_for_report(report)
     reference = ArtifactReference("0" * 64, "objects/00/" + "0" * 64, 0, "application/json")
     persisted = []
@@ -226,7 +343,7 @@ def test_validated_schema_v3_candidate_reuses_sealed_report_and_enters_reducer(
         lambda _candidate: SimpleNamespace(),
     )
     pipeline = ProductionCandidatePipeline(
-        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        spec,
         environment={"GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "f" * 64},
         run_dir=tmp_path,
     )
@@ -240,25 +357,6 @@ def test_validated_schema_v3_candidate_reuses_sealed_report_and_enters_reducer(
         "_materialize_issue",
         lambda *_args, **_kwargs: {"promotion": "not_applicable"},
     )
-    entry = RulePlanEntry(
-        entry_id="p1:neo4j:discovery:constant_true_disjunction:256:0",
-        phase=CampaignPhase.P1,
-        target=TargetSystem.NEO4J,
-        rule_id="constant_true_disjunction",
-        family="bool",
-        tier="core",
-        graph_scale=256,
-        shard_index=0,
-        shard_seed=7,
-        accepted_pair_quota=1,
-        max_generated_seed_budget=2,
-        max_variants_per_seed=1,
-        proof_version="1",
-        query_timeout_seconds=30,
-        max_entry_runtime_seconds=600,
-        measurement_protocol_id="paired-runtime-v1",
-        stream=RuleStream.DISCOVERY,
-    )
     store = ContentAddressedStore(tmp_path / "artifacts", budget_bytes=1024 * 1024)
 
     outcome = pipeline.process_validated(
@@ -271,12 +369,110 @@ def test_validated_schema_v3_candidate_reuses_sealed_report_and_enters_reducer(
         graph_snapshot_ref={},
         attempt_dir=tmp_path,
         validation_adapter_factory=lambda _candidate: object(),
+        task8_validation_ref=_task8_validation_reference(
+            tmp_path,
+            entry,
+            candidate,
+            report,
+        ),
     )
 
     assert persisted == [report]
     assert reduced == [report]
     assert outcome["validation"]["stage"] == "validation_passed"
     assert outcome["reduction"]["status"] == "reduced_valid"
+
+
+@pytest.mark.parametrize(
+    "case",
+    ("control", "non_core", "rule_mismatch", "candidate_mismatch", "missing_ref"),
+)
+def test_validated_schema_v3_preflight_rejects_before_cas_or_reducer(
+    monkeypatch,
+    tmp_path,
+    case,
+) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    entry = _core_entry()
+    report = _schema_v3_report(spec, entry)
+    candidate = _candidate_for_report(report)
+    if case == "control":
+        entry = replace(entry, stream=RuleStream.CONTROL)
+    elif case == "non_core":
+        entry = replace(entry, tier="experimental")
+    elif case == "rule_mismatch":
+        entry = replace(entry, rule_id="constant_true_disjunction", family="bool")
+    elif case == "candidate_mismatch":
+        candidate = _candidate()
+
+    side_effects: list[str] = []
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline.ArtifactChainWriter.persist_validation",
+        lambda *_args, **_kwargs: (
+            side_effects.append("cas")
+            or SimpleNamespace(
+                reference=ArtifactReference(
+                    "1" * 64,
+                    "objects/11/" + "1" * 64,
+                    0,
+                    "application/json",
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline._validation_environment",
+        lambda *_args, **_kwargs: {"execution_mode": "test"},
+    )
+    monkeypatch.setattr(
+        "graph_sym_perf.experiment.candidate_pipeline._rule_witness",
+        lambda _candidate: SimpleNamespace(),
+    )
+    pipeline = ProductionCandidatePipeline(
+        spec,
+        environment={"GRAPHSYMPERF_NEO4J_IMAGE_DIGEST": "sha256:" + "f" * 64},
+        run_dir=tmp_path,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_reduce",
+        lambda *_args, **_kwargs: side_effects.append("reducer") or _reduction(),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_materialize_issue",
+        lambda *_args, **_kwargs: {"promotion": "not_applicable"},
+    )
+    reference = ArtifactReference(
+        "0" * 64,
+        "objects/00/" + "0" * 64,
+        0,
+        "application/json",
+    )
+    task8_ref = (
+        None
+        if case == "missing_ref"
+        else _task8_validation_reference(tmp_path, entry, candidate, report)
+    )
+
+    with pytest.raises((TypeError, ValueError), match="validated candidate|Task-8"):
+        pipeline.process_validated(
+            candidate,
+            report,
+            task=entry,
+            artifact_store=ContentAddressedStore(
+                tmp_path / "artifacts",
+                budget_bytes=1024 * 1024,
+            ),
+            candidate_ref=reference,
+            driver_version="driver/1",
+            graph_snapshot_ref={},
+            attempt_dir=tmp_path,
+            validation_adapter_factory=lambda _candidate: object(),
+            task8_validation_ref=task8_ref,
+        )
+
+    assert side_effects == []
 
 
 def test_reducer_screen_rejects_a_runtime_direction_reversal() -> None:
