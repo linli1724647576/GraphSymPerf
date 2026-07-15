@@ -25,12 +25,23 @@ class EvidencePayload(Generic[T]):
 class SanitizationIntegrityError(ValueError):
     """A generic boundary would invalidate already sealed evidence."""
 
-_SENSITIVE_KEY_SUFFIX = re.compile(
-    r"(?:^|[._-])"
-    r"(?:password|passwd|pwd|secret|token|authorization|credential|credentials|api[_-]?key|auth)"
-    r"(?:[._-](?:value|header))?$",
-    re.IGNORECASE,
+_CAMEL_ACRONYM_BOUNDARY = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
+_CAMEL_WORD_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_KEY_SEPARATORS = re.compile(r"[._-]+")
+_CREDENTIAL_KEY_TOKENS = frozenset(
+    {
+        "auth",
+        "authorization",
+        "credential",
+        "credentials",
+        "passwd",
+        "password",
+        "pwd",
+        "secret",
+        "token",
+    }
 )
+_CREDENTIAL_KEY_SUFFIX_TOKENS = frozenset({"header", "value"})
 _PLAIN_INLINE_SECRET_NAME = (
     r"(?:password|passwd|pwd|secret|token|authorization|credential|api[_-]?key)"
 )
@@ -124,7 +135,26 @@ def is_sensitive_key(value: object) -> bool:
     normalized = _normalized_key(value)
     if normalized is None:
         return False
-    return _SENSITIVE_KEY_SUFFIX.search(normalized) is not None
+    tokens = _key_tokens(normalized)
+    for index, token in enumerate(tokens):
+        if (
+            token in _CREDENTIAL_KEY_TOKENS
+            and all(
+                suffix in _CREDENTIAL_KEY_SUFFIX_TOKENS
+                for suffix in tokens[index + 1 :]
+            )
+        ):
+            return True
+        if (
+            token == "api"
+            and tokens[index : index + 2] == ("api", "key")
+            and all(
+                suffix in _CREDENTIAL_KEY_SUFFIX_TOKENS
+                for suffix in tokens[index + 2 :]
+            )
+        ):
+            return True
+    return False
 
 
 def _normalized_key(value: object) -> str | None:
@@ -138,6 +168,16 @@ def _normalized_key(value: object) -> str | None:
     ):
         normalized = normalized[1:-1].strip()
     return normalized
+
+
+def _key_tokens(value: str) -> tuple[str, ...]:
+    separated = _KEY_SEPARATORS.sub(" ", value)
+    tokens: list[str] = []
+    for chunk in separated.split():
+        chunk = _CAMEL_ACRONYM_BOUNDARY.sub(" ", chunk)
+        chunk = _CAMEL_WORD_BOUNDARY.sub(" ", chunk)
+        tokens.extend(part.lower() for part in chunk.split() if part)
+    return tuple(tokens)
 
 
 def sanitize_text(

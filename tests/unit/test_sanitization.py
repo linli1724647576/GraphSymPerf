@@ -305,6 +305,46 @@ def test_diagnostic_fields_clean_dotted_assignments_and_full_spaced_paths() -> N
 
 
 @pytest.mark.parametrize(
+    "key",
+    (
+        "password_value",
+        "access-token-value",
+        "config.neo4j.password",
+        "passwordValue",
+        "accessToken",
+        "authorizationHeader",
+        "neo4jPassword",
+        "clientSecret",
+        "AccessTokenValue",
+        "NEO4J_PASSWORD",
+        "APIKey",
+    ),
+)
+def test_operational_sensitive_key_tokenizer_covers_common_naming_styles(
+    key: str,
+) -> None:
+    assert sanitize_structure({key: "opaque-credential"}) == {key: "<redacted>"}
+
+
+def test_typed_evidence_columns_are_not_interpreted_as_operational_keys() -> None:
+    payload = {
+        "rows": [
+            {
+                "passwordValue": "literal-password-column",
+                "accessToken": "literal-token-column",
+                "authorizationHeader": "literal-header-column",
+                "neo4jPassword": "literal-neo4j-column",
+                "clientSecret": "literal-secret-column",
+            }
+        ]
+    }
+
+    envelope = sanitize_structure(EvidencePayload(payload))
+
+    assert unwrap_evidence_payload(envelope) == payload
+
+
+@pytest.mark.parametrize(
     "unsafe_key",
     (
         "bolt://neo4j:key-secret@db.internal:7687",
