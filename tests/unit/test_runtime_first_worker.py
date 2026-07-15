@@ -39,6 +39,7 @@ from graph_sym_perf.experiment.worker import (
     _graph_snapshot_hash,
     _query_hash,
     _load_terminal_candidate_outcome,
+    _validated_pair_yield,
 )
 from graph_sym_perf.generation.corpus import GraphCorpus
 from graph_sym_perf.runtime.models import (
@@ -67,6 +68,13 @@ from tests.helpers.regression_gate import (
     install_verified_regression_gate,
 )
 from tests.unit.test_artifact_policy import _candidate_payload, _validation_payload
+
+
+def test_validated_pair_yield_uses_all_core_accepted_pairs() -> None:
+    point, ci_low = _validated_pair_yield(successes=1, accepted_pairs=200)
+
+    assert point == pytest.approx(0.005)
+    assert 0.0 < ci_low < point
 
 
 class _Adapter:

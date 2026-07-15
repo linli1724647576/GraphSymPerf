@@ -1788,6 +1788,7 @@ class RuntimeFirstShardWorker:
                 adapter,
                 entry,
                 entry_dir,
+                accepted_pair_count=len(accepted_hashes),
                 queries=queries,
                 factory=factory,
                 records=store.records,
@@ -1871,6 +1872,7 @@ class RuntimeFirstShardWorker:
         entry: RulePlanEntry,
         entry_dir: Path,
         *,
+        accepted_pair_count: int,
         queries: tuple[str, ...],
         factory: RulePairFactory,
         records: tuple[dict[str, Any], ...],
@@ -2266,10 +2268,14 @@ class RuntimeFirstShardWorker:
             (float(outcome.get("pooled_ratio_ci_low") or 1.0) for outcome in passed_outcomes),
             default=1.0,
         )
-        validation_yield = (
-            len(passed_outcomes) / len(validation_outcomes)
-            if validation_outcomes
-            else 0.0
+        yield_successes = (
+            len(passed_outcomes)
+            if entry.stream is RuleStream.DISCOVERY
+            else 0
+        )
+        validation_yield, validation_yield_ci_low = _validated_pair_yield(
+            successes=yield_successes,
+            accepted_pairs=accepted_pair_count,
         )
         return {
             "terminal_state": (
@@ -2315,10 +2321,7 @@ class RuntimeFirstShardWorker:
                 "health_events": health_events,
                 "timeout_rate": min(1.0, len(timeout_records) / max(1, len(records))),
                 "validation_pair_yield": validation_yield,
-                "validation_yield_ci_low": _wilson_lower_bound(
-                    len(passed_outcomes),
-                    len(validation_outcomes),
-                ),
+                "validation_yield_ci_low": validation_yield_ci_low,
             },
             "timeout_records": tuple(timeout_records),
         }
@@ -5267,6 +5270,33 @@ def _wilson_lower_bound(successes: int, total: int, *, z: float = 1.959963984540
         + (z * z / (4.0 * total * total))
     )
     return max(0.0, (centre - margin) / denominator)
+
+
+def _validated_pair_yield(
+    *,
+    successes: int,
+    accepted_pairs: int,
+) -> tuple[float, float]:
+    """Return validated CORE issues per accepted pair and its Wilson lower bound."""
+
+    if (
+        isinstance(successes, bool)
+        or isinstance(accepted_pairs, bool)
+        or not isinstance(successes, int)
+        or not isinstance(accepted_pairs, int)
+        or accepted_pairs < 0
+        or successes < 0
+        or successes > accepted_pairs
+    ):
+        raise ValueError(
+            "validated pair yield requires 0 <= successes <= accepted_pairs"
+        )
+    if accepted_pairs == 0:
+        return 0.0, 0.0
+    return (
+        successes / accepted_pairs,
+        _wilson_lower_bound(successes, accepted_pairs),
+    )
 
 
 def _compact_timeout_side(record: PairRuntimeRecord) -> str | None:
