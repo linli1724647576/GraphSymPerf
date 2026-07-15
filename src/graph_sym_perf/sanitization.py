@@ -293,12 +293,7 @@ def _require_valid_canonical_envelope_if_recognized(
         raise SanitizationIntegrityError(
             "EVIDENCE_INTEGRITY_ERROR: invalid canonical evidence envelope"
         )
-    try:
-        expected_hash = _project_canonical_hash(body)
-    except (TypeError, ValueError, ArithmeticError) as exc:
-        raise SanitizationIntegrityError(
-            "EVIDENCE_INTEGRITY_ERROR: canonical evidence envelope is not hashable"
-        ) from exc
+    expected_hash = _canonical_envelope_hash(body)
     if expected_hash != content_hash:
         raise SanitizationIntegrityError(
             "EVIDENCE_INTEGRITY_ERROR: invalid canonical evidence envelope"
@@ -309,7 +304,16 @@ def _require_valid_canonical_envelope_if_recognized(
 def _seal_evidence_payload(value: EvidencePayload[Any]) -> dict[str, object]:
     _require_typed_evidence_payload(value.payload)
     body = {"payload": value.payload}
-    return {**body, "content_hash": _project_canonical_hash(body)}
+    return {**body, "content_hash": _canonical_envelope_hash(body)}
+
+
+def _canonical_envelope_hash(body: Mapping[str, object]) -> str:
+    try:
+        return _project_canonical_hash(body)
+    except (TypeError, ValueError, ArithmeticError) as exc:
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: canonical evidence envelope is not hashable"
+        ) from exc
 
 
 def unwrap_evidence_payload(value: object) -> object:

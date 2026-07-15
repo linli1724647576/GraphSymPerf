@@ -195,6 +195,14 @@ def test_non_finite_canonical_envelope_payload_fails_with_integrity_error(
         )
 
 
+def test_non_finite_typed_evidence_initial_seal_fails_with_integrity_error() -> None:
+    with pytest.raises(
+        SanitizationIntegrityError,
+        match="EVIDENCE_INTEGRITY_ERROR",
+    ):
+        sanitize_structure(EvidencePayload({"rows": [float("nan")]}))
+
+
 def test_marker_named_fields_do_not_claim_a_generic_seal() -> None:
     ordinary = {
         "content_hash": "not-a-seal",
