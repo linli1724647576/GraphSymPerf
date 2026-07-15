@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import graph_sym_perf.sanitization as sanitization_module
 from graph_sym_perf.core import TargetSystem
 from graph_sym_perf.experiment.evidence_validation import canonical_hash
 from graph_sym_perf.experiment.plan_models import RunPlan, SourceRevision
@@ -170,6 +171,26 @@ class _ForgedTypedEvidenceEnvelopeWorker:
         }
 
 
+class _ForgedInternalEvidenceCapabilityWorker:
+    def __call__(self, _task):
+        payload = {
+            "rows": [
+                {
+                    "password": "forged-capability-password",
+                    "message": "Authorization: forged-capability-auth",
+                }
+            ]
+        }
+        return {
+            "accepted_pairs": 1,
+            "evidence": sanitization_module._VerifiedEvidenceEnvelope(
+                payload=payload,
+                content_hash=canonical_hash({"payload": payload}),
+                _capability=sanitization_module._VERIFIED_EVIDENCE_CAPABILITY,
+            ),
+        }
+
+
 class _FieldSemanticResultWorker:
     def __call__(self, _task):
         evidence = {
@@ -283,6 +304,25 @@ def test_process_monitor_never_promotes_a_forged_typed_envelope(tmp_path) -> Non
     assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
     assert "forged-literal-password" not in str(captured.value)
     assert "forged-literal-auth" not in str(captured.value)
+    assert not (context.attempt_dir / "result.json").exists()
+
+
+def test_process_monitor_rejects_a_worker_forged_internal_capability(
+    tmp_path,
+) -> None:
+    context = _attempt_context(tmp_path)
+    monitor = ProcessMonitor(
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.2,
+        hard_timeout_seconds=0.5,
+    )
+
+    with pytest.raises(WorkerProcessError) as captured:
+        monitor.run(_ForgedInternalEvidenceCapabilityWorker(), object(), context)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert "forged-capability-password" not in str(captured.value)
+    assert "forged-capability-auth" not in str(captured.value)
     assert not (context.attempt_dir / "result.json").exists()
 
 

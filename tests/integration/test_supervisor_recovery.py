@@ -9,6 +9,7 @@ from dataclasses import replace
 import pytest
 
 import graph_sym_perf.experiment.supervisor as supervisor_module
+import graph_sym_perf.sanitization as sanitization_module
 from graph_sym_perf.adapters.base import DBMSFingerprint, DBMSHealthEpoch
 from graph_sym_perf.core import ExecutionResult, TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RunPlan, ShardTask, SourceRevision
@@ -937,6 +938,54 @@ def test_non_json_initial_evidence_fails_once_as_typed_integrity(
     assert terminal["infrastructure_error_kind"] == (
         ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
     )
+
+
+def test_nonisolated_worker_cannot_return_a_forged_internal_capability(
+    tmp_path,
+) -> None:
+    plan = _p1_rule_plan()
+
+    def worker(entry):
+        payload = {
+            "rows": [
+                {
+                    "password": "nonisolated-capability-password",
+                    "message": "Authorization: nonisolated-capability-auth",
+                }
+            ]
+        }
+        return {
+            "accepted_pairs": entry.accepted_pair_quota,
+            "artifact_complete": True,
+            "certificate_complete": True,
+            "entry_id": entry.entry_id,
+            "terminal_state": "completed",
+            "evidence": sanitization_module._VerifiedEvidenceEnvelope(
+                payload=payload,
+                content_hash=canonical_hash({"payload": payload}),
+                _capability=sanitization_module._VERIFIED_EVIDENCE_CAPABILITY,
+            ),
+        }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=2,
+        process_isolation=False,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    attempts = sorted((tmp_path / "entries").glob("*/attempt-*"))
+    assert [path.name for path in attempts] == ["attempt-000"]
+    terminal_path = attempts[0] / "terminal_result.json"
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+    assert terminal["infrastructure_error_kind"] == (
+        ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    )
+    raw = terminal_path.read_text(encoding="utf-8")
+    assert "nonisolated-capability-password" not in raw
+    assert "nonisolated-capability-auth" not in raw
 
 
 def _hash_for(label: str) -> str:

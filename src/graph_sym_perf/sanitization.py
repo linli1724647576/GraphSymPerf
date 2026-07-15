@@ -273,7 +273,13 @@ def sanitize_text(
 def sanitize_structure(value: Any) -> Any:
     """Recursively sanitize JSON-like values while preserving container shape."""
 
-    return _sanitize_structure(value)
+    return _sanitize_structure(value, allow_parent_verified_evidence=False)
+
+
+def _sanitize_parent_verified_structure(value: Any) -> Any:
+    """Consume capabilities created by parent-side durable verification only."""
+
+    return _sanitize_structure(value, allow_parent_verified_evidence=True)
 
 
 def _sanitize_structure_for_persistence(
@@ -286,6 +292,7 @@ def _sanitize_structure_for_persistence(
         value,
         evidence_attestations=attestations,
         path=(),
+        allow_parent_verified_evidence=False,
     )
     return sanitized, tuple(attestations)
 
@@ -295,10 +302,15 @@ def _sanitize_structure(
     *,
     evidence_attestations: list[dict[str, object]] | None = None,
     path: tuple[str | int, ...] = (),
+    allow_parent_verified_evidence: bool,
 ) -> Any:
     """Internal recursion used by the public boundary sanitizer."""
 
     if isinstance(value, _VerifiedEvidenceEnvelope):
+        if not allow_parent_verified_evidence:
+            raise SanitizationIntegrityError(
+                "EVIDENCE_INTEGRITY_ERROR: verified evidence is invalid at a source boundary"
+            )
         return _verified_evidence_as_mapping(value)
     if isinstance(value, EvidencePayload):
         envelope = _seal_evidence_payload(value)
@@ -322,6 +334,7 @@ def _sanitize_structure(
                     item,
                     evidence_attestations=evidence_attestations,
                     path=path + (key,),
+                    allow_parent_verified_evidence=allow_parent_verified_evidence,
                 )
             )
             for key, item in value.items()
@@ -339,6 +352,7 @@ def _sanitize_structure(
                 item,
                 evidence_attestations=evidence_attestations,
                 path=path + (index,),
+                allow_parent_verified_evidence=allow_parent_verified_evidence,
             )
             for index, item in enumerate(value)
         ]
@@ -348,6 +362,7 @@ def _sanitize_structure(
                 item,
                 evidence_attestations=evidence_attestations,
                 path=path + (index,),
+                allow_parent_verified_evidence=allow_parent_verified_evidence,
             )
             for index, item in enumerate(value)
         )

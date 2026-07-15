@@ -45,7 +45,11 @@ from graph_sym_perf.experiment.state import (
     can_transition,
 )
 from graph_sym_perf.reliability.findings import ReliabilityFindingStore
-from graph_sym_perf.sanitization import SanitizationIntegrityError, sanitize_structure
+from graph_sym_perf.sanitization import (
+    SanitizationIntegrityError,
+    _sanitize_parent_verified_structure,
+    sanitize_structure,
+)
 
 
 @dataclass(frozen=True)
@@ -247,6 +251,7 @@ class RulePlanSupervisor:
                 max_parallel_shards_per_system=1,
                 task_identity=canonical_hash(to_jsonable(entry)),
             )
+            parent_verified_evidence = False
             try:
                 if self.attempt_guard is not None:
                     self.attempt_guard()
@@ -260,6 +265,7 @@ class RulePlanSupervisor:
                             hard_timeout_seconds=float(entry.max_entry_runtime_seconds),
                             hard_timeout_error_kind=ErrorKind.RESOURCE_EXHAUSTED,
                         ).run(worker, entry, context)
+                        parent_verified_evidence = True
                     else:
                         bind_worker_attempt(worker, context)
                         value = worker(entry)
@@ -285,6 +291,7 @@ class RulePlanSupervisor:
                             entry,
                             value=value,
                             worker_error=worker_error,
+                            parent_verified_evidence=parent_verified_evidence,
                         ),
                         "terminal_state": final_state.value,
                     }
@@ -355,7 +362,11 @@ class RulePlanSupervisor:
                     "terminal_state": final_state.value,
                 }
             try:
-                final_result = _sanitize_terminal_result(final_result, final_state)
+                final_result = _sanitize_terminal_result(
+                    final_result,
+                    final_state,
+                    parent_verified_evidence=parent_verified_evidence,
+                )
             except SanitizationIntegrityError:
                 non_retryable_failure = True
                 final_state = EntryState.INFRASTRUCTURE_FAILED
@@ -452,8 +463,14 @@ class RulePlanSupervisor:
 def _sanitize_terminal_result(
     result: Mapping[str, object],
     state: EntryState,
+    *,
+    parent_verified_evidence: bool = False,
 ) -> dict[str, object]:
-    sanitized = sanitize_structure(result)
+    sanitized = (
+        _sanitize_parent_verified_structure(result)
+        if parent_verified_evidence
+        else sanitize_structure(result)
+    )
     if not isinstance(sanitized, dict):  # pragma: no cover - Mapping contract
         raise TypeError("terminal result sanitizer must return an object")
     for key in (
@@ -484,6 +501,7 @@ def _secondary_rule_plan_terminal(
     *,
     value: object | None,
     worker_error: BaseException | None,
+    parent_verified_evidence: bool,
 ) -> dict[str, object]:
     if isinstance(worker_error, WorkerProcessError):
         if worker_error.kind is ErrorKind.RESOURCE_EXHAUSTED:
@@ -550,7 +568,11 @@ def _secondary_rule_plan_terminal(
             "infrastructure_reason": "worker did not produce a mapping",
             "terminal_state": state.value,
         }
-    sanitized = _sanitize_terminal_result(result, state)
+    sanitized = _sanitize_terminal_result(
+        result,
+        state,
+        parent_verified_evidence=parent_verified_evidence,
+    )
     keys = (
         "accepted_pairs",
         "artifact_complete",
