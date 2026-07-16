@@ -102,7 +102,7 @@ def test_validated_yield_config_freezes_the_approved_budget() -> None:
     assert spec.rules.discovery_rule_ids[0] == "constant_true_disjunction"
     assert "and_excluded_middle_or_null" not in spec.rules.discovery_rule_ids
     assert spec.generation.algorithm == "COMPARED3"
-    assert spec.generation.expected_commit == "b2166f1b70cfa9b5816fe707327dd6aed2a22a45"
+    assert spec.generation.expected_commit == "1bf4f24c6d2095bd2aab3fb3aa5ff15be93a08c6"
     assert spec.regression["manifest"] == (
         Path("tests/fixtures/regressions/neo4j_bug001/manifest.yaml").resolve()
     )
