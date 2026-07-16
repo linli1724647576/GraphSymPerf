@@ -102,6 +102,7 @@ def test_validated_yield_config_freezes_the_approved_budget() -> None:
     assert spec.rules.discovery_rule_ids[0] == "constant_true_disjunction"
     assert "and_excluded_middle_or_null" not in spec.rules.discovery_rule_ids
     assert "node_order_symmetry" not in spec.rules.discovery_rule_ids
+    assert "predicate_order_symmetry" not in spec.rules.discovery_rule_ids
     assert spec.rules.control_rule_ids == ("edge_notation_symmetry",)
     assert spec.generation.algorithm == "COMPARED3"
     assert spec.generation.expected_commit == "f5c0a67ca317e956c5572884a28f7f22e5dcb356"

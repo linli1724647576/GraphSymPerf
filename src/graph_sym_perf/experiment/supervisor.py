@@ -260,9 +260,20 @@ class RulePlanSupervisor:
                 worker_error: BaseException | None = None
                 try:
                     if self.process_isolation:
+                        stale_after_seconds = self.stale_after_seconds
+                        if entry.stream.value == "regression":
+                            # The strict regression worker owns two nested spawned
+                            # validation sessions.  Its outer process hard budget is
+                            # authoritative even if a nested spawn stalls the helper
+                            # heartbeat thread on this platform.
+                            stale_after_seconds = max(
+                                stale_after_seconds,
+                                float(entry.max_entry_runtime_seconds)
+                                + max(1.0, self.heartbeat_seconds * 2.0),
+                            )
                         value = ProcessMonitor(
                             heartbeat_seconds=self.heartbeat_seconds,
-                            stale_after_seconds=self.stale_after_seconds,
+                            stale_after_seconds=stale_after_seconds,
                             hard_timeout_seconds=float(entry.max_entry_runtime_seconds),
                             hard_timeout_error_kind=ErrorKind.RESOURCE_EXHAUSTED,
                         ).run(worker, entry, context)

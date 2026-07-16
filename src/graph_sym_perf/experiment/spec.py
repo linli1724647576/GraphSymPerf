@@ -412,12 +412,11 @@ def _load_schema_v3(
                 frozenset(definition.rule_capabilities),
             )
         }
-        if set(discovery_rule_ids) != active_core:
-            missing = sorted(active_core - set(discovery_rule_ids))
-            inactive = sorted(set(discovery_rule_ids) - active_core)
+        inactive = sorted(set(discovery_rule_ids) - active_core)
+        if inactive:
             raise ConfigError(
-                f"rules.discovery_rule_ids must equal active CORE rules for {target.value}; "
-                f"missing={missing}, inactive={inactive}"
+                f"rules.discovery_rule_ids contains inactive CORE rules for "
+                f"{target.value}: {inactive}"
             )
         invalid_controls = sorted(set(control_rule_ids) - active_control)
         if invalid_controls:

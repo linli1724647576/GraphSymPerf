@@ -1456,6 +1456,39 @@ def test_stale_heartbeat_kills_a_stopped_worker_before_shard_timeout(tmp_path) -
     assert "WORKER_HUNG" in shard_events.read_text(encoding="utf-8")
 
 
+def test_regression_entry_uses_its_hard_budget_when_nested_session_heartbeat_stalls(
+    tmp_path,
+) -> None:
+    from graph_sym_perf.experiment.planner import build_rule_plan
+
+    full_plan = build_rule_plan(
+        load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
+        CampaignPhase.P0,
+    )
+    regression = next(
+        entry for entry in full_plan.entries if entry.stream.value == "regression"
+    )
+    plan = replace(
+        full_plan,
+        entries=(replace(regression, max_entry_runtime_seconds=1),),
+    )
+    started = time.monotonic()
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign",
+        input_manifest_hash="a" * 64,
+        retry_limit=0,
+        process_isolation=True,
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.08,
+    ).run(plan, _StopsEntireWorkerProcess())
+
+    assert 0.8 <= time.monotonic() - started < 1.5
+    assert summary.resource_exhausted == (plan.entries[0],)
+    assert not summary.infrastructure_failed
+
+
 def test_resume_rejects_a_different_immutable_manifest(tmp_path) -> None:
     task = _InflightDeadlineTask()
     original = RunPlan("manifest-a", 2, (task,), 1, SourceRevision("a", None, None))  # type: ignore[arg-type]
