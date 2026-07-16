@@ -148,6 +148,41 @@ def _cell_summary_root(result) -> str:
     )["cell_summary_root"]
 
 
+def test_campaign_uses_configured_infrastructure_retry_limit(tmp_path) -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+    calls: dict[str, int] = {}
+    delegate = _CampaignFixtureWorker()
+
+    class Worker:
+        def __call__(self, entry):
+            calls[entry.entry_id] = calls.get(entry.entry_id, 0) + 1
+            if calls[entry.entry_id] == 1:
+                return {
+                    "accepted_pairs": 0,
+                    "artifact_complete": True,
+                    "certificate_complete": False,
+                    "entry_id": entry.entry_id,
+                    "terminal_state": "infrastructure_failed",
+                }
+            return delegate(entry)
+
+    result = lifecycle.run(
+        spec,
+        Worker(),
+        phase=CampaignPhase.P0,
+        run_id="p0-configured-retry",
+    )
+
+    assert result.passed
+    assert set(calls.values()) == {2}
+    events = [
+        json.loads(line)
+        for line in (result.run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(event["attempt"] == 1 for event in events)
+
+
 def test_campaign_phase_ancestry_selection_and_exact_p2_expansion(tmp_path) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
     lifecycle = _campaign_lifecycle(tmp_path)

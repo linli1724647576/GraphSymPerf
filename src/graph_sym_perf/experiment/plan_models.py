@@ -115,6 +115,7 @@ class CampaignBudgetSpec:
     p1: PhaseBudgetSpec
     p2: PhaseBudgetSpec
     generated_seed_multiplier: int
+    infrastructure_retry_limit: int
 
 
 @dataclass(frozen=True)

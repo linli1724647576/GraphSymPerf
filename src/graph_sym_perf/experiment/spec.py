@@ -289,13 +289,30 @@ def _load_schema_v3(
     matrix = CampaignMatrixSpec(graph_scales=graph_scales)
 
     campaign_raw = _mapping(raw["campaign"], "campaign")
-    _exact_keys(campaign_raw, {"p0", "p1", "p2", "generated_seed_multiplier"}, "campaign")
+    _exact_keys(
+        campaign_raw,
+        {
+            "p0",
+            "p1",
+            "p2",
+            "generated_seed_multiplier",
+            "infrastructure_retry_limit",
+        },
+        "campaign",
+    )
     p2_budget = _phase_budget(campaign_raw["p2"], "campaign.p2", allow_cell_limit=True)
     if p2_budget.max_rule_scale_cells != MAX_P2_RULE_SCALE_CELLS:
         raise ConfigError(
             "campaign.p2.max_rule_scale_cells must be exactly "
             f"{MAX_P2_RULE_SCALE_CELLS}"
         )
+    infrastructure_retry_limit = _positive_int(
+        campaign_raw["infrastructure_retry_limit"],
+        "campaign.infrastructure_retry_limit",
+        allow_zero=True,
+    )
+    if infrastructure_retry_limit > 3:
+        raise ConfigError("campaign.infrastructure_retry_limit must be at most 3")
     campaign = CampaignBudgetSpec(
         p0=_phase_budget(campaign_raw["p0"], "campaign.p0", allow_cell_limit=False),
         p1=_phase_budget(campaign_raw["p1"], "campaign.p1", allow_cell_limit=False),
@@ -304,6 +321,7 @@ def _load_schema_v3(
             campaign_raw["generated_seed_multiplier"],
             "campaign.generated_seed_multiplier",
         ),
+        infrastructure_retry_limit=infrastructure_retry_limit,
     )
 
     generation_raw = _mapping(raw["generation"], "generation")

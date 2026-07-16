@@ -99,6 +99,7 @@ def test_validated_yield_config_freezes_the_approved_budget() -> None:
     assert spec.campaign.p2.accepted_pairs == 1000
     assert spec.campaign.p2.shards == 3
     assert spec.campaign.p2.max_rule_scale_cells == 6
+    assert spec.campaign.infrastructure_retry_limit == 1
     assert spec.rules.discovery_rule_ids[0] == "constant_true_disjunction"
     assert "and_excluded_middle_or_null" not in spec.rules.discovery_rule_ids
     assert "node_order_symmetry" not in spec.rules.discovery_rule_ids
@@ -259,6 +260,21 @@ def test_schema_v3_rejects_p2_cell_limit_above_formal_maximum(tmp_path: Path) ->
     path = _write_config_bundle(tmp_path, experiment=raw)
 
     with pytest.raises(ConfigError, match=r"campaign\.p2\.max_rule_scale_cells.*exactly 6"):
+        load_experiment_spec(path)
+
+
+@pytest.mark.parametrize("retry_limit", (-1, 4))
+def test_schema_v3_bounds_infrastructure_retry_limit(
+    tmp_path: Path,
+    retry_limit: int,
+) -> None:
+    raw = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    raw["campaign"]["infrastructure_retry_limit"] = retry_limit
+    path = _write_config_bundle(tmp_path, experiment=raw)
+
+    with pytest.raises(ConfigError, match=r"campaign\.infrastructure_retry_limit"):
         load_experiment_spec(path)
 
 

@@ -122,12 +122,17 @@ class CampaignLifecycle:
         run_id: str,
         parent_run: str | None = None,
         selection: str | Path | None = None,
-        retry_limit: int = 0,
+        retry_limit: int | None = None,
     ) -> CampaignLifecycleResult:
         if not isinstance(spec, ValidatedYieldExperimentSpec):
             raise TypeError("CampaignLifecycle requires a schema-v3 validated-yield spec")
         if not isinstance(phase, CampaignPhase):
             raise TypeError("phase must be a CampaignPhase")
+        effective_retry_limit = (
+            spec.campaign.infrastructure_retry_limit
+            if retry_limit is None
+            else retry_limit
+        )
         run_dir = self._run_dir(run_id)
         if run_dir.exists():
             raise FileExistsError(f"campaign run id already exists: {run_id}")
@@ -203,7 +208,7 @@ class CampaignLifecycle:
                 run_dir,
                 campaign_id=campaign_id,
                 input_manifest_hash=manifest_hash,
-                retry_limit=retry_limit,
+                retry_limit=effective_retry_limit,
                 process_isolation=self.process_isolation,
                 attempt_guard=_campaign_source_provenance_guard(
                     spec,
