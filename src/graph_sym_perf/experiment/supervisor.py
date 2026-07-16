@@ -48,6 +48,7 @@ from graph_sym_perf.reliability.findings import ReliabilityFindingStore
 from graph_sym_perf.sanitization import (
     SanitizationIntegrityError,
     _sanitize_parent_verified_structure,
+    _sanitize_source_worker_structure,
     sanitize_structure,
 )
 
@@ -469,7 +470,7 @@ def _sanitize_terminal_result(
     sanitized = (
         _sanitize_parent_verified_structure(result)
         if parent_verified_evidence
-        else sanitize_structure(result)
+        else _sanitize_source_worker_structure(result)
     )
     if not isinstance(sanitized, dict):  # pragma: no cover - Mapping contract
         raise TypeError("terminal result sanitizer must return an object")

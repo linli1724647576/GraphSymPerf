@@ -988,6 +988,50 @@ def test_nonisolated_worker_cannot_return_a_forged_internal_capability(
     assert "nonisolated-capability-auth" not in raw
 
 
+class _DuckItemsSecret:
+    def items(self):
+        return {
+            "passwordValue": "nonisolated-duck-password",
+            "message": "Authorization: nonisolated-duck-auth",
+        }.items()
+
+
+def test_nonisolated_duck_items_result_fails_once_as_typed_integrity(
+    tmp_path,
+) -> None:
+    plan = _p1_rule_plan()
+
+    def worker(entry):
+        return {
+            "accepted_pairs": entry.accepted_pair_quota,
+            "artifact_complete": True,
+            "certificate_complete": True,
+            "entry_id": entry.entry_id,
+            "terminal_state": "completed",
+            "nested": _DuckItemsSecret(),
+        }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=2,
+        process_isolation=False,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    attempts = sorted((tmp_path / "entries").glob("*/attempt-*"))
+    assert [path.name for path in attempts] == ["attempt-000"]
+    terminal_path = attempts[0] / "terminal_result.json"
+    terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
+    assert terminal["infrastructure_error_kind"] == (
+        ErrorKind.EVIDENCE_INTEGRITY_ERROR.value
+    )
+    raw = terminal_path.read_text(encoding="utf-8")
+    assert "nonisolated-duck-password" not in raw
+    assert "nonisolated-duck-auth" not in raw
+
+
 def _hash_for(label: str) -> str:
     return hashlib.sha256(label.encode("utf-8")).hexdigest()
 

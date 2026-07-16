@@ -314,13 +314,31 @@ def _redact_secret_bearing_token(match: re.Match[str]) -> str:
 def sanitize_structure(value: Any) -> Any:
     """Recursively sanitize JSON-like values while preserving container shape."""
 
-    return _sanitize_structure(value, allow_parent_verified_evidence=False)
+    return _sanitize_structure(
+        value,
+        allow_parent_verified_evidence=False,
+        strict_json=False,
+    )
+
+
+def _sanitize_source_worker_structure(value: Any) -> Any:
+    """Normalize and sanitize a nonisolated worker result before persistence."""
+
+    return _sanitize_structure(
+        value,
+        allow_parent_verified_evidence=False,
+        strict_json=True,
+    )
 
 
 def _sanitize_parent_verified_structure(value: Any) -> Any:
     """Consume capabilities created by parent-side durable verification only."""
 
-    return _sanitize_structure(value, allow_parent_verified_evidence=True)
+    return _sanitize_structure(
+        value,
+        allow_parent_verified_evidence=True,
+        strict_json=True,
+    )
 
 
 def _sanitize_structure_for_persistence(
@@ -334,6 +352,7 @@ def _sanitize_structure_for_persistence(
         evidence_attestations=attestations,
         path=(),
         allow_parent_verified_evidence=False,
+        strict_json=True,
     )
     return sanitized, tuple(attestations)
 
@@ -344,6 +363,7 @@ def _sanitize_structure(
     evidence_attestations: list[dict[str, object]] | None = None,
     path: tuple[str | int, ...] = (),
     allow_parent_verified_evidence: bool,
+    strict_json: bool,
 ) -> Any:
     """Internal recursion used by the public boundary sanitizer."""
 
@@ -365,6 +385,10 @@ def _sanitize_structure(
         return envelope
     if isinstance(value, Mapping):
         for key in value:
+            if strict_json and not isinstance(key, str):
+                raise SanitizationIntegrityError(
+                    "EVIDENCE_INTEGRITY_ERROR: worker result mapping keys must be strings"
+                )
             _require_safe_mapping_key(key)
         canonical_envelope = _require_valid_canonical_envelope_if_recognized(value)
         sanitized = {
@@ -376,6 +400,7 @@ def _sanitize_structure(
                     evidence_attestations=evidence_attestations,
                     path=path + (key,),
                     allow_parent_verified_evidence=allow_parent_verified_evidence,
+                    strict_json=strict_json,
                 )
             )
             for key, item in value.items()
@@ -385,7 +410,7 @@ def _sanitize_structure(
                 raise SanitizationIntegrityError(
                     "EVIDENCE_INTEGRITY_ERROR: boundary sanitization would alter sealed evidence"
                 )
-            return value
+            return sanitized if strict_json else value
         return sanitized
     if isinstance(value, list):
         return [
@@ -394,21 +419,44 @@ def _sanitize_structure(
                 evidence_attestations=evidence_attestations,
                 path=path + (index,),
                 allow_parent_verified_evidence=allow_parent_verified_evidence,
+                strict_json=strict_json,
             )
             for index, item in enumerate(value)
         ]
     if isinstance(value, tuple):
-        return tuple(
+        normalized = [
             _sanitize_structure(
                 item,
                 evidence_attestations=evidence_attestations,
                 path=path + (index,),
                 allow_parent_verified_evidence=allow_parent_verified_evidence,
+                strict_json=strict_json,
             )
             for index, item in enumerate(value)
-        )
+        ]
+        return normalized if strict_json else tuple(normalized)
     if isinstance(value, str):
-        return sanitize_text(value)
+        sanitized_text = sanitize_text(value)
+        if strict_json:
+            try:
+                sanitized_text.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise SanitizationIntegrityError(
+                    "EVIDENCE_INTEGRITY_ERROR: worker result string is not UTF-8 persistable"
+                ) from exc
+        return sanitized_text
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        if not strict_json or math.isfinite(value):
+            return value
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: worker result contains a non-finite number"
+        )
+    if strict_json:
+        raise SanitizationIntegrityError(
+            "EVIDENCE_INTEGRITY_ERROR: worker result contains a non-persistable value"
+        )
     return value
 
 

@@ -191,6 +191,25 @@ class _ForgedInternalEvidenceCapabilityWorker:
         }
 
 
+class _DuckItemsSecret:
+    def __init__(self, prefix: str) -> None:
+        self.prefix = prefix
+
+    def items(self):
+        return {
+            "passwordValue": f"{self.prefix}-duck-password",
+            "message": f"Authorization: {self.prefix}-duck-auth",
+        }.items()
+
+
+class _DuckItemsResultWorker:
+    def __call__(self, _task):
+        return {
+            "accepted_pairs": 1,
+            "nested": _DuckItemsSecret("isolated"),
+        }
+
+
 class _FieldSemanticResultWorker:
     def __call__(self, _task):
         evidence = {
@@ -323,6 +342,25 @@ def test_process_monitor_rejects_a_worker_forged_internal_capability(
     assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
     assert "forged-capability-password" not in str(captured.value)
     assert "forged-capability-auth" not in str(captured.value)
+    assert not (context.attempt_dir / "result.json").exists()
+
+
+def test_process_monitor_rejects_a_duck_items_object_once_as_integrity(
+    tmp_path,
+) -> None:
+    context = _attempt_context(tmp_path)
+    monitor = ProcessMonitor(
+        heartbeat_seconds=0.01,
+        stale_after_seconds=0.2,
+        hard_timeout_seconds=0.5,
+    )
+
+    with pytest.raises(WorkerProcessError) as captured:
+        monitor.run(_DuckItemsResultWorker(), object(), context)
+
+    assert captured.value.kind is ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    assert "isolated-duck-password" not in str(captured.value)
+    assert "isolated-duck-auth" not in str(captured.value)
     assert not (context.attempt_dir / "result.json").exists()
 
 
