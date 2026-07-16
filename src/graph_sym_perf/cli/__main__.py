@@ -39,6 +39,7 @@ def _parser() -> argparse.ArgumentParser:
         command = experiment_commands.add_parser(name, help=help_text)
         command.add_argument("--config", default="config/experiment.yaml")
     experiment_commands.choices["doctor"].add_argument("--output-root")
+    experiment_commands.choices["doctor"].add_argument("--phase", choices=("p0", "p1", "p2"))
     experiment_commands.choices["plan"].add_argument("--output")
     experiment_commands.choices["plan"].add_argument("--phase", choices=("p0", "p1", "p2"))
     experiment_commands.choices["plan"].add_argument("--selection")
@@ -140,8 +141,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.command == "experiment" and args.experiment_command == "doctor":
-            report = experiments.doctor(config=args.config, output_root=args.output_root)
-            print(f"doctor: targets={len(report.systems)} gdsmith_dirty={report.gdsmith_dirty} ready={report.ready}")
+            report = experiments.doctor(
+                config=args.config,
+                output_root=args.output_root,
+                phase=args.phase,
+            )
+            print(
+                f"doctor: targets={len(report.systems)} phase={report.phase} "
+                f"entries={report.entry_count} gdsmith_dirty={report.gdsmith_dirty} "
+                f"regression_ready={report.regression_environment_ready} ready={report.ready}"
+            )
             return 0 if report.ready else 4
         if args.command == "experiment" and args.experiment_command == "status":
             report = experiments.status(output_root=args.output_root, run_id=args.run_id)

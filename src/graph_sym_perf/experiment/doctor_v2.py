@@ -14,8 +14,19 @@ from urllib.parse import urlparse
 
 from graph_sym_perf.adapters import create_adapter
 from graph_sym_perf.config import migrate_experiment_spec_to_run_config
-from graph_sym_perf.core import GdsmithConfig, TargetSystem
-from graph_sym_perf.experiment.planner import build_run_plan
+from graph_sym_perf.core import (
+    ConfirmationConfig,
+    DatasetConfig,
+    EquivalenceConfig,
+    GdsmithConfig,
+    QueryGenerationConfig,
+    RunConfig,
+    RunPaths,
+    SystemConfig,
+    TargetSystem,
+)
+from graph_sym_perf.experiment.plan_models import CampaignPhase, ValidatedYieldExperimentSpec
+from graph_sym_perf.experiment.planner import build_rule_plan, build_run_plan
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.gdsmith.runner import check_gdsmith_tooling
 from graph_sym_perf.experiment.provenance import verified_execution_provenance
@@ -48,6 +59,9 @@ class DoctorReport:
     disk_required_bytes: int
     disk_ready: bool
     systems: tuple[SystemDoctorResult, ...]
+    phase: str | None = None
+    entry_count: int = 0
+    regression_environment_ready: bool = True
 
 
 _DRIVERS = {
@@ -66,9 +80,15 @@ def run_doctor(
     *,
     environment: Mapping[str, str] | None = None,
     output_root: str | Path = ".",
+    phase: str | CampaignPhase | None = None,
 ) -> DoctorReport:
     spec = load_experiment_spec(config_path)
-    return run_doctor_spec(spec, environment=environment, output_root=output_root)
+    return run_doctor_spec(
+        spec,
+        environment=environment,
+        output_root=output_root,
+        phase=phase,
+    )
 
 
 def run_doctor_spec(
@@ -76,11 +96,28 @@ def run_doctor_spec(
     *,
     environment: Mapping[str, str] | None = None,
     output_root: str | Path = ".",
+    phase: str | CampaignPhase | None = None,
 ) -> DoctorReport:
     env = dict(os.environ if environment is None else environment)
     output_path = Path(output_root)
     output_path.mkdir(parents=True, exist_ok=True)
-    plan = build_run_plan(spec, environment=env)
+    if isinstance(spec, ValidatedYieldExperimentSpec):
+        parsed_phase = CampaignPhase.P0 if phase is None else (
+            phase if isinstance(phase, CampaignPhase) else CampaignPhase(str(phase))
+        )
+        if parsed_phase is CampaignPhase.P2:
+            raise ValueError("schema-v3 P2 doctor requires a frozen selection through the run command")
+        plan = build_rule_plan(spec, parsed_phase, environment=env)
+        entries = plan.entries
+        budget_mb = int(spec.artifacts["entry_budget_mb"])
+        phase_value = parsed_phase.value
+    else:
+        if phase is not None:
+            raise ValueError("--phase is only valid for schema-v3 doctor")
+        plan = build_run_plan(spec, environment=env)
+        entries = plan.tasks
+        budget_mb = int(spec.artifacts["shard_budget_mb"])
+        phase_value = None
     gdsmith = check_gdsmith_tooling(
         GdsmithConfig(
             expected_source_commit=spec.generation.expected_commit,
@@ -90,7 +127,7 @@ def run_doctor_spec(
     )
     results = tuple(_check_system(target, definition, spec, env) for target, definition in spec.systems.items())
     disk_free = shutil.disk_usage(output_path).free
-    disk_required = len(plan.tasks) * int(spec.artifacts["shard_budget_mb"]) * 1024 * 1024
+    disk_required = len(entries) * budget_mb * 1024 * 1024
     disk_ready = disk_free >= disk_required
     source_ready = (
         plan.source_revision.provenance_complete
@@ -98,7 +135,8 @@ def run_doctor_spec(
         and plan.source_revision.gdsmith_dirty is False
         and plan.source_revision.gdsmith_commit == spec.generation.expected_commit
     )
-    ready = gdsmith.ready and source_ready and disk_ready and all(
+    regression_ready = _regression_environment_ready(spec, env)
+    ready = gdsmith.ready and source_ready and disk_ready and regression_ready and all(
         result.required_env_present
         and result.generation_env_present
         and result.generation_connectivity in {"ready", "not_required"}
@@ -119,6 +157,9 @@ def run_doctor_spec(
         disk_required,
         disk_ready,
         results,
+        phase_value,
+        len(entries),
+        regression_ready,
     )
     destination = output_path / "doctor.json"
     destination.write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")
@@ -135,7 +176,11 @@ def _check_system(target, definition, spec, env: Mapping[str, str]) -> SystemDoc
     connectivity = "not_attempted"
     connectivity_reason = "required environment missing" if not required_env_present else "driver unavailable"
     if required_env_present and driver_available:
-        config = migrate_experiment_spec_to_run_config(spec, target)
+        config = (
+            _validated_yield_doctor_config(spec, target, definition)
+            if isinstance(spec, ValidatedYieldExperimentSpec)
+            else migrate_experiment_spec_to_run_config(spec, target)
+        )
         adapter = create_adapter(config.systems[0], config, env)
         try:
             dependency_ok, dependency_reason = adapter.check_dependency()
@@ -167,6 +212,47 @@ def _check_system(target, definition, spec, env: Mapping[str, str]) -> SystemDoc
         connectivity_reason,
         definition.graph_isolation,
     )
+
+
+def _validated_yield_doctor_config(spec, target, definition) -> RunConfig:
+    optional_env = {"database": "GRAPHSYMPERF_NEO4J_DATABASE"} if target is TargetSystem.NEO4J else {}
+    system = SystemConfig(
+        target=target,
+        required_env=definition.required_env,
+        optional_env=optional_env,
+        settings={},
+    )
+    return RunConfig(
+        source_path=str(spec.source_path),
+        paths=RunPaths(),
+        systems=(system,),
+        dataset=DatasetConfig(seed=spec.seed),
+        query_generation=QueryGenerationConfig(),
+        equivalence=EquivalenceConfig(
+            max_result_rows=int(spec.validation["max_result_rows"]),
+            timeout_seconds=float(definition.default_timeout_seconds),
+        ),
+        confirmation=ConfirmationConfig(timeout_seconds=float(definition.default_timeout_seconds)),
+    )
+
+
+def _regression_environment_ready(spec, env: Mapping[str, str]) -> bool:
+    if not isinstance(spec, ValidatedYieldExperimentSpec):
+        return True
+    manifest_path = Path(spec.regression["manifest"])
+    try:
+        import yaml
+
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    if not isinstance(manifest, Mapping):
+        return False
+    names = tuple(
+        manifest.get(key)
+        for key in ("image_digest_env", "container_env", "uri_env")
+    )
+    return all(isinstance(name, str) and bool(env.get(name)) for name in names)
 
 
 def _generation_connectivity(definition, env: Mapping[str, str]) -> str:

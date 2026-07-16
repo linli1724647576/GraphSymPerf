@@ -78,9 +78,20 @@ class ExperimentCommands:
             write_resolved_manifest(plan, output)
         return plan
 
-    def doctor(self, *, config: str | Path, output_root: str | Path | None = None):
+    def doctor(
+        self,
+        *,
+        config: str | Path,
+        output_root: str | Path | None = None,
+        phase: str | CampaignPhase | None = None,
+    ):
         options = {} if output_root is None else {"output_root": output_root}
-        return run_doctor(config, environment=_formal_environment(config), **options)
+        return run_doctor(
+            config,
+            environment=_formal_environment(config),
+            phase=phase,
+            **options,
+        )
 
     def run(
         self,
@@ -94,7 +105,12 @@ class ExperimentCommands:
     ):
         spec = load_experiment_spec(config)
         environment = _formal_environment(config)
-        report = run_doctor(config, environment=environment, output_root=output_root)
+        report = run_doctor(
+            config,
+            environment=environment,
+            output_root=output_root,
+            phase=phase,
+        )
         if not report.ready:
             raise ExperimentNotReady("doctor is not ready; inspect the generated doctor report")
         if isinstance(spec, ValidatedYieldExperimentSpec):
