@@ -83,6 +83,7 @@ def _query_execution_error(message: str, exc: Exception) -> QueryExecutionError:
         return QueryTimeoutError(message)
     if getattr(exc, "code", None) in {
         "Neo.ClientError.Transaction.TransactionTimedOut",
+        "Neo.ClientError.Transaction.TransactionTimedOutClientConfiguration",
         "Neo.TransientError.Transaction.TransactionTimedOut",
     }:
         return QueryTimeoutError(message)

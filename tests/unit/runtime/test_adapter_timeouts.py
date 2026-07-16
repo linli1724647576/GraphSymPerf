@@ -32,6 +32,20 @@ class _TimeoutDriver:
         return _TimeoutSession()
 
 
+class _Neo4jClientConfiguredTimeout(Exception):
+    code = "Neo.ClientError.Transaction.TransactionTimedOutClientConfiguration"
+
+
+class _Neo4jClientConfiguredTimeoutSession(_TimeoutSession):
+    def run(self, *_args, **_kwargs):
+        raise _Neo4jClientConfiguredTimeout("client transaction timeout")
+
+
+class _Neo4jClientConfiguredTimeoutDriver:
+    def session(self, **_kwargs):
+        return _Neo4jClientConfiguredTimeoutSession()
+
+
 class _TimeoutGraph:
     def query(self, *_args, **_kwargs):
         raise TimeoutError("deadline")
@@ -144,3 +158,18 @@ def test_runtime_harness_recognizes_typed_adapter_timeout() -> None:
 
     assert evidence.verdict is RuntimeVerdict.INCONCLUSIVE
     assert evidence.reason_codes == ("both_timeout",)
+
+
+def test_neo4j_client_configured_transaction_timeout_is_typed() -> None:
+    adapter = object.__new__(Neo4jAdapter)
+    adapter._driver = _Neo4jClientConfiguredTimeoutDriver()
+    adapter._database = None
+    adapter._connect = lambda: None
+
+    with pytest.raises(QueryTimeoutError):
+        adapter.execute(
+            "MATCH (n) RETURN n",
+            {},
+            "runtime",
+            timeout_seconds=60.0,
+        )
