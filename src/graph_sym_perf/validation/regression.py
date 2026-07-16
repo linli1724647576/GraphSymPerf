@@ -1343,7 +1343,11 @@ def _candidate(case: RegressionCase, identity: RegressionEnvironmentIdentity) ->
         validation_policy=ValidationPolicy(
             max_result_rows=100_000,
             query_timeout_seconds=60.0,
-            session_timeout_seconds=600.0,
+            # The frozen slow side is about 6s on the affected image.  The
+            # strict protocol executes it roughly 60 times per session across
+            # B/B controls, warmups, and paired measurements, so 600s leaves
+            # too little room for graph/index setup and normal variance.
+            session_timeout_seconds=1_200.0,
         ),
     )
 

@@ -690,6 +690,12 @@ def test_production_constructor_is_fixed_and_session_builder_is_spawned(tmp_path
     assert isinstance(build_independent_session_runner(case), SpawnedValidationSessionRunner)
 
 
+def test_known_regression_session_budget_covers_the_fixed_strict_protocol() -> None:
+    candidate = regression_module._candidate(_case(), _identity(_case()))
+
+    assert candidate.validation_policy.session_timeout_seconds == 1_200.0
+
+
 def test_landed_report_rejects_campaign_manifest_environment_and_content_drift(tmp_path: Path) -> None:
     case = _case()
     path = tmp_path / "report.json"
