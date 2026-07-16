@@ -339,7 +339,14 @@ class RegressionCase:
             "manifest_path": "path",
             "graph_file_sha256": "graph_sha256",
         }
-        return getattr(self.manifest, aliases.get(name, name))
+        # During spawn unpickling the dataclass fields are restored one by one.
+        # Looking up ``self.manifest`` through __getattr__ before that field is
+        # present recursively calls this method until RecursionError.
+        try:
+            manifest = object.__getattribute__(self, "manifest")
+        except AttributeError:
+            raise AttributeError(name) from None
+        return getattr(manifest, aliases.get(name, name))
 
 
 @dataclass(frozen=True)

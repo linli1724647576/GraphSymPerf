@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import pickle
 import re
 import shutil
 from dataclasses import replace
@@ -73,6 +74,16 @@ def _case(**overrides: str):
             else None
         ),
     )
+
+
+def test_regression_case_is_pickle_safe_for_spawned_validation_sessions() -> None:
+    case = _case()
+
+    restored = pickle.loads(pickle.dumps(case))
+
+    assert restored == case
+    assert restored.manifest_path == case.manifest_path
+    assert restored.password == case.password
 
 
 def _identity(case=None, *, version: str = "2026.04.0 community"):
