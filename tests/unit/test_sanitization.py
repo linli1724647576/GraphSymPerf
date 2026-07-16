@@ -451,6 +451,13 @@ def test_diagnostic_fields_clean_dotted_assignments_and_full_spaced_paths() -> N
         "PWDVALUE",
         "APIKEYHEADER",
         "NEO4JPASSWORDHEADER",
+        "USERPASSWORD",
+        "REDISPASSWORD",
+        "AZURECLIENTSECRET",
+        "JWTSECRET",
+        "REFRESHTOKEN",
+        "redispassword",
+        "REDISPASSWORDHEADER",
     ),
 )
 def test_operational_sensitive_key_tokenizer_covers_common_naming_styles(

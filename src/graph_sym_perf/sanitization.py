@@ -73,20 +73,6 @@ _COMPACT_CREDENTIAL_BASES = (
     "pwd",
     "apikey",
 )
-_COMPACT_CREDENTIAL_PREFIXES = frozenset(
-    {
-        "access",
-        "adapter",
-        "client",
-        "config",
-        "database",
-        "db",
-        "driver",
-        "neo4j",
-        "service",
-        "vendor",
-    }
-)
 _COMPACT_CREDENTIAL_SUFFIXES = ("header", "value")
 _PLAIN_INLINE_SECRET_NAME = (
     r"(?:password|passwd|pwd|secret|token|authorization|credential|api[_-]?key)"
@@ -181,8 +167,7 @@ def is_sensitive_key(value: object) -> bool:
     normalized = _normalized_key(value)
     if normalized is None:
         return False
-    compact = re.sub(r"[^A-Za-z0-9]", "", normalized).lower()
-    if _is_compact_credential_key(compact):
+    if _is_compact_credential_key(normalized):
         return True
     tokens = _key_tokens(normalized)
     for index, token in enumerate(tokens):
@@ -207,7 +192,8 @@ def is_sensitive_key(value: object) -> bool:
 
 
 def _is_compact_credential_key(value: str) -> bool:
-    stem = value
+    compact = re.sub(r"[^A-Za-z0-9]", "", value)
+    stem = compact.lower()
     for suffix in _COMPACT_CREDENTIAL_SUFFIXES:
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
@@ -216,22 +202,9 @@ def _is_compact_credential_key(value: str) -> bool:
         if not stem.endswith(base):
             continue
         prefix = stem[: -len(base)]
-        if _is_compact_credential_prefix(prefix):
+        if not prefix or compact.isupper() or compact.islower():
             return True
     return False
-
-
-def _is_compact_credential_prefix(value: str) -> bool:
-    if not value:
-        return True
-    reachable = {0}
-    for index in range(len(value)):
-        if index not in reachable:
-            continue
-        for prefix in _COMPACT_CREDENTIAL_PREFIXES:
-            if value.startswith(prefix, index):
-                reachable.add(index + len(prefix))
-    return len(value) in reachable
 
 
 def _normalized_key(value: object) -> str | None:
