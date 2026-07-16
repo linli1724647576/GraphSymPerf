@@ -41,7 +41,7 @@ def collect_aa_noise_samples(
             query,
             query,
             policy=RuntimePolicy(
-                warmups=0,
+                warmups=2,
                 pairs=pairs_per_query,
                 seed=index,
                 require_exact_balance=pairs_per_query % 2 == 0,

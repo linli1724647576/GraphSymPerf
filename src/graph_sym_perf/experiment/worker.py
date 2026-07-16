@@ -4300,7 +4300,7 @@ def _load_or_calibrate_entry_noise(
         "probe_pair_hashes": probe_hashes,
         "probe_samples_us": probe_samples_us,
         "probe_queries": 20,
-        "protocol_version": "aa-noise-20x10-v1",
+        "protocol_version": "aa-noise-20x10-warmup2-v2",
     }
     content_hash = canonical_hash(body)
     persist_intent(content_hash, tuple(probe_hashes))
@@ -4367,7 +4367,7 @@ def _load_entry_noise(
         or body.get("minimum_complete_samples") != 200
         or body.get("order_bias_rule") != "median_order_bias_ms<=p95_delta_ms"
         or body.get("long_tail_ratio_max") != 5.0
-        or body.get("protocol_version") != "aa-noise-20x10-v1"
+        or body.get("protocol_version") != "aa-noise-20x10-warmup2-v2"
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -4439,7 +4439,7 @@ def _write_entry_noise_failure(
         "graph_snapshot_hash": graph_snapshot_hash,
         "dbms_fingerprint": dbms_fingerprint,
         "dbms_health_epoch": dbms_health_epoch,
-        "protocol_version": "aa-noise-20x10-v1",
+        "protocol_version": "aa-noise-20x10-warmup2-v2",
         "probe_queries": 20,
         "pairs_per_query": 10,
         "expected_probe_pair_hashes": list(expected_probe_hashes),
@@ -4505,7 +4505,7 @@ def _load_entry_noise_failure(
         or body.get("graph_snapshot_hash") != graph_snapshot_hash
         or body.get("dbms_fingerprint") != dbms_fingerprint
         or body.get("dbms_health_epoch") != dbms_health_epoch
-        or body.get("protocol_version") != "aa-noise-20x10-v1"
+        or body.get("protocol_version") != "aa-noise-20x10-warmup2-v2"
         or body.get("probe_queries") != 20
         or body.get("pairs_per_query") != 10
         or not isinstance(body.get("reason_codes"), list)

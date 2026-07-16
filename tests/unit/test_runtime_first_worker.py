@@ -3608,7 +3608,7 @@ def test_incomplete_noise_writes_separate_typed_failure_artifact(tmp_path) -> No
         (entry_dir / "noise_calibration_failure.json").read_text(encoding="utf-8")
     )
     assert failure["reason_codes"] == ["aa_probe_inconclusive"]
-    assert failure["protocol_version"] == "aa-noise-20x10-v1"
+    assert failure["protocol_version"] == "aa-noise-20x10-warmup2-v2"
     assert failure["content_hash"] == canonical_hash(
         {key: value for key, value in failure.items() if key != "content_hash"}
     )

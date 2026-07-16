@@ -137,15 +137,17 @@ def test_noise_preflight_rejects_consistent_first_second_execution_bias() -> Non
 def test_noise_preflight_rejects_a_long_tail_above_five_times_p95() -> None:
     class LongTailFake:
         def __init__(self) -> None:
-            self.calls = 0
+            self.calls: dict[str, int] = {}
 
         def execute(self, query: str, parameters, **_kwargs) -> float:
-            self.calls += 1
+            self.calls[query] = self.calls.get(query, 0) + 1
             # Exactly four of 200 pairs have a large second observation. That
             # keeps p95 near 1ms while moving the interpolated p99 above 5x.
-            pair_index = (self.calls - 1) // 2
-            is_second = self.calls % 2 == 0
-            return 100.0 if is_second and pair_index in {0, 50, 100, 150} else (11.0 if is_second else 10.0)
+            probe_index = int(query.removeprefix("probe-"))
+            call = self.calls[query]
+            measured_call = call - 4
+            is_second = measured_call > 0 and measured_call % 2 == 0
+            return 100.0 if is_second and probe_index in {0, 5, 10, 15} and measured_call == 2 else (11.0 if is_second else 10.0)
 
     noise = calibrate_aa_noise(
         RuntimeHarness(),
@@ -158,6 +160,27 @@ def test_noise_preflight_rejects_a_long_tail_above_five_times_p95() -> None:
     assert noise.long_tail_ratio is not None
     assert noise.long_tail_ratio > 5.0
     assert "aa_long_tail" in noise.reason_codes
+
+
+def test_noise_preflight_warms_each_probe_before_collecting_samples() -> None:
+    class ColdFirstExecutionFake:
+        def __init__(self) -> None:
+            self.calls: dict[str, int] = {}
+
+        def execute(self, query: str, parameters, **_kwargs) -> float:
+            self.calls[query] = self.calls.get(query, 0) + 1
+            return 1000.0 if self.calls[query] == 1 else 10.0
+
+    noise = calibrate_aa_noise(
+        RuntimeHarness(),
+        ColdFirstExecutionFake(),
+        tuple(f"probe-{index}" for index in range(20)),
+        pairs_per_query=10,
+    )
+
+    assert noise.valid
+    assert noise.sample_count == 200
+    assert noise.p99_delta_ms == 0.0
 
 
 def test_runtime_gate_rejects_evidence_without_a_stable_majority_direction() -> None:
