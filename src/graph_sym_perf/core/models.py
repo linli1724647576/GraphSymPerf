@@ -142,12 +142,15 @@ class GdsmithConfig:
     stall_timeout_seconds: float = 120.0
     max_raw_artifact_bytes: int | None = None
     max_node_num: int = 128
+    compatibility_profile: str = "all"
 
     def __post_init__(self) -> None:
         if type(self.max_node_num) is not int:
             raise TypeError("max_node_num must be a positive integer")
         if self.max_node_num <= 0:
             raise ValueError("max_node_num must be a positive integer")
+        if self.compatibility_profile not in {"all", "neo4j"}:
+            raise ValueError("compatibility_profile must be 'all' or 'neo4j'")
 
 
 @dataclass(frozen=True)

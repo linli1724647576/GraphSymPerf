@@ -79,6 +79,7 @@ def check_gdsmith_tooling(config: GdsmithConfig, env: Mapping[str, str]) -> Gdsm
         jar_path,
         env.get(config.jar_sha256_env),
         expected_source_commit=config.expected_source_commit,
+        compatibility_profile=config.compatibility_profile,
     )
     destructive_ok = env.get(config.allow_destructive_env) == "1"
 
@@ -112,6 +113,7 @@ def _verify_gdsmith_artifact(
     expected_digest: str | None,
     *,
     expected_source_commit: str | None,
+    compatibility_profile: str,
 ) -> tuple[str | None, str | None, bool]:
     if jar_path is None or not jar_path.is_file():
         return None, None, False
@@ -124,7 +126,7 @@ def _verify_gdsmith_artifact(
         manifest = json.loads(raw)
     except (OSError, json.JSONDecodeError):
         return actual, None, False
-    required_guards = {
+    all_backend_guards = {
         "reject_multi_label_node_patterns",
         "render_safe_double_quoted_literals",
         "reject_unsafe_double_quoted_tokens",
@@ -136,6 +138,13 @@ def _verify_gdsmith_artifact(
         "exclude_unbuildable_tugraph_provider",
         "shade_runnable_jar",
     }
+    neo4j_guards = {
+        "neo4j_transaction_timeout_30s",
+        "neo4j_result_row_cap_1000",
+        "exclude_unbuildable_tugraph_provider",
+        "shade_runnable_jar",
+    }
+    required_guards = neo4j_guards if compatibility_profile == "neo4j" else all_backend_guards
     valid = bool(
         isinstance(manifest, dict)
         and manifest.get("sha256") == actual.removeprefix("sha256:")

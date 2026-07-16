@@ -361,7 +361,10 @@ def _rule_plan_source_revision(
             else "schema-v3 GDsmith checkout cleanliness is unavailable"
         )
     tooling = check_gdsmith_tooling(
-        GdsmithConfig(expected_source_commit=spec.generation.expected_commit),
+        GdsmithConfig(
+            expected_source_commit=spec.generation.expected_commit,
+            compatibility_profile="neo4j",
+        ),
         os.environ if environment is None else environment,
     )
     if (

@@ -3597,6 +3597,7 @@ class RuntimeFirstShardWorker:
             timeout_seconds = max(1.0, min(float(max_runtime_seconds) - 300.0, 6 * 3600.0))
             base_config = GdsmithConfig(
                 expected_source_commit=self.spec.generation.expected_commit,
+                compatibility_profile="neo4j" if self.spec.schema_version == 3 else "all",
                 algorithm=self.spec.generation.algorithm.lower(),
                 backend_extra_args=(
                     {backend: ("--label-num", "1")}
@@ -3737,6 +3738,7 @@ def _entry_run_config(
             source=spec.generation.backend,
             gdsmith=GdsmithConfig(
                 expected_source_commit=spec.generation.expected_commit,
+                compatibility_profile="neo4j" if spec.schema_version == 3 else "all",
                 algorithm=spec.generation.algorithm.lower(),
                 num_queries=entry.max_generated_seed_budget,
                 random_seed=entry.shard_seed,

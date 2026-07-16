@@ -15,7 +15,7 @@ generation:
   source: gdsmith
   algorithm: COMPARED3
   commit_source: vendored_checkout
-  expected_commit: 1bf4f24c6d2095bd2aab3fb3aa5ff15be93a08c6
+  expected_commit: f5c0a67ca317e956c5572884a28f7f22e5dcb356
   checkout: ../../GDsmith-runtime-first-clean
   required_env: [GRAPHSYMPERF_GDSMITH_JAR, GRAPHSYMPERF_GDSMITH_JAR_SHA256, GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE]
 runtime:

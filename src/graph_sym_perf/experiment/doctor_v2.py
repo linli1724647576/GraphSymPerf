@@ -82,7 +82,10 @@ def run_doctor_spec(
     output_path.mkdir(parents=True, exist_ok=True)
     plan = build_run_plan(spec, environment=env)
     gdsmith = check_gdsmith_tooling(
-        GdsmithConfig(expected_source_commit=spec.generation.expected_commit),
+        GdsmithConfig(
+            expected_source_commit=spec.generation.expected_commit,
+            compatibility_profile="neo4j" if spec.schema_version == 3 else "all",
+        ),
         env,
     )
     results = tuple(_check_system(target, definition, spec, env) for target, definition in spec.systems.items())

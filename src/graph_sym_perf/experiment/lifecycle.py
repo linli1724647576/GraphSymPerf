@@ -287,7 +287,10 @@ class _SourceProvenanceGuard:
 
     def _verify_artifact_provenance(self) -> None:
         tooling = check_gdsmith_tooling(
-            GdsmithConfig(expected_source_commit=self.spec.generation.expected_commit),
+            GdsmithConfig(
+                expected_source_commit=self.spec.generation.expected_commit,
+                compatibility_profile="neo4j" if self.schema_version == 3 else "all",
+            ),
             self.environment,
         )
         if (
@@ -307,7 +310,10 @@ class _SourceProvenanceGuard:
         return signature_after
 
     def _artifact_signature(self) -> tuple[object, ...]:
-        config = GdsmithConfig(expected_source_commit=self.spec.generation.expected_commit)
+        config = GdsmithConfig(
+            expected_source_commit=self.spec.generation.expected_commit,
+            compatibility_profile="neo4j" if self.schema_version == 3 else "all",
+        )
         jar_value = self.environment.get(config.jar_env)
         jar = Path(jar_value).expanduser() if jar_value else None
         manifest = jar.with_suffix(jar.suffix + ".manifest.json") if jar is not None else None

@@ -156,6 +156,39 @@ def test_gdsmith_tooling_binds_jar_hash_manifest_and_source_commit(tmp_path: Pat
     assert not wrong_commit.ready
 
 
+def test_gdsmith_tooling_neo4j_profile_requires_only_verified_neo4j_guards(
+    tmp_path: Path, monkeypatch
+) -> None:
+    jar = tmp_path / "GDsmith.jar"
+    jar.write_text("verified-jar", encoding="utf-8")
+    environment = _gdsmith_artifact_env(jar)
+    manifest_path = jar.with_suffix(jar.suffix + ".manifest.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["compatibility_guards"] = [
+        "neo4j_transaction_timeout_30s",
+        "neo4j_result_row_cap_1000",
+        "exclude_unbuildable_tugraph_provider",
+        "shade_runnable_jar",
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(gdsmith_runner.shutil, "which", lambda name: "/usr/bin/java")
+    environment["GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE"] = "1"
+
+    neo4j = check_gdsmith_tooling(
+        GdsmithConfig(expected_source_commit="a" * 40, compatibility_profile="neo4j"),
+        environment,
+    )
+    all_backends = check_gdsmith_tooling(
+        GdsmithConfig(expected_source_commit="a" * 40),
+        environment,
+    )
+
+    assert neo4j.ready
+    assert neo4j.build_manifest_ok
+    assert not all_backends.ready
+    assert not all_backends.build_manifest_ok
+
+
 def test_gdsmith_tooling_requires_the_per_statement_timeout_guard(tmp_path: Path, monkeypatch) -> None:
     jar = tmp_path / "GDsmith.jar"
     jar.write_text("verified-jar", encoding="utf-8")
