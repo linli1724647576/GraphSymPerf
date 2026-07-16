@@ -611,7 +611,8 @@ def _conservative_boolean_expression(expression: str) -> bool:
         return False
     if re.search(r"[+*/%]|\[[^\]]*]", expression):
         return False
-    if re.search(r"\b[A-Za-z_]\w*\s*\(", expression):
+    function_like_names = re.findall(r"\b([A-Za-z_]\w*)\s*\(", expression)
+    if any(name.upper() not in {"AND", "OR", "NOT"} for name in function_like_names):
         return False
     scrubbed = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"", "'literal'", expression)
     return re.fullmatch(r"[A-Za-z0-9_.$'\"\s()=<>!-]+", scrubbed) is not None

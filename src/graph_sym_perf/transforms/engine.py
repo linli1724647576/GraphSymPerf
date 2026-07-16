@@ -7,7 +7,12 @@ from dataclasses import dataclass, replace
 from typing import Mapping
 
 from graph_sym_perf.cypher.ast import EdgePattern, NodePattern, PatternList
-from graph_sym_perf.cypher.parser import parse_and_predicate, parse_match_clause, parse_query
+from graph_sym_perf.cypher.parser import (
+    CypherParseError,
+    parse_and_predicate,
+    parse_match_clause,
+    parse_query,
+)
 from graph_sym_perf.cypher.proof import (
     prove_label_order,
     prove_edge_notation,
@@ -123,9 +128,14 @@ def _apply_predicate_order(query: str, certificate: SafetyCertificate):
     clause, match = _match_at_certificate(query, certificate)
     if match.where_region is None or certificate.ast_path != f"clauses[{_clause_index(certificate)}].where":
         raise RuleNotApplicable("predicate-order proof requires the complete WHERE conjunction")
-    original = parse_and_predicate(match.where_region.text)
-    replacement = original.render_reversed()
-    transformed = parse_and_predicate(replacement)
+    try:
+        original = parse_and_predicate(match.where_region.text)
+        replacement = original.render_reversed()
+        transformed = parse_and_predicate(replacement)
+    except CypherParseError as exc:
+        raise RuleNotApplicable(
+            "predicate-order conjunction is outside the proved fragment"
+        ) from exc
     proof = prove_predicate_order(original, transformed)
     result = _replace_query_region(
         query,

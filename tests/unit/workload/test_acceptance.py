@@ -100,6 +100,40 @@ def test_rule_pair_factory_uses_the_entry_rule_not_a_worker_constant() -> None:
     assert sym_result.pair.transform_metadata["semantic_proof_sha256"]
 
 
+def test_predicate_order_skips_unproved_gdsmith_conjunction_without_quarantine() -> None:
+    query = (
+        "MATCH (n0 :L0)<-[r0 :T1]-(n1 :L2)<-[r1 :T0]-(n2 :L5) "
+        "WHERE (((r0.id) > -1) AND ((r0.id) <> (r1.id))) "
+        "MATCH (n3 :L3), (n4)<-[r2 :T4]-(n5 :L0) WHERE ((r2.id) > -1) "
+        "RETURN n0"
+    )
+
+    result = RulePairFactory(RuleRegistry.default()).build(
+        query,
+        _entry(rule_id="predicate_order_symmetry", family="sym"),
+        TargetSystem.NEO4J,
+    )
+
+    assert result.pair is None
+    assert result.quarantine is False
+    assert result.reject_code == "RULE_NOT_APPLICABLE"
+
+
+def test_predicate_order_accepts_parenthesized_proved_conjunction() -> None:
+    query = "MATCH (n) WHERE ((n.a = 1) AND (n.b = 2)) RETURN n"
+
+    result = RulePairFactory(RuleRegistry.default()).build(
+        query,
+        _entry(rule_id="predicate_order_symmetry", family="sym"),
+        TargetSystem.NEO4J,
+    )
+
+    assert result.pair is not None
+    assert result.quarantine is False
+    assert result.pair.query_b != query
+    assert result.pair.certificate.ast_path == "clauses[0].where"
+
+
 def test_rule_pair_factory_quarantines_entry_proof_version_drift() -> None:
     entry = _entry(rule_id="null_partition_tautology", family="bool")
     drifted = RulePlanEntry(**{**entry.__dict__, "proof_version": "stale"})
