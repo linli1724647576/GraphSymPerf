@@ -1,7 +1,8 @@
 from types import SimpleNamespace
 
 from graph_sym_perf.core import TargetSystem
-from graph_sym_perf.experiment.doctor_v2 import run_doctor
+from graph_sym_perf.experiment.doctor_v2 import _regression_environment_ready, run_doctor
+from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.provenance import (
     verified_container_image_digest,
     verified_execution_provenance,
@@ -26,6 +27,25 @@ def test_doctor_treats_proxy_generation_and_full_matrix_disk_budget_as_hard_gate
     assert age.generation_connectivity == "not_attempted"
     assert ladybug.generation_connectivity == "not_attempted"
     assert report.disk_required_bytes == 7 * 16 * 500 * 1024 * 1024
+
+
+def test_schema_v3_doctor_requires_all_regression_credentials() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    environment = {
+        "GRAPHSYMPERF_NEO4J_BUG001_IMAGE_DIGEST": "sha256:" + "a" * 64,
+        "GRAPHSYMPERF_NEO4J_BUG001_CONTAINER": "neo4j-bug001",
+        "GRAPHSYMPERF_NEO4J_BUG001_URI": "bolt://localhost:7699",
+    }
+
+    assert not _regression_environment_ready(spec, environment)
+
+    environment.update(
+        {
+            "GRAPHSYMPERF_NEO4J_BUG001_USER": "neo4j",
+            "GRAPHSYMPERF_NEO4J_BUG001_PASSWORD": "secret",
+        }
+    )
+    assert _regression_environment_ready(spec, environment)
 
 
 def test_container_digest_must_match_docker_inspect_not_only_environment_format(monkeypatch) -> None:

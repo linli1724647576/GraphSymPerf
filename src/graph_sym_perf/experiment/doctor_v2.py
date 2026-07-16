@@ -250,7 +250,13 @@ def _regression_environment_ready(spec, env: Mapping[str, str]) -> bool:
         return False
     names = tuple(
         manifest.get(key)
-        for key in ("image_digest_env", "container_env", "uri_env")
+        for key in (
+            "image_digest_env",
+            "container_env",
+            "uri_env",
+            "user_env",
+            "password_env",
+        )
     )
     return all(isinstance(name, str) and bool(env.get(name)) for name in names)
 

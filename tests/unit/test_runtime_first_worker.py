@@ -782,6 +782,7 @@ def test_schema_v3_entry_generation_uses_entry_artifact_budget_and_frozen_algori
     worker._generate_with_gdsmith(_rule_plan_entry(), tmp_path / "raw")
 
     assert captured["config"].algorithm == "compared3"
+    assert captured["config"].timeout_seconds == 570.0
     assert captured["config"].max_raw_artifact_bytes == 350 * 1024 * 1024
 
 
