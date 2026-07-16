@@ -406,6 +406,14 @@ class RulePlanSupervisor:
                 }
                 final_result = terminal_body
                 final_state = EntryState.INFRASTRUCTURE_FAILED
+            if final_state is EntryState.INFRASTRUCTURE_FAILED:
+                raw_kind = terminal_body.get("infrastructure_error_kind")
+                try:
+                    typed_kind = ErrorKind(str(raw_kind)) if raw_kind is not None else None
+                except ValueError:
+                    typed_kind = ErrorKind.EVIDENCE_INTEGRITY_ERROR
+                if typed_kind is not None and not _is_retryable_error(typed_kind):
+                    non_retryable_failure = True
             _atomic_write_json(
                 attempt_dir / "terminal_result.json",
                 {**terminal_body, "content_hash": canonical_hash(terminal_body)},
@@ -1548,7 +1556,10 @@ def _classify_exception(exc: BaseException) -> ErrorKind:
 
 
 def _is_retryable_error(kind: ErrorKind) -> bool:
-    return kind is not ErrorKind.EVIDENCE_INTEGRITY_ERROR
+    return kind not in {
+        ErrorKind.EVIDENCE_INTEGRITY_ERROR,
+        ErrorKind.NOISE_CALIBRATION_FAILED,
+    }
 
 
 __all__ = ["AttemptContext", "ManifestMismatchError", "RunSummary", "ShardSupervisor", "WorkerProcessError"]

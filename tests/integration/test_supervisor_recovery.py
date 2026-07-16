@@ -166,6 +166,38 @@ def test_rule_plan_supervisor_retries_in_new_attempt_and_writes_typed_cell_summa
     assert len((tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()) >= 4
 
 
+def test_rule_plan_supervisor_does_not_retry_anchored_noise_failure(tmp_path) -> None:
+    plan = _p1_rule_plan()
+    calls = 0
+
+    def worker(entry):
+        nonlocal calls
+        calls += 1
+        return {
+            "entry_id": entry.entry_id,
+            "terminal_state": "infrastructure_failed",
+            "accepted_pairs": 0,
+            "certificate_complete": False,
+            "artifact_complete": True,
+            "infrastructure_error_kind": ErrorKind.NOISE_CALIBRATION_FAILED.value,
+            "infrastructure_reason": "invalid fixed-protocol A/A noise calibration",
+        }
+
+    summary = RulePlanSupervisor(
+        tmp_path,
+        campaign_id="campaign-fixture",
+        input_manifest_hash="a" * 64,
+        retry_limit=1,
+        process_isolation=False,
+    ).run(plan, worker)
+
+    assert summary.infrastructure_failed == plan.entries
+    assert calls == 1
+    entry_dir = next((tmp_path / "entries").iterdir())
+    assert (entry_dir / "attempt-000" / "terminal_result.json").is_file()
+    assert not (entry_dir / "attempt-001").exists()
+
+
 def test_rule_plan_supervisor_writes_one_cell_summary_for_every_terminal_class(tmp_path) -> None:
     plan = _p1_rule_plan()
     base = plan.entries[0]

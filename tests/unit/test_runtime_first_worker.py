@@ -3187,6 +3187,7 @@ def test_timeout_queue_is_not_committed_when_final_health_identity_drifts(
 
 
 def test_runtime_artifact_failure_never_advances_accepted_count(tmp_path, monkeypatch) -> None:
+    _install_valid_noise_stub(monkeypatch)
     entry = _rule_plan_entry(rule_id="null_partition_tautology", family="bool")
     monkeypatch.setattr(
         "graph_sym_perf.runtime.records.CompactRuntimeStore._write_line",
@@ -3584,6 +3585,10 @@ def test_complete_invalid_noise_is_anchored_as_auditable_evidence(tmp_path) -> N
     result = worker(entry)
 
     assert result["terminal_state"] == "infrastructure_failed"
+    assert (
+        result["infrastructure_error_kind"]
+        == ErrorKind.NOISE_CALIBRATION_FAILED.value
+    )
     entry_dir = next(tmp_path.glob("entries/*"))
     noise = json.loads((entry_dir / "noise_calibration.json").read_text(encoding="utf-8"))
     assert noise["calibration"]["valid"] is False
@@ -3621,6 +3626,10 @@ def test_incomplete_noise_writes_separate_typed_failure_artifact(tmp_path) -> No
     result = worker(entry)
 
     assert result["terminal_state"] == "infrastructure_failed"
+    assert (
+        result["infrastructure_error_kind"]
+        == ErrorKind.NOISE_CALIBRATION_FAILED.value
+    )
     entry_dir = next(tmp_path.glob("entries/*"))
     assert not (entry_dir / "noise_calibration.json").exists()
     failure = json.loads(

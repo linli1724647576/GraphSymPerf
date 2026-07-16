@@ -1703,7 +1703,10 @@ class RuntimeFirstShardWorker:
                 noise_failure_intent = None
                 persist_progress()
                 state = EntryState.INFRASTRUCTURE_FAILED
-                infrastructure_error_kind = ErrorKind(str(failure["error_kind"]))
+                # The failure artifact is immutable and anchored in this entry.
+                # Re-entering the same evidence root cannot produce an
+                # independent calibration, so the supervisor must not retry it.
+                infrastructure_error_kind = ErrorKind.NOISE_CALIBRATION_FAILED
                 infrastructure_reason = str(failure["error_reason"])
 
             noise_is_complete = bool(calibrated_noise_floor_id)
@@ -1736,7 +1739,7 @@ class RuntimeFirstShardWorker:
                 pass
             elif not noise_is_complete or not noise.valid or noise.p99_delta_ms is None:
                 state = EntryState.INFRASTRUCTURE_FAILED
-                infrastructure_error_kind = ErrorKind.INFRASTRUCTURE_ERROR
+                infrastructure_error_kind = ErrorKind.NOISE_CALIBRATION_FAILED
                 infrastructure_reason = "invalid fixed-protocol A/A noise calibration"
             else:
                 for pending_record in tuple(pending):
