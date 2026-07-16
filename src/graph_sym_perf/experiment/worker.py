@@ -164,6 +164,8 @@ from graph_sym_perf.workload.registry import AcceptedCorpusRegistry
 
 
 _MAX_QUERY_CANCELLATION_GRACE_SECONDS = 5.0
+_AA_NOISE_PROTOCOL_VERSION = "aa-noise-fastest20-20x10-warmup2-v3"
+_AA_NOISE_PROBE_SELECTION = "fastest_20_by_acceptance_a_us"
 
 
 @dataclass(frozen=True)
@@ -4297,10 +4299,11 @@ def _load_or_calibrate_entry_noise(
         "minimum_complete_samples": 200,
         "order_bias_rule": "median_order_bias_ms<=p95_delta_ms",
         "pairs_per_query": 10,
+        "probe_selection": _AA_NOISE_PROBE_SELECTION,
         "probe_pair_hashes": probe_hashes,
         "probe_samples_us": probe_samples_us,
         "probe_queries": 20,
-        "protocol_version": "aa-noise-20x10-warmup2-v2",
+        "protocol_version": _AA_NOISE_PROTOCOL_VERSION,
     }
     content_hash = canonical_hash(body)
     persist_intent(content_hash, tuple(probe_hashes))
@@ -4341,6 +4344,7 @@ def _load_entry_noise(
         "minimum_complete_samples",
         "order_bias_rule",
         "pairs_per_query",
+        "probe_selection",
         "probe_pair_hashes",
         "probe_samples_us",
         "probe_queries",
@@ -4366,8 +4370,9 @@ def _load_entry_noise(
         or body.get("pairs_per_query") != 10
         or body.get("minimum_complete_samples") != 200
         or body.get("order_bias_rule") != "median_order_bias_ms<=p95_delta_ms"
+        or body.get("probe_selection") != _AA_NOISE_PROBE_SELECTION
         or body.get("long_tail_ratio_max") != 5.0
-        or body.get("protocol_version") != "aa-noise-20x10-warmup2-v2"
+        or body.get("protocol_version") != _AA_NOISE_PROTOCOL_VERSION
     ):
         raise WorkerFailure(
             ErrorKind.EVIDENCE_INTEGRITY_ERROR,
@@ -4439,7 +4444,7 @@ def _write_entry_noise_failure(
         "graph_snapshot_hash": graph_snapshot_hash,
         "dbms_fingerprint": dbms_fingerprint,
         "dbms_health_epoch": dbms_health_epoch,
-        "protocol_version": "aa-noise-20x10-warmup2-v2",
+        "protocol_version": _AA_NOISE_PROTOCOL_VERSION,
         "probe_queries": 20,
         "pairs_per_query": 10,
         "expected_probe_pair_hashes": list(expected_probe_hashes),
@@ -4505,7 +4510,7 @@ def _load_entry_noise_failure(
         or body.get("graph_snapshot_hash") != graph_snapshot_hash
         or body.get("dbms_fingerprint") != dbms_fingerprint
         or body.get("dbms_health_epoch") != dbms_health_epoch
-        or body.get("protocol_version") != "aa-noise-20x10-warmup2-v2"
+        or body.get("protocol_version") != _AA_NOISE_PROTOCOL_VERSION
         or body.get("probe_queries") != 20
         or body.get("pairs_per_query") != 10
         or not isinstance(body.get("reason_codes"), list)
@@ -4536,12 +4541,12 @@ def _expected_noise_probe_records(
         acceptance_records,
         key=lambda value: (int(value["acceptance_a_us"]), str(value["pair_hash"])),
     )
-    if len({str(value["pair_hash"]) for value in ordered}) < 20:
-        return ordered
-    return [
-        ordered[round(index * (len(ordered) - 1) / 19)]
-        for index in range(20)
-    ]
+    # A/A is an infrastructure-noise calibration, not a workload stress test.
+    # Sampling cost quantiles repeatedly executed a single 1--60 second query
+    # and could consume an entire entry budget before Stage 1.  The fastest 20
+    # accepted pairs keep the fixed 20x10 protocol affordable; expensive-query
+    # stability remains guarded by Stage 2, independent validation, and CIs.
+    return ordered[:20]
 
 
 def _stage2_entry_payload(entry: RulePlanEntry) -> dict[str, object]:

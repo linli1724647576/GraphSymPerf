@@ -3521,6 +3521,24 @@ def test_noise_artifact_freezes_exact_integer_samples_and_progress_anchor(tmp_pa
     assert progress["noise_intent"] is None
 
 
+def test_noise_probe_selection_uses_the_twenty_lowest_cost_accepted_pairs() -> None:
+    records = [
+        {
+            "acceptance_a_us": cost,
+            "pair_hash": f"{index:064x}",
+            "source_query_ordinal": index,
+        }
+        for index, cost in enumerate(range(30_000, 0, -1_000), start=1)
+    ]
+
+    selected = worker_module._expected_noise_probe_records(records)
+
+    assert len(selected) == 20
+    assert [record["acceptance_a_us"] for record in selected] == list(
+        range(1_000, 21_000, 1_000)
+    )
+
+
 def test_complete_invalid_noise_is_anchored_as_auditable_evidence(tmp_path) -> None:
     queries = tuple(
         f"MATCH (n) WHERE n.id = {index} RETURN n"
@@ -3608,7 +3626,7 @@ def test_incomplete_noise_writes_separate_typed_failure_artifact(tmp_path) -> No
         (entry_dir / "noise_calibration_failure.json").read_text(encoding="utf-8")
     )
     assert failure["reason_codes"] == ["aa_probe_inconclusive"]
-    assert failure["protocol_version"] == "aa-noise-20x10-warmup2-v2"
+    assert failure["protocol_version"] == "aa-noise-fastest20-20x10-warmup2-v3"
     assert failure["content_hash"] == canonical_hash(
         {key: value for key, value in failure.items() if key != "content_hash"}
     )
