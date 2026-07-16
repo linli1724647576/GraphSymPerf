@@ -9,7 +9,12 @@ from graph_sym_perf.core import TargetSystem
 from graph_sym_perf.experiment.plan_models import CampaignPhase, RulePlanEntry, RuleStream
 from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import RuntimePolicy
-from graph_sym_perf.runtime.records import ArtifactWriteError, CompactRuntimeStore, PairRuntimeRecord
+from graph_sym_perf.runtime.records import (
+    ArtifactWriteError,
+    CompactRuntimeStore,
+    PairRuntimeRecord,
+    summarize_integer_samples,
+)
 from graph_sym_perf.transforms.rule_models import RuleRegistry
 from graph_sym_perf.workload.rule_pairs import RulePairFactory
 
@@ -87,6 +92,23 @@ def test_pair_runtime_record_stores_integer_microseconds_without_query_or_plan(t
     assert "query_a" not in payload and "query_b" not in payload
     assert "profile" not in payload and "plan" not in payload
     assert store.count == 1
+
+
+def test_integer_summary_uses_paired_delta_when_marginal_medians_disagree() -> None:
+    summary = summarize_integer_samples(
+        (
+            ("BA", 939, 961),
+            ("AB", 693, 682),
+            ("AB", 557, 579),
+        ),
+        noise_p99_ms=1.0,
+    )
+
+    assert summary["median_a_ms"] > summary["median_b_ms"]
+    assert summary["runtime_direction"] == "b"
+    assert summary["median_delta_ms"] == 0.022
+    assert summary["median_ratio"] > 1.0
+    assert summary["delta_over_noise"] == 0.022
 
 
 def test_store_write_failure_does_not_increment_accepted_count(monkeypatch, tmp_path) -> None:

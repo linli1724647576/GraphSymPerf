@@ -359,8 +359,9 @@ def summarize_integer_samples(
         }
 
     assert median_a_ms is not None and median_b_ms is not None
+    paired_delta_us = float(median(b - a for _order, a, b in normalized))
     runtime_direction = (
-        "a" if median_a_ms > median_b_ms else "b" if median_b_ms > median_a_ms else None
+        "b" if paired_delta_us > 0 else "a" if paired_delta_us < 0 else None
     )
     oriented = [
         (b, a) if runtime_direction == "a" else (a, b)

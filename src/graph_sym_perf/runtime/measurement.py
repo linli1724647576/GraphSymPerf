@@ -229,7 +229,15 @@ def _evidence(
         return RuntimeEvidence(RuntimeVerdict.INCONCLUSIVE, _hash(query_a), _hash(query_b), samples, None, None, None, None, 0.0, None, ("no_complete_samples",))
     median_a_ms = float(median(a for a, _b in complete))
     median_b_ms = float(median(b for _a, b in complete))
-    observed_slow_query = "a" if median_a_ms > median_b_ms else "b" if median_b_ms > median_a_ms else None
+    # Choose the observed direction from the paired differences, not from the
+    # two marginal medians.  With a small paired sample, the marginal medians
+    # can name A as slower while the median within-pair difference names B;
+    # orienting by the former then produces an impossible negative "absolute"
+    # Stage-1 delta and ratio below one.
+    paired_delta_ms = float(median(b - a for a, b in complete))
+    observed_slow_query = (
+        "b" if paired_delta_ms > 0 else "a" if paired_delta_ms < 0 else None
+    )
     slower_side = expected_slow_query or observed_slow_query
     if expected_slow_query is not None and observed_slow_query != expected_slow_query:
         reason_codes.append("direction_mismatch")

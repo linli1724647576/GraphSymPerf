@@ -161,6 +161,30 @@ def test_validation_keeps_discovery_direction_when_runtime_order_reverses() -> N
     assert "direction_mismatch" in evidence.reason_codes
 
 
+def test_discovery_direction_uses_paired_delta_when_marginal_medians_disagree() -> None:
+    class SequenceFake:
+        def __init__(self) -> None:
+            self.values = {
+                "A": iter((939.0, 693.0, 557.0)),
+                "B": iter((961.0, 682.0, 579.0)),
+            }
+
+        def execute(self, query: str, parameters, **_kwargs) -> float:
+            return next(self.values[query])
+
+    evidence = RuntimeHarness().measure_pair(
+        SequenceFake(),
+        "A",
+        "B",
+        policy=RuntimePolicy(warmups=0, pairs=3, seed=4),
+    )
+
+    assert evidence.median_a_ms > evidence.median_b_ms
+    assert evidence.slower_side == "b"
+    assert evidence.median_delta_ms == 22.0
+    assert evidence.median_ratio > 1.0
+
+
 @pytest.mark.parametrize("invalid_elapsed", [float("nan"), float("inf"), float("-inf")])
 def test_non_finite_execute_elapsed_is_invalid(invalid_elapsed: float) -> None:
     evidence = RuntimeHarness().measure_pair(
