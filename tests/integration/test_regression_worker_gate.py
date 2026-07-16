@@ -401,7 +401,10 @@ def test_manifest_drift_after_planning_still_lands_a_typed_configuration_failure
     manifest_path = fixture_dir / "manifest.yaml"
     spec = replace(
         load_experiment_spec("config/neo4j_validated_runtime_yield.yaml"),
-        regression={"manifest": manifest_path},
+        regression={
+            "manifest": manifest_path,
+            "max_entry_runtime_seconds": 2_700,
+        },
     )
     entry = next(
         value

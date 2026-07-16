@@ -258,6 +258,21 @@ def test_p0_has_one_zero_quota_regression_entry_outside_campaign_budgets() -> No
     assert plan.control_accepted_pair_budget == 100
 
 
+def test_p0_regression_entry_uses_its_dedicated_runtime_budget() -> None:
+    spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
+    plan = build_rule_plan(spec, CampaignPhase.P0)
+
+    regression = next(
+        entry for entry in plan.entries if entry.stream is RuleStream.REGRESSION
+    )
+    assert regression.max_entry_runtime_seconds == 2_700
+    assert all(
+        entry.max_entry_runtime_seconds == 300
+        for entry in plan.entries
+        if entry.stream is not RuleStream.REGRESSION
+    )
+
+
 def test_p1_and_p2_do_not_repeat_the_regression_entry() -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
 

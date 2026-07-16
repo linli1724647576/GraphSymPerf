@@ -31,5 +31,5 @@ validation:
   absolute: {noise_multiplier: 5.0, delta_ms: 50.0, pooled_ratio: 1.5, ratio_ci_low: 1.2}
   max_result_rows: 100000
 reducer: {enabled: true, max_attempts: 500, max_seconds: 1800, require_reduced_validation: true}
-regression: {manifest: tests/fixtures/regressions/neo4j_bug001/manifest.yaml}
+regression: {manifest: tests/fixtures/regressions/neo4j_bug001/manifest.yaml, max_entry_runtime_seconds: 2700}
 artifacts: {entry_budget_mb: 500}

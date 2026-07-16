@@ -136,7 +136,9 @@ def build_rule_plan(
                 spec,
                 regression_manifest,
                 registry,
-                max_entry_runtime_seconds=phase_budget.max_entry_runtime_seconds,
+                max_entry_runtime_seconds=int(
+                    spec.regression["max_entry_runtime_seconds"]
+                ),
             )
         )
 

@@ -348,13 +348,25 @@ def _load_schema_v3(
     }
 
     regression_raw = _mapping(raw["regression"], "regression")
-    _exact_keys(regression_raw, {"manifest"}, "regression")
+    _exact_keys(
+        regression_raw,
+        {"manifest", "max_entry_runtime_seconds"},
+        "regression",
+    )
     regression_manifest = Path(
         _nonempty_string(regression_raw["manifest"], "regression.manifest")
     )
     if not regression_manifest.is_absolute():
         regression_manifest = (source_path.parent.parent / regression_manifest).resolve()
-    regression = FrozenMapping({"manifest": regression_manifest})
+    regression = FrozenMapping(
+        {
+            "manifest": regression_manifest,
+            "max_entry_runtime_seconds": _positive_int(
+                regression_raw["max_entry_runtime_seconds"],
+                "regression.max_entry_runtime_seconds",
+            ),
+        }
+    )
 
     rules_raw = _mapping(raw["rules"], "rules")
     _exact_keys(rules_raw, {"discovery_rule_ids", "control_rule_ids"}, "rules")
