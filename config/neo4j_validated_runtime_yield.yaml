@@ -3,7 +3,7 @@ experiment: {name: neo4j_validated_runtime_yield, seed: 20260714}
 targets: [neo4j]
 matrix: {graph_scales: [128, 256, 512]}
 campaign:
-  p0: {accepted_pairs: 50, shards: 1, max_entry_runtime_seconds: 3600}
+  p0: {accepted_pairs: 50, shards: 1, max_entry_runtime_seconds: 300}
   p1: {accepted_pairs: 200, shards: 1, max_entry_runtime_seconds: 7200}
   p2: {accepted_pairs: 1000, shards: 3, max_entry_runtime_seconds: 21600, max_rule_scale_cells: 6}
   generated_seed_multiplier: 10
