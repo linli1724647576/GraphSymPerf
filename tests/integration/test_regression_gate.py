@@ -620,6 +620,28 @@ class _IndexDelegate:
         return tuple(statements)
 
 
+class _VersionDelegate:
+    def __init__(self) -> None:
+        self.query = ""
+
+    def connectivity_check(self):
+        return True, "connected"
+
+    def execute(self, query, _parameters, query_kind, **_kwargs):
+        assert query_kind == "regression_version_identity"
+        self.query = query
+        return SimpleNamespace(rows=({"version": "2026.04.0", "edition": "community"},))
+
+
+def test_version_identity_filters_non_dbms_component_rows() -> None:
+    delegate = _VersionDelegate()
+    adapter = _AffectedVersionNeo4jAdapter(delegate, _case())
+
+    assert adapter.connectivity_check() == (True, "connected")
+    assert "trim(edition) <> ''" in delegate.query
+    assert adapter.observed_version == "2026.04.0 community"
+
+
 def test_each_session_awaits_and_verifies_exactly_seven_online_indexes() -> None:
     case = _case()
     delegate = _IndexDelegate({name: "ONLINE" for name in case.index_names})

@@ -665,6 +665,7 @@ class _AffectedVersionNeo4jAdapter:
             return connected
         result = self._delegate.execute(
             "CALL dbms.components() YIELD versions, edition "
+            "WHERE edition IS NOT NULL AND trim(edition) <> '' "
             "RETURN versions[0] AS version, edition",
             {},
             "regression_version_identity",
