@@ -94,13 +94,15 @@ def test_validated_yield_config_freezes_the_approved_budget() -> None:
     assert not isinstance(spec, ExperimentSpec)
     assert spec.schema_version == 3
     assert spec.matrix.graph_scales == (128, 256, 512)
-    assert spec.campaign.p0.accepted_pairs == 50
+    assert spec.campaign.p0.accepted_pairs == 20
     assert spec.campaign.p1.accepted_pairs == 200
     assert spec.campaign.p2.accepted_pairs == 1000
     assert spec.campaign.p2.shards == 3
     assert spec.campaign.p2.max_rule_scale_cells == 6
     assert spec.rules.discovery_rule_ids[0] == "constant_true_disjunction"
     assert "and_excluded_middle_or_null" not in spec.rules.discovery_rule_ids
+    assert "node_order_symmetry" not in spec.rules.discovery_rule_ids
+    assert spec.rules.control_rule_ids == ("edge_notation_symmetry",)
     assert spec.generation.algorithm == "COMPARED3"
     assert spec.generation.expected_commit == "f5c0a67ca317e956c5572884a28f7f22e5dcb356"
     assert spec.regression["manifest"] == (

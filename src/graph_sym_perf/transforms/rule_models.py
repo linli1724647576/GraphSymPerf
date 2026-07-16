@@ -245,7 +245,6 @@ _BOOL_CORE = (
 _SYM_CORE = (
     _rule("pattern_order_symmetry", SafetyTier.CORE, "graph_pattern_product_commutativity_v1", "constituent path-pattern conjunction commutes inside one MATCH", purity=("pure", "relationship_uniqueness_preserved"), sites=("match_pattern_component",), role=RuleRole.OPTIMIZER_STRESS),
     _rule("predicate_order_symmetry", SafetyTier.CORE, "kleene_conjunction_commutativity_v1", "pure total conjunction terms commute", purity=("pure", "total"), sites=("where_boolean",), role=RuleRole.OPTIMIZER_STRESS),
-    _rule("node_order_symmetry", SafetyTier.CORE, "edge_endpoint_alpha_equivalence_v1", "unobserved endpoint traversal orientation preserves matches", purity=("pure", "same_graph_pattern"), sites=("match_pattern_component",), role=RuleRole.OPTIMIZER_STRESS),
     _rule("label_order_symmetry", SafetyTier.CORE, "label_conjunction_commutativity_v1", "multiple labels denote an unordered conjunction", purity=("pure",), sites=("match_pattern_component",), role=RuleRole.OPTIMIZER_STRESS, capabilities=("multi_label_intersection",)),
 )
 
@@ -256,6 +255,7 @@ _CONTROL = (
 )
 
 _EXPERIMENTAL = (
+    _rule("node_order_symmetry", SafetyTier.EXPERIMENTAL, "edge_endpoint_alpha_equivalence_v1", "unobserved endpoint traversal orientation preserves matches", purity=("pure", "same_graph_pattern"), sites=("match_pattern_component",), role=RuleRole.RESEARCH_ONLY),
     _rule("double_negation_predicate", SafetyTier.EXPERIMENTAL, "kleene_double_negation_v1", "NOT NOT P = P", purity=("pure",), sites=("where_boolean",), role=RuleRole.RESEARCH_ONLY),
     _rule("de_morgan_predicate", SafetyTier.EXPERIMENTAL, "kleene_de_morgan_v1", "Kleene NOT distributes by De Morgan duality", purity=("pure", "total", "no_pattern_predicate"), sites=("where_boolean",), role=RuleRole.RESEARCH_ONLY),
     _rule("case_true_experimental", SafetyTier.EXPERIMENTAL, "case_boolean_identity_v1", "CASE boolean normalization", purity=("pure", "total"), sites=("where_boolean",), role=RuleRole.RESEARCH_ONLY),

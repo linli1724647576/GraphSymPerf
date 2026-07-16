@@ -3,13 +3,13 @@ experiment: {name: neo4j_validated_runtime_yield, seed: 20260714}
 targets: [neo4j]
 matrix: {graph_scales: [128, 256, 512]}
 campaign:
-  p0: {accepted_pairs: 50, shards: 1, max_entry_runtime_seconds: 300}
+  p0: {accepted_pairs: 20, shards: 1, max_entry_runtime_seconds: 300}
   p1: {accepted_pairs: 200, shards: 1, max_entry_runtime_seconds: 7200}
   p2: {accepted_pairs: 1000, shards: 3, max_entry_runtime_seconds: 21600, max_rule_scale_cells: 6}
   generated_seed_multiplier: 10
 rules:
-  discovery_rule_ids: [constant_true_disjunction, constant_false_conjunction, null_partition_tautology, null_contradiction, null_complete_excluded_middle, pattern_order_symmetry, predicate_order_symmetry, node_order_symmetry, label_order_symmetry]
-  control_rule_ids: [alpha_renaming_symmetry, edge_notation_symmetry]
+  discovery_rule_ids: [constant_true_disjunction, constant_false_conjunction, null_partition_tautology, null_contradiction, null_complete_excluded_middle, pattern_order_symmetry, predicate_order_symmetry, label_order_symmetry]
+  control_rule_ids: [edge_notation_symmetry]
 generation:
   backend: gdsmith
   source: gdsmith

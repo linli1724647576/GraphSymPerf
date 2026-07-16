@@ -25,7 +25,6 @@ def test_default_registry_exposes_the_approved_neo4j_rule_set() -> None:
         "null_complete_excluded_middle",
         "pattern_order_symmetry",
         "predicate_order_symmetry",
-        "node_order_symmetry",
         "label_order_symmetry",
     }
     assert {rule.family for rule in core} == {RuleFamily.BOOL, RuleFamily.SYM}
@@ -185,7 +184,6 @@ def test_registry_matches_the_audited_core_control_and_experimental_catalog() ->
         "null_complete_excluded_middle",
         "pattern_order_symmetry",
         "predicate_order_symmetry",
-        "node_order_symmetry",
         "label_order_symmetry",
     }
     assert agens_core == neo4j_core - {"label_order_symmetry"}
@@ -197,7 +195,12 @@ def test_registry_matches_the_audited_core_control_and_experimental_catalog() ->
         "edge_notation_symmetry",
         "alpha_renaming_symmetry",
     }
-    assert {"double_negation_predicate", "de_morgan_predicate", "pattern_decomposition_symmetry"} <= {
+    assert {
+        "node_order_symmetry",
+        "double_negation_predicate",
+        "de_morgan_predicate",
+        "pattern_decomposition_symmetry",
+    } <= {
         rule.rule_id for rule in registry.rules_for("neo4j", SafetyTier.EXPERIMENTAL)
     }
 

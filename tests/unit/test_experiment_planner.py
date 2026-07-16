@@ -65,8 +65,8 @@ def test_p1_rule_plan_has_independent_rule_scale_budgets() -> None:
 
     discovery = [entry for entry in plan.entries if entry.stream is RuleStream.DISCOVERY]
     control = [entry for entry in plan.entries if entry.stream is RuleStream.CONTROL]
-    assert len(discovery) == 9 * 3
-    assert len(control) == 2 * 3
+    assert len(discovery) == 8 * 3
+    assert len(control) == 1 * 3
     assert all(entry.accepted_pair_quota == 200 for entry in discovery)
     assert all(entry.accepted_pair_quota == 50 for entry in control)
     assert all(
@@ -77,8 +77,8 @@ def test_p1_rule_plan_has_independent_rule_scale_budgets() -> None:
     assert all(entry.query_timeout_seconds == 60 for entry in plan.entries)
     assert all(entry.measurement_protocol_id == "validated-yield-v1" for entry in plan.entries)
     assert len({entry.shard_seed for entry in plan.entries}) == len(plan.entries)
-    assert plan.discovery_accepted_pair_budget == 5400
-    assert plan.control_accepted_pair_budget == 300
+    assert plan.discovery_accepted_pair_budget == 4800
+    assert plan.control_accepted_pair_budget == 150
 
     by_rule = {entry.rule_id: entry for entry in discovery}
     assert by_rule["constant_true_disjunction"].family == "bool"
@@ -216,7 +216,10 @@ def test_p2_rejects_alias_duplicate_cells_after_canonicalization() -> None:
         )
 
 
-@pytest.mark.parametrize("rule_id", ("alpha_renaming_symmetry", "double_negation_predicate"))
+@pytest.mark.parametrize(
+    "rule_id",
+    ("alpha_renaming_symmetry", "node_order_symmetry", "double_negation_predicate"),
+)
 def test_p2_rejects_control_or_inactive_non_core_rules(rule_id: str) -> None:
     spec = load_experiment_spec("config/neo4j_validated_runtime_yield.yaml")
 
@@ -254,8 +257,8 @@ def test_p0_has_one_zero_quota_regression_entry_outside_campaign_budgets() -> No
     assert regression[0].accepted_pair_quota == 0
     assert regression[0].max_generated_seed_budget == 0
     assert regression[0].rule_id == "pattern_order_symmetry"
-    assert plan.discovery_accepted_pair_budget == 450
-    assert plan.control_accepted_pair_budget == 100
+    assert plan.discovery_accepted_pair_budget == 160
+    assert plan.control_accepted_pair_budget == 50
 
 
 def test_p0_regression_entry_uses_its_dedicated_runtime_budget() -> None:
@@ -359,9 +362,9 @@ def test_rule_plan_resolved_manifest_is_atomic_immutable_and_auditable(tmp_path:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 3
     assert payload["phase"] == "p1"
-    assert len(payload["entries"]) == 33
-    assert payload["discovery_accepted_pair_budget"] == 5400
-    assert payload["control_accepted_pair_budget"] == 300
+    assert len(payload["entries"]) == 27
+    assert payload["discovery_accepted_pair_budget"] == 4800
+    assert payload["control_accepted_pair_budget"] == 150
     assert payload["source_revision"]["repository_commit"]
     assert payload["source_revision"]["gdsmith_commit"] == spec.generation.expected_commit
     assert payload["source_revision"]["rules_schema_sha256"] == hashlib.sha256(

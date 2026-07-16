@@ -15,7 +15,7 @@ rules:
   null_complete_excluded_middle: {tier: core, version: "1", proof_id: three_valued_excluded_middle_v1, site_classes: [where_boolean], exploration_floor: 20}
   pattern_order_symmetry: {tier: core, version: "1", proof_id: graph_pattern_product_commutativity_v1, site_classes: [match_pattern_component], exploration_floor: 20}
   predicate_order_symmetry: {tier: core, version: "1", proof_id: kleene_conjunction_commutativity_v1, site_classes: [where_boolean], exploration_floor: 20}
-  node_order_symmetry: {tier: core, version: "1", proof_id: edge_endpoint_alpha_equivalence_v1, site_classes: [match_pattern_component], exploration_floor: 20}
+  node_order_symmetry: {tier: experimental, version: "1", proof_id: edge_endpoint_alpha_equivalence_v1, site_classes: [match_pattern_component], exploration_floor: 0}
   label_order_symmetry: {tier: core, version: "1", proof_id: label_conjunction_commutativity_v1, site_classes: [match_pattern_component], exploration_floor: 20}
   duplicate_predicate_control: {tier: control, version: "1", proof_id: idempotent_predicate_control_v1, site_classes: [where_boolean], exploration_floor: 0}
   edge_notation_symmetry: {tier: control, version: "1", proof_id: edge_parser_normalization_v1, site_classes: [match_pattern_component], exploration_floor: 0}

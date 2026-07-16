@@ -19,9 +19,17 @@ def _variant(query: str, rule: str, *, target: TargetSystem = TargetSystem.NEO4J
     return family.variants[0]
 
 
-def test_node_order_symmetry_reverses_a_certified_undirected_component() -> None:
-    variant = _variant("MATCH (a:A)-[r:R]-(b:B) RETURN a, b, r", "node_order_symmetry")
-    assert "(b:B)-[r:R]-(a:A)" in variant.query
+def test_node_order_symmetry_is_not_in_the_automatic_formal_family() -> None:
+    family = generate_symmetry_family(
+        _case("MATCH (a:A)-[r:R]-(b:B) RETURN a, b, r"),
+        TransformConfig(
+            enabled_families=("symmetry",),
+            enabled_rules=("node_order_symmetry",),
+        ),
+        TargetSystem.NEO4J,
+    )
+
+    assert not family.variants
 
 
 def test_predicate_order_symmetry_reorders_only_a_proved_conjunction() -> None:
