@@ -74,6 +74,7 @@ _COMPACT_CREDENTIAL_BASES = (
     "apikey",
 )
 _COMPACT_CREDENTIAL_SUFFIXES = ("header", "value")
+_NON_SECRET_METADATA_SUFFIXES = frozenset({"count", "name", "status"})
 _PLAIN_INLINE_SECRET_NAME = (
     r"(?:password|passwd|pwd|secret|token|authorization|credential|api[_-]?key)"
 )
@@ -278,10 +279,27 @@ def sanitize_text(
 
 def _redact_secret_bearing_token(match: re.Match[str]) -> str:
     token = match.group(0)
-    assignment_key = re.split(r"[:=]", token, maxsplit=1)[0].strip("'\"")
-    if is_sensitive_key(assignment_key) or "secret" in _key_tokens(token):
+    assignment = re.split(r"[:=]", token, maxsplit=1)
+    assignment_key = assignment[0].strip("'\"")
+    if is_sensitive_key(assignment_key):
+        return REDACTED
+    if _has_secret_bearing_token(assignment_key):
+        return REDACTED
+    if len(assignment) == 2 and _has_secret_bearing_token(assignment[1]):
         return REDACTED
     return token
+
+
+def _has_secret_bearing_token(value: str) -> bool:
+    tokens = _key_tokens(value)
+    for index, token in enumerate(tokens):
+        if token != "secret":
+            continue
+        suffix = tokens[index + 1 :]
+        if suffix and all(item in _NON_SECRET_METADATA_SUFFIXES for item in suffix):
+            continue
+        return True
+    return False
 
 
 def sanitize_structure(value: Any) -> Any:
