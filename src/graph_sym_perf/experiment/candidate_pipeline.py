@@ -723,7 +723,7 @@ def _verify_task8_validation_reference(
         or body.get("candidate_hash") != candidate.candidate_hash
         or body.get("pair_hash") != expected_pair_hash
         or body.get("stage") != PipelineStage.VALIDATION_PASSED.value
-        or any(body.get(name) != value for name, value in expected_entry_identity.items())
+        or body.get("entry_identity") != expected_entry_identity
         or report_payload != to_jsonable(asdict(validation))
         or to_jsonable(asdict(replayed)) != to_jsonable(asdict(validation))
         or not issue_validation_report_is_complete(replayed)

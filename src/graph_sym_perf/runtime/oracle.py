@@ -179,11 +179,12 @@ def _canonical_stage2_evidence(
 
     median_a_ms = float(median(a for a, _b in complete))
     median_b_ms = float(median(b for _a, b in complete))
+    paired_delta_ms = float(median(b - a for a, b in complete))
     observed_slow_query = (
-        "a"
-        if median_a_ms > median_b_ms
-        else "b"
-        if median_b_ms > median_a_ms
+        "b"
+        if paired_delta_ms > 0
+        else "a"
+        if paired_delta_ms < 0
         else None
     )
     reasons = (
