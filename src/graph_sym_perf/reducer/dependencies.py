@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from graph_sym_perf.cypher.ast import PatternList
+from graph_sym_perf.cypher.ast import Clause, PatternList
 from graph_sym_perf.cypher.parser import CypherParseError, parse_match_clause, parse_query, split_top_level_commas
 
 
@@ -13,7 +13,7 @@ _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
 _KEYWORDS = frozenset(
     {
         "ALL", "AND", "AS", "ASC", "BY", "CASE", "COUNT", "DESC", "DISTINCT",
-        "ELSE", "END", "FALSE", "IN", "IS", "LIMIT", "MATCH", "NOT", "NULL",
+        "CONTAINS", "ELSE", "END", "FALSE", "IN", "IS", "LIMIT", "MATCH", "NOT", "NULL",
         "OPTIONAL", "OR", "ORDER", "RETURN", "SKIP", "THEN", "TRUE", "UNWIND",
         "WHEN", "WHERE", "WITH", "XOR",
     }
@@ -69,9 +69,7 @@ def analyze_query(query: str) -> QueryDependencyGraph:
         projection_schema: tuple[str, ...] = ()
         try:
             if clause.keyword in {"MATCH", "OPTIONAL MATCH"}:
-                if clause.keyword != "MATCH":
-                    raise CypherParseError("OPTIONAL_MATCH_FAIL_CLOSED", "optional match reduction is not proven")
-                match = parse_match_clause(clause)
+                match = parse_match_clause(_ordinary_match_view(clause))
                 variables = _pattern_variables(match.pattern)
                 definitions = variables - incoming
                 pattern_uses = variables & incoming
@@ -156,6 +154,23 @@ def analyze_query(query: str) -> QueryDependencyGraph:
         aggregate_sensitive=aggregate_sensitive,
         ast_node_count=ast_nodes,
     )
+
+
+def _ordinary_match_view(clause: Clause) -> Clause:
+    """Expose OPTIONAL MATCH pattern/scope syntax to the dependency parser.
+
+    This does not prove that an OPTIONAL MATCH clause may be deleted. It only
+    models the variables introduced and consumed by the clause. Every reducer
+    proposal still passes dependency preservation, complete-result
+    equivalence, ordinary runtime screening, and independent final validation.
+    """
+
+    if clause.keyword == "MATCH":
+        return clause
+    if clause.keyword != "OPTIONAL MATCH":
+        raise CypherParseError("NOT_MATCH_CLAUSE", "expected a MATCH-like clause")
+    text = re.sub(r"^\s*OPTIONAL\s+MATCH\b", "MATCH", clause.text, count=1, flags=re.I)
+    return Clause("MATCH", clause.start, clause.end, text)
 
 
 def dependency_safe_removal(clauses: tuple[str, ...], remove_index: int) -> bool:
