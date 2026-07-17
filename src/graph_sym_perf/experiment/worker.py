@@ -470,7 +470,10 @@ class RuntimeFirstShardWorker:
             self._attempt_dir = attempt_dir
         if entry.stream is RuleStream.REGRESSION:
             return self._run_regression_rule_plan_entry(entry, attempt_dir)
-        if entry.phase in {CampaignPhase.P1, CampaignPhase.P2}:
+        if (
+            entry.target is TargetSystem.NEO4J
+            and entry.phase in {CampaignPhase.P1, CampaignPhase.P2}
+        ):
             try:
                 manifest = self._regression_manifest()
                 campaign_identity_hash = self._regression_campaign_identity(manifest)

@@ -175,6 +175,27 @@ def test_later_phase_blocks_before_generation_when_p0_gate_artifact_is_missing(
     assert "regression" in str(summary["infrastructure_reason"])
 
 
+def test_ladybug_p1_does_not_require_the_neo4j_regression_environment(
+    tmp_path: Path,
+) -> None:
+    spec = load_experiment_spec("config/ladybug_pattern_order_128_p1.yaml")
+    plan = build_rule_plan(spec, CampaignPhase.P1)
+    entry = next(item for item in plan.entries if item.stream is RuleStream.DISCOVERY)
+
+    def generation_reached(*_args, **_kwargs):
+        raise RuntimeError("ladybug generation reached")
+
+    worker = RuntimeFirstShardWorker(
+        spec,
+        environment={},
+        generation_runner=generation_reached,
+    )
+    worker.bind_run_dir(tmp_path)
+
+    with pytest.raises(RuntimeError, match="ladybug generation reached"):
+        worker(entry)
+
+
 def test_p0_dispatches_the_production_runner_but_trusts_only_the_landed_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
