@@ -1458,6 +1458,42 @@ def test_worker_builds_each_rule_plan_entry_with_its_own_certified_rule(
     assert "query_a" not in records[0] and "query_b" not in records[0]
 
 
+def test_ladybug_rule_entry_never_uses_neo4j_manifest_queries(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_valid_noise_stub(monkeypatch)
+    entry = replace(
+        _rule_plan_entry(rule_id="predicate_order_symmetry", family="sym"),
+        entry_id="p1:ladybugdb:discovery:predicate_order_symmetry:256:0",
+        target=TargetSystem.LADYBUGDB,
+    )
+
+    class LadybugAdapter(_Adapter):
+        target = TargetSystem.LADYBUGDB
+
+        def execute(self, query, parameters, query_kind, **kwargs):
+            if query_kind.startswith("graph_manifest_"):
+                raise AssertionError("Ladybug must not execute Neo4j manifest queries")
+            return super().execute(query, parameters, query_kind, **kwargs)
+
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/ladybug_predicate_order_128_p1.yaml"),
+        generation_runner=lambda _entry, _raw_dir: GeneratedShard(
+            graph_statements=("CREATE (n:Node {id: 1, value: 1})",),
+            query_texts=("MATCH (n) WHERE n.id = 1 AND true RETURN n",),
+            generator_metadata={"backend": "gdsmith", "requested_max_nodes": entry.graph_scale},
+        ),
+        adapter_factory=lambda _entry: LadybugAdapter(),
+    )
+    worker.bind_run_dir(tmp_path)
+
+    result = worker(entry)
+
+    assert result["accepted_pairs"] == 1
+    assert result["terminal_state"] == "stage2_complete"
+
+
 def test_rule_entry_stage1_timeout_is_durably_counted_without_query_text(
     tmp_path,
     monkeypatch,

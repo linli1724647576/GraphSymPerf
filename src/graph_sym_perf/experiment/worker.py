@@ -852,11 +852,17 @@ class RuntimeFirstShardWorker:
                         )
                     elif graph_manifest is not None:
                         try:
-                            final_graph = read_neo4j_graph_manifest(
-                                proxy,
-                                requested_max_nodes=entry.graph_scale,
-                                statements=generated.graph_statements,
-                            )
+                            if entry.target is TargetSystem.NEO4J:
+                                final_graph = read_neo4j_graph_manifest(
+                                    proxy,
+                                    requested_max_nodes=entry.graph_scale,
+                                    statements=generated.graph_statements,
+                                )
+                            else:
+                                final_graph = graph_manifest_from_replay(
+                                    generated.graph_statements,
+                                    requested_max_nodes=entry.graph_scale,
+                                )
                         except (TypeError, ValueError) as exc:
                             raise WorkerFailure(
                                 ErrorKind.INFRASTRUCTURE_ERROR,
