@@ -136,6 +136,55 @@ def test_schema_v3_requires_a_preregistered_neo4j_measurement_target_id(
         load_experiment_spec(path)
 
 
+def test_schema_v3_accepts_a_preregistered_single_ladybugdb_target(
+    tmp_path: Path,
+) -> None:
+    experiment = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    systems = yaml.safe_load(Path("config/systems.yaml").read_text(encoding="utf-8"))
+    experiment["targets"] = ["ladybugdb"]
+    experiment["rules"] = {
+        "discovery_rule_ids": ["pattern_order_symmetry"],
+        "control_rule_ids": ["edge_notation_symmetry"],
+    }
+    systems["systems"]["ladybugdb"]["measurement_target_id"] = (
+        "ladybugdb-formal-runtime-target-v1"
+    )
+    path = _write_config_bundle(tmp_path, experiment=experiment, systems=systems)
+
+    spec = load_experiment_spec(path)
+
+    assert isinstance(spec, ValidatedYieldExperimentSpec)
+    assert spec.targets == (TargetSystem.LADYBUGDB,)
+    assert (
+        spec.systems[TargetSystem.LADYBUGDB].measurement_target_id
+        == "ladybugdb-formal-runtime-target-v1"
+    )
+
+
+def test_schema_v3_rejects_a_noncanonical_ladybugdb_capability_contract(
+    tmp_path: Path,
+) -> None:
+    experiment = yaml.safe_load(
+        Path("config/neo4j_validated_runtime_yield.yaml").read_text(encoding="utf-8")
+    )
+    systems = yaml.safe_load(Path("config/systems.yaml").read_text(encoding="utf-8"))
+    experiment["targets"] = ["ladybugdb"]
+    experiment["rules"] = {
+        "discovery_rule_ids": ["pattern_order_symmetry"],
+        "control_rule_ids": ["edge_notation_symmetry"],
+    }
+    systems["systems"]["ladybugdb"]["generation_backend"] = "memgraph"
+    path = _write_config_bundle(tmp_path, experiment=experiment, systems=systems)
+
+    with pytest.raises(
+        ConfigError,
+        match=r"schema-v3.*canonical LadybugDB capability contract",
+    ):
+        load_experiment_spec(path)
+
+
 @pytest.mark.parametrize(
     ("targets", "measurement_target_id"),
     (

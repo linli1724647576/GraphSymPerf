@@ -118,6 +118,18 @@ _SCHEMA_V3_NEO4J_CAPABILITY_CONTRACT: Mapping[str, object] = {
     "graph_isolation": "database",
 }
 
+_SCHEMA_V3_LADYBUGDB_CAPABILITY_CONTRACT: Mapping[str, object] = {
+    "generation_backend": "neo4j_proxy",
+    "capabilities": [
+        "single_node_label",
+        "native_parameters",
+        "very_low_applicability_generation",
+    ],
+    "dialect": "cypher",
+    "graph_isolation": "database_file",
+    "measurement_target_id": "ladybugdb-formal-runtime-target-v1",
+}
+
 
 def load_experiment_spec(path: str | Path) -> ExperimentSpec | ValidatedYieldExperimentSpec:
     source_path = Path(path)
@@ -269,11 +281,16 @@ def _load_schema_v3(
     targets_raw = raw["targets"]
     if not isinstance(targets_raw, list) or not targets_raw:
         raise ConfigError("targets must be a non-empty list")
-    if targets_raw != [TargetSystem.NEO4J.value]:
+    supported_v3_targets = {
+        TargetSystem.NEO4J.value,
+        TargetSystem.LADYBUGDB.value,
+    }
+    if len(targets_raw) != 1 or targets_raw[0] not in supported_v3_targets:
         raise ConfigError(
-            "schema-v3 targets must be exactly the canonical single target [neo4j]"
+            "schema-v3 targets must be exactly one canonical supported target "
+            "[neo4j or ladybugdb]"
         )
-    targets = (TargetSystem.NEO4J,)
+    targets = (TargetSystem.parse(targets_raw[0]),)
 
     matrix_raw = _mapping(raw["matrix"], "matrix")
     _exact_keys(matrix_raw, {"graph_scales"}, "matrix")
@@ -390,14 +407,16 @@ def _load_schema_v3(
     _exact_keys(rules_raw, {"discovery_rule_ids", "control_rule_ids"}, "rules")
     systems_path = source_path.parent / "systems.yaml"
     systems_document = _load_yaml(systems_path, "systems configuration")
-    _require_schema_v3_neo4j_capability_contract(systems_document)
+    if targets == (TargetSystem.NEO4J,):
+        _require_schema_v3_neo4j_capability_contract(systems_document)
+    else:
+        _require_schema_v3_ladybugdb_capability_contract(systems_document)
     systems = _parse_systems(systems_document, targets)
-    if (
-        TargetSystem.NEO4J in systems
-        and systems[TargetSystem.NEO4J].measurement_target_id is None
-    ):
+    target = targets[0]
+    if systems[target].measurement_target_id is None:
         raise ConfigError(
-            "systems.neo4j.measurement_target_id is required for schema-v3 campaigns"
+            f"systems.{target.value}.measurement_target_id is required for "
+            "schema-v3 campaigns"
         )
     rules_path = source_path.parent / "rules.yaml"
     rules_catalog, rules_schema_sha256 = _load_rules(rules_path)
@@ -479,6 +498,23 @@ def _require_schema_v3_neo4j_capability_contract(
     ):
         raise ConfigError(
             "schema-v3 requires the canonical Neo4j capability contract"
+        )
+
+
+def _require_schema_v3_ladybugdb_capability_contract(
+    document: Mapping[str, Any],
+) -> None:
+    systems = _mapping(document.get("systems"), "systems")
+    ladybugdb = _mapping(
+        systems.get(TargetSystem.LADYBUGDB.value),
+        "systems.ladybugdb",
+    )
+    if any(
+        ladybugdb.get(field) != expected
+        for field, expected in _SCHEMA_V3_LADYBUGDB_CAPABILITY_CONTRACT.items()
+    ):
+        raise ConfigError(
+            "schema-v3 requires the canonical LadybugDB capability contract"
         )
 
 
