@@ -797,6 +797,44 @@ def test_schema_v3_entry_generation_uses_entry_artifact_budget_and_frozen_algori
     assert captured["config"].max_raw_artifact_bytes == 350 * 1024 * 1024
 
 
+def test_schema_v2_generation_uses_default_gdsmith_algorithm_when_unspecified(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    captured = {}
+    record = SimpleNamespace(statement="MATCH (n) RETURN n")
+
+    def fake_run_gdsmith(**kwargs):
+        captured["config"] = kwargs["config"]
+        return SimpleNamespace(
+            returncode=0,
+            process_returncode=0,
+            fatal_stderr_markers=(),
+            query_record_limit_reached=False,
+            artifact_budget_exceeded=False,
+            generation_stalled=False,
+            parsed=SimpleNamespace(
+                graph_statements=("CREATE (n:Node {id: 1})",),
+                accepted_queries=(record,),
+            ),
+        )
+
+    monkeypatch.setattr("graph_sym_perf.experiment.worker.run_gdsmith", fake_run_gdsmith)
+    worker = RuntimeFirstShardWorker(
+        load_experiment_spec("config/experiment.yaml"),
+        environment={
+            "GRAPHSYMPERF_GDSMITH_PROXY_LADYBUGDB_URI": "bolt://localhost:7697",
+        },
+    )
+
+    worker._generate_with_gdsmith(
+        ShardTask(TargetSystem.LADYBUGDB, 0, 7, 1, 2, 60, "neo4j_proxy"),
+        tmp_path / "raw",
+    )
+
+    assert captured["config"].algorithm == "compared3"
+
+
 def test_schema_v3_entry_creates_adapter_from_entry_budgets(monkeypatch) -> None:
     captured = {}
     sentinel = object()

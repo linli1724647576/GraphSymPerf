@@ -3608,10 +3608,13 @@ class RuntimeFirstShardWorker:
             # Leave a 30-second supervisor margin so timeout is emitted as an
             # auditable partial corpus instead of a killed worker process.
             timeout_seconds = max(1.0, min(float(max_runtime_seconds) - 30.0, 6 * 3600.0))
+            configured_algorithm = self.spec.generation.algorithm.lower()
+            if configured_algorithm == "unspecified":
+                configured_algorithm = GdsmithConfig().algorithm
             base_config = GdsmithConfig(
                 expected_source_commit=self.spec.generation.expected_commit,
                 compatibility_profile="neo4j" if self.spec.schema_version == 3 else "all",
-                algorithm=self.spec.generation.algorithm.lower(),
+                algorithm=configured_algorithm,
                 backend_extra_args=(
                     {backend: ("--label-num", "1")}
                     if requires_single_label

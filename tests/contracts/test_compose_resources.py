@@ -23,6 +23,17 @@ def test_gdsmith_neo4j_proxies_use_independent_containers_and_bolt_ports() -> No
     assert arcadedb["environment"]["NEO4J_AUTH"] == "none"
 
 
+def test_ladybug_proxy_has_a_low_memory_container_envelope() -> None:
+    compose = yaml.safe_load(Path("infra/docker-compose.graphdbs.yml").read_text(encoding="utf-8"))
+
+    ladybug = compose["services"]["neo4j-ladybug-proxy"]
+    assert ladybug["mem_limit"] == "2g"
+    assert ladybug["memswap_limit"] == "2g"
+    assert ladybug["cpus"] == 2.0
+    assert ladybug["environment"]["NEO4J_server_memory_heap_max__size"] == "768M"
+    assert ladybug["environment"]["NEO4J_server_memory_pagecache_size"] == "384M"
+
+
 def test_memgraph_has_a_bounded_memory_and_query_runtime_envelope() -> None:
     compose = yaml.safe_load(Path("infra/docker-compose.graphdbs.yml").read_text(encoding="utf-8"))
 
