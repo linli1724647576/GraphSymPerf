@@ -78,7 +78,10 @@ from graph_sym_perf.experiment.state import (
 )
 from graph_sym_perf.generation.corpus import GraphCorpus, GraphManifest, PortableQuery, portable_ast_hash
 from graph_sym_perf.generation.gdsmith import GdsmithGenerator, GenerationRequest
-from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
+from graph_sym_perf.gdsmith.replay import (
+    gdsmith_read_query_is_replayable,
+    graph_manifest_from_replay,
+)
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
 from graph_sym_perf.runtime.measurement import RuntimeHarness, paired_schedule
 from graph_sym_perf.runtime.models import (
@@ -744,12 +747,23 @@ class RuntimeFirstShardWorker:
                             ErrorKind.INFRASTRUCTURE_ERROR,
                             f"graph manifest read failed: {exc}",
                         ) from exc
-                    if graph_manifest.graph_fingerprint != graph_hash:
+                else:
+                    try:
+                        graph_manifest = graph_manifest_from_replay(
+                            generated.graph_statements,
+                            requested_max_nodes=requested_max_nodes,
+                        )
+                    except (TypeError, ValueError) as exc:
                         raise WorkerFailure(
                             ErrorKind.INFRASTRUCTURE_ERROR,
-                            "graph manifest fingerprint does not match sealed graph",
-                        )
-                    _atomic_write_json(attempt_dir / "graph_manifest.json", asdict(graph_manifest))
+                            f"graph manifest build failed: {exc}",
+                        ) from exc
+                if graph_manifest.graph_fingerprint != graph_hash:
+                    raise WorkerFailure(
+                        ErrorKind.INFRASTRUCTURE_ERROR,
+                        "graph manifest fingerprint does not match sealed graph",
+                    )
+                _atomic_write_json(attempt_dir / "graph_manifest.json", asdict(graph_manifest))
                 fingerprint = _adapter_dbms_fingerprint(proxy)
                 health_epoch = _adapter_dbms_health_epoch(proxy)
                 if not fingerprint.available or not health_epoch.available:
@@ -1962,7 +1976,7 @@ class RuntimeFirstShardWorker:
         if graph_manifest is None:
             raise WorkerFailure(
                 ErrorKind.EVIDENCE_INTEGRITY_ERROR,
-                "Neo4j Stage-2 candidate requires a complete graph manifest",
+                "Stage-2 candidate requires a complete graph manifest",
             )
         if not math.isfinite(noise_p99_ms) or noise_p99_ms < 0:
             return {

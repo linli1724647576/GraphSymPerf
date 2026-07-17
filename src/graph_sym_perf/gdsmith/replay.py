@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from graph_sym_perf.generation.corpus import GraphCorpus, GraphManifest
 from graph_sym_perf.query_ir.expression import cypher_identifier
 
 
@@ -91,6 +92,24 @@ def parse_gdsmith_replay_graph(statements: tuple[str, ...] | list[str]) -> Gdsmi
             continue
         raise ValueError(f"UNSUPPORTED_GDSMITH_GRAPH_STATEMENT: {stripped[:160]}")
     return GdsmithReplayGraph(nodes=tuple(nodes), relationships=tuple(relationships))
+
+
+def graph_manifest_from_replay(
+    statements: tuple[str, ...] | list[str],
+    *,
+    requested_max_nodes: int,
+) -> GraphManifest:
+    sealed_statements = tuple(statements)
+    graph = parse_gdsmith_replay_graph(sealed_statements)
+    return GraphManifest(
+        requested_max_nodes=requested_max_nodes,
+        actual_nodes=len(graph.nodes),
+        actual_relationships=len(graph.relationships),
+        label_count=len(graph.node_labels),
+        relationship_type_count=len(graph.relationship_types),
+        index_count=0,
+        graph_fingerprint=GraphCorpus(sealed_statements).content_hash,
+    )
 
 
 def gdsmith_read_query_is_replayable(query: str) -> bool:
