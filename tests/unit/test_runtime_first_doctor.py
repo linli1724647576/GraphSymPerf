@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from graph_sym_perf.core import TargetSystem
 from graph_sym_perf.experiment.doctor_v2 import _regression_environment_ready, run_doctor
+from graph_sym_perf.experiment.plan_models import CampaignPhase
 from graph_sym_perf.experiment.spec import load_experiment_spec
 from graph_sym_perf.experiment.provenance import (
     verified_container_image_digest,
@@ -46,6 +47,14 @@ def test_schema_v3_doctor_requires_all_regression_credentials() -> None:
         }
     )
     assert _regression_environment_ready(spec, environment)
+
+
+def test_schema_v3_doctor_only_requires_regression_credentials_for_p0() -> None:
+    spec = load_experiment_spec("config/ladybug_pattern_order_128_p1.yaml")
+
+    assert not _regression_environment_ready(spec, {}, phase=CampaignPhase.P0)
+    assert _regression_environment_ready(spec, {}, phase=CampaignPhase.P1)
+    assert _regression_environment_ready(spec, {}, phase=CampaignPhase.P2)
 
 
 def test_container_digest_must_match_docker_inspect_not_only_environment_format(monkeypatch) -> None:

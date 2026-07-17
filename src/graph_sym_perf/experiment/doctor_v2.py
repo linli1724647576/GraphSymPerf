@@ -111,6 +111,7 @@ def run_doctor_spec(
         entries = plan.entries
         budget_mb = int(spec.artifacts["entry_budget_mb"])
         phase_value = parsed_phase.value
+        regression_phase = parsed_phase
     else:
         if phase is not None:
             raise ValueError("--phase is only valid for schema-v3 doctor")
@@ -118,6 +119,7 @@ def run_doctor_spec(
         entries = plan.tasks
         budget_mb = int(spec.artifacts["shard_budget_mb"])
         phase_value = None
+        regression_phase = None
     gdsmith = check_gdsmith_tooling(
         GdsmithConfig(
             expected_source_commit=spec.generation.expected_commit,
@@ -135,7 +137,11 @@ def run_doctor_spec(
         and plan.source_revision.gdsmith_dirty is False
         and plan.source_revision.gdsmith_commit == spec.generation.expected_commit
     )
-    regression_ready = _regression_environment_ready(spec, env)
+    regression_ready = _regression_environment_ready(
+        spec,
+        env,
+        phase=regression_phase,
+    )
     ready = gdsmith.ready and source_ready and disk_ready and regression_ready and all(
         result.required_env_present
         and result.generation_env_present
@@ -236,8 +242,15 @@ def _validated_yield_doctor_config(spec, target, definition) -> RunConfig:
     )
 
 
-def _regression_environment_ready(spec, env: Mapping[str, str]) -> bool:
+def _regression_environment_ready(
+    spec,
+    env: Mapping[str, str],
+    *,
+    phase: CampaignPhase | None = None,
+) -> bool:
     if not isinstance(spec, ValidatedYieldExperimentSpec):
+        return True
+    if phase is not None and phase is not CampaignPhase.P0:
         return True
     manifest_path = Path(spec.regression["manifest"])
     try:
