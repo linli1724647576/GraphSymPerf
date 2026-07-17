@@ -199,6 +199,7 @@ class CampaignLifecycle:
             if callable(bind_regression_root):
                 bind_regression_root(
                     self._regression_root_for_phase(
+                        spec,
                         phase,
                         run_dir=run_dir,
                         parent=parent_ref,
@@ -448,6 +449,12 @@ class CampaignLifecycle:
             if parent_run is not None:
                 raise PhaseAncestryError("P0 must not have a parent run")
             return None
+        if (
+            phase is CampaignPhase.P1
+            and spec.targets == (TargetSystem.LADYBUGDB,)
+            and parent_run is None
+        ):
+            return None
         required = CampaignPhase.P0 if phase is CampaignPhase.P1 else CampaignPhase.P1
         if parent_run is None:
             raise PhaseAncestryError(f"{required.value.upper()} parent run is required")
@@ -541,12 +548,19 @@ class CampaignLifecycle:
 
     def _regression_root_for_phase(
         self,
+        spec: ValidatedYieldExperimentSpec,
         phase: CampaignPhase,
         *,
         run_dir: Path,
         parent: Mapping[str, object] | None,
     ) -> Path:
         if phase is CampaignPhase.P0:
+            return run_dir
+        if (
+            phase is CampaignPhase.P1
+            and spec.targets == (TargetSystem.LADYBUGDB,)
+            and parent is None
+        ):
             return run_dir
         if parent is None:
             raise PhaseAncestryError("non-P0 phase lacks regression ancestry")
@@ -719,14 +733,15 @@ def measurement_target_identity(
     if not isinstance(spec, ValidatedYieldExperimentSpec):
         raise TypeError("measurement target identity requires a schema-v3 spec")
     del environment
-    definition = spec.systems.get(TargetSystem.NEO4J)
+    target = spec.targets[0] if len(spec.targets) == 1 else None
+    definition = spec.systems.get(target) if target is not None else None
     target_id = definition.measurement_target_id if definition is not None else None
     if (
         not isinstance(target_id, str)
         or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", target_id) is None
     ):
         raise PhaseAncestryError(
-            "schema-v3 Neo4j measurement_target_id is missing or invalid"
+            "schema-v3 measurement_target_id is missing or invalid"
         )
     return canonical_hash(
         {

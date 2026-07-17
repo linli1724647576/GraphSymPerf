@@ -339,6 +339,32 @@ def test_campaign_requires_successful_matching_parent_and_preserves_manifests(tm
         lifecycle.run(spec, _CampaignFixtureWorker(), phase=CampaignPhase.P0, run_id="interrupted")
 
 
+def test_ladybug_p1_can_bootstrap_without_a_neo4j_regression_parent(tmp_path) -> None:
+    spec = load_experiment_spec("config/ladybug_pattern_order_128_p1.yaml")
+    lifecycle = _campaign_lifecycle(tmp_path)
+
+    class _BoundWorker(_CampaignFixtureWorker):
+        def __init__(self):
+            super().__init__()
+            self.regression_roots = []
+
+        def bind_regression_artifact_root(self, root):
+            self.regression_roots.append(Path(root))
+
+    worker = _BoundWorker()
+    result = lifecycle.run(
+        spec,
+        worker,
+        phase=CampaignPhase.P1,
+        run_id="ladybug-p1",
+    )
+
+    assert result.passed
+    assert worker.regression_roots == [result.run_dir]
+    manifest = json.loads((result.run_dir / "resolved_manifest.json").read_text())
+    assert manifest["parent"] is None
+
+
 def test_campaign_rejects_an_incomplete_rule_plan_source_revision_before_p0(
     monkeypatch,
     tmp_path,
