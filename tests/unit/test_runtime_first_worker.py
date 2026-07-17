@@ -56,7 +56,10 @@ from graph_sym_perf.runtime.screening import (
     select_control_validation_pairs,
 )
 from graph_sym_perf.validation.graph_snapshot import GraphSnapshot
-from graph_sym_perf.validation.session_runner import validation_schedule_seed
+from graph_sym_perf.validation.session_runner import (
+    validation_schedule_seed,
+    validation_session_timeout_seconds,
+)
 from graph_sym_perf.validation.models import (
     EquivalenceEvidence,
     SessionLifecycle,
@@ -68,6 +71,14 @@ from tests.helpers.regression_gate import (
     install_verified_regression_gate,
 )
 from tests.unit.test_artifact_policy import _candidate_payload, _validation_payload
+
+
+def test_validation_session_timeout_covers_the_configured_query_protocol() -> None:
+    assert validation_session_timeout_seconds(
+        query_timeout_seconds=60.0,
+        warmups_per_session=5,
+        pairs_per_session=20,
+    ) == 8_460.0
 
 
 def test_validated_pair_yield_uses_all_core_accepted_pairs() -> None:

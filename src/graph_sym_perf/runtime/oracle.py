@@ -78,9 +78,8 @@ def validate_stage2_evidence(
                 or not isinstance(value, int | float)
                 or not math.isfinite(value)
                 or value < 0
-                or value > timeout_ms
             ):
-                raise ValueError("Stage-2 elapsed sample is outside its timeout bound")
+                raise ValueError("Stage-2 elapsed sample is invalid")
     expected = _canonical_stage2_evidence(
         evidence.paired_samples,
         query_a_hash=query_a_hash,

@@ -407,3 +407,49 @@ def test_stage2_replay_uses_paired_delta_for_direction_like_runtime_harness() ->
         timeout_ms=runtime_policy.timeout_ms,
         policy=policy,
     )
+
+
+def test_stage2_replay_accepts_completed_elapsed_above_requested_query_timeout() -> None:
+    class CompletedAfterDeadlineFake:
+        def execute(self, query: str, parameters, **_kwargs) -> float:
+            return 101.0 if query == "A" else 151.0
+
+    policy = replace(
+        DEFAULT_SCREENING_POLICY,
+        stage2_warmups=0,
+        stage2_pairs=4,
+        stage2_bootstrap_resamples=7,
+    )
+    runtime_policy = RuntimePolicy(
+        warmups=policy.stage2_warmups,
+        pairs=policy.stage2_pairs,
+        seed=29,
+        require_exact_balance=policy.stage2_require_exact_balance,
+        timeout_ms=100.0,
+        bootstrap_resamples=policy.stage2_bootstrap_resamples,
+    )
+    evidence = RuntimeHarness().measure_pair(
+        CompletedAfterDeadlineFake(),
+        "A",
+        "B",
+        policy=runtime_policy,
+        expected_slow_query="b",
+    )
+
+    assert all(sample.a_ms == 101.0 for sample in evidence.paired_samples)
+    assert all(sample.b_ms == 151.0 for sample in evidence.paired_samples)
+    assert not any(sample.a_timeout or sample.b_timeout for sample in evidence.paired_samples)
+    validate_stage2_evidence(
+        evidence,
+        query_a_hash=evidence.query_a_hash,
+        query_b_hash=evidence.query_b_hash,
+        expected_orders=paired_schedule(
+            policy.stage2_pairs,
+            seed=runtime_policy.seed,
+            require_exact_balance=policy.stage2_require_exact_balance,
+        ),
+        expected_slow_query="b",
+        seed=runtime_policy.seed,
+        timeout_ms=runtime_policy.timeout_ms,
+        policy=policy,
+    )

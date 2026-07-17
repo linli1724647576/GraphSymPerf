@@ -30,6 +30,49 @@ from graph_sym_perf.validation.models import (
 from graph_sym_perf.validation.graph_snapshot import verify_graph_snapshot
 
 
+_VALIDATION_SETUP_ALLOWANCE_SECONDS = 300.0
+_VALIDATION_EQUIVALENCE_EXECUTIONS = 6
+
+
+def validation_session_timeout_seconds(
+    *,
+    query_timeout_seconds: float,
+    warmups_per_session: int,
+    pairs_per_session: int,
+) -> float:
+    """Return a hard session ceiling that covers the full query protocol.
+
+    A session performs the primary paired measurement, two same-query control
+    measurements, and six equivalence/control executions.  The per-query
+    timeout is therefore not a valid total process timeout by itself.
+    """
+
+    if query_timeout_seconds <= 0:
+        raise ValueError("query_timeout_seconds must be positive")
+    if (
+        isinstance(warmups_per_session, bool)
+        or not isinstance(warmups_per_session, int)
+        or warmups_per_session < 0
+    ):
+        raise ValueError("warmups_per_session must be a non-negative integer")
+    if (
+        isinstance(pairs_per_session, bool)
+        or not isinstance(pairs_per_session, int)
+        or pairs_per_session <= 0
+    ):
+        raise ValueError("pairs_per_session must be a positive integer")
+    query_executions = (
+        _VALIDATION_EQUIVALENCE_EXECUTIONS
+        + 2 * warmups_per_session
+        + 6 * pairs_per_session
+    )
+    return max(
+        _VALIDATION_SETUP_ALLOWANCE_SECONDS,
+        query_timeout_seconds * query_executions
+        + _VALIDATION_SETUP_ALLOWANCE_SECONDS,
+    )
+
+
 @dataclass(frozen=True)
 class ValidationSessionRequest:
     target: str

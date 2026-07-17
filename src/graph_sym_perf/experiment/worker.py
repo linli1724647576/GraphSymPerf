@@ -141,7 +141,10 @@ from graph_sym_perf.validation.regression import (
     write_regression_configuration_failure,
     write_unresolved_regression_configuration_failure,
 )
-from graph_sym_perf.validation.session_runner import SpawnedValidationSessionRunner
+from graph_sym_perf.validation.session_runner import (
+    SpawnedValidationSessionRunner,
+    validation_session_timeout_seconds,
+)
 from graph_sym_perf.validation.sealed_replay import (
     replay_issue_validation_report,
     runtime_evidence_from_payload,
@@ -2448,9 +2451,14 @@ class RuntimeFirstShardWorker:
                     timer_resolution_ms=0.001,
                     max_result_rows=int(self.spec.validation["max_result_rows"]),
                     query_timeout_seconds=float(entry.query_timeout_seconds),
-                    session_timeout_seconds=max(
-                        300.0,
-                        float(entry.query_timeout_seconds) * 10.0,
+                    session_timeout_seconds=validation_session_timeout_seconds(
+                        query_timeout_seconds=float(entry.query_timeout_seconds),
+                        warmups_per_session=int(
+                            self.spec.validation["warmups_per_session"]
+                        ),
+                        pairs_per_session=int(
+                            self.spec.validation["pairs_per_session"]
+                        ),
                     ),
                 ),
             )
@@ -5714,7 +5722,11 @@ def _candidate_validation_policy(spec: ExperimentSpec, task: ShardTask) -> Valid
         min_ci_low=float(validation["min_ci_lower_ratio"]),
         max_result_rows=int(validation["max_result_rows"]),
         query_timeout_seconds=timeout,
-        session_timeout_seconds=max(300.0, timeout * 10.0),
+        session_timeout_seconds=validation_session_timeout_seconds(
+            query_timeout_seconds=timeout,
+            warmups_per_session=int(validation["warmups_per_session"]),
+            pairs_per_session=int(validation["pairs_per_session"]),
+        ),
     )
 
 
