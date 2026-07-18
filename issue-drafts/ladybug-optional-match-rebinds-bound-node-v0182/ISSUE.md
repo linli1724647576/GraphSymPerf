@@ -59,6 +59,9 @@ Query A consistently returns `c = 2`, while query B consistently returns
 `c = 4`. The result was reproduced in two fresh OS processes using independent
 database files, with six alternating executions per process.
 
+As a differential semantic check, Neo4j 2026.05.0 returned `c = 2` for both
+query forms on the same graph structure.
+
 Removing the redundant `(n3)` restores the expected cardinality. The observed
 factor of two equals the number of nodes in this graph, suggesting that `n3`
 is scanned and rebound instead of being correlated with its existing binding.

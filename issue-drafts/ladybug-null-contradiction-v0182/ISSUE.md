@@ -1,4 +1,4 @@
-# Equivalent NULL contradiction remains about 6.45x slower than `WHERE false`
+# Equivalent NULL contradiction remains about 5x slower than `WHERE false`
 
 I found that a simple NULL-test contradiction is consistently slower than the
 equivalent constant-false predicate on a large node table, although both
@@ -64,7 +64,10 @@ constant-false formulation.
 
 ### Actual behavior
 
-Both queries returned `c = 0`. Validation used two fresh OS processes and two
+Both queries returned `c = 0`. A fresh rerun of the attached reproducer in two
+independent OS processes measured 5.2915x / 1.3288 ms and 4.9400x / 1.4151 ms.
+
+A separate stricter validation pass used two fresh OS processes and two
 independent database files. Each session performed six alternating complete-
 result equivalence checks, five warmups, and 20 exactly balanced paired
 measurements. Both 200-sample A/A calibrations passed.

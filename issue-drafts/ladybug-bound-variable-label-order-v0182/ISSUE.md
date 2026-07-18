@@ -59,6 +59,9 @@ Query A consistently returns `c = 0`, while query B consistently returns
 `c = 1`. The result was reproduced in two fresh OS processes using independent
 database files, with six alternating executions per process.
 
+As a differential semantic check, Neo4j 2026.05.0 returned `c = 0` for both
+query forms on the same graph structure.
+
 The `c = 1` result corresponds to the `L1` source node of `T5`, suggesting that
 the later `:L2` constraint is ignored after the earlier unlabelled `(n1)` has
 bound the variable.
