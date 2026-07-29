@@ -1,0 +1,12 @@
+{
+  "api": "HTTP",
+  "arcadedb_build": "792bdff3378f10bf3fafe136b04a7437e2ba6c4b",
+  "arcadedb_version": "26.8.1-SNAPSHOT",
+  "docker_engine": "29.1.2",
+  "docker_image": "arcadedata/arcadedb:latest",
+  "docker_image_digest": "sha256:0a7935789d65da3ae5e328c33fc56c3144115d324be14d561967afc65c552a86",
+  "host_arch": "arm64",
+  "host_os": "macOS 27.0",
+  "query_language": "opencypher",
+  "verified_at": "2026-07-21T16:00:09+08:00"
+}

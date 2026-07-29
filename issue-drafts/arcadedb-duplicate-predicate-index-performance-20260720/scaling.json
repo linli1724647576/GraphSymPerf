@@ -1,0 +1,29 @@
+{
+  "purpose": "explanatory scaling check only; not the runtime oracle",
+  "query_a": "MATCH (n:Bench) WHERE n.id = 1 RETURN count(*) AS c",
+  "query_b": "MATCH (n:Bench) WHERE (n.id = 1) AND (n.id = 1) RETURN count(*) AS c",
+  "rows": [
+    {
+      "delta_ms": 6.293041980825365,
+      "median_a_ms": 2.6298960437998176,
+      "median_b_ms": 8.922938024625182,
+      "nodes": 5000,
+      "ratio": 3.39288621147657
+    },
+    {
+      "delta_ms": 35.13262502383441,
+      "median_a_ms": 3.4693749621510506,
+      "median_b_ms": 38.60199998598546,
+      "nodes": 20000,
+      "ratio": 11.126499847122835
+    },
+    {
+      "delta_ms": 95.20106250420213,
+      "median_a_ms": 2.3689374793320894,
+      "median_b_ms": 97.56999998353422,
+      "nodes": 80000,
+      "ratio": 41.187241467868375
+    }
+  ],
+  "schema_version": 1
+}
