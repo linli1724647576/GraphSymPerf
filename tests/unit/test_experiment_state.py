@@ -32,6 +32,7 @@ def test_error_kind_is_a_closed_typed_reliability_taxonomy() -> None:
         "DBMS_UNAVAILABLE",
         "DBMS_CRASHED",
         "INFRASTRUCTURE_ERROR",
+        "NOISE_CALIBRATION_FAILED",
         "EVIDENCE_INTEGRITY_ERROR",
         "RESOURCE_EXHAUSTED",
     }

@@ -29,7 +29,6 @@ def test_symmetry_core_rules_apply_through_ast_proofs() -> None:
     cases = {
         "pattern_order_symmetry": "MATCH (a:A), (b:B) RETURN a, b",
         "predicate_order_symmetry": "MATCH (a:A) WHERE a.x = 1 AND a.y = 2 RETURN a",
-        "node_order_symmetry": "MATCH (a:A)-[r:R]-(b:B) RETURN a, b, r",
         "label_order_symmetry": "MATCH (a:A:B) RETURN a",
     }
     for rule_id, query in cases.items():

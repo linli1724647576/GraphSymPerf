@@ -12,14 +12,17 @@ def test_transform_registry_prefers_symmetry_for_gdsmith_cases() -> None:
     case = QueryCase(
         case_id="gdsmith_case_0001",
         template_name="gdsmith",
-        query="MATCH (a:L0)-[r:T0]-(b:L1) RETURN a, b",
+        query="MATCH (a:L0), (b:L1) RETURN a, b",
         parameters={},
         base_predicate="",
         safe_expression="",
         source="gdsmith",
     )
 
-    config = TransformConfig(enabled_families=("bool_redundancy", "symmetry"), enabled_rules=("node_order_symmetry",))
+    config = TransformConfig(
+        enabled_families=("bool_redundancy", "symmetry"),
+        enabled_rules=("pattern_order_symmetry",),
+    )
 
     assert select_family_name(case, config) == "symmetry"
     family = generate_transform_family(case, config)

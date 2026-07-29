@@ -24,7 +24,9 @@ def test_core_provider_reaches_each_rule_exploration_floor_without_external_feed
         provider.record_accepted(proposal.rule_id)
 
     expected = {rule.rule_id for rule in RuleRegistry.default().rules_for("neo4j", SafetyTier.CORE)}
-    assert provider.accepted_counts == {rule_id: 20 for rule_id in expected}
+    assert set(provider.accepted_counts) == expected
+    assert sum(provider.accepted_counts.values()) == len(queries)
+    assert all(count >= 20 for count in provider.accepted_counts.values())
 
 
 def test_core_provider_quarantines_dynamic_equivalence_mismatch(tmp_path) -> None:

@@ -749,6 +749,7 @@ neo4j = [
     { name = "neo4j" },
 ]
 test = [
+    { name = "neo4j" },
     { name = "pytest" },
 ]
 
@@ -763,6 +764,7 @@ requires-dist = [
     { name = "neo4j", marker = "extra == 'db'", specifier = ">=5.0" },
     { name = "neo4j", marker = "extra == 'memgraph'", specifier = ">=5.0" },
     { name = "neo4j", marker = "extra == 'neo4j'", specifier = ">=5.0" },
+    { name = "neo4j", marker = "extra == 'test'", specifier = ">=5.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'agensgraph'", specifier = ">=3.1" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'apache-age'", specifier = ">=3.1" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'db'", specifier = ">=3.1" },
