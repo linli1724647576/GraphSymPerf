@@ -322,7 +322,11 @@ class RuleApplicabilityCertificate:
 
 动态结果一致只验证当前 \(G\) 上的实际可观察行为，不能替代静态证书。
 
-## 5. 第一批规则
+## 5. 第一批规则（已锁定）
+
+第一批正式 CORE 注册表只包含以下两条规则。`CORE-1` 是主要的图原生表示对称规则；
+`CORE-2` 用于扩展结构化轨道并压力测试图模式规划敏感性。其余规则保持
+`EXPERIMENTAL` 或 `CONTROL`，未经后续独立决策不得进入正式 CORE 产率。
 
 ### 5.1 CORE-1：无向图模式线性化族
 
@@ -343,6 +347,7 @@ class RuleApplicabilityCertificate:
 - 对链模式生成合法的正向和逆向线性化。
 
 这是最符合微信动机例子的图原生规则，当前仓库已有无向端点证明和有限 Cypher AST 基础，实现可行性最高。
+它承担第一阶段关于“图模式表示对称”的主要方法证据和实现主线。
 但单条无向边通常只有 2 个去重后的有效表示，不能单独构成正式查询族；该规则只有在一个
 可认证位点的表示轨道至少产生 4 个不同成员，或与其他生成元通过联合证书后组成至少 4 个
 成员的复合轨道时，才可进入正式路径。否则只保留为诊断候选。
@@ -370,6 +375,9 @@ class RuleApplicabilityCertificate:
 - 证书记录分量依赖图和排列。
 
 此规则比普通谓词交换更接近图模式 join-order 敏感性，但与 GRev 存在明显邻近关系，论文必须强调“完整族证据和证书”，不能把排列本身写成首创。
+正式支持域严格限定为同一个 `MATCH` 的 pattern list 表示顺序：不得把它扩展成任意关系
+代数 join-order 重写、跨子句重排或谓词重排。它在论文中的作用是提供结构化族扩展与
+对照证据，不单独承担方法新颖性主张。
 当 \(k=2\) 时只有 2 个排列，必须标记为诊断候选；正式查询族应选择 \(k\ge 3\) 的可认证
 pattern list，并从其排列轨道中确定性生成至少 4 个成员。
 
@@ -766,7 +774,7 @@ families/<family-id>/
 ### Phase 0：语义冻结
 
 - 写 ADR：任意固定 \(G\)、查询表示对称、图状态不变；
-- 确认第一批 CORE 只有两个规则；
+- 落实已锁定的两个 CORE 规则及其正式支持域；
 - 定义 `PatternIR`、证书和制品 schema；
 - 添加“正式路径不得导入 bool/symmetric_state”的 contract test。
 
@@ -861,11 +869,13 @@ families/<family-id>/
    兼容层，不进入核心产率或论文查询族级预言评价。
 2. **生成元组合策略（已锁定）**：允许单规则或多规则的已认证生成元组合形成至少 4 成员
    轨道，但必须通过联合证书和动作前缀验证。
-3. **第一批 CORE**：推荐仅 `undirected_pattern_linearization` 和 `match_pattern_component_permutation`。
+3. **第一批 CORE（已锁定）**：仅包含 `undirected_pattern_linearization` 和
+   `match_pattern_component_permutation`；前者承担主要图原生方法证据，后者严格限定为
+   同一 `MATCH` 内 pattern list 的结构化族扩展。
 4. **新颖性边界**：是否接受“规则本身未必新，创新在结构化族、证书和族级预言”这一收紧表述。
 5. **GRev 角色**：推荐只作外部基线与覆盖对照，不直接嵌入正式主线。
 6. **正式统计单位**：从 accepted query pairs 改为 accepted certified query families；member 数作为第二层统计。
 7. **历史 BOOL 路线**：推荐从正式代码入口和论文贡献中移除，但保留 historical replay 与旧 issue 证据。
 8. **计划信息**：推荐继续保持解释证据，不参与候选生成、调度和 promotion。
 
-前两项已经锁定；其余六项锁定前，不建议开始大规模改代码。
+前三项已经锁定；其余五项锁定前，不建议开始大规模改代码。
