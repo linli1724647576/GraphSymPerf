@@ -248,8 +248,9 @@ class CertifiedQueryFamily:
 
 约束：
 
-- `members` 至少有 2 个文本不同的成员；
-- 正式族级离群预言优先要求至少 3 个成员，推荐至少 4 个；
+- `CertifiedQueryFamily.members` 必须至少包含 4 个语义等价、表面表示不同的成员；
+- 去重后只有 2–3 个成员的候选只能进入开发诊断或历史 pair 兼容路径，标记为
+  `DIAGNOSTIC_FAMILY_CARDINALITY`，不得计入正式查询族、核心产率或查询族级性能预言；
 - 同一 `family_id` 的所有成员共享 `semantic_ir_hash`；
 - `presentation_hash` 必须不同，避免把空白或大小写变化计为成员；
 - 轨道过大时使用确定性有界采样，并记录未枚举规模上界和采样种子。
@@ -318,6 +319,9 @@ class RuleApplicabilityCertificate:
 - 对链模式生成合法的正向和逆向线性化。
 
 这是最符合微信动机例子的图原生规则，当前仓库已有无向端点证明和有限 Cypher AST 基础，实现可行性最高。
+但单条无向边通常只有 2 个去重后的有效表示，不能单独构成正式查询族；该规则只有在一个
+可认证位点的表示轨道至少产生 4 个不同成员，或与同一结构化对称模式内的其他已认证生成元
+组合后达到 4 个成员时，才可进入正式路径。否则只保留为诊断候选。
 
 ### 5.2 CORE-2：同一 MATCH 内模式分量排列族
 
@@ -338,6 +342,8 @@ class RuleApplicabilityCertificate:
 - 证书记录分量依赖图和排列。
 
 此规则比普通谓词交换更接近图模式 join-order 敏感性，但与 GRev 存在明显邻近关系，论文必须强调“完整族证据和证书”，不能把排列本身写成首创。
+当 \(k=2\) 时只有 2 个排列，必须标记为诊断候选；正式查询族应选择 \(k\ge 3\) 的可认证
+pattern list，并从其排列轨道中确定性生成至少 4 个成员。
 
 ### 5.3 EXPERIMENTAL-1：有限无向路径端点族
 
@@ -408,6 +414,11 @@ def build_family(seed: PortableQuery, target: TargetSystem) -> FamilyBuildOutcom
                 renderer.render(ir, action) for action in actions
             )
             if len(members) < config.min_family_members:
+                record_diagnostic(
+                    reason="DIAGNOSTIC_FAMILY_CARDINALITY",
+                    members=members,
+                    certificate=certificate,
+                )
                 continue
             if any(analyze_pattern_ir(parse_query(q)).semantic_hash != ir.semantic_hash
                    for q in members):
@@ -422,7 +433,8 @@ def build_family(seed: PortableQuery, target: TargetSystem) -> FamilyBuildOutcom
 - GDsmith seed 数；
 - 可解析 seed 数；
 - 存在可认证对称位点的 seed 数；
-- 构成至少 2/3/4 成员查询族的 seed 数；
+- 仅形成 2–3 成员诊断候选的 seed 数；
+- 构成至少 4 成员正式查询族的 seed 数；
 - 动态结果一致的查询族数；
 - 进入 runtime screen 的查询族数。
 
@@ -515,7 +527,9 @@ D_{-o}=
 
 这使预言表达为“同一对称族中一个表示异常慢，而其他表示互相一致”，比任意选择一对查询更有定位力。
 
-对于只有 2 个成员的规则，保留现有 pair oracle 作为兼容层，但单独报告为 `PAIR_ONLY`，不作为“查询族级预言”的主要评价证据。
+对于只有 2–3 个成员的候选，保留现有 pair oracle 或小族测量作为开发诊断与历史兼容层，
+统一报告为 `DIAGNOSTIC_ONLY`；它们不进入正式查询族级预言，也不进入核心产率、性能异常
+发现数或论文主评价。
 
 ### 8.3 独立复验
 
@@ -582,9 +596,9 @@ D_{-o}=
 
 ```yaml
 query_symmetry:
-  min_family_members: 3
-  preferred_family_members: 4
+  min_family_members: 4
   max_family_members: 12
+  below_minimum_policy: diagnostic_only
   orbit_mode: bounded_deterministic
   core_rules:
     - undirected_pattern_linearization
@@ -706,11 +720,12 @@ families/<family-id>/
 
 - 实现 `PatternIR`；
 - 实现 `undirected_pattern_linearization`；
-- 生成至少 2 个成员；
+- 生成至少 2 个成员以验证动作、语义哈希和结果门禁；
 - 接入完整结果门禁；
-- 复用 pair runtime 先跑两成员兼容实验。
+- 复用 pair runtime 先跑两成员兼容实验，但产物必须标记为 `DIAGNOSTIC_ONLY`。
 
-验收：在非对称图状态上稳定生成并验证同结果查询。
+验收：在非对称图状态上稳定生成并验证同结果查询；本阶段的 2–3 成员产物不得进入正式
+查询族统计。
 
 ### Phase 2：查询族与证书
 
@@ -719,7 +734,8 @@ families/<family-id>/
 - 实现 `match_pattern_component_permutation`；
 - 持久化完整证书和成员动作。
 
-验收：至少 3/4 成员查询族可重放，伪造证书无法通过。
+验收：至少 4 成员的正式查询族可重放，伪造证书无法通过；少于 4 成员时 fail closed 到
+诊断路径。
 
 ### Phase 3：族级 runtime oracle
 
@@ -762,7 +778,7 @@ families/<family-id>/
 | 同一任意 \(G\) 上无向端点表示对称 | 高 | 当前 AST/RA proof 已有基础 | 方言解析差异 |
 | 同 MATCH pattern 分量族 | 中高 | 当前 parser 支持 pattern list | 关系唯一性和复杂 pattern |
 | 规则适用证书 | 高 | 已有 `SafetyCertificate` 与 promotion gate | 现有证书仍偏 pair |
-| 3–12 成员查询族生成 | 中高 | 组合规模可有界枚举 | 有效族产率未知 |
+| 4–12 成员查询族生成 | 中高 | 组合规模可有界枚举 | 有效族产率未知 |
 | 族级平衡 runtime oracle | 高 | 可复用 pair harness、noise、bootstrap | 正式实验成本增加 |
 | mandatory MATCH 排列 | 中 | 依赖分析已有 reducer 基础 | Cypher 作用域和 WHERE 附着 |
 | 可变长度路径端点族 | 中低 | 有有限路径 proof 雏形 | 多重路径、路径对象和跨方言语义 |
@@ -779,11 +795,12 @@ families/<family-id>/
 
 如果最后仍然只实现“端点反转 + 两条查询计时”，该工作会被审稿人视为 GRev/AMOEBA 的窄规则复现，贡献不足。
 
-## 15. 需要先讨论并锁定的决策
+## 15. 已锁定决策与待讨论项
 
 建议按以下顺序逐项讨论：
 
-1. **正式测试单位**：推荐最小 3 成员、优选 4 成员；2 成员只保留兼容层。
+1. **正式测试单位（已锁定）**：正式查询族至少 4 个成员；2–3 成员只保留开发诊断和历史
+   兼容层，不进入核心产率或论文查询族级预言评价。
 2. **第一批 CORE**：推荐仅 `undirected_pattern_linearization` 和 `match_pattern_component_permutation`。
 3. **新颖性边界**：是否接受“规则本身未必新，创新在结构化族、证书和族级预言”这一收紧表述。
 4. **GRev 角色**：推荐只作外部基线与覆盖对照，不直接嵌入正式主线。
@@ -791,4 +808,4 @@ families/<family-id>/
 6. **历史 BOOL 路线**：推荐从正式代码入口和论文贡献中移除，但保留 historical replay 与旧 issue 证据。
 7. **计划信息**：推荐继续保持解释证据，不参与候选生成、调度和 promotion。
 
-在这七项锁定前，不建议开始大规模改代码。
+第一项已经锁定；其余六项锁定前，不建议开始大规模改代码。
