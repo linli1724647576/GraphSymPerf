@@ -1,0 +1,960 @@
+{
+  "arcadedb_url": "http://127.0.0.1:2482",
+  "arcadedb_version": "26.8.1-SNAPSHOT (build 792bdff3378f10bf3fafe136b04a7437e2ba6c4b/1784537604794/main)",
+  "database": "boolverify_s2_300k_20260724",
+  "node_count": 300000,
+  "purpose": "discovery_screen_not_issue_grade_validation",
+  "results": [
+    {
+      "balanced_pairs": 20,
+      "complete_typed_equivalent": true,
+      "explain_a": {
+        "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=(n.id = 1 AND n.id <= 1), cost=54005.00, rows=45000]\n  + NodeIndexRangeScan(n:Bench) [index=Bench[id], id <= 1, cost=9005.00, rows=90000]\n\nTotal Estimated Cost: 54005.00\nTotal Estimated Rows: 45000\n",
+        "explainPlan": {
+          "cost": -1,
+          "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=(n.id = 1 AND n.id <= 1), cost=54005.00, rows=45000]\n  + NodeIndexRangeScan(n:Bench) [index=Bench[id], id <= 1, cost=9005.00, rows=90000]\n\nTotal Estimated Cost: 54005.00\nTotal Estimated Rows: 45000\n",
+          "steps": null,
+          "type": "OpenCypherExecutionPlan"
+        },
+        "result": [],
+        "user": "root"
+      },
+      "explain_b": {
+        "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=NOT (NOT n.id = 1 OR NOT n.id <= 1), cost=450000.00, rows=150000]\n  + NodeByLabelScan(n:Bench) [cost=300000.00, rows=300000]\n\nTotal Estimated Cost: 450000.00\nTotal Estimated Rows: 150000\n",
+        "explainPlan": {
+          "cost": -1,
+          "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=NOT (NOT n.id = 1 OR NOT n.id <= 1), cost=450000.00, rows=150000]\n  + NodeByLabelScan(n:Bench) [cost=300000.00, rows=300000]\n\nTotal Estimated Cost: 450000.00\nTotal Estimated Rows: 150000\n",
+          "steps": null,
+          "type": "OpenCypherExecutionPlan"
+        },
+        "result": [],
+        "user": "root"
+      },
+      "negative_controls": {
+        "aa": [
+          {
+            "absolute_delta_ms": 0.8448339067399502,
+            "first_ms": 4.22133388929069,
+            "order": "AB",
+            "second_ms": 3.3764999825507402,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 0.22466620430350304,
+            "first_ms": 1.1102089192718267,
+            "order": "BA",
+            "second_ms": 1.3348751235753298,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 7.0457912515848875,
+            "first_ms": 8.121708175167441,
+            "order": "BA",
+            "second_ms": 1.0759169235825539,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 0.16916682943701744,
+            "first_ms": 1.388832926750183,
+            "order": "AB",
+            "second_ms": 1.2196660973131657,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 1.6451668925583363,
+            "first_ms": 1.759583130478859,
+            "order": "BA",
+            "second_ms": 3.404750023037195,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 3.1352080404758453,
+            "first_ms": 1.1831249576061964,
+            "order": "AB",
+            "second_ms": 4.318332998082042,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 0.24379068054258823,
+            "first_ms": 1.4143751468509436,
+            "order": "BA",
+            "second_ms": 1.6581658273935318,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 6.326040951535106,
+            "first_ms": 7.7904160134494305,
+            "order": "AB",
+            "second_ms": 1.4643750619143248,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 7.010583067312837,
+            "first_ms": 1.3936669565737247,
+            "order": "BA",
+            "second_ms": 8.404250023886561,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 7.0766659919172525,
+            "first_ms": 1.3163338880985975,
+            "order": "AB",
+            "second_ms": 8.39299988001585,
+            "side": "a"
+          }
+        ],
+        "bb": [
+          {
+            "absolute_delta_ms": 80.61033394187689,
+            "first_ms": 342.1810839790851,
+            "order": "AB",
+            "second_ms": 261.5707500372082,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 24.264290928840637,
+            "first_ms": 290.480500087142,
+            "order": "BA",
+            "second_ms": 266.21620915830135,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 173.67362487129867,
+            "first_ms": 478.0357088893652,
+            "order": "BA",
+            "second_ms": 304.3620840180665,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 185.90970896184444,
+            "first_ms": 405.189166078344,
+            "order": "BA",
+            "second_ms": 591.0988750401884,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 43.257125187665224,
+            "first_ms": 461.5056251641363,
+            "order": "AB",
+            "second_ms": 418.24849997647107,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 107.35162510536611,
+            "first_ms": 400.89870779775083,
+            "order": "BA",
+            "second_ms": 508.25033290311694,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 19.020583014935255,
+            "first_ms": 367.16216686181724,
+            "order": "BA",
+            "second_ms": 348.141583846882,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 19.46979109197855,
+            "first_ms": 316.85000006109476,
+            "order": "AB",
+            "second_ms": 297.3802089691162,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 35.30041594058275,
+            "first_ms": 318.7090000137687,
+            "order": "AB",
+            "second_ms": 354.0094159543514,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 67.13704206049442,
+            "first_ms": 373.0970420874655,
+            "order": "AB",
+            "second_ms": 305.9600000269711,
+            "side": "b"
+          }
+        ]
+      },
+      "result_a": [
+        {
+          "@props": "c:3",
+          "c": 1
+        }
+      ],
+      "result_b": [
+        {
+          "@props": "c:3",
+          "c": 1
+        }
+      ],
+      "rule": {
+        "query_a": "MATCH (n:Bench) WHERE n.id = 1 AND n.id <= 1 RETURN count(*) AS c",
+        "query_b": "MATCH (n:Bench) WHERE NOT (NOT (n.id = 1) OR NOT (n.id <= 1)) RETURN count(*) AS c",
+        "rule_id": "de_morgan_predicate",
+        "theorem": "NOT (P OR Q) = (NOT P) AND (NOT Q) in strong Kleene logic"
+      },
+      "samples": [
+        {
+          "a_ms": 14.098416082561016,
+          "b_ms": 490.51512498408556,
+          "order": "AB"
+        },
+        {
+          "a_ms": 6.814958993345499,
+          "b_ms": 482.01962490566075,
+          "order": "BA"
+        },
+        {
+          "a_ms": 4.24512499012053,
+          "b_ms": 525.373833021149,
+          "order": "BA"
+        },
+        {
+          "a_ms": 2.4322078097611666,
+          "b_ms": 528.0744999181479,
+          "order": "AB"
+        },
+        {
+          "a_ms": 4.926833091303706,
+          "b_ms": 434.4285409897566,
+          "order": "BA"
+        },
+        {
+          "a_ms": 2.743958029896021,
+          "b_ms": 345.4242078587413,
+          "order": "AB"
+        },
+        {
+          "a_ms": 6.694332929328084,
+          "b_ms": 334.15637514553964,
+          "order": "BA"
+        },
+        {
+          "a_ms": 3.3832499757409096,
+          "b_ms": 315.74220792390406,
+          "order": "AB"
+        },
+        {
+          "a_ms": 5.257416050881147,
+          "b_ms": 365.26304110884666,
+          "order": "BA"
+        },
+        {
+          "a_ms": 3.660124959424138,
+          "b_ms": 383.2789589650929,
+          "order": "BA"
+        },
+        {
+          "a_ms": 7.9665828961879015,
+          "b_ms": 408.9756249450147,
+          "order": "BA"
+        },
+        {
+          "a_ms": 4.534458974376321,
+          "b_ms": 348.6719159409404,
+          "order": "BA"
+        },
+        {
+          "a_ms": 2.5975832249969244,
+          "b_ms": 296.2367911823094,
+          "order": "AB"
+        },
+        {
+          "a_ms": 3.6089580971747637,
+          "b_ms": 326.7728330101818,
+          "order": "AB"
+        },
+        {
+          "a_ms": 2.9134158976376057,
+          "b_ms": 306.85454211197793,
+          "order": "AB"
+        },
+        {
+          "a_ms": 18.955833045765758,
+          "b_ms": 367.9421248380095,
+          "order": "AB"
+        },
+        {
+          "a_ms": 10.695416945964098,
+          "b_ms": 329.3264580424875,
+          "order": "BA"
+        },
+        {
+          "a_ms": 5.11154206469655,
+          "b_ms": 284.50487507507205,
+          "order": "BA"
+        },
+        {
+          "a_ms": 1.3389999512583017,
+          "b_ms": 293.9927498809993,
+          "order": "AB"
+        },
+        {
+          "a_ms": 2.2516248282045126,
+          "b_ms": 256.22800015844405,
+          "order": "AB"
+        }
+      ],
+      "summary": {
+        "b_slower_fraction": 1.0,
+        "issue_grade_runtime_gate_passed": true,
+        "median_a_ms": 4.3897919822484255,
+        "median_b_ms": 347.04806189984083,
+        "median_b_over_a": 79.05797434212016,
+        "median_delta_ms": 342.6582699175924,
+        "negative_control_p99_ms": 183.58485298464075,
+        "paired_delta_ms_ci95": {
+          "high": 390.3139380272478,
+          "low": 315.4949995223433
+        },
+        "paired_ratio_ci95": {
+          "high": 109.5607971567492,
+          "low": 62.56753834956515
+        }
+      },
+      "verdict": "PERFORMANCE_CANDIDATE",
+      "warmups_per_query": 3
+    },
+    {
+      "balanced_pairs": 20,
+      "complete_typed_equivalent": true,
+      "explain_a": {
+        "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.id = 1, cost=185.00, rows=150]\n  + NodeIndexSeek(n:Bench) [index=Bench[id], id=1, cost=35.00, rows=300]\n\nTotal Estimated Cost: 185.00\nTotal Estimated Rows: 150\n",
+        "explainPlan": {
+          "cost": -1,
+          "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.id = 1, cost=185.00, rows=150]\n  + NodeIndexSeek(n:Bench) [index=Bench[id], id=1, cost=35.00, rows=300]\n\nTotal Estimated Cost: 185.00\nTotal Estimated Rows: 150\n",
+          "steps": null,
+          "type": "OpenCypherExecutionPlan"
+        },
+        "result": [],
+        "user": "root"
+      },
+      "explain_b": {
+        "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=NOT n.id != 1, cost=450000.00, rows=150000]\n  + NodeByLabelScan(n:Bench) [cost=300000.00, rows=300000]\n\nTotal Estimated Cost: 450000.00\nTotal Estimated Rows: 150000\n",
+        "explainPlan": {
+          "cost": -1,
+          "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=NOT n.id != 1, cost=450000.00, rows=150000]\n  + NodeByLabelScan(n:Bench) [cost=300000.00, rows=300000]\n\nTotal Estimated Cost: 450000.00\nTotal Estimated Rows: 150000\n",
+          "steps": null,
+          "type": "OpenCypherExecutionPlan"
+        },
+        "result": [],
+        "user": "root"
+      },
+      "negative_controls": {
+        "aa": [
+          {
+            "absolute_delta_ms": 4.831500118598342,
+            "first_ms": 7.386249955743551,
+            "order": "AB",
+            "second_ms": 12.217750074341893,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 2.8299579862505198,
+            "first_ms": 5.9505419339984655,
+            "order": "BA",
+            "second_ms": 8.780499920248985,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 2.395958872511983,
+            "first_ms": 6.930749863386154,
+            "order": "BA",
+            "second_ms": 4.534790990874171,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 3.86012508533895,
+            "first_ms": 4.990499932318926,
+            "order": "BA",
+            "second_ms": 8.850625017657876,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 0.5034168716520071,
+            "first_ms": 3.508166875690222,
+            "order": "AB",
+            "second_ms": 3.0047500040382147,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 1.1471263132989407,
+            "first_ms": 8.207334205508232,
+            "order": "AB",
+            "second_ms": 7.0602078922092915,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 1.1942079290747643,
+            "first_ms": 5.522334016859531,
+            "order": "BA",
+            "second_ms": 6.716541945934296,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 3.6800000816583633,
+            "first_ms": 11.314417002722621,
+            "order": "AB",
+            "second_ms": 7.634416921064258,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 1.34591618552804,
+            "first_ms": 2.9970419127494097,
+            "order": "BA",
+            "second_ms": 4.34295809827745,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 1.4473746996372938,
+            "first_ms": 3.2428328413516283,
+            "order": "AB",
+            "second_ms": 1.7954581417143345,
+            "side": "a"
+          }
+        ],
+        "bb": [
+          {
+            "absolute_delta_ms": 72.73979112505913,
+            "first_ms": 458.56383303180337,
+            "order": "AB",
+            "second_ms": 385.82404190674424,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 17.176625784486532,
+            "first_ms": 327.7050838805735,
+            "order": "AB",
+            "second_ms": 310.528458096087,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 76.73437404446304,
+            "first_ms": 427.7559579350054,
+            "order": "AB",
+            "second_ms": 351.0215838905424,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 6.593541940674186,
+            "first_ms": 295.83295807242393,
+            "order": "BA",
+            "second_ms": 302.4265000130981,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 17.961082747206092,
+            "first_ms": 295.51558289676905,
+            "order": "BA",
+            "second_ms": 277.55450014956295,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 7.854666793718934,
+            "first_ms": 262.9483330529183,
+            "order": "BA",
+            "second_ms": 270.80299984663725,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 12.060749111697078,
+            "first_ms": 256.7726669367403,
+            "order": "BA",
+            "second_ms": 268.83341604843736,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 41.21849895454943,
+            "first_ms": 306.07720790430903,
+            "order": "AB",
+            "second_ms": 264.8587089497596,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 8.515749825164676,
+            "first_ms": 242.8106248844415,
+            "order": "BA",
+            "second_ms": 234.29487505927682,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 15.795168001204729,
+            "first_ms": 237.4291659798473,
+            "order": "AB",
+            "second_ms": 253.22433398105204,
+            "side": "b"
+          }
+        ]
+      },
+      "result_a": [
+        {
+          "@props": "c:3",
+          "c": 1
+        }
+      ],
+      "result_b": [
+        {
+          "@props": "c:3",
+          "c": 1
+        }
+      ],
+      "rule": {
+        "query_a": "MATCH (n:Bench) WHERE n.id = 1 RETURN count(*) AS c",
+        "query_b": "MATCH (n:Bench) WHERE NOT (n.id <> 1) RETURN count(*) AS c",
+        "rule_id": "negated_inequality",
+        "theorem": "x = c = NOT (x <> c) in three-valued comparison semantics"
+      },
+      "samples": [
+        {
+          "a_ms": 3.304457990452647,
+          "b_ms": 290.1515408884734,
+          "order": "BA"
+        },
+        {
+          "a_ms": 1.6517909243702888,
+          "b_ms": 297.1117498818785,
+          "order": "AB"
+        },
+        {
+          "a_ms": 4.388999892398715,
+          "b_ms": 260.26245788671076,
+          "order": "AB"
+        },
+        {
+          "a_ms": 2.194667002186179,
+          "b_ms": 296.52300011366606,
+          "order": "BA"
+        },
+        {
+          "a_ms": 1.4440000522881746,
+          "b_ms": 275.5910421255976,
+          "order": "AB"
+        },
+        {
+          "a_ms": 6.788791157305241,
+          "b_ms": 302.3442500270903,
+          "order": "AB"
+        },
+        {
+          "a_ms": 12.343792011961341,
+          "b_ms": 337.5857078935951,
+          "order": "BA"
+        },
+        {
+          "a_ms": 8.199415868148208,
+          "b_ms": 321.6985419858247,
+          "order": "BA"
+        },
+        {
+          "a_ms": 2.635540906339884,
+          "b_ms": 331.943916156888,
+          "order": "BA"
+        },
+        {
+          "a_ms": 5.550750065594912,
+          "b_ms": 270.6202920526266,
+          "order": "AB"
+        },
+        {
+          "a_ms": 2.4317919742316008,
+          "b_ms": 287.16183290816844,
+          "order": "AB"
+        },
+        {
+          "a_ms": 6.517917150631547,
+          "b_ms": 334.9509169347584,
+          "order": "AB"
+        },
+        {
+          "a_ms": 2.6931660249829292,
+          "b_ms": 292.0507499948144,
+          "order": "BA"
+        },
+        {
+          "a_ms": 5.338167073205113,
+          "b_ms": 367.9069159552455,
+          "order": "AB"
+        },
+        {
+          "a_ms": 3.102625021710992,
+          "b_ms": 331.01020916365087,
+          "order": "BA"
+        },
+        {
+          "a_ms": 1.8265419639647007,
+          "b_ms": 333.1732500810176,
+          "order": "AB"
+        },
+        {
+          "a_ms": 6.856417050585151,
+          "b_ms": 372.31295788660645,
+          "order": "BA"
+        },
+        {
+          "a_ms": 4.084791988134384,
+          "b_ms": 453.11774988658726,
+          "order": "BA"
+        },
+        {
+          "a_ms": 4.018333973363042,
+          "b_ms": 439.80104103684425,
+          "order": "AB"
+        },
+        {
+          "a_ms": 12.492457870393991,
+          "b_ms": 575.1859999727458,
+          "order": "BA"
+        }
+      ],
+      "summary": {
+        "b_slower_fraction": 1.0,
+        "issue_grade_runtime_gate_passed": true,
+        "median_a_ms": 4.051562980748713,
+        "median_b_ms": 326.3543755747378,
+        "median_b_over_a": 80.55024125885087,
+        "median_delta_ms": 322.3028125939891,
+        "negative_control_p99_ms": 75.9754032897763,
+        "paired_delta_ms_ci95": {
+          "high": 330.3275416838005,
+          "low": 291.8429585406557
+        },
+        "paired_ratio_ci95": {
+          "high": 114.5072493296544,
+          "low": 52.84532195838704
+        }
+      },
+      "verdict": "PERFORMANCE_CANDIDATE",
+      "warmups_per_query": 3
+    },
+    {
+      "balanced_pairs": 20,
+      "complete_typed_equivalent": true,
+      "explain_a": {
+        "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.flag = true, cost=18005.00, rows=15000]\n  + NodeIndexSeek(n:Bench) [index=Bench[flag], flag=true, cost=3005.00, rows=30000]\n\nTotal Estimated Cost: 18005.00\nTotal Estimated Rows: 15000\n",
+        "explainPlan": {
+          "cost": -1,
+          "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.flag = true, cost=18005.00, rows=15000]\n  + NodeIndexSeek(n:Bench) [index=Bench[flag], flag=true, cost=3005.00, rows=30000]\n\nTotal Estimated Cost: 18005.00\nTotal Estimated Rows: 15000\n",
+          "steps": null,
+          "type": "OpenCypherExecutionPlan"
+        },
+        "result": [],
+        "user": "root"
+      },
+      "explain_b": {
+        "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.flag, cost=450000.00, rows=150000]\n  + NodeByLabelScan(n:Bench) [cost=300000.00, rows=300000]\n\nTotal Estimated Cost: 450000.00\nTotal Estimated Rows: 150000\n",
+        "explainPlan": {
+          "cost": -1,
+          "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.flag, cost=450000.00, rows=150000]\n  + NodeByLabelScan(n:Bench) [cost=300000.00, rows=300000]\n\nTotal Estimated Cost: 450000.00\nTotal Estimated Rows: 150000\n",
+          "steps": null,
+          "type": "OpenCypherExecutionPlan"
+        },
+        "result": [],
+        "user": "root"
+      },
+      "negative_controls": {
+        "aa": [
+          {
+            "absolute_delta_ms": 0.7589589804410934,
+            "first_ms": 1.1365830432623625,
+            "order": "BA",
+            "second_ms": 1.895542023703456,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 1.4709581155329943,
+            "first_ms": 2.4613330606371164,
+            "order": "BA",
+            "second_ms": 0.9903749451041222,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 1.0397080332040787,
+            "first_ms": 1.5402499120682478,
+            "order": "BA",
+            "second_ms": 2.5799579452723265,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 0.058208126574754715,
+            "first_ms": 1.026500016450882,
+            "order": "AB",
+            "second_ms": 0.9682918898761272,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 0.010458054021000862,
+            "first_ms": 0.9243329986929893,
+            "order": "AB",
+            "second_ms": 0.9138749446719885,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 4.306083079427481,
+            "first_ms": 5.240583093836904,
+            "order": "BA",
+            "second_ms": 0.9345000144094229,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 0.16316608525812626,
+            "first_ms": 0.8754169102758169,
+            "order": "BA",
+            "second_ms": 1.0385829955339432,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 0.10266597382724285,
+            "first_ms": 0.8895830251276493,
+            "order": "AB",
+            "second_ms": 0.7869170513004065,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 0.014834105968475342,
+            "first_ms": 1.4898749068379402,
+            "order": "AB",
+            "second_ms": 1.5047090128064156,
+            "side": "a"
+          },
+          {
+            "absolute_delta_ms": 1.1331248097121716,
+            "first_ms": 0.9647500701248646,
+            "order": "AB",
+            "second_ms": 2.097874879837036,
+            "side": "a"
+          }
+        ],
+        "bb": [
+          {
+            "absolute_delta_ms": 16.253125155344605,
+            "first_ms": 305.29825016856194,
+            "order": "BA",
+            "second_ms": 289.04512501321733,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 0.7859163451939821,
+            "first_ms": 245.35466614179313,
+            "order": "AB",
+            "second_ms": 244.56874979659915,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 13.444249983876944,
+            "first_ms": 249.3390419986099,
+            "order": "AB",
+            "second_ms": 235.89479201473296,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 37.638082867488265,
+            "first_ms": 278.22133293375373,
+            "order": "BA",
+            "second_ms": 240.58325006626546,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 5.077749956399202,
+            "first_ms": 255.14395791105926,
+            "order": "BA",
+            "second_ms": 250.06620795466006,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 29.990458162501454,
+            "first_ms": 239.70312485471368,
+            "order": "AB",
+            "second_ms": 269.69358301721513,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 16.88179187476635,
+            "first_ms": 363.9565829653293,
+            "order": "BA",
+            "second_ms": 347.07479109056294,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 13.21300002746284,
+            "first_ms": 308.8219170458615,
+            "order": "AB",
+            "second_ms": 295.60891701839864,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 55.98733387887478,
+            "first_ms": 349.05929188244045,
+            "order": "BA",
+            "second_ms": 293.07195800356567,
+            "side": "b"
+          },
+          {
+            "absolute_delta_ms": 3.2362090423703194,
+            "first_ms": 290.13429093174636,
+            "order": "AB",
+            "second_ms": 293.3704999741167,
+            "side": "b"
+          }
+        ]
+      },
+      "result_a": [
+        {
+          "@props": "c:3",
+          "c": 1
+        }
+      ],
+      "result_b": [
+        {
+          "@props": "c:3",
+          "c": 1
+        }
+      ],
+      "rule": {
+        "query_a": "MATCH (n:Bench) WHERE n.flag = true RETURN count(*) AS c",
+        "query_b": "MATCH (n:Bench) WHERE n.flag RETURN count(*) AS c",
+        "rule_id": "boolean_property_truth",
+        "theorem": "a Boolean property and that property = true select the same rows"
+      },
+      "samples": [
+        {
+          "a_ms": 1.9990000873804092,
+          "b_ms": 254.31612506508827,
+          "order": "AB"
+        },
+        {
+          "a_ms": 1.5217908658087254,
+          "b_ms": 287.33133315108716,
+          "order": "AB"
+        },
+        {
+          "a_ms": 5.153624806553125,
+          "b_ms": 287.0438750833273,
+          "order": "AB"
+        },
+        {
+          "a_ms": 5.807749927043915,
+          "b_ms": 235.93979212455451,
+          "order": "BA"
+        },
+        {
+          "a_ms": 1.6825839411467314,
+          "b_ms": 291.40195809304714,
+          "order": "AB"
+        },
+        {
+          "a_ms": 1.874708104878664,
+          "b_ms": 254.78341686539352,
+          "order": "BA"
+        },
+        {
+          "a_ms": 3.2627920154482126,
+          "b_ms": 270.9389158990234,
+          "order": "AB"
+        },
+        {
+          "a_ms": 10.673125041648746,
+          "b_ms": 256.34299986995757,
+          "order": "AB"
+        },
+        {
+          "a_ms": 2.044250024482608,
+          "b_ms": 256.3088331371546,
+          "order": "BA"
+        },
+        {
+          "a_ms": 8.411082904785872,
+          "b_ms": 281.85429191216826,
+          "order": "BA"
+        },
+        {
+          "a_ms": 1.324875047430396,
+          "b_ms": 290.71633401326835,
+          "order": "AB"
+        },
+        {
+          "a_ms": 2.1931249648332596,
+          "b_ms": 372.82595806755126,
+          "order": "AB"
+        },
+        {
+          "a_ms": 9.586249943822622,
+          "b_ms": 417.35595813952386,
+          "order": "BA"
+        },
+        {
+          "a_ms": 2.581499982625246,
+          "b_ms": 387.4432079028338,
+          "order": "BA"
+        },
+        {
+          "a_ms": 16.362875001505017,
+          "b_ms": 397.89274986833334,
+          "order": "BA"
+        },
+        {
+          "a_ms": 4.481625044718385,
+          "b_ms": 447.32675002887845,
+          "order": "BA"
+        },
+        {
+          "a_ms": 5.90354111045599,
+          "b_ms": 444.30249999277294,
+          "order": "AB"
+        },
+        {
+          "a_ms": 4.1805419605225325,
+          "b_ms": 347.0082499552518,
+          "order": "BA"
+        },
+        {
+          "a_ms": 1.9859159365296364,
+          "b_ms": 292.33020916581154,
+          "order": "BA"
+        },
+        {
+          "a_ms": 3.6784580443054438,
+          "b_ms": 269.4802088662982,
+          "order": "AB"
+        }
+      ],
+      "summary": {
+        "b_slower_fraction": 1.0,
+        "issue_grade_runtime_gate_passed": true,
+        "median_a_ms": 3.470625029876828,
+        "median_b_ms": 289.02383358217776,
+        "median_b_over_a": 83.27717085369927,
+        "median_delta_ms": 285.55320855230093,
+        "negative_control_p99_ms": 52.50097618671132,
+        "paired_delta_ms_ci95": {
+          "high": 356.73027054872364,
+          "low": 266.738937352784
+        },
+        "paired_ratio_ci95": {
+          "high": 141.55367504189263,
+          "low": 64.47824309910241
+        }
+      },
+      "verdict": "PERFORMANCE_CANDIDATE",
+      "warmups_per_query": 3
+    }
+  ],
+  "schema_version": 1,
+  "session": 2,
+  "setup": {
+    "indexes": [
+      "Bench.id UNIQUE",
+      "Bench.group_id NOTUNIQUE",
+      "Bench.maybe NOTUNIQUE",
+      "Bench.flag NOTUNIQUE"
+    ],
+    "maybe_null_frequency": "one in five vertices",
+    "properties": [
+      "id LONG",
+      "group_id LONG",
+      "maybe LONG",
+      "flag BOOLEAN"
+    ],
+    "vertex_type": "Bench"
+  }
+}
