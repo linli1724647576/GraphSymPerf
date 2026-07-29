@@ -1,0 +1,391 @@
+{
+  "balanced_pairs": 20,
+  "certificate": {
+    "ast_path": "clauses[0].where",
+    "canonical_rule_id": "null_partition_tautology",
+    "capability_hash": "arcadedb-null_partition_tautology-index-v1",
+    "clause_context": "where",
+    "expression_type": "boolean",
+    "family": "bool",
+    "nullability": "three_valued",
+    "preconditions": [
+      "pure"
+    ],
+    "proof_id": "kleene_null_partition_v1",
+    "proof_version": "1",
+    "rule_id": "null_partition_tautology",
+    "semantic_proof_hash": "26afe5ac1ed4f58c8693ba706411168a0b4e96ddb6df902cac251c1f720da88b",
+    "semantic_proof_template_hash": "b168017154b1bf8f0f3a2b3f8426c432ed98e1243fd23600ac4fb361978bfb86",
+    "site_class": "where_boolean",
+    "submit_eligible": true,
+    "tier": "core",
+    "variables_in_scope": [
+      "n"
+    ]
+  },
+  "complete_typed_equivalent": true,
+  "database": "nullpart_unique_session1",
+  "explain_a": {
+    "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.id = 1, cost=17.00, rows=10]\n  + NodeIndexSeek(n:Bench) [index=Bench[id], id=1, cost=7.00, rows=20]\n\nTotal Estimated Cost: 17.00\nTotal Estimated Rows: 10\n",
+    "explainPlan": {
+      "cost": -1,
+      "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.id = 1, cost=17.00, rows=10]\n  + NodeIndexSeek(n:Bench) [index=Bench[id], id=1, cost=7.00, rows=20]\n\nTotal Estimated Cost: 17.00\nTotal Estimated Rows: 10\n",
+      "steps": null,
+      "type": "OpenCypherExecutionPlan"
+    },
+    "result": [],
+    "user": "root"
+  },
+  "explain_b": {
+    "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=(n.id = 1 AND (n.id = 1 IS NULL OR n.id = 1 IS NOT NULL)), cost=30000.00, rows=10000]\n  + NodeByLabelScan(n:Bench) [cost=20000.00, rows=20000]\n\nTotal Estimated Cost: 30000.00\nTotal Estimated Rows: 10000\n",
+    "explainPlan": {
+      "cost": -1,
+      "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=(n.id = 1 AND (n.id = 1 IS NULL OR n.id = 1 IS NOT NULL)), cost=30000.00, rows=10000]\n  + NodeByLabelScan(n:Bench) [cost=20000.00, rows=20000]\n\nTotal Estimated Cost: 30000.00\nTotal Estimated Rows: 10000\n",
+      "steps": null,
+      "type": "OpenCypherExecutionPlan"
+    },
+    "result": [],
+    "user": "root"
+  },
+  "graph_count_result": [
+    {
+      "@props": "c:3",
+      "c": 20000
+    }
+  ],
+  "negative_controls": {
+    "aa": [
+      {
+        "absolute_delta_ms": 0.4020831547677517,
+        "first_ms": 1.747499918565154,
+        "order": "21",
+        "second_ms": 2.1495830733329058,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.6595419254153967,
+        "first_ms": 1.8607920501381159,
+        "order": "12",
+        "second_ms": 2.5203339755535126,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.519624212756753,
+        "first_ms": 3.31504107452929,
+        "order": "21",
+        "second_ms": 2.7954168617725372,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.23758294992148876,
+        "first_ms": 2.5450829416513443,
+        "order": "12",
+        "second_ms": 2.3074999917298555,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.18733390606939793,
+        "first_ms": 2.410333137959242,
+        "order": "21",
+        "second_ms": 2.59766704402864,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.034499913454055786,
+        "first_ms": 4.571541910991073,
+        "order": "21",
+        "second_ms": 4.606041824445128,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 5.0602920819073915,
+        "first_ms": 8.040250046178699,
+        "order": "12",
+        "second_ms": 2.979957964271307,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.8042929694056511,
+        "first_ms": 6.174416048452258,
+        "order": "12",
+        "second_ms": 6.978709017857909,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 1.946458825841546,
+        "first_ms": 4.805666860193014,
+        "order": "21",
+        "second_ms": 2.859208034351468,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 3.1172907911241055,
+        "first_ms": 5.114707862958312,
+        "order": "12",
+        "second_ms": 1.9974170718342066,
+        "side": "a"
+      }
+    ],
+    "bb": [
+      {
+        "absolute_delta_ms": 33.08920771814883,
+        "first_ms": 54.62600011378527,
+        "order": "12",
+        "second_ms": 87.7152078319341,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 12.83324882388115,
+        "first_ms": 121.64408294484019,
+        "order": "21",
+        "second_ms": 108.81083412095904,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 89.4457078538835,
+        "first_ms": 167.06458292901516,
+        "order": "12",
+        "second_ms": 77.61887507513165,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 31.538832932710648,
+        "first_ms": 94.8931670282036,
+        "order": "12",
+        "second_ms": 63.35433409549296,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 19.241499016061425,
+        "first_ms": 86.99158299714327,
+        "order": "21",
+        "second_ms": 67.75008398108184,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 1.9770411308854818,
+        "first_ms": 140.41216601617634,
+        "order": "12",
+        "second_ms": 138.43512488529086,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 129.43950109183788,
+        "first_ms": 214.5150420255959,
+        "order": "21",
+        "second_ms": 85.07554093375802,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 2.215916756540537,
+        "first_ms": 92.10024983622134,
+        "order": "12",
+        "second_ms": 89.8843330796808,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 32.35991578549147,
+        "first_ms": 102.75158286094666,
+        "order": "21",
+        "second_ms": 70.39166707545519,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 43.95279195159674,
+        "first_ms": 101.83075000531971,
+        "order": "21",
+        "second_ms": 145.78354195691645,
+        "side": "b"
+      }
+    ]
+  },
+  "node_count": 20000,
+  "query_a": "MATCH (n:Bench) WHERE n.id = 1 RETURN count(*) AS c",
+  "query_b": "MATCH (n:Bench) WHERE (n.id = 1) AND ((n.id = 1) IS NULL OR (n.id = 1) IS NOT NULL) RETURN count(*) AS c",
+  "result_a": [
+    {
+      "@props": "c:3",
+      "c": 1
+    }
+  ],
+  "result_b": [
+    {
+      "@props": "c:3",
+      "c": 1
+    }
+  ],
+  "rule_id": "null_partition_tautology",
+  "rule_tier": "core",
+  "samples": [
+    {
+      "a_ms": 8.811207953840494,
+      "b_ms": 184.14708296768367,
+      "order": "AB"
+    },
+    {
+      "a_ms": 3.432458033785224,
+      "b_ms": 167.55445790477097,
+      "order": "AB"
+    },
+    {
+      "a_ms": 8.000625064596534,
+      "b_ms": 121.12045800313354,
+      "order": "BA"
+    },
+    {
+      "a_ms": 4.0475421119481325,
+      "b_ms": 145.5566668882966,
+      "order": "BA"
+    },
+    {
+      "a_ms": 8.376166922971606,
+      "b_ms": 132.52304098568857,
+      "order": "AB"
+    },
+    {
+      "a_ms": 11.322875041514635,
+      "b_ms": 213.3202499244362,
+      "order": "BA"
+    },
+    {
+      "a_ms": 4.4316251296550035,
+      "b_ms": 156.72345901839435,
+      "order": "AB"
+    },
+    {
+      "a_ms": 5.012416047975421,
+      "b_ms": 131.47629098966718,
+      "order": "AB"
+    },
+    {
+      "a_ms": 10.40887483395636,
+      "b_ms": 83.08562496677041,
+      "order": "AB"
+    },
+    {
+      "a_ms": 2.5060418993234634,
+      "b_ms": 75.56225010193884,
+      "order": "BA"
+    },
+    {
+      "a_ms": 2.9761248733848333,
+      "b_ms": 62.5771670602262,
+      "order": "BA"
+    },
+    {
+      "a_ms": 2.0204579923301935,
+      "b_ms": 98.59879105351865,
+      "order": "AB"
+    },
+    {
+      "a_ms": 6.087750196456909,
+      "b_ms": 99.44283403456211,
+      "order": "BA"
+    },
+    {
+      "a_ms": 13.452209066599607,
+      "b_ms": 284.3392079230398,
+      "order": "BA"
+    },
+    {
+      "a_ms": 10.615416103973985,
+      "b_ms": 221.39141708612442,
+      "order": "AB"
+    },
+    {
+      "a_ms": 9.023209102451801,
+      "b_ms": 131.92837499082088,
+      "order": "AB"
+    },
+    {
+      "a_ms": 6.6752920392900705,
+      "b_ms": 107.75695787742734,
+      "order": "BA"
+    },
+    {
+      "a_ms": 3.3968749921768904,
+      "b_ms": 131.75925007089972,
+      "order": "AB"
+    },
+    {
+      "a_ms": 7.660416886210442,
+      "b_ms": 91.30937489680946,
+      "order": "BA"
+    },
+    {
+      "a_ms": 3.836125135421753,
+      "b_ms": 75.19383309409022,
+      "order": "BA"
+    }
+  ],
+  "schema_version": 1,
+  "semantic_proof": {
+    "ast_path": "clauses[0].where",
+    "canonical_rule_id": "null_partition_tautology",
+    "family": "bool",
+    "fragment": "one certified pure Cypher WHERE boolean-expression subtree under Kleene three-valued logic",
+    "invariant": "conjoining the certified tautology preserves the original WHERE selection for every input row",
+    "original_ra": [
+      "Selection",
+      "n.id = 1",
+      [
+        "TRUE",
+        "FALSE",
+        "NULL"
+      ]
+    ],
+    "premises": [
+      "the certificate identifies the exact parsed WHERE subtree",
+      "the expression is deterministic and side-effect free",
+      "the selected identity evaluates to TRUE for TRUE, FALSE, and NULL"
+    ],
+    "proof_id": "kleene_null_partition_v1",
+    "proof_version": "1",
+    "site_class": "where_boolean",
+    "submit_eligible": true,
+    "theorem": "KleeneNullPartitionTautology",
+    "tier": "core",
+    "transformed_ra": [
+      "SelectionAndTautology",
+      "n.id = 1",
+      "null_partition_tautology",
+      [
+        [
+          "TRUE",
+          "TRUE"
+        ],
+        [
+          "FALSE",
+          "TRUE"
+        ],
+        [
+          "NULL",
+          "TRUE"
+        ]
+      ]
+    ]
+  },
+  "session": 1,
+  "setup": {
+    "index": "CREATE INDEX ON Bench (id) UNIQUE",
+    "load": "UNWIND range(...) CREATE (:Bench {id: i})",
+    "property": "Bench.id LONG",
+    "vertex_type": "Bench"
+  },
+  "submit_eligible": true,
+  "summary": {
+    "delta_ci_high_ms": 146.9004793325439,
+    "delta_ci_low_ms": 94.96670844964683,
+    "direction_consistency": 1.0,
+    "median_a_ms": 6.38152111787349,
+    "median_b_ms": 131.61777053028345,
+    "median_delta_ms": 123.52601997554302,
+    "median_ratio": 20.877419183525934,
+    "negative_control_p99_ms": 129.43950109183788,
+    "ratio_ci_high": 28.19107656669467,
+    "ratio_ci_low": 16.238782668105365,
+    "slower_side": "b"
+  },
+  "url": "http://127.0.0.1:2482",
+  "warmups_per_query": 5
+}

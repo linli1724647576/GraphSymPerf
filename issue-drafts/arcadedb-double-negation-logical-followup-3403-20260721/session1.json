@@ -1,0 +1,159 @@
+{
+  "certificate": {
+    "ast_path": "clauses[0].where",
+    "canonical_rule_id": "double_negation_predicate",
+    "capability_hash": "arcadedb-double-negation-scalar-v1",
+    "clause_context": "where",
+    "expression_type": "boolean",
+    "family": "bool",
+    "nullability": "three_valued",
+    "preconditions": [
+      "pure"
+    ],
+    "proof_id": "kleene_double_negation_v1",
+    "proof_version": "1",
+    "rule_id": "double_negation_predicate",
+    "semantic_proof_hash": "a1d2b6e569c867b6c1108b2d404ec2148f4746acb665395ebaee230f5c88e905",
+    "semantic_proof_template_hash": "a1d2b6e569c867b6c1108b2d404ec2148f4746acb665395ebaee230f5c88e905",
+    "site_class": "where_boolean",
+    "submit_eligible": false,
+    "tier": "experimental",
+    "variables_in_scope": [
+      "n"
+    ]
+  },
+  "checks": {
+    "bare_double_not_wrong_id_2": true,
+    "bare_matches_single_not": true,
+    "fully_parenthesized_matches_original": true,
+    "original_expected_id_1": true,
+    "projection_context_is_correct": true,
+    "working_control_matches_original": true
+  },
+  "database": "double_not_scalar_session1",
+  "deterministic": true,
+  "explain_double_not_bare": {
+    "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=NOT n.flag, cost=4.50, rows=1]\n  + NodeByLabelScan(n:BoolCase) [cost=3.00, rows=3]\n\nTotal Estimated Cost: 4.50\nTotal Estimated Rows: 1\n",
+    "explainPlan": {
+      "cost": -1,
+      "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=NOT n.flag, cost=4.50, rows=1]\n  + NodeByLabelScan(n:BoolCase) [cost=3.00, rows=3]\n\nTotal Estimated Cost: 4.50\nTotal Estimated Rows: 1\n",
+      "steps": null,
+      "type": "OpenCypherExecutionPlan"
+    },
+    "result": [],
+    "user": "root"
+  },
+  "explain_double_not_fully_parenthesized": {
+    "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.flag, cost=4.50, rows=1]\n  + NodeByLabelScan(n:BoolCase) [cost=3.00, rows=3]\n\nTotal Estimated Cost: 4.50\nTotal Estimated Rows: 1\n",
+    "explainPlan": {
+      "cost": -1,
+      "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.flag, cost=4.50, rows=1]\n  + NodeByLabelScan(n:BoolCase) [cost=3.00, rows=3]\n\nTotal Estimated Cost: 4.50\nTotal Estimated Rows: 1\n",
+      "steps": null,
+      "type": "OpenCypherExecutionPlan"
+    },
+    "result": [],
+    "user": "root"
+  },
+  "explain_original": {
+    "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.flag, cost=4.50, rows=1]\n  + NodeByLabelScan(n:BoolCase) [cost=3.00, rows=3]\n\nTotal Estimated Cost: 4.50\nTotal Estimated Rows: 1\n",
+    "explainPlan": {
+      "cost": -1,
+      "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.flag, cost=4.50, rows=1]\n  + NodeByLabelScan(n:BoolCase) [cost=3.00, rows=3]\n\nTotal Estimated Cost: 4.50\nTotal Estimated Rows: 1\n",
+      "steps": null,
+      "type": "OpenCypherExecutionPlan"
+    },
+    "result": [],
+    "user": "root"
+  },
+  "proof_id": "kleene_double_negation_v1",
+  "proof_theorem": "NOT NOT P = P",
+  "queries": {
+    "constant_false_bare": "WITH false AS p WHERE NOT NOT p RETURN p",
+    "constant_false_control": "WITH false AS p WHERE NOT (NOT p) RETURN p",
+    "constant_true_bare": "WITH true AS p WHERE NOT NOT p RETURN p",
+    "constant_true_control": "WITH true AS p WHERE NOT (NOT p) RETURN p",
+    "double_not_bare": "MATCH (n:BoolCase) WHERE NOT NOT n.flag RETURN n.id AS id ORDER BY id",
+    "double_not_fully_parenthesized": "MATCH (n:BoolCase) WHERE NOT (NOT (n.flag)) RETURN n.id AS id ORDER BY id",
+    "double_not_working_control": "MATCH (n:BoolCase) WHERE NOT (NOT n.flag) RETURN n.id AS id ORDER BY id",
+    "original": "MATCH (n:BoolCase) WHERE n.flag RETURN n.id AS id ORDER BY id",
+    "projection_context": "MATCH (n:BoolCase) RETURN n.id AS id, n.flag AS flag, NOT NOT n.flag AS bare, NOT (NOT n.flag) AS parenthesized, NOT (NOT (n.flag)) AS fully_parenthesized ORDER BY id",
+    "single_not": "MATCH (n:BoolCase) WHERE NOT n.flag RETURN n.id AS id ORDER BY id"
+  },
+  "repeat_count": 5,
+  "results": {
+    "constant_false_bare": [
+      {
+        "p": false
+      }
+    ],
+    "constant_false_control": [],
+    "constant_true_bare": [],
+    "constant_true_control": [
+      {
+        "p": true
+      }
+    ],
+    "double_not_bare": [
+      {
+        "@props": "id:3",
+        "id": 2
+      }
+    ],
+    "double_not_fully_parenthesized": [
+      {
+        "@props": "id:3",
+        "id": 1
+      }
+    ],
+    "double_not_working_control": [
+      {
+        "@props": "id:3",
+        "id": 1
+      }
+    ],
+    "original": [
+      {
+        "@props": "id:3",
+        "id": 1
+      }
+    ],
+    "projection_context": [
+      {
+        "@props": "id:3",
+        "bare": true,
+        "flag": true,
+        "fully_parenthesized": true,
+        "id": 1,
+        "parenthesized": true
+      },
+      {
+        "@props": "id:3",
+        "bare": false,
+        "flag": false,
+        "fully_parenthesized": false,
+        "id": 2,
+        "parenthesized": false
+      },
+      {
+        "@props": "id:3",
+        "bare": null,
+        "flag": null,
+        "fully_parenthesized": null,
+        "id": 3,
+        "parenthesized": null
+      }
+    ],
+    "single_not": [
+      {
+        "@props": "id:3",
+        "id": 2
+      }
+    ]
+  },
+  "rule_id": "double_negation_predicate",
+  "rule_tier": "experimental",
+  "schema_version": 1,
+  "session": 1,
+  "submit_eligible": false,
+  "url": "http://127.0.0.1:2482"
+}

@@ -1,0 +1,26 @@
+{
+  "direction_consistency": 1.0,
+  "formal_interpretation": "runtime-relative-gate-passes; rule tier remains control and auto-submit is false",
+  "fresh_databases": [
+    "dupidx_unique_session1",
+    "dupidx_unique_session2"
+  ],
+  "pairs_per_session": 20,
+  "pooled_delta_ci_high_ms": 36.11183352768421,
+  "pooled_delta_ci_low_ms": 29.661771026439965,
+  "pooled_median_delta_ms": 32.56854088976979,
+  "pooled_median_ratio": 13.19420687812375,
+  "pooled_negative_control_p99_ms": 12.207916006445885,
+  "pooled_pairs": 40,
+  "pooled_ratio_ci_high": 13.644234461137684,
+  "pooled_ratio_ci_low": 10.829971944895226,
+  "relative_gate": {
+    "delta_above_negative_control_p99": true,
+    "pooled_ratio_ci_low_gte_2": true,
+    "pooled_ratio_gte_3": true,
+    "session_ratios_gte_2": true
+  },
+  "same_slow_side": true,
+  "schema_version": 1,
+  "sessions": 2
+}

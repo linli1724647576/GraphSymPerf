@@ -1,0 +1,1615 @@
+{
+  "passed": true,
+  "provenance": {
+    "container": "graphsymperf-arcadedb-verify-20260720",
+    "database": "graphsymperf_arcadedb_perf_verify_20260720",
+    "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+    "dbms_version": "sha256:0a7935789d65da3ae5e328c33fc56c3144115d324be14d561967afc65c552a86",
+    "endpoint": "http://127.0.0.1:2482",
+    "image_digest": "sha256:0a7935789d65da3ae5e328c33fc56c3144115d324be14d561967afc65c552a86",
+    "protocol": "production IssueValidator / independent-two-session-v1",
+    "rebound_candidate_hash": "b15586583b2fd0a85a38a0446c30b81d021085df5386c0cdcbe1b38b87fdfc55",
+    "source_candidate_hash": "c459ebfb116498552aefcda492787bbd445bdcee43d8e3f5ec0a0c04d75a5b28",
+    "source_discovery_delta_ms": 1355.9172907844186,
+    "source_discovery_ratio": 7.304014231200524,
+    "source_graph_snapshot_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+    "source_pair_hash": "8a490f4f1fe841bd49f083c40833200e8854021acab73e2c1040d80f2e51be4c"
+  },
+  "report": {
+    "discovery_ratio": 7.304014231200524,
+    "equivalence": {
+      "complete_result": true,
+      "equivalent": true,
+      "reason_codes": []
+    },
+    "magnitude_stability": "stable",
+    "manifest": {
+      "candidate_hash": "b15586583b2fd0a85a38a0446c30b81d021085df5386c0cdcbe1b38b87fdfc55",
+      "certificate": {
+        "ast_path": "clauses[5].pattern.components[1]",
+        "canonical_rule_id": "pattern_order_symmetry",
+        "capability_hash": "106c9802be3e53066a6edcf8aaacd09289f46ed7907d0e7574d863c7f9563064",
+        "clause_context": "match",
+        "expression_type": "graph_pattern",
+        "family": "sym",
+        "nullability": "pattern_defined",
+        "preconditions": [
+          "pure",
+          "relationship_uniqueness_preserved"
+        ],
+        "proof_id": "graph_pattern_product_commutativity_v1",
+        "proof_version": "1",
+        "rule_id": "pattern_order_symmetry",
+        "semantic_proof_hash": "07ae8ab716c9ee8db321f6d580a623cea7ff34e4ab5282ac9cc080c741c23077",
+        "semantic_proof_template_hash": "07ae8ab716c9ee8db321f6d580a623cea7ff34e4ab5282ac9cc080c741c23077",
+        "site_class": "match_pattern_component",
+        "submit_eligible": true,
+        "tier": "core",
+        "variables_in_scope": [
+          "n0",
+          "n1",
+          "n2",
+          "n3",
+          "n4",
+          "n5",
+          "n6",
+          "n7",
+          "r0",
+          "r1",
+          "r2",
+          "r3",
+          "r4"
+        ]
+      },
+      "content_hashes": {
+        "items_tuple": [
+          [
+            "certificate",
+            "0437b2978ca2aa85574be5189135d3aa2a5df6c7c1fa8f0d939b86f44ce22221"
+          ],
+          [
+            "dbms_fingerprint",
+            "b83b3f7ecc82d2c575ca87fb61585a0aae363b9f545c29bea070e7f821e0184a"
+          ],
+          [
+            "dbms_version",
+            "685a11cd7dd5d158148f59ad2e0a9657250f670ed7076195fc4e971728babe68"
+          ],
+          [
+            "discovery_ratio",
+            "8df5df3811e804c18cdcc6f9c935e56ceeeb5d2b3e57c7022b3f3214a48e93bd"
+          ],
+          [
+            "discovery_slow_query",
+            "c100f95c1913f9c72fc1f4ef0847e1e723ffe0bde0b36e5f36c13f81fe8c26ed"
+          ],
+          [
+            "graph_snapshot",
+            "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2"
+          ],
+          [
+            "parameters",
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          ],
+          [
+            "query_a",
+            "25609650dcca629fa2bb87248091050089ec10dad6a37927161b0bfdbc24e58a"
+          ],
+          [
+            "query_b",
+            "510e0d5e0e7bb77e7ac7281f9eddbbaefd47df15f3d1739cb8bb3debec832794"
+          ],
+          [
+            "resolved_config",
+            "dc6888f625c929c6476ef91ad6594b4b7bdca21408e2f5ed63c8ff765b99d86e"
+          ],
+          [
+            "validation_policy",
+            "fcb604d3f31f1704f331cf2fc300135ab00dde8cf19fb23f552e0f43a28245ad"
+          ]
+        ]
+      },
+      "dbms_version": "sha256:0a7935789d65da3ae5e328c33fc56c3144115d324be14d561967afc65c552a86",
+      "discovery_ratio": 7.304014231200524,
+      "discovery_slow_query": "b",
+      "graph_snapshot": {
+        "content_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+        "statements": [
+          "CREATE (n0 :L3{k19 : true, k18 : \"n\", k20 : false, k22 : -1563767668, id : 0, k21 : 1858142041})",
+          "CREATE (n0 :L4{k28 : 822700628, k27 : 1278885372, k29 : \"nz\", id : 1, k24 : true, k23 : \"F0\", k26 : \"dd\", k25 : 1806356142})",
+          "CREATE (n0 :L1{k11 : false, id : 2, k6 : \"ld\", k10 : -822468286, k7 : \"TOTopi\", k8 : 345317711, k12 : \"DZ4O\", k9 : 578429571})",
+          "CREATE (n0 :L1{k11 : false, id : 3, k6 : \"ld\", k10 : 150231387, k7 : \"nw\", k8 : -589081748, k12 : \"f\", k9 : 777594715})",
+          "CREATE (n0 {id : 4})",
+          "CREATE (n0 :L1{id : 5, k10 : 196135859, k7 : \"z\", k8 : -14701918, k12 : \"4\", k9 : 2092516399})",
+          "CREATE (n0 {id : 6})",
+          "CREATE (n0 {id : 7})",
+          "CREATE (n0 :L0{k0 : \"zVeTW\", k1 : true, k2 : \"cOb8W\", k3 : \"t\", k4 : 377824478, k5 : false, id : 8})",
+          "CREATE (n0 {id : 9})",
+          "CREATE (n0 :L5{k31 : true, k30 : true, k33 : -8929970, id : 10, k32 : 327625564, k35 : \"4\", k34 : -1050813909})",
+          "CREATE (n0 :L4{k28 : -1316470228, k27 : 1431806244, k29 : \"H\", id : 11, k24 : false, k23 : \"z\", k26 : \"yhG\", k25 : -1212992788})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"siGO\", id : 12, k13 : -22498553, k15 : \"Z\", k14 : \"l\"})",
+          "CREATE (n0 :L5{k31 : false, k30 : false, k33 : -1287538298, id : 13, k32 : -459177595, k35 : \"9\", k34 : 139774862})",
+          "CREATE (n0 :L4{k28 : -11697422, k27 : 2023520095, k29 : \"r\", id : 14, k24 : false, k23 : \"hrW\", k26 : \"ylc\", k25 : -1923201903})",
+          "CREATE (n0 :L5{k31 : true, k30 : true, k33 : -1913396241, id : 15, k32 : 1209992483, k35 : \"hlyM9Af3\", k34 : -681467436})",
+          "CREATE (n0 :L2{k17 : true, id : 16, k13 : 258494249, k15 : \"Kw\", k14 : \"yL\"})",
+          "CREATE (n0 :L1{k11 : false, id : 17, k6 : \"mRQ\", k10 : -105288617, k7 : \"Z\", k8 : -2086147025, k12 : \"Zfj\", k9 : 1710241977})",
+          "CREATE (n0 :L5{k31 : false, k30 : false, k33 : 1873862325, id : 18, k32 : 2022082265, k35 : \"iL9\", k34 : 433168364})",
+          "CREATE (n0 :L5{k31 : true, k30 : true, id : 19, k32 : 1209992483, k35 : \"KueP5\", k34 : 1095943962})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"Q\", id : 20, k13 : -1903504381, k15 : \"W\", k14 : \"L\"})",
+          "CREATE (n0 :L0{k0 : \"45khFhvc\", k1 : false, k2 : \"J8\", k3 : \"u4PA0l3P\", k4 : -279515107, k5 : true, id : 21})",
+          "CREATE (n0 :L5{k31 : true, k30 : true, k33 : -290397671, id : 22, k32 : -459177595, k35 : \"R\", k34 : 294156212})",
+          "CREATE (n0 :L4{k28 : -861228548, k27 : -690626951, k29 : \"wC45M\", id : 23, k24 : false, k23 : \"S\", k26 : \"NtyaNoWI\", k25 : 1055050220})",
+          "CREATE (n0 :L1{k11 : false, id : 24, k6 : \"x\", k10 : 548014520, k7 : \"w\", k8 : -901193738, k12 : \"03Xihe\", k9 : 1710241977})",
+          "CREATE (n0 :L4{k27 : 182405952, k29 : \"H\", id : 25, k24 : true, k23 : \"k\", k25 : 1876226758})",
+          "CREATE (n0 :L0{k0 : \"qF0\", k1 : true, k2 : \"cOb8W\", k3 : \"Q\", k4 : -279515107, k5 : false, id : 26})",
+          "CREATE (n0 {id : 27})",
+          "CREATE (n0 :L1{k11 : true, id : 28, k6 : \"RGATxXnUM\", k10 : 548014520, k7 : \"Z\", k8 : 721201335, k12 : \"i5\", k9 : 1277778500})",
+          "CREATE (n0 :L4{k28 : -995048914, k27 : 1431806244, k29 : \"9K0RDZ\", id : 29, k24 : true, k23 : \"F0\", k26 : \"UA\", k25 : -1573468574})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"x\", id : 30, k13 : -2014005658, k15 : \"Kw\", k14 : \"s\"})",
+          "CREATE (n0 :L3{k19 : false, k18 : \"CCj8\", k20 : true, k22 : -1122974806, id : 31, k21 : 1130996165})",
+          "CREATE (n0 :L5{k31 : true, k30 : true, k33 : -1349547106, id : 32, k32 : -357021634, k35 : \"QSZX5C\", k34 : 1952680897})",
+          "CREATE (n0 :L3{k19 : true, k18 : \"u\", k20 : true, k22 : 2141405467, id : 33, k21 : 700331256})",
+          "CREATE (n0 :L4{k28 : -1316470228, k27 : -331489897, k29 : \"r\", id : 34, k24 : false, k26 : \"yhG\", k25 : 77256363})",
+          "CREATE (n0 :L1{k11 : false, id : 35, k6 : \"N\", k10 : 1902151561, k7 : \"Z\", k8 : 955313197, k12 : \"oMPZ6h\", k9 : -1098725939})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"r\", id : 36, k13 : -1063144906, k15 : \"Kw\", k14 : \"m4cZMgmq\"})",
+          "CREATE (n0 :L0{k0 : \"nb\", k1 : false, k2 : \"cOb8W\", k3 : \"H\", k5 : true, id : 37})",
+          "CREATE (n0 :L4{k28 : 1223870344, k27 : -331489897, k29 : \"t\", id : 38, k24 : true, k23 : \"j\", k26 : \"WYp7ZW\", k25 : -314897083})",
+          "CREATE (n0 :L0{k0 : \"45khFhvc\", k1 : false, k2 : \"l4b20E\", k3 : \"h\", k4 : 2003016638, k5 : true, id : 39})",
+          "CREATE (n0 :L4{k28 : 764489605, k27 : 2011614417, k29 : \"Q\", id : 40, k24 : true, k23 : \"z\", k26 : \"j\", k25 : 1806356142})",
+          "CREATE (n0 :L3{k19 : false, k20 : false, k22 : 1072335481, id : 41, k21 : -466191860})",
+          "CREATE (n0 {id : 42})",
+          "CREATE (n0 :L1{k11 : true, id : 43, k6 : \"2\", k10 : 1902151561, k8 : -1339732290, k12 : \"i5\", k9 : 1710241977})",
+          "CREATE (n0 :L5{k31 : true, k30 : false, k33 : 1873862325, id : 44, k32 : 293684031, k35 : \"hlyM9Af3\", k34 : 139774862})",
+          "CREATE (n0 :L3{k19 : false, k18 : \"n\", k20 : false, k22 : -1152145326, id : 45, k21 : -1308043988})",
+          "CREATE (n0 :L0{k0 : \"e\", k3 : \"u4PA0l3P\", k5 : false, id : 46})",
+          "CREATE (n0 :L0{k0 : \"I\", k1 : false, k2 : \"as\", k3 : \"pPZhC5TA\", k4 : -142036388, k5 : false, id : 47})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"5A6\", id : 48, k13 : -462335610, k15 : \"Q\", k14 : \"Sfa\"})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"P\", id : 49, k13 : -1709454058, k15 : \"v\", k14 : \"Sfa\"})",
+          "CREATE (n0 :L4{k28 : -1676919794, k27 : 1257345116, k29 : \"wC45M\", id : 50, k23 : \"B\", k26 : \"JfqTh3F\"})",
+          "CREATE (n0 :L1{k11 : false, id : 51, k6 : \"mRQ\", k10 : 548014520, k7 : \"A\", k8 : -589081748, k12 : \"DZ4O\", k9 : 296476775})",
+          "CREATE (n0 :L1{k11 : false, id : 52, k6 : \"Jm\", k10 : 1823122631, k7 : \"QEBss\", k8 : -969907237, k12 : \"gW8xZ\", k9 : -1098725939})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"h\", id : 53, k13 : -22498553, k15 : \"B\", k14 : \"kab\"})",
+          "CREATE (n0 :L0{k0 : \"y\", k1 : false, k2 : \"xQnh\", k3 : \"u9c0dGOGC\", k4 : -2135554879, k5 : false, id : 54})",
+          "CREATE (n0 {id : 55})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"v\", id : 56, k13 : -1903504381, k15 : \"s\", k14 : \"C4G\"})",
+          "CREATE (n0 :L4{k28 : 1195379537, k27 : 876866651, k29 : \"iMxo\", id : 57, k24 : true, k23 : \"y\", k26 : \"WYp7ZW\", k25 : -314897083})",
+          "CREATE (n0 :L3{k19 : true, k18 : \"B\", k20 : false, id : 58, k21 : -902927624})",
+          "CREATE (n0 :L5{k31 : false, k30 : true, k33 : -326203442, id : 59, k32 : 634518903, k35 : \"mTE\", k34 : 1952680897})",
+          "CREATE (n0 :L5{k31 : true, k30 : false, k33 : -1349547106, id : 60, k32 : -974837615, k35 : \"iL9\", k34 : 2039070573})",
+          "CREATE (n0 :L4{k28 : -1654792415, k27 : 2011614417, k29 : \"t\", id : 61, k24 : false, k23 : \"k\", k26 : \"JfqTh3F\", k25 : 1621160720})",
+          "CREATE (n0 :L3{k19 : true, k18 : \"a7K2jS\", k20 : false, k22 : -1709971423, id : 62, k21 : 680336741})",
+          "CREATE (n0 :L4{k28 : 8762522, k27 : -1235774328, k29 : \"x\", id : 63, k24 : true, k23 : \"aJS\", k26 : \"3h\", k25 : -1573468574})",
+          "CREATE (n0 :L3{k19 : true, k18 : \"a7K2jS\", k20 : true, k22 : -1152145326, id : 64, k21 : -1308043988})",
+          "CREATE (n0 :L5{k31 : true, k30 : false, k33 : -999974186, id : 65, k32 : 1635605428, k35 : \"H\", k34 : 1270760204})",
+          "CREATE (n0 :L0{k0 : \"LpF\", k1 : false, k2 : \"4\", k3 : \"F\", k4 : 681303418, k5 : false, id : 66})",
+          "CREATE (n0 {id : 67})",
+          "CREATE (n0 :L4{k28 : 1754898226, k27 : 1717298926, k29 : \"t\", id : 68, k24 : false, k23 : \"aJS\", k26 : \"W\", k25 : 1876226758})",
+          "CREATE (n0 {id : 69})",
+          "CREATE (n0 {id : 70})",
+          "CREATE (n0 {id : 71})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"5A6\", id : 72, k13 : -499727936, k15 : \"B\", k14 : \"g\"})",
+          "CREATE (n0 :L1{k11 : true, id : 73, k6 : \"mRQ\", k10 : 717670585, k8 : -844475973, k9 : -1432541096})",
+          "CREATE (n0 :L5{k31 : false, k30 : false, id : 74, k32 : 634518903, k35 : \"KueP5\"})",
+          "CREATE (n0 {id : 75})",
+          "CREATE (n0 :L4{k28 : -1654792415, k27 : -1994903281, k29 : \"H\", id : 76, k24 : true, k23 : \"j\", k26 : \"dd\", k25 : 1544847861})",
+          "CREATE (n0 :L3{k19 : true, k18 : \"a7K2jS\", k20 : true, k22 : -665017393, id : 77, k21 : 1130996165})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"Q\", id : 78, k13 : -1903504381, k15 : \"d\", k14 : \"1tK\"})",
+          "CREATE (n0 :L0{k0 : \"qF0\", k1 : true, k2 : \"J8\", k3 : \"dB8WwR\", k4 : -2084926477, k5 : false, id : 79})",
+          "CREATE (n0 :L1{k11 : true, id : 80, k6 : \"H\", k10 : 1823122631, k8 : 1689035624, k12 : \"kB\", k9 : 788046202})",
+          "CREATE (n0 {id : 81})",
+          "CREATE (n0 {id : 82})",
+          "CREATE (n0 {id : 83})",
+          "CREATE (n0 :L3{k19 : false, k18 : \"G\", k20 : false, k22 : 646917439, id : 84, k21 : 819100760})",
+          "CREATE (n0 :L1{k11 : false, id : 85, k6 : \"PBA\", k10 : 1235504267, k7 : \"YnvL\", k8 : 1217121301, k12 : \"Zfj\"})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"Q\", id : 86, k13 : -623527532, k15 : \"9GB9cAuuk\", k14 : \"p\"})",
+          "CREATE (n0 :L4{k28 : 1938897437, k27 : 1257345116, k29 : \"I\", id : 87, k24 : false, k23 : \"k\", k26 : \"kPDo6q\", k25 : -265195875})",
+          "CREATE (n0 :L5{k31 : true, k30 : false, k33 : -290397671, id : 88, k32 : 1631707515, k35 : \"E\", k34 : 1095943962})",
+          "CREATE (n0 :L5{k30 : true, id : 89, k32 : 2094849304, k35 : \"hlyM9Af3\", k34 : 294156212})",
+          "CREATE (n0 :L1{k11 : false, id : 90, k6 : \"mRQ\", k10 : 31011895, k7 : \"Y\", k8 : 646020650, k12 : \"tspYTt5jl\", k9 : 1835937505})",
+          "CREATE (n0 {id : 91})",
+          "CREATE (n0 {id : 92})",
+          "CREATE (n0 :L5{k31 : false, k30 : false, k33 : 1819508117, id : 93, k32 : 1209992483, k35 : \"hlyM9Af3\", k34 : -2093768408})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"h\", id : 94, k13 : 557016968, k15 : \"d\", k14 : \"C4G\"})",
+          "CREATE (n0 :L1{k11 : false, id : 95, k6 : \"9FlT\", k10 : 695175970, k7 : \"TOTopi\", k8 : -589081748, k12 : \"dnK4\", k9 : 1710241977})",
+          "CREATE (n0 :L0{k0 : \"p\", k1 : true, k3 : \"u4PA0l3P\", k4 : -142036388, k5 : true, id : 96})",
+          "CREATE (n0 :L5{k31 : false, k30 : true, k33 : 1466254312, id : 97, k32 : -578296623, k35 : \"4\", k34 : -836522848})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"5A6\", id : 98, k13 : -1249630378, k15 : \"Q\", k14 : \"s\"})",
+          "CREATE (n0 :L0{k0 : \"LpF\", k1 : false, k2 : \"7\", k3 : \"pPZhC5TA\", k4 : -240251653, k5 : false, id : 99})",
+          "CREATE (n0 :L4{k28 : 1223870344, k27 : 320620409, k29 : \"9\", id : 100, k24 : true, k23 : \"S\", k26 : \"Zz\", k25 : 595369468})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"E\", id : 101, k13 : 949915745, k15 : \"B\", k14 : \"m4cZMgmq\"})",
+          "CREATE (n0 :L2{k16 : \"Uq\", id : 102, k13 : -268774342, k15 : \"e\", k14 : \"s\"})",
+          "CREATE (n0 :L5{k31 : false, k30 : false, k33 : 1466254312, id : 103, k32 : 1030017182, k35 : \"aMWG8\", k34 : -2097926197})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"P7ELM3u\", id : 104, k13 : 258494249, k14 : \"1tK\"})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"E\", id : 105, k13 : 1190417531, k15 : \"ss1Po\", k14 : \"VY0Ba\"})",
+          "CREATE (n0 :L4{k28 : 822700628, k27 : 2009036811, k29 : \"t\", id : 106, k23 : \"j\", k26 : \"3h\", k25 : 1621160720})",
+          "CREATE (n0 :L3{k19 : false, k18 : \"qVO\", k20 : true, k22 : -1311042150, id : 107, k21 : -247283866})",
+          "CREATE (n0 :L0{k0 : \"bNK\", k1 : false, k2 : \"l4b20E\", k3 : \"dB8WwR\", k4 : 894293156, k5 : true, id : 108})",
+          "CREATE (n0 :L4{k28 : -1495657293, k27 : 2009036811, k29 : \"wC45M\", id : 109, k24 : true, k23 : \"E2\", k26 : \"NtyaNoWI\", k25 : 1055050220})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"v\", id : 110, k13 : -268774342, k15 : \"M\", k14 : \"sIXY0ixwQ\"})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"h\", id : 111, k13 : -623527532, k15 : \"KUzi\", k14 : \"Sfa\"})",
+          "CREATE (n0 :L1{k11 : true, id : 112, k6 : \"yDsgRoWk1\", k10 : 1538680050, k7 : \"Z\", k8 : 1689035624, k12 : \"f\", k9 : 81309856})",
+          "CREATE (n0 :L1{k11 : true, id : 113, k6 : \"Jm\", k10 : 196135859, k7 : \"A\", k8 : -2116740398, k12 : \"f\", k9 : -932085946})",
+          "CREATE (n0 :L2{k17 : true, k16 : \"P\", id : 114, k13 : -499727936, k15 : \"e\", k14 : \"kab\"})",
+          "CREATE (n0 :L3{k19 : true, k20 : false, k22 : -1396489467, id : 115, k21 : -1788282949})",
+          "CREATE (n0 :L1{k11 : false, id : 116, k6 : \"yDsgRoWk1\", k7 : \"Y\", k8 : -133652062, k12 : \"kB\", k9 : -1432541096})",
+          "CREATE (n0 :L4{k28 : 1223870344, k27 : 781536687, k29 : \"I\", id : 117, k24 : true, k23 : \"8\", k26 : \"yhG\", k25 : 595369468})",
+          "CREATE (n0 :L1{k11 : false, id : 118, k6 : \"mRQ\", k10 : 2008491219, k7 : \"vp1G\", k8 : 646020650, k12 : \"tkf\", k9 : -1432541096})",
+          "CREATE (n0 :L0{k1 : false, k2 : \"Ho\", k3 : \"izoO\", k5 : false, id : 119})",
+          "CREATE (n0 :L4{k28 : 1223870344, k27 : -1994903281, k29 : \"5gt\", id : 120, k24 : true, k23 : \"z\", k26 : \"6\", k25 : 465607120})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"AkW\", id : 121, k13 : -1249630378, k15 : \"i\", k14 : \"s\"})",
+          "CREATE (n0 :L0{k0 : \"3CSxXIU\", k1 : true, k2 : \"y\", k3 : \"u9c0dGOGC\", k4 : -2084926477, k5 : false, id : 122})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"h\", id : 123, k13 : -623527532, k15 : \"E1sXStsVe\", k14 : \"n5\"})",
+          "CREATE (n0 {id : 124})",
+          "CREATE (n0 :L5{k31 : true, k30 : true, id : 125, k32 : 65278299, k35 : \"U\", k34 : -1569653190})",
+          "CREATE (n0 :L2{k17 : false, k16 : \"siGO\", id : 126, k13 : 949915745, k15 : \"W\"})",
+          "CREATE (n0 :L1{k11 : false, id : 127, k6 : \"N\", k10 : 1823122631, k7 : \"8\", k8 : -2116740398, k9 : 1735519615})",
+          "MATCH (n0 {id : 119}), (n1 {id : 7}) MERGE(n0)-[r :T0{k39 : -998599802, k38 : true, k40 : 974999778, k41 : true, id : 128, k37 : \"o\", k36 : -1027733734}]->(n1)",
+          "MATCH (n0 {id : 22}), (n1 {id : 106}) MERGE(n0)-[r :T3{k53 : false, k52 : 470057834, k55 : \"wsDeWNe\", id : 129, k54 : -1599962038, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 48}), (n1 {id : 101}) MERGE(n0)-[r :T4{k60 : false, k61 : -729460073, id : 130, k57 : false, k59 : true, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 110}), (n1 {id : 33}) MERGE(n0)-[r :T1{k42 : 950804101, k44 : -1981923693, id : 131, k43 : -585917927, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 68}), (n1 {id : 101}) MERGE(n0)-[r :T2{k49 : \"9O0\", k51 : 2034377843, k50 : 567305316, id : 132, k48 : -1641083841, k47 : \"w\"}]->(n1)",
+          "MATCH (n0 {id : 50}), (n1 {id : 90}) MERGE(n0)-[r :T2{k49 : \"Tl\", k51 : 2034377843, k50 : -1393753939, id : 133, k47 : \"Gh\"}]->(n1)",
+          "MATCH (n0 {id : 50}), (n1 {id : 51}) MERGE(n0)-[r :T0{k39 : 1993181672, k38 : false, k40 : -1845472852, k41 : true, id : 134, k37 : \"o\", k36 : -1496998083}]->(n1)",
+          "MATCH (n0 {id : 19}), (n1 {id : 16}) MERGE(n0)-[r :T4{k60 : false, k61 : -729460073, id : 135, k57 : true, k59 : true, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 55}), (n1 {id : 76}) MERGE(n0)-[r :T1{k42 : -1640607030, k44 : 518339861, id : 136, k43 : 1146955582, k46 : 1870316122, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 14}), (n1 {id : 69}) MERGE(n0)-[r :T0{k39 : -142350450, k38 : true, k40 : 974999778, k41 : false, id : 137, k37 : \"hcwo\", k36 : -2037626190}]->(n1)",
+          "MATCH (n0 {id : 6}), (n1 {id : 37}) MERGE(n0)-[r :T4{k61 : -1028307117, id : 138, k57 : false, k59 : true, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 41}), (n1 {id : 99}) MERGE(n0)-[r :T5{k62 : 1655425777, k64 : -486042954, k63 : \"m\", k66 : false, id : 139, k65 : false, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 58}), (n1 {id : 56}) MERGE(n0)-[r :T4{k60 : true, k61 : 194329263, id : 140, k57 : false, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 36}), (n1 {id : 68}) MERGE(n0)-[r :T5{k62 : 1655425777, k64 : 1330902466, k63 : \"w\", k66 : true, id : 141, k65 : false, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 3}), (n1 {id : 118}) MERGE(n0)-[r :T5{k62 : 245826143, k64 : 1330901285, k63 : \"mP\", k66 : true, id : 142, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 47}), (n1 {id : 32}) MERGE(n0)-[r :T3{k53 : true, k52 : -2092155387, k55 : \"fv4G\", id : 143, k54 : 1093133250, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 44}), (n1 {id : 125}) MERGE(n0)-[r :T3{k53 : true, k52 : 715506249, k55 : \"V1dYNek\", id : 144, k54 : -1202912624, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 86}), (n1 {id : 42}) MERGE(n0)-[r :T3{k53 : true, k52 : 244459259, k55 : \"D\", id : 145, k54 : -1599962038, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 71}), (n1 {id : 9}) MERGE(n0)-[r :T4{k60 : false, k61 : -1742733116, id : 146, k57 : true, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 33}), (n1 {id : 34}) MERGE(n0)-[r :T0{k39 : -1225447343, k38 : false, k40 : -700471295, k41 : false, id : 147, k37 : \"20\", k36 : 748060967}]->(n1)",
+          "MATCH (n0 {id : 26}), (n1 {id : 15}) MERGE(n0)-[r :T2{k49 : \"4LBQolf\", k51 : 731478777, k50 : 567305316, id : 148, k48 : -1641083841, k47 : \"EoHeoD\"}]->(n1)",
+          "MATCH (n0 {id : 105}), (n1 {id : 62}) MERGE(n0)-[r :T2{k51 : 86171749, k50 : -1083494123, id : 149, k48 : -325767464, k47 : \"p\"}]->(n1)",
+          "MATCH (n0 {id : 49}), (n1 {id : 107}) MERGE(n0)-[r :T5{k62 : -1454035396, k64 : 1234298861, k63 : \"F\", k66 : false, id : 150, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 1}), (n1 {id : 108}) MERGE(n0)-[r :T3{k53 : true, k52 : -1610532385, k55 : \"tN\", id : 151, k54 : -1364195781, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 82}), (n1 {id : 15}) MERGE(n0)-[r :T0{k39 : -1360892139, k38 : false, k40 : -456661887, k41 : true, id : 152, k37 : \"e\", k36 : 1121493571}]->(n1)",
+          "MATCH (n0 {id : 10}), (n1 {id : 99}) MERGE(n0)-[r :T2{k49 : \"S2\", k51 : 1198717289, k50 : -1597120428, id : 153, k48 : 754997996, k47 : \"j\"}]->(n1)",
+          "MATCH (n0 {id : 70}), (n1 {id : 34}) MERGE(n0)-[r :T3{k53 : false, k52 : 682138684, k55 : \"DFd\", id : 154, k54 : -2079641558, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 29}), (n1 {id : 86}) MERGE(n0)-[r :T4{k60 : true, k61 : -567070745, id : 155, k57 : false, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 102}), (n1 {id : 22}) MERGE(n0)-[r :T4{k60 : false, k61 : -1073348928, id : 156, k57 : false, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 27}), (n1 {id : 59}) MERGE(n0)-[r :T1{k42 : -2127586209, k44 : 518339861, id : 157, k43 : 1412882134, k46 : 1870316122, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 94}), (n1 {id : 101}) MERGE(n0)-[r :T5{k62 : -1454035396, k64 : 1234298861, k66 : false, id : 158, k65 : false, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 118}), (n1 {id : 74}) MERGE(n0)-[r :T0{k39 : -142350450, k38 : true, k40 : 367957961, id : 159, k37 : \"RKN7\", k36 : 124724411}]->(n1)",
+          "MATCH (n0 {id : 108}), (n1 {id : 78}) MERGE(n0)-[r :T4{k60 : true, k61 : 880985876, id : 160, k57 : false, k59 : true, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 73}), (n1 {id : 96}) MERGE(n0)-[r :T5{k62 : 1403091106, k64 : -1420916379, k63 : \"m\", k66 : false, id : 161, k65 : false, k67 : true}]->(n1)",
+          "MATCH (n0 {id : 124}), (n1 {id : 34}) MERGE(n0)-[r :T3{k53 : false, k52 : -2092155387, k55 : \"DFd\", id : 162, k54 : -425277464, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 111}), (n1 {id : 36}) MERGE(n0)-[r :T1{k42 : 1047194537, k44 : 316300183, id : 163, k43 : 1125580917, k46 : -1179901202, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 35}), (n1 {id : 79}) MERGE(n0)-[r :T5{k62 : -1454035396, k64 : -486042954, k63 : \"Ix\", k66 : true, id : 164, k65 : true}]->(n1)",
+          "MATCH (n0 {id : 9}), (n1 {id : 0}) MERGE(n0)-[r :T3{k53 : true, k52 : 1715129751, k55 : \"4\", id : 165, k54 : 1396049823, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 124}), (n1 {id : 94}) MERGE(n0)-[r :T4{k60 : false, id : 166, k57 : true, k59 : true, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 10}), (n1 {id : 24}) MERGE(n0)-[r :T4{k60 : true, k61 : -567070745, id : 167, k57 : false, k59 : true, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 55}), (n1 {id : 13}) MERGE(n0)-[r :T2{k49 : \"8\", k51 : -1373017311, k50 : -586543984, id : 168, k47 : \"bYm\"}]->(n1)",
+          "MATCH (n0 {id : 97}), (n1 {id : 84}) MERGE(n0)-[r :T1{k42 : 1353437856, k44 : 518339861, id : 169, k43 : 1406932479, k46 : 1170059882, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 15}), (n1 {id : 58}) MERGE(n0)-[r :T3{k53 : true, k52 : -1066621445, k55 : \"2\", id : 170, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 0}), (n1 {id : 82}) MERGE(n0)-[r :T1{k42 : -1597607040, k44 : -467881093, id : 171, k43 : -1587903655, k46 : -1179901202, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 53}), (n1 {id : 7}) MERGE(n0)-[r :T5{k62 : 245826143, k64 : 1234298861, k63 : \"w\", k66 : false, id : 172, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 87}), (n1 {id : 29}) MERGE(n0)-[r :T5{k62 : -461005215, k64 : 1072606116, k63 : \"omey\", k66 : false, id : 173, k65 : true, k67 : true}]->(n1)",
+          "MATCH (n0 {id : 41}), (n1 {id : 91}) MERGE(n0)-[r :T1{k42 : 1047194537, k44 : -517705207, id : 174, k43 : 1933613728, k46 : -456304703, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 11}), (n1 {id : 76}) MERGE(n0)-[r :T5{k62 : 1655425777, k64 : -1286405741, k63 : \"eLC\", k66 : true, id : 175, k65 : false, k67 : true}]->(n1)",
+          "MATCH (n0 {id : 18}), (n1 {id : 120}) MERGE(n0)-[r :T2{k49 : \"Xa\", k51 : 137631700, k50 : 412433019, id : 176, k48 : -2118938969, k47 : \"zpLaBNw\"}]->(n1)",
+          "MATCH (n0 {id : 65}), (n1 {id : 40}) MERGE(n0)-[r :T4{k60 : true, k61 : -2080343073, id : 177, k57 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 98}), (n1 {id : 86}) MERGE(n0)-[r :T2{k49 : \"4LBQolf\", k50 : 903506251, id : 178, k48 : -1947263819, k47 : \"0\"}]->(n1)",
+          "MATCH (n0 {id : 46}), (n1 {id : 108}) MERGE(n0)-[r :T4{k60 : false, k61 : -704304611, id : 179, k57 : false, k59 : true, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 46}), (n1 {id : 120}) MERGE(n0)-[r :T4{k60 : true, k61 : 1603593557, id : 180, k57 : true, k59 : true, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 79}), (n1 {id : 49}) MERGE(n0)-[r :T3{k53 : false, k52 : 1496837054, k55 : \"tL7P36\", id : 181, k54 : -2079641558, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 115}), (n1 {id : 72}) MERGE(n0)-[r :T4{k60 : false, k61 : -1829536502, id : 182, k57 : false, k59 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 95}), (n1 {id : 113}) MERGE(n0)-[r :T3{k53 : false, k52 : 1496837054, k55 : \"RwJlbeq\", id : 183, k54 : -1289802099}]->(n1)",
+          "MATCH (n0 {id : 117}), (n1 {id : 60}) MERGE(n0)-[r :T3{k53 : true, k52 : -1066621445, k55 : \"A\", id : 184, k54 : 1093133250, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 104}), (n1 {id : 24}) MERGE(n0)-[r :T5{k62 : 275350023, k63 : \"eLC\", k66 : true, id : 185, k65 : false, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 100}), (n1 {id : 36}) MERGE(n0)-[r :T1{k42 : 1571880359, k44 : 316300183, id : 186, k43 : -1890089369, k46 : -1056410479, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 118}), (n1 {id : 115}) MERGE(n0)-[r :T5{k62 : 689420122, k64 : 1330901285, k63 : \"7u7GX\", k66 : false, id : 187, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 4}), (n1 {id : 81}) MERGE(n0)-[r :T4{k60 : true, k61 : -1073348928, id : 188, k57 : false, k59 : true}]->(n1)",
+          "MATCH (n0 {id : 90}), (n1 {id : 28}) MERGE(n0)-[r :T3{k53 : false, k52 : -1066621445, k55 : \"fv4G\", id : 189, k54 : 1505659115, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 15}), (n1 {id : 107}) MERGE(n0)-[r :T3{k53 : true, k52 : 1405176482, k55 : \"fv4G\", id : 190, k54 : -174722342, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 9}), (n1 {id : 76}) MERGE(n0)-[r :T4{k60 : true, k61 : 1697835868, id : 191, k57 : true, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 33}), (n1 {id : 63}) MERGE(n0)-[r :T2{k49 : \"S2\", k51 : 1577173329, k50 : 903506251, id : 192, k48 : -731445638, k47 : \"0\"}]->(n1)",
+          "MATCH (n0 {id : 51}), (n1 {id : 102}) MERGE(n0)-[r :T1{k42 : 950804101, k44 : 1471294232, id : 193, k43 : -1107776344, k46 : -65995731, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 32}), (n1 {id : 10}) MERGE(n0)-[r :T0{k39 : 1993181672, k38 : false, k40 : 176092026, k41 : true, id : 194, k37 : \"8aU\", k36 : -1496998083}]->(n1)",
+          "MATCH (n0 {id : 16}), (n1 {id : 12}) MERGE(n0)-[r :T2{k49 : \"oVMiMHq\", k51 : 1689686680, k50 : -1360359161, id : 195, k48 : 1243849880, k47 : \"wV\"}]->(n1)",
+          "MATCH (n0 {id : 80}), (n1 {id : 61}) MERGE(n0)-[r :T1{k42 : 20342883, k44 : 455974606, id : 196, k43 : -1850594049, k46 : 1712897953}]->(n1)",
+          "MATCH (n0 {id : 67}), (n1 {id : 22}) MERGE(n0)-[r :T1{k42 : -1981212250, k44 : 948329625, id : 197, k43 : 1406932479, k46 : -456304703, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 113}), (n1 {id : 119}) MERGE(n0)-[r :T4{k60 : true, id : 198, k57 : true, k59 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 83}), (n1 {id : 28}) MERGE(n0)-[r :T5{k62 : 1519846335, k64 : 1319383972, k66 : false, id : 199, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 100}), (n1 {id : 57}) MERGE(n0)-[r :T2{k51 : 1199156398, k50 : -1284585529, id : 200, k48 : 1848205071, k47 : \"0\"}]->(n1)",
+          "MATCH (n0 {id : 104}), (n1 {id : 11}) MERGE(n0)-[r :T2{k49 : \"P\", k51 : 1198717289, k50 : -1083494123, id : 201, k48 : 1848205071, k47 : \"lql\"}]->(n1)",
+          "MATCH (n0 {id : 22}), (n1 {id : 122}) MERGE(n0)-[r :T5{k62 : -143538837, k64 : -183997046, k63 : \"3ep\", k66 : true, id : 202, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 33}), (n1 {id : 45}) MERGE(n0)-[r :T2{k49 : \"Txvs\", k51 : -1373017311, k50 : -1393753939, id : 203, k48 : -1851679121, k47 : \"j\"}]->(n1)",
+          "MATCH (n0 {id : 94}), (n1 {id : 39}) MERGE(n0)-[r :T4{k60 : false, k61 : -1742733116, id : 204, k57 : false, k59 : false}]->(n1)",
+          "MATCH (n0 {id : 23}), (n1 {id : 67}) MERGE(n0)-[r :T4{k60 : false, k61 : -1073348928, id : 205, k57 : false, k59 : true, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 124}), (n1 {id : 6}) MERGE(n0)-[r :T0{k39 : 1278806796, k38 : true, k40 : 232151857, k41 : false, id : 206, k37 : \"51\"}]->(n1)",
+          "MATCH (n0 {id : 35}), (n1 {id : 9}) MERGE(n0)-[r :T5{k62 : 754510890, k64 : 1319383972, k63 : \"kv\", k66 : false, id : 207, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 122}), (n1 {id : 83}) MERGE(n0)-[r :T3{k53 : false, k52 : 1405176482, k55 : \"2\", id : 208, k54 : -2079641558, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 82}), (n1 {id : 14}) MERGE(n0)-[r :T2{k49 : \"Txvs\", k51 : 68820908, k50 : -1597120428, id : 209, k48 : 754997996}]->(n1)",
+          "MATCH (n0 {id : 60}), (n1 {id : 82}) MERGE(n0)-[r :T4{k60 : false, k61 : 880985876, id : 210, k57 : false, k59 : true, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 13}), (n1 {id : 76}) MERGE(n0)-[r :T3{k53 : false, k52 : -359926237, k55 : \"EKu\", id : 211, k54 : -1289802099, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 42}), (n1 {id : 19}) MERGE(n0)-[r :T5{k62 : -143538837, k64 : -183997046, k63 : \"mP\", k66 : true, id : 212, k65 : false, k67 : true}]->(n1)",
+          "MATCH (n0 {id : 36}), (n1 {id : 39}) MERGE(n0)-[r :T3{k53 : true, k52 : -502103759, k55 : \"casL7uET\", id : 213, k54 : -1599962038, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 86}), (n1 {id : 30}) MERGE(n0)-[r :T3{k53 : false, k52 : 1405176482, k55 : \"2\", id : 214, k54 : 1093133250, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 77}), (n1 {id : 120}) MERGE(n0)-[r :T1{k42 : 1361134561, k44 : -709472954, id : 215, k43 : -1587903655, k46 : -329540429, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 114}), (n1 {id : 126}) MERGE(n0)-[r :T1{k42 : 1047194537, k44 : -1981923693, id : 216, k43 : 526437605, k46 : 1818648320, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 87}), (n1 {id : 63}) MERGE(n0)-[r :T0{k39 : -1360892139, k38 : false, k40 : -1147752671, k41 : true, id : 217, k37 : \"8aU\", k36 : 124724411}]->(n1)",
+          "MATCH (n0 {id : 38}), (n1 {id : 106}) MERGE(n0)-[r :T2{k49 : \"j\", k51 : 771395644, k50 : 114579678, id : 218, k48 : 450664966, k47 : \"CLfa0qss\"}]->(n1)",
+          "MATCH (n0 {id : 96}), (n1 {id : 32}) MERGE(n0)-[r :T5{k62 : -461005215, k64 : -2058382724, k63 : \"mP\", k66 : true, id : 219, k65 : false, k67 : true}]->(n1)",
+          "MATCH (n0 {id : 20}), (n1 {id : 16}) MERGE(n0)-[r :T1{k42 : 674090257, k44 : -2138442402, id : 220, k43 : 1406932479, k46 : -152242439, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 112}), (n1 {id : 100}) MERGE(n0)-[r :T0{k39 : 433078425, k38 : true, k40 : -1721952338, k41 : true, id : 221, k37 : \"o\", k36 : 513663002}]->(n1)",
+          "MATCH (n0 {id : 111}), (n1 {id : 94}) MERGE(n0)-[r :T2{k49 : \"j\", k51 : 771395644, k50 : -1597120428, id : 222, k48 : 1243849880, k47 : \"Gh\"}]->(n1)",
+          "MATCH (n0 {id : 107}), (n1 {id : 117}) MERGE(n0)-[r :T2{k49 : \"oHb\", k51 : 705274929, k50 : -1597120428, id : 223, k48 : -1612875727, k47 : \"u\"}]->(n1)",
+          "MATCH (n0 {id : 76}), (n1 {id : 83}) MERGE(n0)-[r :T2{k49 : \"mdIS\", k51 : -1654278051, k50 : -586543984, id : 224, k48 : -1947263819, k47 : \"CwE\"}]->(n1)",
+          "MATCH (n0 {id : 37}), (n1 {id : 87}) MERGE(n0)-[r :T4{k60 : true, k61 : -861589702, id : 225, k57 : false, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 107}), (n1 {id : 101}) MERGE(n0)-[r :T0{k39 : -998599802, k38 : true, k40 : -365228179, k41 : true, id : 226, k37 : \"hcwo\", k36 : 955845136}]->(n1)",
+          "MATCH (n0 {id : 45}), (n1 {id : 93}) MERGE(n0)-[r :T0{k39 : -524355460, k38 : true, k40 : -700471295, k41 : false, id : 227, k37 : \"nY\", k36 : 1741584683}]->(n1)",
+          "MATCH (n0 {id : 41}), (n1 {id : 34}) MERGE(n0)-[r :T4{k60 : true, k61 : -1073348928, id : 228, k57 : false, k59 : true, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 18}), (n1 {id : 6}) MERGE(n0)-[r :T1{k42 : -1551766542, k44 : 516544869, id : 229, k43 : -880955546, k46 : -65995731, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 4}), (n1 {id : 115}) MERGE(n0)-[r :T3{k53 : false, k52 : 1148538273, k55 : \"D\", id : 230, k54 : 1505659115, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 53}), (n1 {id : 13}) MERGE(n0)-[r :T4{k60 : true, k61 : -2080343073, id : 231, k57 : false, k59 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 62}), (n1 {id : 124}) MERGE(n0)-[r :T2{k49 : \"9O0\", k51 : -1654278051, k50 : 567305316, id : 232, k48 : -1935317725, k47 : \"zpLaBNw\"}]->(n1)",
+          "MATCH (n0 {id : 28}), (n1 {id : 109}) MERGE(n0)-[r :T1{k42 : 1621631203, k44 : -1255441023, id : 233, k43 : -492691374, k46 : -65995731, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 49}), (n1 {id : 16}) MERGE(n0)-[r :T4{k60 : false, k61 : 1697835868, id : 234, k57 : false, k59 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 66}), (n1 {id : 26}) MERGE(n0)-[r :T2{k49 : \"S2\", k51 : -1373017311, k50 : -790331687, id : 235, k48 : -1876338911, k47 : \"lql\"}]->(n1)",
+          "MATCH (n0 {id : 120}), (n1 {id : 66}) MERGE(n0)-[r :T1{k42 : -2127586209, k44 : -709472954, id : 236, k46 : -1056410479, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 50}), (n1 {id : 97}) MERGE(n0)-[r :T3{k53 : false, k52 : -941881326, k55 : \"tL7P36\", id : 237, k54 : -566274754, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 84}), (n1 {id : 110}) MERGE(n0)-[r :T0{k39 : -464194560, k38 : false, k40 : -365228179, k41 : false, id : 238, k36 : -456229309}]->(n1)",
+          "MATCH (n0 {id : 117}), (n1 {id : 99}) MERGE(n0)-[r :T4{k60 : false, k61 : -1742733116, id : 239, k57 : false, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 46}), (n1 {id : 10}) MERGE(n0)-[r :T2{k49 : \"U\", k51 : 86171749, k50 : -1597120428, id : 240, k48 : 450664966, k47 : \"EoHeoD\"}]->(n1)",
+          "MATCH (n0 {id : 56}), (n1 {id : 37}) MERGE(n0)-[r :T4{k60 : true, k61 : -861589702, id : 241, k57 : false, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 19}), (n1 {id : 6}) MERGE(n0)-[r :T2{k49 : \"U\", k51 : 1577173329, k50 : -1360359161, id : 242, k48 : 1848205071, k47 : \"C\"}]->(n1)",
+          "MATCH (n0 {id : 37}), (n1 {id : 0}) MERGE(n0)-[r :T3{k53 : true, k52 : -172327837, k55 : \"wsDeWNe\", id : 243, k54 : 1505659115, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 56}), (n1 {id : 108}) MERGE(n0)-[r :T0{k39 : -1459195059, k38 : true, k40 : -700471295, k41 : false, id : 244, k37 : \"e\", k36 : -1027733734}]->(n1)",
+          "MATCH (n0 {id : 12}), (n1 {id : 100}) MERGE(n0)-[r :T3{k53 : true, k52 : -1104668051, k55 : \"v\", id : 245, k54 : -1289802099, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 63}), (n1 {id : 38}) MERGE(n0)-[r :T0{k39 : 1278806796, k38 : false, k40 : 1691510274, k41 : true, id : 246, k37 : \"TjOy\"}]->(n1)",
+          "MATCH (n0 {id : 34}), (n1 {id : 91}) MERGE(n0)-[r :T5{k62 : 1046361525, k64 : 1202194921, k63 : \"7\", k66 : true, id : 247, k65 : false, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 75}), (n1 {id : 118}) MERGE(n0)-[r :T1{k42 : 1361134561, k44 : 516544869, id : 248, k43 : 1933613728, k46 : -1808335222, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 28}), (n1 {id : 112}) MERGE(n0)-[r :T2{k49 : \"ooM\", k51 : -1654278051, k50 : 114579678, id : 249, k48 : -573087671, k47 : \"wV\"}]->(n1)",
+          "MATCH (n0 {id : 94}), (n1 {id : 5}) MERGE(n0)-[r :T4{k60 : false, id : 250, k57 : false, k59 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 59}), (n1 {id : 48}) MERGE(n0)-[r :T4{k60 : false, k61 : -909303707, id : 251, k57 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 29}), (n1 {id : 91}) MERGE(n0)-[r :T3{k53 : false, k52 : 1715129751, k55 : \"tN\", id : 252, k54 : -789616162, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 101}), (n1 {id : 26}) MERGE(n0)-[r :T2{k51 : 731478777, k50 : 114579678, id : 253, k48 : -1641083841, k47 : \"lql\"}]->(n1)",
+          "MATCH (n0 {id : 118}), (n1 {id : 94}) MERGE(n0)-[r :T0{k39 : -1225447343, k38 : false, k40 : -365228179, k41 : false, id : 254, k37 : \"0V2WBoB\", k36 : 124724411}]->(n1)",
+          "MATCH (n0 {id : 83}), (n1 {id : 48}) MERGE(n0)-[r :T1{k42 : 1439853932, k44 : -467881093, id : 255, k43 : -492691374, k46 : -456304703, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 114}), (n1 {id : 70}) MERGE(n0)-[r :T3{k53 : true, k52 : -1250224885, k55 : \"fv4G\", id : 256, k54 : 849274252, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 127}), (n1 {id : 3}) MERGE(n0)-[r :T2{k49 : \"mdIS\", k51 : 1577173329, k50 : 903506251, id : 257, k48 : -573087671, k47 : \"o\"}]->(n1)",
+          "MATCH (n0 {id : 7}), (n1 {id : 35}) MERGE(n0)-[r :T1{k42 : -1640607030, k44 : -573031516, id : 258, k43 : 1961207907, k46 : -1808335222, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 123}), (n1 {id : 102}) MERGE(n0)-[r :T3{k53 : false, k52 : -2092155387, k55 : \"wsDeWNe\", id : 259, k54 : 1604441327, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 48}), (n1 {id : 18}) MERGE(n0)-[r :T5{k62 : 1519846335, k64 : 1330901285, k63 : \"OIvfWoz4L\", k66 : false, id : 260, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 30}), (n1 {id : 118}) MERGE(n0)-[r :T0{k39 : 182902504, k38 : true, k40 : 402619913, k41 : false, id : 261, k37 : \"js\", k36 : 955845136}]->(n1)",
+          "MATCH (n0 {id : 80}), (n1 {id : 69}) MERGE(n0)-[r :T2{k49 : \"fbC\", k51 : 836282878, k50 : 114579678, id : 262, k47 : \"CLfa0qss\"}]->(n1)",
+          "MATCH (n0 {id : 101}), (n1 {id : 79}) MERGE(n0)-[r :T4{k60 : true, k61 : -1073348928, id : 263, k57 : false, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 5}), (n1 {id : 76}) MERGE(n0)-[r :T4{k60 : false, k61 : 1603593557, id : 264, k57 : false, k59 : true, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 83}), (n1 {id : 93}) MERGE(n0)-[r :T4{k60 : true, k61 : -729460073, id : 265, k57 : false, k59 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 16}), (n1 {id : 123}) MERGE(n0)-[r :T1{k42 : 20342883, k44 : -1137147285, id : 266, k43 : -1587903655, k46 : -456304703, k45 : true}]->(n1)",
+          "MATCH (n0 {id : 68}), (n1 {id : 3}) MERGE(n0)-[r :T4{k60 : false, k61 : 266256823, id : 267, k57 : false, k59 : true, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 56}), (n1 {id : 55}) MERGE(n0)-[r :T1{k42 : -1981212250, k44 : 669837737, id : 268, k43 : -1107776344, k46 : -1056410479, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 123}), (n1 {id : 60}) MERGE(n0)-[r :T5{k62 : 275350023, k64 : 267346891, k63 : \"T\", k66 : true, id : 269, k65 : false, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 39}), (n1 {id : 97}) MERGE(n0)-[r :T0{k39 : -665101101, k38 : false, k40 : -2065187106, k41 : true, id : 270, k37 : \"Z\", k36 : 2111993960}]->(n1)",
+          "MATCH (n0 {id : 70}), (n1 {id : 15}) MERGE(n0)-[r :T0{k39 : -582432782, k38 : true, k40 : 1100429940, k41 : true, id : 271, k37 : \"hcwo\", k36 : 1741584683}]->(n1)",
+          "MATCH (n0 {id : 28}), (n1 {id : 80}) MERGE(n0)-[r :T3{k53 : false, k55 : \"tN\", id : 272, k54 : -566274754, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 28}), (n1 {id : 100}) MERGE(n0)-[r :T4{k60 : false, k61 : -1073348928, id : 273, k57 : false, k59 : true, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 37}), (n1 {id : 18}) MERGE(n0)-[r :T2{k49 : \"Tl\", k51 : 1198717289, k50 : -2071126951, id : 274, k48 : -573087671, k47 : \"HM\"}]->(n1)",
+          "MATCH (n0 {id : 26}), (n1 {id : 125}) MERGE(n0)-[r :T1{k42 : -1359147010, k44 : -1646523338, id : 275, k43 : 1406932479, k46 : -329540429, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 40}), (n1 {id : 2}) MERGE(n0)-[r :T3{k53 : true, k55 : \"tL7P36\", id : 276, k54 : -789616162, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 5}), (n1 {id : 98}) MERGE(n0)-[r :T1{k42 : 1439853932, k44 : -467881093, id : 277, k43 : -1701187808, k46 : 1818648320, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 124}), (n1 {id : 60}) MERGE(n0)-[r :T4{k60 : false, k61 : -1922401341, id : 278, k57 : true, k59 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 71}), (n1 {id : 16}) MERGE(n0)-[r :T4{k60 : false, k61 : 194329263, id : 279, k57 : false, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 77}), (n1 {id : 27}) MERGE(n0)-[r :T4{k60 : false, k61 : 266256823, id : 280, k57 : true, k59 : false, k58 : true}]->(n1)",
+          "MATCH (n0 {id : 56}), (n1 {id : 127}) MERGE(n0)-[r :T2{k49 : \"1UnCV\", k51 : 137631700, k50 : -2071126951, id : 281, k48 : -1947263819, k47 : \"CLfa0qss\"}]->(n1)",
+          "MATCH (n0 {id : 120}), (n1 {id : 65}) MERGE(n0)-[r :T5{k62 : 1655425777, k64 : 267346891, k63 : \"OIvfWoz4L\", id : 282, k65 : true, k67 : true}]->(n1)",
+          "MATCH (n0 {id : 75}), (n1 {id : 26}) MERGE(n0)-[r :T2{k51 : -835831308, k50 : 1407029930, id : 283, k48 : -91210976, k47 : \"j\"}]->(n1)",
+          "MATCH (n0 {id : 127}), (n1 {id : 105}) MERGE(n0)-[r :T2{k49 : \"8\", k51 : 731478777, k50 : -1597120428, id : 284, k48 : 1664254151}]->(n1)",
+          "MATCH (n0 {id : 86}), (n1 {id : 120}) MERGE(n0)-[r :T0{k38 : true, k40 : -2065187106, k41 : true, id : 285, k37 : \"Z\", k36 : -2037626190}]->(n1)",
+          "MATCH (n0 {id : 39}), (n1 {id : 13}) MERGE(n0)-[r :T0{k39 : -142350450, k38 : false, k40 : -365228179, k41 : false, id : 286, k37 : \"6\", k36 : 1559106943}]->(n1)",
+          "MATCH (n0 {id : 81}), (n1 {id : 55}) MERGE(n0)-[r :T0{k39 : 1278806796, k38 : false, k40 : -700471295, k41 : true, id : 287, k37 : \"51\", k36 : 513663002}]->(n1)",
+          "MATCH (n0 {id : 26}), (n1 {id : 120}) MERGE(n0)-[r :T3{k53 : true, k52 : 1148538273, id : 288, k54 : -1599962038}]->(n1)",
+          "MATCH (n0 {id : 49}), (n1 {id : 43}) MERGE(n0)-[r :T2{k49 : \"W\", k51 : 771395644, k50 : -981307508, id : 289, k48 : -731445638, k47 : \"o\"}]->(n1)",
+          "MATCH (n0 {id : 72}), (n1 {id : 99}) MERGE(n0)-[r :T2{k49 : \"U\", k51 : 705274929, k50 : 508982377, id : 290, k48 : -325767464, k47 : \"bYm\"}]->(n1)",
+          "MATCH (n0 {id : 66}), (n1 {id : 98}) MERGE(n0)-[r :T0{k39 : -1851126998, k38 : true, k40 : -2065187106, k41 : true, id : 291, k37 : \"cIj\", k36 : 1121493571}]->(n1)",
+          "MATCH (n0 {id : 71}), (n1 {id : 25}) MERGE(n0)-[r :T3{k53 : false, k52 : -1066621445, k55 : \"eYxueWbv\", id : 292, k54 : 830883168, k56 : true}]->(n1)",
+          "MATCH (n0 {id : 55}), (n1 {id : 0}) MERGE(n0)-[r :T3{k53 : true, k52 : -1269040854, k55 : \"v\", id : 293, k54 : 1611627997, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 50}), (n1 {id : 108}) MERGE(n0)-[r :T2{k49 : \"Xa\", k50 : -2071126951, id : 294, k48 : 1243849880, k47 : \"u\"}]->(n1)",
+          "MATCH (n0 {id : 11}), (n1 {id : 6}) MERGE(n0)-[r :T4{k60 : false, k61 : 1575823703, id : 295, k57 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 109}), (n1 {id : 18}) MERGE(n0)-[r :T4{k60 : true, k61 : -909303707, id : 296, k57 : false, k59 : false, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 31}), (n1 {id : 81}) MERGE(n0)-[r :T4{k60 : true, k61 : -1742733116, id : 297, k57 : false, k59 : true, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 78}), (n1 {id : 3}) MERGE(n0)-[r :T0{k39 : -714924363, k38 : false, k40 : 987766136, k41 : true, id : 298, k37 : \"o\", k36 : 1741584683}]->(n1)",
+          "MATCH (n0 {id : 58}), (n1 {id : 101}) MERGE(n0)-[r :T4{k60 : true, k61 : -1742733116, id : 299, k57 : true, k59 : true, k58 : false}]->(n1)",
+          "MATCH (n0 {id : 45}), (n1 {id : 112}) MERGE(n0)-[r :T1{k42 : 20342883, k44 : 1471294232, id : 300, k43 : -1587903655, k46 : -696350351, k45 : false}]->(n1)",
+          "MATCH (n0 {id : 100}), (n1 {id : 122}) MERGE(n0)-[r :T3{k53 : false, k55 : \"A\", id : 301, k54 : -1289802099, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 90}), (n1 {id : 8}) MERGE(n0)-[r :T3{k53 : false, k52 : -1610532385, k55 : \"D\", id : 302, k54 : -1289802099, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 50}), (n1 {id : 9}) MERGE(n0)-[r :T2{k49 : \"8\", k51 : 137631700, k50 : -981307508, id : 303, k48 : 1243849880, k47 : \"HM\"}]->(n1)",
+          "MATCH (n0 {id : 86}), (n1 {id : 23}) MERGE(n0)-[r :T5{k62 : 460057761, k64 : 1202194921, k63 : \"hz16\", k66 : true, id : 304, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 19}), (n1 {id : 80}) MERGE(n0)-[r :T0{k39 : -1225447343, k38 : true, k40 : 987766136, k41 : true, id : 305, k37 : \"nY\", k36 : 748060967}]->(n1)",
+          "MATCH (n0 {id : 118}), (n1 {id : 69}) MERGE(n0)-[r :T5{k62 : 1519846335, k64 : -7129357, k63 : \"kv\", k66 : true, id : 306, k65 : false, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 61}), (n1 {id : 4}) MERGE(n0)-[r :T0{k38 : false, k40 : -365228179, k41 : false, id : 307, k37 : \"o\", k36 : -1027733734}]->(n1)",
+          "MATCH (n0 {id : 122}), (n1 {id : 20}) MERGE(n0)-[r :T5{k62 : 1268098102, k64 : 1533332781, k63 : \"xOU\", k66 : true, id : 308, k65 : false, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 63}), (n1 {id : 80}) MERGE(n0)-[r :T0{k39 : -1851126998, k38 : false, k40 : -700471295, k41 : false, id : 309, k37 : \"0V2WBoB\", k36 : -456229309}]->(n1)",
+          "MATCH (n0 {id : 47}), (n1 {id : 110}) MERGE(n0)-[r :T3{k53 : true, k52 : 1715129751, k55 : \"xSjM\", id : 310, k54 : -1599962038, k56 : false}]->(n1)",
+          "MATCH (n0 {id : 4}), (n1 {id : 6}) MERGE(n0)-[r :T5{k62 : -1121132013, k64 : 1001860725, k63 : \"omey\", id : 311, k65 : true, k67 : false}]->(n1)",
+          "MATCH (n0 {id : 107}), (n1 {id : 12}) MERGE(n0)-[r :T1{k42 : 1439853932, k44 : -1646523338, id : 312, k43 : -286098338, k46 : -1178615534, k45 : true}]->(n1)"
+        ]
+      },
+      "pair": {
+        "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+        "graph_snapshot_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+        "parameters": {
+          "items_tuple": []
+        },
+        "query_a": "MATCH (n0 :L4)-[r0 :T2]->(n1)-[r1 :T3]->(n2 :L3) WHERE (((r0.id) > -1) AND ((r0.id) <> (r1.id))) UNWIND [2043255542, (n0.k28), (n0.k27)] AS a0 UNWIND [965748237, 299595045, (n2.k22)] AS a1 WITH (n0.k23) AS a2, (n2.k21) AS a3, a0 WITH * WHERE true MATCH (n2)-[r2 :T1]->(n3), (n4 :L4)<-[r3 :T1]-(n5 :L3)-[r4 :T4]->(n6), (n7) WHERE (((true AND ((r2.id) <> (r3.id))) AND ((r2.id) <> (r4.id))) AND ((r3.id) <> (r4.id))) RETURN (r3.k45) AS a4",
+        "query_b": "MATCH (n0 :L4)-[r0 :T2]->(n1)-[r1 :T3]->(n2 :L3) WHERE (((r0.id) > -1) AND ((r0.id) <> (r1.id))) UNWIND [2043255542, (n0.k28), (n0.k27)] AS a0 UNWIND [965748237, 299595045, (n2.k22)] AS a1 WITH (n0.k23) AS a2, (n2.k21) AS a3, a0 WITH * WHERE true MATCH (n2)-[r2 :T1]->(n3), (n7), (n4 :L4)<-[r3 :T1]-(n5 :L3)-[r4 :T4]->(n6) WHERE (((true AND ((r2.id) <> (r3.id))) AND ((r2.id) <> (r4.id))) AND ((r3.id) <> (r4.id))) RETURN (r3.k45) AS a4",
+        "rule_id": "pattern_order_symmetry",
+        "safety_certificate": {
+          "ast_path": "clauses[5].pattern.components[1]",
+          "canonical_rule_id": "pattern_order_symmetry",
+          "capability_hash": "106c9802be3e53066a6edcf8aaacd09289f46ed7907d0e7574d863c7f9563064",
+          "clause_context": "match",
+          "expression_type": "graph_pattern",
+          "family": "sym",
+          "nullability": "pattern_defined",
+          "preconditions": [
+            "pure",
+            "relationship_uniqueness_preserved"
+          ],
+          "proof_id": "graph_pattern_product_commutativity_v1",
+          "proof_version": "1",
+          "rule_id": "pattern_order_symmetry",
+          "semantic_proof_hash": "07ae8ab716c9ee8db321f6d580a623cea7ff34e4ab5282ac9cc080c741c23077",
+          "semantic_proof_template_hash": "07ae8ab716c9ee8db321f6d580a623cea7ff34e4ab5282ac9cc080c741c23077",
+          "site_class": "match_pattern_component",
+          "submit_eligible": true,
+          "tier": "core",
+          "variables_in_scope": [
+            "n0",
+            "n1",
+            "n2",
+            "n3",
+            "n4",
+            "n5",
+            "n6",
+            "n7",
+            "r0",
+            "r1",
+            "r2",
+            "r3",
+            "r4"
+          ]
+        }
+      },
+      "resolved_config": {
+        "items_tuple": [
+          [
+            "latest_revalidation",
+            true
+          ],
+          [
+            "source_candidate_hash",
+            "c459ebfb116498552aefcda492787bbd445bdcee43d8e3f5ec0a0c04d75a5b28"
+          ],
+          [
+            "target",
+            "arcadedb"
+          ],
+          [
+            "validation",
+            {
+              "items_tuple": [
+                [
+                  "bootstrap_resamples",
+                  10000
+                ],
+                [
+                  "max_result_rows",
+                  100000
+                ],
+                [
+                  "min_absolute_delta",
+                  "aa_noise_p99"
+                ],
+                [
+                  "min_ci_lower_ratio",
+                  2.0
+                ],
+                [
+                  "min_ratio",
+                  3.0
+                ],
+                [
+                  "pairs_per_session",
+                  20
+                ],
+                [
+                  "reconnect_between_sessions",
+                  true
+                ],
+                [
+                  "reload_graph_between_sessions",
+                  true
+                ],
+                [
+                  "require_complete_equivalence",
+                  true
+                ],
+                [
+                  "require_same_direction_in_both_sessions",
+                  true
+                ],
+                [
+                  "schedule",
+                  "balanced_random"
+                ],
+                [
+                  "sessions",
+                  2
+                ],
+                [
+                  "warmups_per_session",
+                  5
+                ]
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "metadata": {
+      "items_tuple": [
+        [
+          "absolute_also_passed",
+          false
+        ]
+      ]
+    },
+    "pooled_delta_ci_low_ms": 793.1135825347155,
+    "pooled_delta_ms": 895.7282288465649,
+    "pooled_ratio_ci_low": 7.180711381124153,
+    "reason_codes": [],
+    "sessions": [
+      {
+        "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+        "evidence": {
+          "ci_delta_high_ms": 793.1135825347155,
+          "ci_delta_low_ms": 727.0105830393732,
+          "ci_ratio_high": 7.66460613222895,
+          "ci_ratio_low": 6.790936721017987,
+          "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+          "direction_consistency": 1.0,
+          "graph_snapshot_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+          "measurement_protocol": "ordinary-execute-20-pair-v1",
+          "measurement_source": "ordinary_execute",
+          "median_a_ms": 121.15914595779032,
+          "median_b_ms": 872.6984795648605,
+          "median_delta_ms": 749.399853986688,
+          "median_ratio": 7.203297597181994,
+          "paired_samples": [
+            {
+              "a_ms": 147.64866698533297,
+              "a_timeout": false,
+              "b_ms": 987.0490420144051,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 118.54229192249477,
+              "a_timeout": false,
+              "b_ms": 944.6602910757065,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 133.46425001509488,
+              "a_timeout": false,
+              "b_ms": 861.5357500966638,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 115.88670802302659,
+              "a_timeout": false,
+              "b_ms": 830.9187500271946,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 104.98641687445343,
+              "a_timeout": false,
+              "b_ms": 906.8511249497533,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 118.16658289171755,
+              "a_timeout": false,
+              "b_ms": 837.7650419715792,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 126.69529183767736,
+              "a_timeout": false,
+              "b_ms": 1171.299999812618,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 146.55825006775558,
+              "a_timeout": false,
+              "b_ms": 983.7111250963062,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 120.99966686218977,
+              "a_timeout": false,
+              "b_ms": 883.5403751581907,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 109.33045786805451,
+              "a_timeout": false,
+              "b_ms": 875.9251669980586,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 121.31862505339086,
+              "a_timeout": false,
+              "b_ms": 833.4335421677679,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 106.69316700659692,
+              "a_timeout": false,
+              "b_ms": 824.6033750474453,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 107.66295879147947,
+              "a_timeout": false,
+              "b_ms": 818.2897081132978,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 111.15404218435287,
+              "a_timeout": false,
+              "b_ms": 837.1037081815302,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 125.12312503531575,
+              "a_timeout": false,
+              "b_ms": 861.777916084975,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 128.37312486954033,
+              "a_timeout": false,
+              "b_ms": 859.1359579004347,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 131.9031671155244,
+              "a_timeout": false,
+              "b_ms": 869.4717921316624,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 143.9004170242697,
+              "a_timeout": false,
+              "b_ms": 905.1314999815077,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 131.9391659926623,
+              "a_timeout": false,
+              "b_ms": 954.7777499537915,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 115.06433389149606,
+              "a_timeout": false,
+              "b_ms": 899.4267908856273,
+              "b_timeout": false,
+              "order": "BA"
+            }
+          ],
+          "query_a_hash": "25609650dcca629fa2bb87248091050089ec10dad6a37927161b0bfdbc24e58a",
+          "query_b_hash": "510e0d5e0e7bb77e7ac7281f9eddbbaefd47df15f3d1739cb8bb3debec832794",
+          "reason_codes": [],
+          "relative_mad": 0.07142454367073142,
+          "slow_query": "b",
+          "slower_side": "b",
+          "timeout_lower_bound_ratio": null,
+          "verdict": "pass"
+        },
+        "graph_fingerprint": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+        "health_event": null,
+        "lifecycle": {
+          "adapter_created": true,
+          "connection_closed": true,
+          "connection_id": "49214:str:4574622320",
+          "connection_opened": true,
+          "graph_loaded": true,
+          "graph_reset": true,
+          "graph_verified": true,
+          "process_exited": true,
+          "process_started": true
+        },
+        "negative_controls": [
+          {
+            "ci_delta_high_ms": 14.87279194407165,
+            "ci_delta_low_ms": -8.462187484838068,
+            "ci_ratio_high": 1.1339072258065768,
+            "ci_ratio_low": 0.9261094488248711,
+            "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+            "direction_consistency": 0.65,
+            "graph_snapshot_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+            "measurement_protocol": null,
+            "measurement_source": null,
+            "median_a_ms": 107.80060349497944,
+            "median_b_ms": 110.26072956155986,
+            "median_delta_ms": 7.501813117414713,
+            "median_ratio": 1.073581070086713,
+            "paired_samples": [
+              {
+                "a_ms": 108.97374991327524,
+                "a_timeout": false,
+                "b_ms": 114.460582844913,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 113.02087502554059,
+                "a_timeout": false,
+                "b_ms": 128.05333407595754,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 103.61358313821256,
+                "a_timeout": false,
+                "b_ms": 125.15291594900191,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 123.83979093283415,
+                "a_timeout": false,
+                "b_ms": 100.57920799590647,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 101.34733305312693,
+                "a_timeout": false,
+                "b_ms": 110.82729208283126,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 107.87291591987014,
+                "a_timeout": false,
+                "b_ms": 123.18037496879697,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 99.20470789074898,
+                "a_timeout": false,
+                "b_ms": 122.13145894929767,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 111.88287497498095,
+                "a_timeout": false,
+                "b_ms": 105.2047919947654,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 116.62525008432567,
+                "a_timeout": false,
+                "b_ms": 102.45783301070333,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 103.29083306714892,
+                "a_timeout": false,
+                "b_ms": 138.25608300976455,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 107.72829107008874,
+                "a_timeout": false,
+                "b_ms": 97.3813331220299,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 116.31229193881154,
+                "a_timeout": false,
+                "b_ms": 106.06599994935095,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 120.6656249705702,
+                "a_timeout": false,
+                "b_ms": 105.84908304736018,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 99.94795802049339,
+                "a_timeout": false,
+                "b_ms": 101.41220805235207,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 103.98954106494784,
+                "a_timeout": false,
+                "b_ms": 113.13320812769234,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 98.4315408859402,
+                "a_timeout": false,
+                "b_ms": 117.49662505462766,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 101.64670809172094,
+                "a_timeout": false,
+                "b_ms": 109.22362515702844,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 109.1410000808537,
+                "a_timeout": false,
+                "b_ms": 123.85412491858006,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 117.2052500769496,
+                "a_timeout": false,
+                "b_ms": 103.63149992190301,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 102.26745787076652,
+                "a_timeout": false,
+                "b_ms": 109.69416704028845,
+                "b_timeout": false,
+                "order": "BA"
+              }
+            ],
+            "query_a_hash": "25609650dcca629fa2bb87248091050089ec10dad6a37927161b0bfdbc24e58a",
+            "query_b_hash": "25609650dcca629fa2bb87248091050089ec10dad6a37927161b0bfdbc24e58a",
+            "reason_codes": [],
+            "relative_mad": 0.11800549500220303,
+            "slow_query": "b",
+            "slower_side": "b",
+            "timeout_lower_bound_ratio": null,
+            "verdict": "pass"
+          },
+          {
+            "ci_delta_high_ms": 46.14579142071307,
+            "ci_delta_low_ms": -24.257250013761222,
+            "ci_ratio_high": 1.0528164520046235,
+            "ci_ratio_low": 0.97251512700334,
+            "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+            "direction_consistency": 0.6,
+            "graph_snapshot_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+            "measurement_protocol": null,
+            "measurement_source": null,
+            "median_a_ms": 873.7562914611772,
+            "median_b_ms": 859.6875414950773,
+            "median_delta_ms": 16.33045799098909,
+            "median_ratio": 1.0198028432817903,
+            "paired_samples": [
+              {
+                "a_ms": 1284.4700829591602,
+                "a_timeout": false,
+                "b_ms": 1083.047250052914,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 1056.3584580086172,
+                "a_timeout": false,
+                "b_ms": 860.440457938239,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 1036.2642081454396,
+                "a_timeout": false,
+                "b_ms": 848.9434581715614,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 860.3868330828846,
+                "a_timeout": false,
+                "b_ms": 939.986624987796,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 867.218374973163,
+                "a_timeout": false,
+                "b_ms": 894.4180828984827,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 910.128999967128,
+                "a_timeout": false,
+                "b_ms": 858.9346250519156,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 853.0709170736372,
+                "a_timeout": false,
+                "b_ms": 987.6487501896918,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 891.4949579630047,
+                "a_timeout": false,
+                "b_ms": 968.7058329582214,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 836.4372500218451,
+                "a_timeout": false,
+                "b_ms": 832.4552089907229,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 955.1254999823868,
+                "a_timeout": false,
+                "b_ms": 832.6992499642074,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 852.2591670043766,
+                "a_timeout": false,
+                "b_ms": 823.5802920535207,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 933.9184169657528,
+                "a_timeout": false,
+                "b_ms": 892.8212090395391,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 935.773208970204,
+                "a_timeout": false,
+                "b_ms": 903.2015420962125,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 933.9667079038918,
+                "a_timeout": false,
+                "b_ms": 1007.390416925773,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 846.5782499406487,
+                "a_timeout": false,
+                "b_ms": 867.8930420428514,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 880.2942079491913,
+                "a_timeout": false,
+                "b_ms": 827.0222500432283,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 802.190207876265,
+                "a_timeout": false,
+                "b_ms": 844.555624993518,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 819.6441249456257,
+                "a_timeout": false,
+                "b_ms": 819.6050419937819,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 866.4345841389149,
+                "a_timeout": false,
+                "b_ms": 836.9272910058498,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 820.6027920823544,
+                "a_timeout": false,
+                "b_ms": 831.6254578530788,
+                "b_timeout": false,
+                "order": "AB"
+              }
+            ],
+            "query_a_hash": "510e0d5e0e7bb77e7ac7281f9eddbbaefd47df15f3d1739cb8bb3debec832794",
+            "query_b_hash": "510e0d5e0e7bb77e7ac7281f9eddbbaefd47df15f3d1739cb8bb3debec832794",
+            "reason_codes": [],
+            "relative_mad": 0.046491675139881894,
+            "slow_query": "a",
+            "slower_side": "a",
+            "timeout_lower_bound_ratio": null,
+            "verdict": "pass"
+          }
+        ],
+        "process_id": 49214,
+        "schedule_seed": 844053341734180427,
+        "session_id": "validation-1-febe6852eb254f2087de6188cb35880d"
+      },
+      {
+        "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+        "evidence": {
+          "ci_delta_high_ms": 1289.2581881023943,
+          "ci_delta_low_ms": 1013.4459795663133,
+          "ci_ratio_high": 8.891012996834636,
+          "ci_ratio_low": 7.456993145819538,
+          "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+          "direction_consistency": 1.0,
+          "graph_snapshot_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+          "measurement_protocol": "ordinary-execute-20-pair-v1",
+          "measurement_source": "ordinary_execute",
+          "median_a_ms": 155.87725001387298,
+          "median_b_ms": 1243.1446876144037,
+          "median_delta_ms": 1087.59124961216,
+          "median_ratio": 7.734868167132671,
+          "paired_samples": [
+            {
+              "a_ms": 134.895124938339,
+              "a_timeout": false,
+              "b_ms": 2075.6546249613166,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 352.41033299826086,
+              "a_timeout": false,
+              "b_ms": 1644.3897502031177,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 194.88045782782137,
+              "a_timeout": false,
+              "b_ms": 1746.4493331499398,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 160.5666670948267,
+              "a_timeout": false,
+              "b_ms": 1668.8905840273947,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 174.9899578280747,
+              "a_timeout": false,
+              "b_ms": 1222.5507081020623,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 163.08550001122057,
+              "a_timeout": false,
+              "b_ms": 1265.8114160876721,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 149.4316658936441,
+              "a_timeout": false,
+              "b_ms": 1136.1071250867099,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 155.0688750576228,
+              "a_timeout": false,
+              "b_ms": 1195.2853749971837,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 226.24745778739452,
+              "a_timeout": false,
+              "b_ms": 2004.364457912743,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 162.3829579912126,
+              "a_timeout": false,
+              "b_ms": 1448.9199169911444,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 156.68562497012317,
+              "a_timeout": false,
+              "b_ms": 1126.777624944225,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 180.33433402888477,
+              "a_timeout": false,
+              "b_ms": 1252.4150831159204,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 140.81916608847678,
+              "a_timeout": false,
+              "b_ms": 1079.7820000443608,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 131.6047920845449,
+              "a_timeout": false,
+              "b_ms": 1032.89574990049,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 141.04687492363155,
+              "a_timeout": false,
+              "b_ms": 1031.2123748008162,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 129.56570810638368,
+              "a_timeout": false,
+              "b_ms": 1233.874292112887,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 148.11304095201194,
+              "a_timeout": false,
+              "b_ms": 1352.2312918212265,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 195.01391611993313,
+              "a_timeout": false,
+              "b_ms": 1488.1449579261243,
+              "b_timeout": false,
+              "order": "AB"
+            },
+            {
+              "a_ms": 141.05408382602036,
+              "a_timeout": false,
+              "b_ms": 1213.5106669738889,
+              "b_timeout": false,
+              "order": "BA"
+            },
+            {
+              "a_ms": 149.66450002975762,
+              "a_timeout": false,
+              "b_ms": 1061.6404579486698,
+              "b_timeout": false,
+              "order": "BA"
+            }
+          ],
+          "query_a_hash": "25609650dcca629fa2bb87248091050089ec10dad6a37927161b0bfdbc24e58a",
+          "query_b_hash": "510e0d5e0e7bb77e7ac7281f9eddbbaefd47df15f3d1739cb8bb3debec832794",
+          "reason_codes": [],
+          "relative_mad": 0.09944380600129117,
+          "slow_query": "b",
+          "slower_side": "b",
+          "timeout_lower_bound_ratio": null,
+          "verdict": "pass"
+        },
+        "graph_fingerprint": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+        "health_event": null,
+        "lifecycle": {
+          "adapter_created": true,
+          "connection_closed": true,
+          "connection_id": "49341:str:4418384496",
+          "connection_opened": true,
+          "graph_loaded": true,
+          "graph_reset": true,
+          "graph_verified": true,
+          "process_exited": true,
+          "process_started": true
+        },
+        "negative_controls": [
+          {
+            "ci_delta_high_ms": 19.020667066797614,
+            "ci_delta_low_ms": -17.34108349774033,
+            "ci_ratio_high": 1.1548960933369687,
+            "ci_ratio_low": 0.8836913087650775,
+            "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+            "direction_consistency": 0.5,
+            "graph_snapshot_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+            "measurement_protocol": null,
+            "measurement_source": null,
+            "median_a_ms": 134.36243741307408,
+            "median_b_ms": 134.02216648682952,
+            "median_delta_ms": 0.42143790051341057,
+            "median_ratio": 1.0033347971627924,
+            "paired_samples": [
+              {
+                "a_ms": 161.2958749756217,
+                "a_timeout": false,
+                "b_ms": 123.94145899452269,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 124.36604220420122,
+                "a_timeout": false,
+                "b_ms": 134.97866597026587,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 126.54687510803342,
+                "a_timeout": false,
+                "b_ms": 142.34129199758172,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 132.2961668483913,
+                "a_timeout": false,
+                "b_ms": 132.17641692608595,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 136.42870797775686,
+                "a_timeout": false,
+                "b_ms": 127.56070797331631,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 119.44137490354478,
+                "a_timeout": false,
+                "b_ms": 151.04654198512435,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 190.39799994789064,
+                "a_timeout": false,
+                "b_ms": 119.19975001364946,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 120.26570783928037,
+                "a_timeout": false,
+                "b_ms": 142.5126250833273,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 149.72208393737674,
+                "a_timeout": false,
+                "b_ms": 119.78891608305275,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 138.4547499474138,
+                "a_timeout": false,
+                "b_ms": 193.56062496080995,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 153.3949999138713,
+                "a_timeout": false,
+                "b_ms": 138.79145798273385,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 166.1352920345962,
+                "a_timeout": false,
+                "b_ms": 133.06566700339317,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 151.59470797516406,
+                "a_timeout": false,
+                "b_ms": 138.81170912645757,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 127.37954198382795,
+                "a_timeout": false,
+                "b_ms": 170.68608314730227,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 121.64379213936627,
+                "a_timeout": false,
+                "b_ms": 146.73304185271263,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 114.1819590702653,
+                "a_timeout": false,
+                "b_ms": 144.3824579473585,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 139.11299989558756,
+                "a_timeout": false,
+                "b_ms": 118.84558410383761,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 146.1165000218898,
+                "a_timeout": false,
+                "b_ms": 126.03787495754659,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 121.86474981717765,
+                "a_timeout": false,
+                "b_ms": 122.84262501634657,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 127.08333320915699,
+                "a_timeout": false,
+                "b_ms": 128.04595893248916,
+                "b_timeout": false,
+                "order": "BA"
+              }
+            ],
+            "query_a_hash": "25609650dcca629fa2bb87248091050089ec10dad6a37927161b0bfdbc24e58a",
+            "query_b_hash": "25609650dcca629fa2bb87248091050089ec10dad6a37927161b0bfdbc24e58a",
+            "reason_codes": [],
+            "relative_mad": 0.16478631768595275,
+            "slow_query": "b",
+            "slower_side": "b",
+            "timeout_lower_bound_ratio": null,
+            "verdict": "pass"
+          },
+          {
+            "ci_delta_high_ms": 38.24656188953668,
+            "ci_delta_low_ms": -19.96293757110834,
+            "ci_ratio_high": 1.0428332695667843,
+            "ci_ratio_low": 0.9787395866632733,
+            "dbms_fingerprint": "637dbbcf29adf4a315f6c018b9143b712322d17535783a52d3ebc197bf69df16",
+            "direction_consistency": 0.55,
+            "graph_snapshot_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2",
+            "measurement_protocol": null,
+            "measurement_source": null,
+            "median_a_ms": 901.4098953921348,
+            "median_b_ms": 904.8348125070333,
+            "median_delta_ms": 8.8149169459939,
+            "median_ratio": 1.0090405871126182,
+            "paired_samples": [
+              {
+                "a_ms": 868.7343748752028,
+                "a_timeout": false,
+                "b_ms": 886.2630829680711,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 918.4217089787126,
+                "a_timeout": false,
+                "b_ms": 903.3506670966744,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 858.9884170796722,
+                "a_timeout": false,
+                "b_ms": 932.3667499702424,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 841.2650001700968,
+                "a_timeout": false,
+                "b_ms": 900.2803331241012,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 886.7092081345618,
+                "a_timeout": false,
+                "b_ms": 864.7404578514397,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 958.8177499826998,
+                "a_timeout": false,
+                "b_ms": 1166.9425000436604,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 897.8905829135329,
+                "a_timeout": false,
+                "b_ms": 886.9724168907851,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 904.9292078707367,
+                "a_timeout": false,
+                "b_ms": 929.3406659271568,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 978.4079999662936,
+                "a_timeout": false,
+                "b_ms": 956.7291659768671,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 861.2500419840217,
+                "a_timeout": false,
+                "b_ms": 906.3189579173923,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 891.9399161823094,
+                "a_timeout": false,
+                "b_ms": 892.0410419814289,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 1090.3280000202358,
+                "a_timeout": false,
+                "b_ms": 1109.918792033568,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 963.8227499090135,
+                "a_timeout": false,
+                "b_ms": 1010.8270000200719,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 910.2846249006689,
+                "a_timeout": false,
+                "b_ms": 877.6483340188861,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 896.0628330241889,
+                "a_timeout": false,
+                "b_ms": 877.8157918713987,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 851.6512501519173,
+                "a_timeout": false,
+                "b_ms": 883.0754579976201,
+                "b_timeout": false,
+                "order": "AB"
+              },
+              {
+                "a_ms": 878.4852919634432,
+                "a_timeout": false,
+                "b_ms": 856.4317079726607,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 1043.147874996066,
+                "a_timeout": false,
+                "b_ms": 969.6169591043144,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 922.3196671810001,
+                "a_timeout": false,
+                "b_ms": 972.8318338748068,
+                "b_timeout": false,
+                "order": "BA"
+              },
+              {
+                "a_ms": 1211.9422918185592,
+                "a_timeout": false,
+                "b_ms": 1030.8982499409467,
+                "b_timeout": false,
+                "order": "AB"
+              }
+            ],
+            "query_a_hash": "510e0d5e0e7bb77e7ac7281f9eddbbaefd47df15f3d1739cb8bb3debec832794",
+            "query_b_hash": "510e0d5e0e7bb77e7ac7281f9eddbbaefd47df15f3d1739cb8bb3debec832794",
+            "reason_codes": [],
+            "relative_mad": 0.033675985871468736,
+            "slow_query": "b",
+            "slower_side": "b",
+            "timeout_lower_bound_ratio": null,
+            "verdict": "pass"
+          }
+        ],
+        "process_id": 49341,
+        "schedule_seed": 1844559501693202005,
+        "session_id": "validation-2-d968f283dd6d43c2abc794879eac06ca"
+      }
+    ],
+    "stage": "validation_passed",
+    "submission_path": "relative",
+    "validated_ratio": 7.601664832225781,
+    "validation_policy": {
+      "max_result_rows": 100000,
+      "min_ci_low": 2.0,
+      "min_ratio": 3.0,
+      "noise_floor_ms": 0.0,
+      "query_timeout_seconds": 60.0,
+      "session_timeout_seconds": 900.0,
+      "timer_resolution_ms": 0.001
+    },
+    "validation_protocol": "independent-two-session-v1"
+  }
+}

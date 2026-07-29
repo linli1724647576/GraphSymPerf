@@ -1,0 +1,401 @@
+{
+  "balanced_pairs": 20,
+  "certificate": {
+    "ast_path": "clauses[0].where",
+    "canonical_rule_id": "duplicate_predicate_control",
+    "capability_hash": "arcadedb-duplicate-predicate-v1",
+    "clause_context": "where",
+    "expression_type": "boolean",
+    "family": "bool",
+    "nullability": "three_valued",
+    "preconditions": [
+      "pure",
+      "total"
+    ],
+    "proof_id": "idempotent_predicate_control_v1",
+    "proof_version": "1",
+    "rule_id": "duplicate_predicate_control",
+    "semantic_proof_hash": "59bb1a55d339d119286b86187fee7f49c7f9a01003137b6584dcede057f2baac",
+    "semantic_proof_template_hash": "a1670c7e78b552e542f270e767031ffdaddfc6c3ed21db55b0763a1cb2569b72",
+    "site_class": "where_boolean",
+    "submit_eligible": false,
+    "tier": "control",
+    "variables_in_scope": [
+      "n"
+    ]
+  },
+  "complete_typed_equivalent": true,
+  "database": "dupidx_unique_session1",
+  "explain_a": {
+    "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.id = 1, cost=17.00, rows=10]\n  + NodeIndexSeek(n:Bench) [index=Bench[id], id=1, cost=7.00, rows=20]\n\nTotal Estimated Cost: 17.00\nTotal Estimated Rows: 10\n",
+    "explainPlan": {
+      "cost": -1,
+      "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=n.id = 1, cost=17.00, rows=10]\n  + NodeIndexSeek(n:Bench) [index=Bench[id], id=1, cost=7.00, rows=20]\n\nTotal Estimated Cost: 17.00\nTotal Estimated Rows: 10\n",
+      "steps": null,
+      "type": "OpenCypherExecutionPlan"
+    },
+    "result": [],
+    "user": "root"
+  },
+  "explain_b": {
+    "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=(n.id = 1 AND n.id = 1), cost=30000.00, rows=10000]\n  + NodeByLabelScan(n:Bench) [cost=20000.00, rows=20000]\n\nTotal Estimated Cost: 30000.00\nTotal Estimated Rows: 10000\n",
+    "explainPlan": {
+      "cost": -1,
+      "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ Filter [predicate=(n.id = 1 AND n.id = 1), cost=30000.00, rows=10000]\n  + NodeByLabelScan(n:Bench) [cost=20000.00, rows=20000]\n\nTotal Estimated Cost: 30000.00\nTotal Estimated Rows: 10000\n",
+      "steps": null,
+      "type": "OpenCypherExecutionPlan"
+    },
+    "result": [],
+    "user": "root"
+  },
+  "graph_count_result": [
+    {
+      "@props": "c:3",
+      "c": 20000
+    }
+  ],
+  "negative_controls": {
+    "aa": [
+      {
+        "absolute_delta_ms": 2.477457746863365,
+        "first_ms": 1.8989171367138624,
+        "order": "21",
+        "second_ms": 4.376374883577228,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.5888331215828657,
+        "first_ms": 2.5701250415295362,
+        "order": "12",
+        "second_ms": 1.9812919199466705,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.4367080982774496,
+        "first_ms": 1.3892080169171095,
+        "order": "21",
+        "second_ms": 1.825916115194559,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 1.5545838978141546,
+        "first_ms": 3.04695894010365,
+        "order": "12",
+        "second_ms": 1.4923750422894955,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.6078332662582397,
+        "first_ms": 2.786958124488592,
+        "order": "21",
+        "second_ms": 2.1791248582303524,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.4494588356465101,
+        "first_ms": 1.539665972813964,
+        "order": "21",
+        "second_ms": 1.989124808460474,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 2.028666902333498,
+        "first_ms": 3.6822918336838484,
+        "order": "12",
+        "second_ms": 1.6536249313503504,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.10216725058853626,
+        "first_ms": 1.4673750847578049,
+        "order": "12",
+        "second_ms": 1.3652078341692686,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.042874133214354515,
+        "first_ms": 1.8098338041454554,
+        "order": "21",
+        "second_ms": 1.8527079373598099,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 1.287082675844431,
+        "first_ms": 1.7287081573158503,
+        "order": "12",
+        "second_ms": 3.015790833160281,
+        "side": "a"
+      }
+    ],
+    "bb": [
+      {
+        "absolute_delta_ms": 2.35566683113575,
+        "first_ms": 28.776500141248107,
+        "order": "12",
+        "second_ms": 31.132166972383857,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 0.47362479381263256,
+        "first_ms": 26.788624934852123,
+        "order": "21",
+        "second_ms": 26.31500014103949,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 0.9469159413129091,
+        "first_ms": 34.55633413977921,
+        "order": "12",
+        "second_ms": 35.50325008109212,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 1.299083000048995,
+        "first_ms": 34.72399991005659,
+        "order": "12",
+        "second_ms": 36.023082910105586,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 0.5059158429503441,
+        "first_ms": 38.207834120839834,
+        "order": "21",
+        "second_ms": 38.71374996379018,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 1.3805420603603125,
+        "first_ms": 28.56791694648564,
+        "order": "12",
+        "second_ms": 29.94845900684595,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 2.4448330514132977,
+        "first_ms": 28.973333071917295,
+        "order": "21",
+        "second_ms": 26.528500020503998,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 0.3539582248777151,
+        "first_ms": 26.23350010253489,
+        "order": "12",
+        "second_ms": 25.879541877657175,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 2.929957816377282,
+        "first_ms": 31.212625093758106,
+        "order": "21",
+        "second_ms": 34.14258291013539,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 0.6584171205759048,
+        "first_ms": 33.34158309735358,
+        "order": "21",
+        "second_ms": 32.68316597677767,
+        "side": "b"
+      }
+    ]
+  },
+  "node_count": 20000,
+  "query_a": "MATCH (n:Bench) WHERE n.id = 1 RETURN count(*) AS c",
+  "query_b": "MATCH (n:Bench) WHERE (n.id = 1) AND (n.id = 1) RETURN count(*) AS c",
+  "result_a": [
+    {
+      "@props": "c:3",
+      "c": 1
+    }
+  ],
+  "result_b": [
+    {
+      "@props": "c:3",
+      "c": 1
+    }
+  ],
+  "rule_id": "duplicate_predicate_control",
+  "rule_tier": "control",
+  "samples": [
+    {
+      "a_ms": 2.7845001313835382,
+      "b_ms": 36.722749937325716,
+      "order": "AB"
+    },
+    {
+      "a_ms": 3.090167185291648,
+      "b_ms": 41.552625130862,
+      "order": "AB"
+    },
+    {
+      "a_ms": 15.996707836166024,
+      "b_ms": 37.636541994288564,
+      "order": "BA"
+    },
+    {
+      "a_ms": 7.93516612611711,
+      "b_ms": 42.959332931786776,
+      "order": "BA"
+    },
+    {
+      "a_ms": 4.43662516772747,
+      "b_ms": 49.1566660348326,
+      "order": "AB"
+    },
+    {
+      "a_ms": 5.557291908189654,
+      "b_ms": 55.71862496435642,
+      "order": "BA"
+    },
+    {
+      "a_ms": 3.0702499207109213,
+      "b_ms": 41.71241610310972,
+      "order": "AB"
+    },
+    {
+      "a_ms": 3.4491668920964003,
+      "b_ms": 43.91412506811321,
+      "order": "AB"
+    },
+    {
+      "a_ms": 4.191583022475243,
+      "b_ms": 44.347791001200676,
+      "order": "AB"
+    },
+    {
+      "a_ms": 2.1586669608950615,
+      "b_ms": 30.619957949966192,
+      "order": "BA"
+    },
+    {
+      "a_ms": 2.090750029310584,
+      "b_ms": 27.935959165915847,
+      "order": "BA"
+    },
+    {
+      "a_ms": 1.528790919110179,
+      "b_ms": 40.79345893114805,
+      "order": "AB"
+    },
+    {
+      "a_ms": 12.27504201233387,
+      "b_ms": 48.07141679339111,
+      "order": "BA"
+    },
+    {
+      "a_ms": 2.3582091089338064,
+      "b_ms": 49.49212516658008,
+      "order": "BA"
+    },
+    {
+      "a_ms": 1.6942089423537254,
+      "b_ms": 53.68966679088771,
+      "order": "AB"
+    },
+    {
+      "a_ms": 2.531625097617507,
+      "b_ms": 36.96499997749925,
+      "order": "AB"
+    },
+    {
+      "a_ms": 2.5714170187711716,
+      "b_ms": 39.05083308927715,
+      "order": "BA"
+    },
+    {
+      "a_ms": 1.961250090971589,
+      "b_ms": 32.35554206185043,
+      "order": "AB"
+    },
+    {
+      "a_ms": 2.845499897375703,
+      "b_ms": 38.39883301407099,
+      "order": "BA"
+    },
+    {
+      "a_ms": 3.763166954740882,
+      "b_ms": 34.4738750718534,
+      "order": "BA"
+    }
+  ],
+  "schema_version": 1,
+  "semantic_proof": {
+    "ast_path": "clauses[0].where",
+    "canonical_rule_id": "duplicate_predicate_control",
+    "family": "bool",
+    "fragment": "one certified pure total Cypher WHERE boolean-expression subtree",
+    "invariant": "P AND P has the same three-valued result as P for every input row",
+    "original_ra": [
+      "Predicate",
+      "n.id = 1",
+      [
+        [
+          "TRUE",
+          "TRUE"
+        ],
+        [
+          "FALSE",
+          "FALSE"
+        ],
+        [
+          "NULL",
+          "NULL"
+        ]
+      ]
+    ],
+    "premises": [
+      "the duplicated expression is the exact certificate-bound subtree",
+      "the expression is deterministic and side-effect free",
+      "Kleene conjunction is idempotent for TRUE, FALSE, and NULL"
+    ],
+    "proof_id": "idempotent_predicate_control_v1",
+    "proof_version": "1",
+    "site_class": "where_boolean",
+    "submit_eligible": false,
+    "theorem": "KleeneConjunctionIdempotence",
+    "tier": "control",
+    "transformed_ra": [
+      "And",
+      "n.id = 1",
+      "n.id = 1",
+      [
+        [
+          "TRUE",
+          "TRUE"
+        ],
+        [
+          "FALSE",
+          "FALSE"
+        ],
+        [
+          "NULL",
+          "NULL"
+        ]
+      ]
+    ]
+  },
+  "session": 1,
+  "setup": {
+    "index": "CREATE INDEX ON Bench (id) UNIQUE",
+    "load": "UNWIND range(...) CREATE (:Bench {id: i})",
+    "property": "Bench.id LONG",
+    "vertex_type": "Bench"
+  },
+  "submit_eligible": false,
+  "summary": {
+    "delta_ci_high_ms": 39.71043799538165,
+    "delta_ci_low_ms": 34.18581234291196,
+    "direction_consistency": 1.0,
+    "median_a_ms": 2.957874909043312,
+    "median_b_ms": 41.173042031005025,
+    "median_delta_ms": 36.13789542578161,
+    "median_ratio": 13.404208273022475,
+    "negative_control_p99_ms": 2.929957816377282,
+    "ratio_ci_high": 14.39297677650065,
+    "ratio_ci_low": 10.829971944895226,
+    "slower_side": "b"
+  },
+  "url": "http://127.0.0.1:2482",
+  "warmups_per_query": 5
+}

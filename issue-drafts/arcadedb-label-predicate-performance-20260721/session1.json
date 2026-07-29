@@ -1,0 +1,374 @@
+{
+  "balanced_pairs": 20,
+  "certificate": {
+    "ast_path": "clauses[0].pattern.components[0]",
+    "canonical_rule_id": "label_where_symmetry",
+    "capability_hash": "arcadedb-label-where-symmetry-v1",
+    "clause_context": "match",
+    "expression_type": "graph_pattern",
+    "family": "sym",
+    "nullability": "pattern_defined",
+    "preconditions": [
+      "pure",
+      "single_label"
+    ],
+    "proof_id": "label_predicate_pending",
+    "proof_version": "1",
+    "rule_id": "label_where_symmetry",
+    "semantic_proof_hash": "364fed0277e2bf585085b932c7fa76a46d87982000ca6abfe56c4d24be1fb298",
+    "semantic_proof_template_hash": "364fed0277e2bf585085b932c7fa76a46d87982000ca6abfe56c4d24be1fb298",
+    "site_class": "match_pattern_component",
+    "submit_eligible": false,
+    "tier": "experimental",
+    "variables_in_scope": [
+      "n"
+    ]
+  },
+  "complete_typed_equivalent": true,
+  "database": "labelwhere_300k_session1",
+  "explain_a": {
+    "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ NodeByLabelScan(n:Parent) [cost=1.00, rows=1]\n\nTotal Estimated Cost: 1.00\nTotal Estimated Rows: 1\n",
+    "explainPlan": {
+      "cost": -1,
+      "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Cost-Based Query Optimizer\n\nPhysical Plan:\n+ NodeByLabelScan(n:Parent) [cost=1.00, rows=1]\n\nTotal Estimated Cost: 1.00\nTotal Estimated Rows: 1\n",
+      "steps": null,
+      "type": "OpenCypherExecutionPlan"
+    },
+    "result": [],
+    "user": "root"
+  },
+  "explain_b": {
+    "explain": "OpenCypher Native Execution Plan\n=================================\n\nUsing Traditional Execution (Non-Optimized)\n\nReason: Query pattern not yet supported by optimizer\nExecution will use step-by-step interpretation\n",
+    "explainPlan": {
+      "cost": -1,
+      "prettyPrint": "OpenCypher Native Execution Plan\n=================================\n\nUsing Traditional Execution (Non-Optimized)\n\nReason: Query pattern not yet supported by optimizer\nExecution will use step-by-step interpretation\n",
+      "steps": null,
+      "type": "OpenCypherExecutionPlan"
+    },
+    "result": [],
+    "user": "root"
+  },
+  "graph_counts": {
+    "Child": [
+      {
+        "@props": "c:3",
+        "c": 1
+      }
+    ],
+    "Other": [
+      {
+        "@props": "c:3",
+        "c": 300000
+      }
+    ],
+    "Parent": [
+      {
+        "@props": "c:3",
+        "c": 2
+      }
+    ]
+  },
+  "manual_review_constraints": [
+    "ordinary mandatory MATCH",
+    "single static label",
+    "same bound variable and projection",
+    "no optional match or multi-label expression"
+  ],
+  "negative_controls": {
+    "aa": [
+      {
+        "absolute_delta_ms": 2.7363330591470003,
+        "first_ms": 5.391707876697183,
+        "order": "12",
+        "second_ms": 2.6553748175501823,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 3.6680831108242273,
+        "first_ms": 2.4055829271674156,
+        "order": "21",
+        "second_ms": 6.073666037991643,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 2.2526259999722242,
+        "first_ms": 1.7987911123782396,
+        "order": "21",
+        "second_ms": 4.051417112350464,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.19170809537172318,
+        "first_ms": 1.9584579858928919,
+        "order": "12",
+        "second_ms": 1.7667498905211687,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.30099996365606785,
+        "first_ms": 1.6097920015454292,
+        "order": "12",
+        "second_ms": 1.910791965201497,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.06454205140471458,
+        "first_ms": 1.5512080863118172,
+        "order": "21",
+        "second_ms": 1.6157501377165318,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.033084070309996605,
+        "first_ms": 1.4248751103878021,
+        "order": "21",
+        "second_ms": 1.4579591806977987,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.08224905468523502,
+        "first_ms": 1.3553339522331953,
+        "order": "21",
+        "second_ms": 1.4375830069184303,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.18266611732542515,
+        "first_ms": 1.6247918829321861,
+        "order": "12",
+        "second_ms": 1.8074580002576113,
+        "side": "a"
+      },
+      {
+        "absolute_delta_ms": 0.10787509381771088,
+        "first_ms": 1.6487499233335257,
+        "order": "12",
+        "second_ms": 1.7566250171512365,
+        "side": "a"
+      }
+    ],
+    "bb": [
+      {
+        "absolute_delta_ms": 13.711166800931096,
+        "first_ms": 150.21124994382262,
+        "order": "21",
+        "second_ms": 136.50008314289153,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 56.593874702230096,
+        "first_ms": 130.20604220218956,
+        "order": "12",
+        "second_ms": 186.79991690441966,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 7.50787602737546,
+        "first_ms": 152.18979096971452,
+        "order": "21",
+        "second_ms": 159.69766699708998,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 41.359958006069064,
+        "first_ms": 183.82195802405477,
+        "order": "12",
+        "second_ms": 142.4620000179857,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 31.47333301603794,
+        "first_ms": 172.74470906704664,
+        "order": "12",
+        "second_ms": 204.21804208308458,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 22.97262498177588,
+        "first_ms": 239.34224992990494,
+        "order": "21",
+        "second_ms": 216.36962494812906,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 26.88804198987782,
+        "first_ms": 191.84429105371237,
+        "order": "12",
+        "second_ms": 218.7323330435902,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 41.786500019952655,
+        "first_ms": 168.9550830051303,
+        "order": "21",
+        "second_ms": 210.74158302508295,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 3.1105829402804375,
+        "first_ms": 172.9473329614848,
+        "order": "12",
+        "second_ms": 169.83675002120435,
+        "side": "b"
+      },
+      {
+        "absolute_delta_ms": 8.738916832953691,
+        "first_ms": 167.70795895718038,
+        "order": "21",
+        "second_ms": 158.9690421242267,
+        "side": "b"
+      }
+    ]
+  },
+  "proof_id": "label_predicate_pending",
+  "proof_theorem": "single pattern label is equivalent to a label predicate",
+  "query_a": "MATCH (n:Parent) RETURN n.id AS id ORDER BY id",
+  "query_b": "MATCH (n) WHERE n:Parent RETURN n.id AS id ORDER BY id",
+  "result_a": [
+    {
+      "@props": "id:3",
+      "id": 1
+    },
+    {
+      "@props": "id:3",
+      "id": 2
+    }
+  ],
+  "result_b": [
+    {
+      "@props": "id:3",
+      "id": 1
+    },
+    {
+      "@props": "id:3",
+      "id": 2
+    }
+  ],
+  "rule_id": "label_where_symmetry",
+  "rule_tier": "experimental",
+  "samples": [
+    {
+      "a_ms": 1.7305831424891949,
+      "b_ms": 155.1944580860436,
+      "order": "AB"
+    },
+    {
+      "a_ms": 3.333417000249028,
+      "b_ms": 141.0288750194013,
+      "order": "AB"
+    },
+    {
+      "a_ms": 1.7124582082033157,
+      "b_ms": 154.9874998163432,
+      "order": "AB"
+    },
+    {
+      "a_ms": 4.129125038161874,
+      "b_ms": 158.8579579256475,
+      "order": "BA"
+    },
+    {
+      "a_ms": 1.5533750411123037,
+      "b_ms": 147.37162506207824,
+      "order": "AB"
+    },
+    {
+      "a_ms": 2.210792154073715,
+      "b_ms": 151.51995792984962,
+      "order": "BA"
+    },
+    {
+      "a_ms": 3.2212501391768456,
+      "b_ms": 168.88058301992714,
+      "order": "BA"
+    },
+    {
+      "a_ms": 2.5051250122487545,
+      "b_ms": 149.36666702851653,
+      "order": "BA"
+    },
+    {
+      "a_ms": 2.1637920290231705,
+      "b_ms": 194.86662512645125,
+      "order": "AB"
+    },
+    {
+      "a_ms": 4.403375089168549,
+      "b_ms": 345.437458017841,
+      "order": "BA"
+    },
+    {
+      "a_ms": 2.0793750882148743,
+      "b_ms": 162.10250020958483,
+      "order": "AB"
+    },
+    {
+      "a_ms": 3.506916807964444,
+      "b_ms": 160.9695409424603,
+      "order": "AB"
+    },
+    {
+      "a_ms": 2.033292083069682,
+      "b_ms": 201.76362502388656,
+      "order": "BA"
+    },
+    {
+      "a_ms": 3.048375016078353,
+      "b_ms": 143.8628330361098,
+      "order": "BA"
+    },
+    {
+      "a_ms": 2.204083139076829,
+      "b_ms": 138.2520841434598,
+      "order": "BA"
+    },
+    {
+      "a_ms": 1.839041942730546,
+      "b_ms": 146.9587089959532,
+      "order": "BA"
+    },
+    {
+      "a_ms": 1.266542123630643,
+      "b_ms": 196.88420789316297,
+      "order": "AB"
+    },
+    {
+      "a_ms": 3.4757498651742935,
+      "b_ms": 146.5725409798324,
+      "order": "AB"
+    },
+    {
+      "a_ms": 4.927166039124131,
+      "b_ms": 150.24208393879235,
+      "order": "AB"
+    },
+    {
+      "a_ms": 2.146625192835927,
+      "b_ms": 182.00870812870562,
+      "order": "BA"
+    }
+  ],
+  "schema": {
+    "Child": "vertex type extends Parent",
+    "Other": "unrelated vertex type with id LONG",
+    "Parent": "vertex type with id LONG"
+  },
+  "schema_version": 1,
+  "session": 1,
+  "submit_eligible": false,
+  "summary": {
+    "delta_ci_high_ms": 162.84122900106013,
+    "delta_ci_low_ms": 145.56658396031708,
+    "direction_consistency": 1.0,
+    "median_a_ms": 2.207437646575272,
+    "median_b_ms": 155.0909789511934,
+    "median_delta_ms": 153.36945827584714,
+    "median_ratio": 73.24690818042673,
+    "negative_control_p99_ms": 56.593874702230096,
+    "ratio_ci_high": 87.2329272172316,
+    "ratio_ci_low": 49.81015867519764
+  },
+  "unrelated_node_count": 300000,
+  "url": "http://127.0.0.1:2482",
+  "warmups_per_query": 5
+}

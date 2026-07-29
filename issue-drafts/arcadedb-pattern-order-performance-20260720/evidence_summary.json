@@ -1,0 +1,42 @@
+{
+  "candidate_type": "performance_fix_coverage_gap",
+  "dedup": {
+    "recommended_submission": "follow_up_comment_requesting_reopen",
+    "related_issue": "https://github.com/ArcadeData/arcadedb/issues/5117",
+    "relationship": "same independent-pattern nested-loop family, but current minimized shape still reproduces on 26.8.1-SNAPSHOT after the reported 26.7.2 fix"
+  },
+  "discovery": {
+    "formal_run": "main_runtime_first_gate_arcadedb_100-36a7c55569aa",
+    "rule_id": "pattern_order_symmetry",
+    "source_candidate_hash": "c459ebfb116498552aefcda492787bbd445bdcee43d8e3f5ec0a0c04d75a5b28",
+    "source_pair_hash": "8a490f4f1fe841bd49f083c40833200e8854021acab73e2c1040d80f2e51be4c"
+  },
+  "environment": {
+    "arcadedb_engine": "26.8.1-SNAPSHOT",
+    "docker_image": "arcadedata/arcadedb:latest",
+    "docker_image_digest": "sha256:0a7935789d65da3ae5e328c33fc56c3144115d324be14d561967afc65c552a86",
+    "host": "macOS 27.0 arm64",
+    "image_platform": "linux/arm64",
+    "interface": "HTTP OpenCypher"
+  },
+  "graph": {
+    "nodes": 128,
+    "relationships": 185,
+    "t1_relationships": 26,
+    "t4_relationships": 40,
+    "snapshot_hash": "aaacabc4196a73f50a696f8a91c4c6dc9d2abc186ad9c19def30791153b8c9c2"
+  },
+  "minimal_validation": {
+    "complete_typed_equivalence": true,
+    "direction_consistency": 1.0,
+    "negative_controls_max_ratio": 1.0595381738685326,
+    "pooled_delta_ci_low_ms": 715.5385834630579,
+    "pooled_delta_ms": 764.6083745639771,
+    "pooled_ratio_ci_low": 7.774188191540693,
+    "protocol": "independent-two-session-v1",
+    "sessions": 2,
+    "stage": "validation_passed",
+    "validated_ratio": 8.152552061412695
+  },
+  "status": "validated_follow_up_ready"
+}
