@@ -9,14 +9,14 @@
 推荐把 GraphSymPerf 的核心测试单位从“等价查询对”收紧为：
 
 \[
-\mathcal{F}(Q,G,r)
+\mathcal{F}(Q,G,\mathcal R)
 =
 \left(
 G,
 H_Q,
-\Gamma_r,
-\{Q_\gamma\}_{\gamma\in O_r(Q)},
-C_r,
+\Gamma_{\mathcal R},
+\{Q_\gamma\}_{\gamma\in O_{\mathcal R}(Q)},
+C_{\mathcal R},
 E_\mathcal{F}
 \right).
 \]
@@ -25,9 +25,10 @@ E_\mathcal{F}
 
 - \(G\) 是一次加载后保持不变的任意属性图；
 - \(H_Q\) 是查询 \(Q\) 的图模式中间表示；
-- \(\Gamma_r\) 是规则 \(r\) 允许的表示对称生成元；
-- \(O_r(Q)\) 是这些生成元作用在 \(Q\) 上得到的查询表示轨道；
-- \(C_r\) 是规则适用证书；
+- \(\mathcal R\) 是参与该查询族构造的一条或多条结构化对称规则；
+- \(\Gamma_{\mathcal R}\) 是这些规则在具体查询位点上通过认证的表示对称生成元集合；
+- \(O_{\mathcal R}(Q)\) 是生成元及其合法复合作用在 \(Q\) 上得到的查询表示轨道；
+- \(C_{\mathcal R}\) 是覆盖全部生成元及其复合条件的联合适用证书；
 - \(E_\mathcal{F}\) 是查询族级结果与运行时证据。
 
 这一路线与微信原始文档一致：对称性施加在查询表达及其图原生语义上，所有成员在同一个图状态上执行。图状态对称只是一种可选的受控实验设计，不是查询对称重写成立的前提，也不应进入本项目正式主线。
@@ -200,8 +201,9 @@ class PatternIR:
 ```python
 @dataclass(frozen=True)
 class SymmetryAction:
-    generator_id: str
-    site_id: str
+    action_id: str
+    generator_ids: tuple[str, ...]
+    site_ids: tuple[str, ...]
     permutation: tuple[int, ...]
     orientation: tuple[str, ...]
     action_word: tuple[str, ...]
@@ -223,6 +225,11 @@ class SymmetryAction:
 \operatorname{semanticHash}(Q).
 \]
 
+允许动作由多个已认证生成元复合形成，但不能仅凭“每个生成元单独安全”推出复合安全。联合
+证书必须证明：生成元共享同一语义不变量；前序动作不会使后续动作的适用前提失效；重叠
+位点不存在未建模冲突；或者对动作词的每个前缀重新执行适用检查。生成元不要求两两交换，
+但每个实际枚举的动作词都必须可重放和可验证。
+
 ### 4.3 结构化查询族
 
 ```python
@@ -239,7 +246,8 @@ class CertifiedQueryFamily:
     family_id: str
     seed_query: str
     semantic_ir_hash: str
-    rule_id: str
+    rule_ids: tuple[str, ...]
+    generator_ids: tuple[str, ...]
     members: tuple[QueryFamilyMember, ...]
     certificate: RuleApplicabilityCertificate
     orbit_status: Literal["complete", "bounded_sample"]
@@ -249,6 +257,11 @@ class CertifiedQueryFamily:
 约束：
 
 - `CertifiedQueryFamily.members` 必须至少包含 4 个语义等价、表面表示不同的成员；
+- 正式查询族既可来自单条规则的多个生成元，也可来自多条规则的已认证生成元复合；
+- 多生成元族必须保存完整 `rule_ids`、`generator_ids` 和每个成员的 `action_word`，不能将
+  组合族伪装成单规则实例；
+- `rule_ids` 和 `generator_ids` 使用规范顺序写入身份哈希；动作应用顺序只由
+  `action_word` 表达，避免同一族因序列化顺序不同获得多个身份；
 - 去重后只有 2–3 个成员的候选只能进入开发诊断或历史 pair 兼容路径，标记为
   `DIAGNOSTIC_FAMILY_CARDINALITY`，不得计入正式查询族、核心产率或查询族级性能预言；
 - 同一 `family_id` 的所有成员共享 `semantic_ir_hash`；
@@ -262,13 +275,15 @@ class CertifiedQueryFamily:
 class RuleApplicabilityCertificate:
     schema_version: int
     family_id: str
-    rule_id: str
-    rule_version: str
+    rule_ids: tuple[str, ...]
+    rule_versions: Mapping[str, str]
     source_query_hash: str
     semantic_ir_hash: str
     site_ids: tuple[str, ...]
     generator_ids: tuple[str, ...]
+    generator_certificate_digests: tuple[str, ...]
     preserved_facts: tuple[str, ...]
+    composition_obligations: tuple[str, ...]
     scope_obligations: tuple[str, ...]
     observation_obligations: tuple[str, ...]
     multiplicity_obligations: tuple[str, ...]
@@ -278,7 +293,8 @@ class RuleApplicabilityCertificate:
     proof_digest: str
 ```
 
-证书必须绑定“规则—版本—查询—位点—方言能力”，不能只是规则名。最低义务包括：
+证书必须绑定“规则集合—版本—查询—位点—生成元—方言能力”，不能只是规则名或若干独立
+证书的拼接。最低义务包括：
 
 - 变量定义、使用和投影身份不变；
 - 关系方向语义不变；
@@ -288,6 +304,14 @@ class RuleApplicabilityCertificate:
 - 重复度和关系唯一性作用域保持；
 - `ORDER BY/LIMIT/SKIP` 的有序语义未改变；
 - 目标 GDBMS 声明支持所用语法和语义。
+
+联合证书还必须证明：
+
+- 所有生成元保持同一个 `PatternIR` 语义不变量；
+- 生成元作用位点重叠时，其组合效果已建模且不会覆盖彼此的语义前提；
+- 每个动作词的前缀都保持后续生成元的适用条件，或在应用时重新认证；
+- 复合后的查询重新解析后仍具有相同 `semantic_hash`；
+- 轨道的确定性枚举、去重和有界采样不会把不可认证动作混入正式成员。
 
 证书验证采用 fail-closed：
 
@@ -320,8 +344,12 @@ class RuleApplicabilityCertificate:
 
 这是最符合微信动机例子的图原生规则，当前仓库已有无向端点证明和有限 Cypher AST 基础，实现可行性最高。
 但单条无向边通常只有 2 个去重后的有效表示，不能单独构成正式查询族；该规则只有在一个
-可认证位点的表示轨道至少产生 4 个不同成员，或与同一结构化对称模式内的其他已认证生成元
-组合后达到 4 个成员时，才可进入正式路径。否则只保留为诊断候选。
+可认证位点的表示轨道至少产生 4 个不同成员，或与其他生成元通过联合证书后组成至少 4 个
+成员的复合轨道时，才可进入正式路径。否则只保留为诊断候选。
+
+典型四成员构造是在同一查询中找到两个可联合认证的无向模式位点 \(g_1,g_2\)，由
+\(\{e,g_1,g_2,g_1g_2\}\) 产生四种表示。这里四成员来自两个真实结构动作的笛卡尔轨道，
+不是通过空白、变量改名或布尔冗余补足数量。
 
 ### 5.2 CORE-2：同一 MATCH 内模式分量排列族
 
@@ -397,33 +425,56 @@ def build_family(seed: PortableQuery, target: TargetSystem) -> FamilyBuildOutcom
     ir = analyze_pattern_ir(parsed)
     capabilities = target_capabilities(target)
 
+    certified_generators = []
     for rule in query_symmetry_registry.core_rules(capabilities):
         sites = rule.find_sites(ir)
         for site in sites:
-            certificate = rule.certify(ir, site, capabilities)
-            if not certificate.accepted:
-                record_reject(certificate.reason_code)
+            generator_certificate = rule.certify_generator(
+                ir, site, capabilities
+            )
+            if not generator_certificate.accepted:
+                record_reject(generator_certificate.reason_code)
                 continue
+            certified_generators.extend(
+                rule.generators(ir, site, generator_certificate)
+            )
 
+    bundles = compatible_generator_bundles(
+        certified_generators,
+        max_generators=config.max_generators_per_family,
+        seed=seed.seed,
+    )
+    for bundle in bundles:
+        certificate = certify_composition(ir, bundle, capabilities)
+        if not certificate.accepted:
+            record_reject(certificate.reason_code)
+            continue
+
+        try:
             actions = orbit_enumerator.enumerate(
-                generators=rule.generators(ir, site),
+                generators=bundle,
                 max_members=config.max_family_members,
                 seed=seed.seed,
+                revalidate_each_prefix=True,
             )
-            members = deduplicate_presentations(
-                renderer.render(ir, action) for action in actions
+        except CompositionPreconditionError as error:
+            record_reject(error.reason_code)
+            continue
+
+        members = deduplicate_presentations(
+            renderer.render(ir, action) for action in actions
+        )
+        if len(members) < config.min_family_members:
+            record_diagnostic(
+                reason="DIAGNOSTIC_FAMILY_CARDINALITY",
+                members=members,
+                certificate=certificate,
             )
-            if len(members) < config.min_family_members:
-                record_diagnostic(
-                    reason="DIAGNOSTIC_FAMILY_CARDINALITY",
-                    members=members,
-                    certificate=certificate,
-                )
-                continue
-            if any(analyze_pattern_ir(parse_query(q)).semantic_hash != ir.semantic_hash
-                   for q in members):
-                raise EvidenceIntegrityError("rendered family escaped semantic orbit")
-            return accept(CertifiedQueryFamily(...))
+            continue
+        if any(analyze_pattern_ir(parse_query(q)).semantic_hash != ir.semantic_hash
+               for q in members):
+            raise EvidenceIntegrityError("rendered family escaped semantic orbit")
+        return accept(CertifiedQueryFamily(...))
 
     return reject("NO_CERTIFIED_QUERY_SYMMETRY")
 ```
@@ -433,6 +484,7 @@ def build_family(seed: PortableQuery, target: TargetSystem) -> FamilyBuildOutcom
 - GDsmith seed 数；
 - 可解析 seed 数；
 - 存在可认证对称位点的 seed 数；
+- 存在可联合认证生成元组合的 seed 数；
 - 仅形成 2–3 成员诊断候选的 seed 数；
 - 构成至少 4 成员正式查询族的 seed 数；
 - 动态结果一致的查询族数；
@@ -598,6 +650,8 @@ D_{-o}=
 query_symmetry:
   min_family_members: 4
   max_family_members: 12
+  allow_certified_generator_composition: true
+  max_generators_per_family: 4
   below_minimum_policy: diagnostic_only
   orbit_mode: bounded_deterministic
   core_rules:
@@ -651,7 +705,7 @@ families/<family-id>/
 - 图快照哈希；
 - seed query 与生成器版本；
 - `PatternIR` schema 版本和语义哈希；
-- 规则、生成元、动作词和轨道完整性；
+- 全部规则及其版本、生成元、单生成元证书摘要、联合证书、动作词和轨道完整性；
 - 每个成员的文本哈希与 presentation hash；
 - 结果等价状态；
 - 运行日程、噪声门和异常成员；
@@ -666,6 +720,8 @@ families/<family-id>/
 - `PatternIR` 对允许的表示变化产生相同 `semantic_hash`；
 - 方向、标签、类型、属性、投影或作用域变化产生不同哈希；
 - 对称动作的恒等元、逆元和组合满足预期；
+- 两个分别安全但联合前提冲突的生成元组合必须被拒绝；
+- 联合证书覆盖动作词的每个前缀，篡改生成元顺序或位点后验证失败；
 - renderer 生成成员后重新解析，语义哈希不变；
 - 伪造证书、错误 capability hash 和错误 site 被拒绝；
 - 轨道枚举确定、无重复、受预算限制；
@@ -677,7 +733,7 @@ families/<family-id>/
 在小规模随机 `PatternIR` 上验证：
 
 \[
-\forall \gamma\in O_r(Q),\quad
+\forall \gamma\in O_{\mathcal R}(Q),\quad
 \operatorname{semanticHash}(\gamma Q)
 =
 \operatorname{semanticHash}(Q).
@@ -731,11 +787,13 @@ families/<family-id>/
 
 - 实现轨道枚举和 bounded sample；
 - 实现 `CertifiedQueryFamily`；
+- 实现生成元兼容束枚举、联合证书和动作前缀重认证；
 - 实现 `match_pattern_component_permutation`；
 - 持久化完整证书和成员动作。
 
-验收：至少 4 成员的正式查询族可重放，伪造证书无法通过；少于 4 成员时 fail closed 到
-诊断路径。
+验收：单规则或多规则生成元可经联合认证形成至少 4 成员的正式查询族；分别安全但组合
+不安全的生成元被拒绝；查询族可重放，伪造证书无法通过；少于 4 成员时 fail closed 到诊断
+路径。
 
 ### Phase 3：族级 runtime oracle
 
@@ -801,11 +859,13 @@ families/<family-id>/
 
 1. **正式测试单位（已锁定）**：正式查询族至少 4 个成员；2–3 成员只保留开发诊断和历史
    兼容层，不进入核心产率或论文查询族级预言评价。
-2. **第一批 CORE**：推荐仅 `undirected_pattern_linearization` 和 `match_pattern_component_permutation`。
-3. **新颖性边界**：是否接受“规则本身未必新，创新在结构化族、证书和族级预言”这一收紧表述。
-4. **GRev 角色**：推荐只作外部基线与覆盖对照，不直接嵌入正式主线。
-5. **正式统计单位**：从 accepted query pairs 改为 accepted certified query families；member 数作为第二层统计。
-6. **历史 BOOL 路线**：推荐从正式代码入口和论文贡献中移除，但保留 historical replay 与旧 issue 证据。
-7. **计划信息**：推荐继续保持解释证据，不参与候选生成、调度和 promotion。
+2. **生成元组合策略（已锁定）**：允许单规则或多规则的已认证生成元组合形成至少 4 成员
+   轨道，但必须通过联合证书和动作前缀验证。
+3. **第一批 CORE**：推荐仅 `undirected_pattern_linearization` 和 `match_pattern_component_permutation`。
+4. **新颖性边界**：是否接受“规则本身未必新，创新在结构化族、证书和族级预言”这一收紧表述。
+5. **GRev 角色**：推荐只作外部基线与覆盖对照，不直接嵌入正式主线。
+6. **正式统计单位**：从 accepted query pairs 改为 accepted certified query families；member 数作为第二层统计。
+7. **历史 BOOL 路线**：推荐从正式代码入口和论文贡献中移除，但保留 historical replay 与旧 issue 证据。
+8. **计划信息**：推荐继续保持解释证据，不参与候选生成、调度和 promotion。
 
-第一项已经锁定；其余六项锁定前，不建议开始大规模改代码。
+前两项已经锁定；其余六项锁定前，不建议开始大规模改代码。
