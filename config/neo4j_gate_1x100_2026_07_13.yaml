@@ -1,0 +1,63 @@
+schema_version: 2
+experiment:
+  name: neo4j_gate_1x100_2026_07_13
+  seed: 20260713
+  feedback_observation_days: 90
+targets: [neo4j]
+matrix:
+  shards_per_system: 1
+workload:
+  accepted_query_pairs_per_shard: 100
+  max_generated_seeds_per_shard: 150
+  max_shard_runtime_hours: 1
+  deduplicate_by_ast_hash: true
+  max_variants_per_seed: 2
+generation:
+  backend: gdsmith
+  source: gdsmith
+  algorithm: COMPARED3
+  commit_source: vendored_checkout
+  checkout: ../../GDsmith-src
+scheduling:
+  max_parallel_generation_systems: 1
+  max_parallel_measurement_systems: 1
+  max_parallel_shards_per_system: 1
+  shard_retry_limit: 0
+  heartbeat_seconds: 10
+  stale_after_seconds: 90
+runtime:
+  cache_mode: warm
+  screen: {warmups: 3, pairs: 5, ratio: 2.0, schedule: randomized_ab_ba}
+  noise: {probe_queries: 20, aa_pairs_per_query: 10, absolute_delta_quantile: 0.99}
+validation:
+  sessions: 2
+  warmups_per_session: 5
+  pairs_per_session: 20
+  schedule: balanced_random
+  reconnect_between_sessions: true
+  reload_graph_between_sessions: true
+  require_complete_equivalence: true
+  min_ratio: 3.0
+  min_ci_lower_ratio: 2.0
+  min_absolute_delta: aa_noise_p99
+  bootstrap_resamples: 10000
+  require_same_direction_in_both_sessions: true
+  max_result_rows: 100000
+reducer:
+  enabled: true
+  max_attempts: 500
+  max_seconds: 1800
+  require_reduced_validation: true
+  auto_submit_status: reduced_valid
+  partial_requires_manual_review: true
+rules:
+  safety_tier: core
+  scheduling: exploration_floor_then_validated_yield
+  minimum_accepted_pairs_per_core_rule: 20
+  yield_update_epoch_accepted_pairs: 100
+  forbidden_feedback: [plan, profile, pmc, developer_status]
+artifacts:
+  default_level: minimal
+  promote_candidate_level: candidate
+  promote_issue_level: issue
+  shard_budget_mb: 500

@@ -43,6 +43,8 @@ class Neo4jAdapter(CypherLoaderMixin, BaseAdapter):
                 result = session.run(_query_with_timeout(query, timeout_seconds), dict(parameters))
                 rows, summary, truncated = _collect_rows(result, max_rows)
         except Exception as exc:
+            if _is_timeout_like(exc):
+                raise TimeoutError(f"Neo4j query timed out: {exc}") from exc
             raise QueryExecutionError(f"Neo4j query failed: {exc}") from exc
         elapsed_ms = (perf_counter() - start) * 1000.0
         return ExecutionResult(

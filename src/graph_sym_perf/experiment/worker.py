@@ -39,16 +39,20 @@ from graph_sym_perf.equivalence.purity import assess_query_purity
 from graph_sym_perf.experiment.plan_models import ExperimentSpec, ShardTask
 from graph_sym_perf.gdsmith.replay import gdsmith_read_query_is_replayable
 from graph_sym_perf.gdsmith.runner import neo4j_uri_to_host_port, run_gdsmith
+from graph_sym_perf.generation.symmetric_state import (
+    SymmetryQueryPair,
+    build_involutive_symmetry_state,
+)
 from graph_sym_perf.runtime.measurement import RuntimeHarness
 from graph_sym_perf.runtime.models import RuntimePolicy, RuntimeVerdict
 
 
 @dataclass(frozen=True)
 class GeneratedShard:
-    """Neutral graph and read-query corpus emitted by one GDsmith invocation."""
+    """Symmetric replay graph and certified graph-pattern pairs for one shard."""
 
     graph_statements: tuple[str, ...]
-    query_texts: tuple[str, ...]
+    query_pairs: tuple[SymmetryQueryPair, ...]
     generator_metadata: Mapping[str, object]
 
 
@@ -63,9 +67,10 @@ class _GenerationRunner(Protocol):
 class RuntimeFirstShardWorker:
     """Build accepted pairs and runtime-screen them with a fresh adapter.
 
-    `GeneratedShard` is deliberately neutral: AGE and LadybugDB use an explicit
-    compatible GDsmith proxy for generation, then replay the parsed graph into
-    their own target adapter.  A query is counted only after both ordinary
+    `GeneratedShard` contains the portable primary-label projection of a
+    GDsmith-derived involutive state. AGE and LadybugDB may use a compatible
+    GDsmith proxy for base generation, but graph replay and all measurements
+    happen on the target adapter. A pair is counted only after both ordinary
     executions return complete, typed-equivalent results.
     """
 
@@ -89,13 +94,17 @@ class RuntimeFirstShardWorker:
     def __call__(self, task: ShardTask) -> dict[str, object]:
         if self._run_dir is None:
             raise RuntimeError("shard worker was not bound to an immutable run directory")
-        shard_dir = self._run_dir / "shards" / f"{task.target.value}-{task.shard_index:03d}"
-        shard_dir.mkdir(parents=True, exist_ok=False)
+        shard_dir = _allocate_shard_attempt_dir(self._run_dir, task)
         generated = self._generation_runner(task, shard_dir / "gdsmith_raw")
         adapter = self._adapter_factory(task)
         try:
             self._reset_and_load(adapter, generated.graph_statements)
-            accepted, rejects = self._build_accepted_pairs(adapter, task, generated.query_texts, shard_dir)
+            accepted, rejects = self._build_accepted_pairs(adapter, task, generated.query_pairs, shard_dir)
+            if len(accepted) < task.accepted_query_pairs:
+                raise RuntimeError(
+                    f"accepted only {len(accepted)} of "
+                    f"{task.accepted_query_pairs} required symmetry pairs"
+                )
             candidates = self._screen_pairs(adapter, task, accepted, shard_dir)
         finally:
             adapter.close()
@@ -103,7 +112,7 @@ class RuntimeFirstShardWorker:
             "target": task.target.value,
             "shard_index": task.shard_index,
             "generation": dict(generated.generator_metadata),
-            "generated_query_records": len(generated.query_texts),
+            "generated_query_records": len(generated.query_pairs),
             "accepted_pairs": len(accepted),
             "screened_candidates": candidates,
             "reject_reasons": dict(sorted(rejects.items())),
@@ -124,23 +133,22 @@ class RuntimeFirstShardWorker:
         self,
         adapter: Any,
         task: ShardTask,
-        queries: tuple[str, ...],
+        query_pairs: tuple[SymmetryQueryPair, ...],
         shard_dir: Path,
-    ) -> tuple[list[tuple[str, str]], Counter[str]]:
-        accepted: list[tuple[str, str]] = []
+    ) -> tuple[list[SymmetryQueryPair], Counter[str]]:
+        accepted: list[SymmetryQueryPair] = []
         rejects: Counter[str] = Counter()
         seen: set[str] = set()
         max_rows = int(self.spec.validation["max_result_rows"])
         timeout = self.spec.systems[task.target].default_timeout_seconds
         records_path = shard_dir / "accepted_pairs.jsonl"
-        for query in queries[: task.max_generated_seeds]:
+        for pair in query_pairs[: task.max_generated_seeds]:
             if len(accepted) >= task.accepted_query_pairs:
                 break
-            pair = _certified_boolean_pair(query)
-            if pair is None:
-                rejects["RULE_NOT_APPLICABLE"] += 1
+            base, transformed = pair.query_a, pair.query_b
+            if not assess_query_purity(base).safe or not assess_query_purity(transformed).safe:
+                rejects["PURITY_REJECT"] += 1
                 continue
-            base, transformed = pair
             decision = _dialect_for(task.target).check(PortableQuery(base))
             transformed_decision = _dialect_for(task.target).check(PortableQuery(transformed))
             if decision.kind is DecisionKind.REJECT or transformed_decision.kind is DecisionKind.REJECT:
@@ -168,20 +176,27 @@ class RuntimeFirstShardWorker:
                 rejects["TYPED_EQUIVALENCE_FAILED"] += 1
                 continue
             seen.add(pair_hash)
-            accepted.append((base, transformed))
+            accepted.append(pair)
             _append_jsonl(
                 records_path,
                 {
                     "pair_hash": pair_hash,
                     "query_a_hash": _query_hash(base),
                     "query_b_hash": _query_hash(transformed),
-                    "rule_id": "null_complete_excluded_middle",
+                    "rule_id": pair.rule_id,
+                    "symmetry_certificate": dict(pair.certificate),
                     "equivalence": "complete_typed_equivalent",
                 },
             )
         return accepted, rejects
 
-    def _screen_pairs(self, adapter: Any, task: ShardTask, pairs: list[tuple[str, str]], shard_dir: Path) -> int:
+    def _screen_pairs(
+        self,
+        adapter: Any,
+        task: ShardTask,
+        pairs: list[SymmetryQueryPair],
+        shard_dir: Path,
+    ) -> int:
         policy_config = self.spec.runtime["screen"]
         policy = RuntimePolicy(
             warmups=int(policy_config["warmups"]),
@@ -189,11 +204,13 @@ class RuntimeFirstShardWorker:
             seed=task.seed,
             require_exact_balance=False,
             timeout_ms=float(self.spec.systems[task.target].default_timeout_seconds * 1000),
+            bootstrap_resamples=1,
         )
         threshold = float(policy_config["ratio"])
         harness = RuntimeHarness()
         candidates = 0
-        for index, (base, transformed) in enumerate(pairs):
+        for index, pair in enumerate(pairs):
+            base, transformed = pair.query_a, pair.query_b
             evidence = harness.measure_pair(adapter, base, transformed, policy=RuntimePolicy(**{**policy.__dict__, "seed": task.seed + index}))
             if evidence.verdict is not RuntimeVerdict.PASS or evidence.median_ratio is None or evidence.median_ratio < threshold:
                 continue
@@ -204,6 +221,8 @@ class RuntimeFirstShardWorker:
                     "pair_hash": _pair_hash(base, transformed),
                     "query_a": base,
                     "query_b": transformed,
+                    "rule_id": pair.rule_id,
+                    "symmetry_certificate": dict(pair.certificate),
                     "discovery_median_ratio": evidence.median_ratio,
                     "discovery_median_delta_ms": evidence.median_delta_ms,
                     "runtime_protocol": "execute-only-screen-v3",
@@ -228,7 +247,18 @@ class RuntimeFirstShardWorker:
     def _generate_with_gdsmith(self, task: ShardTask, raw_dir: Path) -> GeneratedShard:
         backend, host, port, username, password = _gdsmith_connection(task.target, self.environment)
         result = run_gdsmith(
-            config=GdsmithConfig(timeout_seconds=min(float(task.max_runtime_seconds), 3600.0)),
+            config=GdsmithConfig(
+                algorithm=self.spec.generation.algorithm,
+                backend_extra_args={
+                    backend: (
+                        "--max-node-num",
+                        str(self.spec.generation.max_node_num),
+                        "--label-num",
+                        str(self.spec.generation.label_num),
+                    )
+                },
+                timeout_seconds=min(float(task.max_runtime_seconds), 3600.0),
+            ),
             env=self.environment,
             raw_dir=raw_dir,
             backend=backend,
@@ -236,36 +266,32 @@ class RuntimeFirstShardWorker:
             port=port,
             username=username,
             password=password,
-            num_queries=task.max_generated_seeds,
+            num_queries=self.spec.generation.bootstrap_queries,
             seed=task.seed,
         )
         if result.returncode != 0:
             raise RuntimeError(f"GDsmith failed with code {result.returncode}")
+        symmetric_state = build_involutive_symmetry_state(
+            result.parsed.graph_statements,
+            max_pairs=task.max_generated_seeds,
+            seed=task.seed,
+        )
         return GeneratedShard(
-            graph_statements=result.parsed.graph_statements,
-            query_texts=tuple(record.statement for record in result.parsed.accepted_queries),
+            graph_statements=symmetric_state.graph_statements,
+            query_pairs=symmetric_state.query_pairs,
             generator_metadata={
                 "backend": backend,
+                "algorithm": self.spec.generation.algorithm,
+                "bootstrap_queries": self.spec.generation.bootstrap_queries,
+                "gdsmith_max_node_num": self.spec.generation.max_node_num,
+                "gdsmith_label_num": self.spec.generation.label_num,
                 "generation_seed": task.seed,
                 "generated_query_record_limit": task.max_generated_seeds,
                 "gdsmith_returncode": result.returncode,
+                "gdsmith_accepted_query_records": len(result.parsed.accepted_queries),
+                **dict(symmetric_state.metadata),
             },
         )
-
-
-def _certified_boolean_pair(query: str) -> tuple[str, str] | None:
-    purity = assess_query_purity(query)
-    if not purity.safe or not gdsmith_read_query_is_replayable(query):
-        return None
-    match = re.search(r"\bWHERE\b(?P<predicate>.*?)(?=\bRETURN\b)", query, flags=re.IGNORECASE | re.DOTALL)
-    if match is None:
-        return None
-    predicate = match.group("predicate").strip()
-    if not predicate:
-        return None
-    certificate = f"(({predicate}) OR NOT ({predicate}) OR ({predicate}) IS NULL)"
-    transformed = query[: match.start("predicate")] + f" ({predicate}) AND {certificate} " + query[match.end("predicate") :]
-    return query, transformed
 
 
 def _dialect_for(target: TargetSystem):
@@ -295,6 +321,20 @@ def _pair_hash(query_a: str, query_b: str) -> str:
 def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(dict(payload), sort_keys=True) + "\n")
+
+
+def _allocate_shard_attempt_dir(run_dir: Path, task: ShardTask) -> Path:
+    shards_dir = run_dir / "shards"
+    base_name = f"{task.target.value}-{task.shard_index:03d}"
+    for attempt in range(10_000):
+        name = base_name if attempt == 0 else f"{base_name}-retry-{attempt:03d}"
+        candidate = shards_dir / name
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return candidate
+    raise RuntimeError(f"exhausted artifact directories for shard {base_name}")
 
 
 def _optional_env(target: TargetSystem) -> Mapping[str, str]:

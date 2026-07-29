@@ -79,6 +79,32 @@ def test_neo4j_profile_timeout_does_not_fallback_to_execute() -> None:
         adapter.profile("RETURN 1 AS ok", {}, "test", timeout_seconds=10)
 
 
+def test_neo4j_execute_maps_driver_transaction_timeout_to_timeout_error() -> None:
+    class TransactionTimedOutClientConfiguration(Exception):
+        pass
+
+    class TimeoutResult:
+        def __iter__(self):
+            raise TransactionTimedOutClientConfiguration("transaction timed out")
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def run(self, query, parameters):
+            return TimeoutResult()
+
+    adapter = object.__new__(Neo4jAdapter)
+    adapter._connect = lambda: None
+    adapter._session = lambda: FakeSession()
+
+    with pytest.raises(TimeoutError, match="transaction timed out"):
+        adapter.execute("RETURN 1 AS ok", {}, "test", timeout_seconds=10)
+
+
 def test_memgraph_profile_timeout_does_not_fallback_to_execute() -> None:
     calls: list[str] = []
     adapter = object.__new__(MemgraphAdapter)

@@ -18,6 +18,20 @@ from graph_sym_perf.experiment.plan_models import (
 )
 
 
+_GDSMITH_ALGORITHMS = {
+    "SIMPLE",
+    "PATTERN_GUIDED",
+    "MANUAL",
+    "NON_EMPTY",
+    "COMPARED1",
+    "COMPARED2",
+    "COMPARED3",
+    "COMPARED4",
+    "COMPARED5",
+    "MANUAL_PERF",
+}
+
+
 def load_experiment_spec(path: str | Path) -> ExperimentSpec:
     source_path = Path(path)
     raw = _load_yaml(source_path, "experiment configuration")
@@ -69,7 +83,21 @@ def load_experiment_spec(path: str | Path) -> ExperimentSpec:
         raise ConfigError("workload.max_generated_seeds_per_shard must be at least accepted_query_pairs_per_shard")
 
     generation_raw = _mapping(raw.get("generation"), "generation")
-    _only_keys(generation_raw, {"backend", "commit_source", "checkout", "source"}, "generation")
+    _only_keys(
+        generation_raw,
+        {
+            "algorithm",
+            "backend",
+            "bootstrap_queries",
+            "commit_source",
+            "checkout",
+            "label_num",
+            "max_node_num",
+            "source",
+            "state_model",
+        },
+        "generation",
+    )
     backend = _nonempty_string(generation_raw.get("backend"), "generation.backend")
     if backend != "gdsmith" or generation_raw.get("source", "gdsmith") != "gdsmith":
         raise ConfigError("generation.backend/source must be gdsmith; LDBC and alternate generators are unsupported")
@@ -79,7 +107,34 @@ def load_experiment_spec(path: str | Path) -> ExperimentSpec:
     checkout = Path(_nonempty_string(generation_raw.get("checkout"), "generation.checkout"))
     if not checkout.is_absolute():
         checkout = (source_path.parent / checkout).resolve()
-    generation = GenerationSpec(backend=backend, commit_source=commit_source, checkout=checkout)
+    algorithm = _nonempty_string(generation_raw.get("algorithm", "COMPARED3"), "generation.algorithm").upper()
+    if algorithm not in _GDSMITH_ALGORITHMS:
+        raise ConfigError(f"generation.algorithm must be one of: {', '.join(sorted(_GDSMITH_ALGORITHMS))}")
+    state_model = _nonempty_string(
+        generation_raw.get("state_model", "involutive_double"),
+        "generation.state_model",
+    )
+    if state_model != "involutive_double":
+        raise ConfigError("generation.state_model must be involutive_double")
+    generation = GenerationSpec(
+        backend=backend,
+        commit_source=commit_source,
+        checkout=checkout,
+        algorithm=algorithm,
+        state_model=state_model,
+        max_node_num=_positive_int(
+            generation_raw.get("max_node_num", 1024),
+            "generation.max_node_num",
+        ),
+        label_num=_positive_int(
+            generation_raw.get("label_num", 4),
+            "generation.label_num",
+        ),
+        bootstrap_queries=_positive_int(
+            generation_raw.get("bootstrap_queries", 1),
+            "generation.bootstrap_queries",
+        ),
+    )
 
     policies = {
         name: _strict_policy(raw.get(name), name)

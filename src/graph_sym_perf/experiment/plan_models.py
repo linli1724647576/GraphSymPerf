@@ -28,6 +28,11 @@ class GenerationSpec:
     backend: str
     commit_source: str
     checkout: Path
+    algorithm: str
+    state_model: str
+    max_node_num: int
+    label_num: int
+    bootstrap_queries: int
 
 
 @dataclass(frozen=True)

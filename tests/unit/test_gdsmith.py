@@ -186,6 +186,46 @@ def test_run_gdsmith_marks_fatal_stderr_as_failure(tmp_path: Path, monkeypatch) 
     assert result.fatal_stderr_markers == ("OutOfMemoryError",)
 
 
+def test_run_gdsmith_marks_neo4j_java_heap_space_as_failure(tmp_path: Path, monkeypatch) -> None:
+    jar = tmp_path / "GDsmith.jar"
+    jar.write_text("placeholder", encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        kwargs["stderr"].write(
+            "org.neo4j.driver.exceptions.TransientException: Java heap space\n"
+        )
+        log_dir = Path(kwargs["cwd"]) / "logs" / "neo4j"
+        log_dir.mkdir(parents=True)
+        (log_dir / "database0-cur.log").write_text(
+            "CREATE (n0:L0 {id: 1});\nMATCH (n0:L0) RETURN n0.id;\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(gdsmith_runner.shutil, "which", lambda name: "/usr/bin/java")
+    monkeypatch.setattr(gdsmith_runner.subprocess, "run", fake_run)
+
+    result = gdsmith_runner.run_gdsmith(
+        config=GdsmithConfig(timeout_seconds=1),
+        env={
+            "GRAPHSYMPERF_GDSMITH_JAR": str(jar),
+            "GRAPHSYMPERF_GDSMITH_ALLOW_DESTRUCTIVE": "1",
+        },
+        raw_dir=tmp_path / "raw",
+        backend="neo4j",
+        host="127.0.0.1",
+        port=7687,
+        username="neo4j",
+        password="secret",
+        num_queries=1,
+        seed=1,
+    )
+
+    assert result.process_returncode == 0
+    assert result.returncode == 1
+    assert result.fatal_stderr_markers == ("Java heap space",)
+
+
 def test_compact_large_text_artifact_keeps_head_and_tail(tmp_path: Path) -> None:
     path = tmp_path / "gdsmith_stderr.txt"
     path.write_bytes(b"a" * 20 + b"middle" * 20 + b"z" * 20)

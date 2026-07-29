@@ -18,6 +18,7 @@ _CAPTURE_ARTIFACT_EDGE_BYTES = 2 * 1024 * 1024
 _FATAL_STDERR_RETURNCODE = 1
 _FATAL_STDERR_PATTERNS: tuple[tuple[str, str], ...] = (
     ("OutOfMemoryError", "OutOfMemoryError"),
+    ("Java heap space", "Java heap space"),
     ("StackOverflowError", "StackOverflowError"),
     ("NoClassDefFoundError", "NoClassDefFoundError"),
     ("UnsupportedClassVersionError", "UnsupportedClassVersionError"),
@@ -259,6 +260,8 @@ def _detect_fatal_stderr_markers(path: Path) -> tuple[str, ...]:
         return ()
     seen: list[str] = []
     for marker, pattern in _FATAL_STDERR_PATTERNS:
+        if marker == "Java heap space" and "OutOfMemoryError" in seen:
+            continue
         if pattern in text and marker not in seen:
             seen.append(marker)
     return tuple(seen)

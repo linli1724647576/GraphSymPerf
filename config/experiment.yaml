@@ -17,6 +17,11 @@ generation:
   source: gdsmith
   commit_source: vendored_checkout
   checkout: ../../GDsmith-src
+  algorithm: COMPARED3
+  state_model: involutive_double
+  max_node_num: 1024
+  label_num: 4
+  bootstrap_queries: 1
 scheduling:
   max_parallel_generation_systems: 3
   max_parallel_measurement_systems: 1

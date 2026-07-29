@@ -29,6 +29,27 @@ def test_runtime_first_experiment_spec_is_the_exact_seven_by_sixteen_matrix() ->
     assert spec.total_accepted_pair_budget == 112_000
 
 
+def test_schema_v2_accepts_an_explicit_gdsmith_algorithm(tmp_path: Path) -> None:
+    source = Path("config/experiment.yaml").read_text(encoding="utf-8")
+    source = source.replace("  algorithm: COMPARED3\n", "  algorithm: NON_EMPTY\n", 1)
+    path = tmp_path / "experiment.yaml"
+    path.write_text(source, encoding="utf-8")
+    (tmp_path / "systems.yaml").write_text(Path("config/systems.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+
+    spec = load_experiment_spec(path)
+
+    assert spec.generation.algorithm == "NON_EMPTY"
+
+
+def test_runtime_first_spec_declares_the_constrained_symmetry_state() -> None:
+    spec = load_experiment_spec("config/experiment.yaml")
+
+    assert spec.generation.state_model == "involutive_double"
+    assert spec.generation.max_node_num == 1024
+    assert spec.generation.label_num == 4
+    assert spec.generation.bootstrap_queries == 1
+
+
 @pytest.mark.parametrize(
     "patch",
     (

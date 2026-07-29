@@ -40,8 +40,12 @@ class RuntimeHarness:
     ) -> RuntimeEvidence:
         params = parameters or {}
         for _ in range(policy.warmups):
-            self._elapsed(executor, query_a, params, policy)
-            self._elapsed(executor, query_b, params, policy)
+            _, a_timeout = self._elapsed(executor, query_a, params, policy)
+            if a_timeout:
+                return _inconclusive_without_samples(query_a, query_b, "warmup_timeout")
+            _, b_timeout = self._elapsed(executor, query_b, params, policy)
+            if b_timeout:
+                return _inconclusive_without_samples(query_a, query_b, "warmup_timeout")
         samples: list[PairedSample] = []
         for order in paired_schedule(policy.pairs, seed=policy.seed, require_exact_balance=policy.require_exact_balance):
             if order == "AB":
@@ -51,6 +55,8 @@ class RuntimeHarness:
                 b_ms, b_timeout = self._elapsed(executor, query_b, params, policy)
                 a_ms, a_timeout = self._elapsed(executor, query_a, params, policy)
             samples.append(PairedSample(order=order, a_ms=a_ms, b_ms=b_ms, a_timeout=a_timeout, b_timeout=b_timeout))
+            if a_timeout or b_timeout:
+                break
         return _evidence(query_a, query_b, tuple(samples), policy)
 
     @staticmethod
@@ -102,6 +108,23 @@ def _evidence(query_a: str, query_b: str, samples: tuple[PairedSample, ...], pol
         sum(value >= 1.0 for value in ratios) / len(ratios),
         relative_mad(a_values + b_values),
         tuple(reason_codes),
+    )
+
+
+def _inconclusive_without_samples(query_a: str, query_b: str, reason: str) -> RuntimeEvidence:
+    return RuntimeEvidence(
+        verdict=RuntimeVerdict.INCONCLUSIVE,
+        query_a_hash=_hash(query_a),
+        query_b_hash=_hash(query_b),
+        paired_samples=(),
+        median_ratio=None,
+        median_delta_ms=None,
+        ci_ratio_low=None,
+        ci_ratio_high=None,
+        direction_consistency=0.0,
+        relative_mad=None,
+        reason_codes=(reason,),
+        timeout_lower_bound_ratio=None,
     )
 
 

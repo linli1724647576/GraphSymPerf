@@ -50,3 +50,15 @@ public class AgensGraphConnection extends CypherConnection {
     assert "MULTI_LABEL_NODE" in patched
     assert "DOUBLE_QUOTED_STRING" in patched
     assert "singleQuotedStrings(singleLabelNodes(query))" in patched
+import pytest
+
+from graph_sym_perf.adapters.agensgraph import AgensGraphAdapter
+from graph_sym_perf.adapters.apache_age import ApacheAgeAdapter
+
+
+@pytest.mark.parametrize("adapter_type", (AgensGraphAdapter, ApacheAgeAdapter))
+def test_graph_replay_rejects_multi_label_nodes_instead_of_dropping_a_label(adapter_type) -> None:
+    adapter = object.__new__(adapter_type)
+
+    with pytest.raises(ValueError, match="multi-label"):
+        adapter.load_gdsmith_graph(("CREATE (n:First:Second {id: 1})",))

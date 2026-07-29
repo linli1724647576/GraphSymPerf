@@ -53,6 +53,7 @@ class AgensGraphAdapter(CypherLoaderMixin, BaseAdapter):
 
     def load_gdsmith_graph(self, statements: tuple[str, ...] | list[str]) -> GdsmithReplayGraph:
         graph = parse_gdsmith_replay_graph(statements)
+        _reject_multi_label_replay_graph(graph)
         self.ensure_schema()
         self._ensure_labels(
             vertex_labels=tuple(sorted({self._primary_node_label(node) for node in graph.nodes})),
@@ -305,6 +306,11 @@ def _has_variable_label_conflict(query: str) -> bool:
         if len(labels_by_variable[variable]) > 1:
             return True
     return False
+
+
+def _reject_multi_label_replay_graph(graph: GdsmithReplayGraph) -> None:
+    if any(len(node.labels) > 1 for node in graph.nodes):
+        raise ValueError("AgensGraph replay does not support multi-label nodes")
 
 
 def _has_distinct_order_by_projection_mismatch(query: str) -> bool:
