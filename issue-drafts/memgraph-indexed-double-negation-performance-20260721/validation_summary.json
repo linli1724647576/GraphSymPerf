@@ -1,0 +1,23 @@
+{
+  "dbms": "Memgraph",
+  "version": "3.10.1",
+  "image_digest": "sha256:042c8642954a7bde971a9c7683c8b1360e7fcf129a5fae36d63f12449e7154aa",
+  "rule_id": "indexed_double_negation_predicate",
+  "nodes": 500000,
+  "matched_rows": 500,
+  "exact_ids_equal": true,
+  "session_1": {
+    "query_a_ms": 1.527125365100801,
+    "query_b_ms": 100.11654149275273,
+    "without_index_ratio": 1.0556110629082043
+  },
+  "session_2": {
+    "query_a_ms": 1.4311664272099733,
+    "query_b_ms": 105.84797954652458,
+    "without_index_ratio": 1.1125097694200905
+  },
+  "raw_evidence": [
+    "../memgraph-search/results/index-normalization-session1.json",
+    "../memgraph-search/results/index-normalization-session2.json"
+  ]
+}

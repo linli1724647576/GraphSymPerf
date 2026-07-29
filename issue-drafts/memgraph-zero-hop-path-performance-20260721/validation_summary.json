@@ -1,0 +1,25 @@
+{
+  "dbms": "Memgraph",
+  "version": "3.10.1",
+  "image_digest": "sha256:042c8642954a7bde971a9c7683c8b1360e7fcf129a5fae36d63f12449e7154aa",
+  "rule_id": "zero_hop_path_identity",
+  "family": "zero_hop_path",
+  "complete_rows_equal": true,
+  "matched_rows": 1000000,
+  "item_nodes": 1000000,
+  "relationships": 0,
+  "sessions": [
+    {
+      "node_match_ms": 61.18110392708331,
+      "zero_hop_ms": 129.66358289122581
+    },
+    {
+      "node_match_ms": 50.57366692926735,
+      "zero_hop_ms": 102.96416655182838
+    }
+  ],
+  "evidence": [
+    "../memgraph-search/results/zero-hop-1m-session1.json",
+    "../memgraph-search/results/zero-hop-1m-session2.json"
+  ]
+}
