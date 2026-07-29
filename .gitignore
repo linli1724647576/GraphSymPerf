@@ -24,3 +24,7 @@
 /tmp_*.jpeg
 .DS_Store
 .env
+/.light/
+/issue-drafts/*-search/*.json
+/issue-drafts/*-search/*.jsonl
+/issue-drafts/*-search/results/
