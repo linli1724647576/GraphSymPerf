@@ -409,7 +409,102 @@ pattern list，并从其排列轨道中确定性生成至少 4 个成员。
 
 该规则最能压力测试跨 pattern join-order，但作用域风险最高，建议第二阶段实现。
 
-### 5.5 CONTROL：不计为论文正式规则
+### 5.5 INCUBATING：新增图原生 mutator 候选
+
+下列规则进入孵化注册表，但不改变已经锁定的两个第一批 CORE。只有完成静态证明、方言能力
+探测、至少 4 成员族构造和真实 GDBMS 先导实验后，才可单独讨论是否升级。
+
+#### 5.5.1 循环模式二面体线性化
+
+规则 ID：`cycle_pattern_dihedral_linearization`
+
+- 对固定长度循环模式改变文本起点和遍历方向；
+- 反向遍历时同步翻转箭头书写，以保持每条有向关系的源、目标变量身份；
+- \(k\) 边循环最多形成 \(2k\) 个旋转/反射表示；
+- 只支持 ordinary mandatory `MATCH`、无命名路径、无量化路径、无重复关系变量；
+- 重复节点变量必须表达同一节点 equijoin，投影变量身份保持。
+
+该规则图原生性和轨道产率高，工程可行性中高；但一般图模式重新线性化与 GRev 的
+ASG/RWC 高度邻近，只能作为 GraphSymPerf“显式族 + 证书 + 族级预言”的规则实例，不能
+把循环旋转本身写成首创。
+
+#### 5.5.2 固定路径链分段/合并
+
+规则 ID：`fixed_path_segmentation`
+
+- 在同一个 `MATCH` 图模式内，把固定链改写为共享节点变量的多个 constituent path
+  patterns，或执行逆变换；
+- \(k\) 条边的 \(k-1\) 个内部切点形成至多 \(2^{k-1}\) 种分段表示；
+- 所有关系仍处于同一个 graph pattern 和同一个 match mode，关系唯一性作用域不得改变；
+- 不允许命名路径、路径投影、量化路径、`OPTIONAL MATCH` 或跨子句移动。
+
+当前 parser 已支持 chain 与 comma-separated `PatternList`，实现可行性高；但该规则几乎
+直接落在 GRev 的 path-cover 表达能力内，因此定位为覆盖扩展和外部基线对照。
+
+#### 5.5.3 重复节点变量约束重锚定
+
+规则 ID：`repeated_node_constraint_reanchoring`
+
+- 当同一节点变量在同一个 graph pattern 中出现多次时，在这些 occurrence 之间移动该变量
+  的静态标签或静态属性约束；
+- 约束必须恰好保留一次，不以复制冗余约束扩大家族；
+- 只处理静态 label、literal/parameter property map，不移动 inline `WHERE`；
+- 不跨 `MATCH`、`OPTIONAL MATCH`、量化路径或子查询作用域；
+- 联合证书证明所有 occurrence 由 equijoin 绑定到同一节点。
+
+该规则能压力测试标签扫描、索引锚点和图模式起点选择，轨道规模由 occurrence 数和约束数
+共同决定。现有关系代数 lowering 没有完整保留边内节点约束，必须先修正 `PatternIR`，
+不能直接复用旧 proof 宣称安全。
+
+#### 5.5.4 关系唯一性作用域分段/融合
+
+规则 ID：`relationship_uniqueness_scope_refactoring`
+
+- 在一个 graph pattern 与多个连续 mandatory `MATCH` 之间做分段或融合；
+- 仅当各分段的静态关系类型集合两两不交，或有同等强度的静态证明保证同一关系不可能跨
+  分段复用时，才允许改变关系唯一性作用域；
+- `WHERE`、路径选择器、量化路径、预绑定关系变量、写子句和 `OPTIONAL MATCH` 一律拒绝；
+- \(k\) 个可独立认证分量的 \(k-1\) 个子句切点可形成至多 \(2^{k-1}\) 种表示。
+
+这是最能体现 Cypher relationship-isomorphism 语义的新增候选，差异化强于普通分量排列；
+同时也是证明风险最高的规则。需要新增跨子句 bag-semantics 证明和目标 DBMS
+`relationship_uniqueness_scope` 能力，未完成前保持 fail-closed。
+
+#### 5.5.5 有界路径量词表示族
+
+规则 ID：`bounded_path_quantifier_representation`
+
+在目标方言同时支持时，构造以下表示子族：
+
+- legacy variable-length relationship；
+- quantified relationship；
+- 展开的 quantified path pattern。
+
+只接受有限上界、相同方向和关系类型，禁止可观察 path/group/list 变量、inline predicate、
+path selector 和零次迭代边界；每次变换后重新解析并验证路径多重度。单个位点通常只有
+2–3 种表示，可与其他已认证位点或生成元组合形成正式四成员族。
+
+这是路径语言特有且优化器敏感的规则，但 quantified syntax 的跨 GDBMS 支持较弱，必须由
+方言 capability matrix 控制，不能把 Neo4j 新语法默认推广到其他目标。
+
+### 5.6 DIALECT CONTROL：方言/解析器对照
+
+以下规则用于测量解析和规范化敏感性，不进入正式规则产率：
+
+- `explicit_default_match_mode`：隐式默认 match mode 与显式
+  `DIFFERENT RELATIONSHIPS`；
+- `explicit_default_path_mode`：仅在语义规范和目标实现均确认时比较隐式默认与显式
+  `TRAIL`；
+- `label_intersection_notation`：legacy multi-label colon form 与受支持方言中的
+  label-intersection expression。
+
+这些变换主要增加语法表面差异，方法贡献较弱；即使形成 4 成员组合，也只能作为
+`DIALECT_CONTROL`，不能升级正式查询族。
+
+完整候选漏斗、文献重叠和代码可行性见
+[`query-symmetry-mutator-study.md`](query-symmetry-mutator-study.md)。
+
+### 5.7 CONTROL：不计为论文正式规则
 
 以下规则只作负对照或解析器控制，不计入正式规则产率和核心 bug yield：
 
@@ -668,9 +763,18 @@ query_symmetry:
   experimental_rules:
     - bounded_undirected_path_endpoint
     - mandatory_match_dependency_permutation
+  incubating_rules:
+    - cycle_pattern_dihedral_linearization
+    - fixed_path_segmentation
+    - repeated_node_constraint_reanchoring
+    - relationship_uniqueness_scope_refactoring
+    - bounded_path_quantifier_representation
   controls:
     - alpha_renaming
     - directed_notation
+    - explicit_default_match_mode
+    - explicit_default_path_mode
+    - label_intersection_notation
 
 runtime:
   family_screen:
@@ -803,6 +907,11 @@ families/<family-id>/
 不安全的生成元被拒绝；查询族可重放，伪造证书无法通过；少于 4 成员时 fail closed 到诊断
 路径。
 
+孵化规则不与 Phase 2 CORE 同时铺开。CORE 稳定后，按
+`cycle_pattern_dihedral_linearization` → `fixed_path_segmentation` →
+`repeated_node_constraint_reanchoring` 的顺序进入独立试验；关系唯一性作用域和量化路径
+表示族分别等待跨子句证明与方言 capability matrix。
+
 ### Phase 3：族级 runtime oracle
 
 - 实现平衡 block 日程；
@@ -848,6 +957,11 @@ families/<family-id>/
 | 族级平衡 runtime oracle | 高 | 可复用 pair harness、noise、bootstrap | 正式实验成本增加 |
 | mandatory MATCH 排列 | 中 | 依赖分析已有 reducer 基础 | Cypher 作用域和 WHERE 附着 |
 | 可变长度路径端点族 | 中低 | 有有限路径 proof 雏形 | 多重路径、路径对象和跨方言语义 |
+| 循环二面体线性化 | 中高 | chain parser 与图模式 RA 可扩展 | 与 GRev path-cover 高度重叠 |
+| 固定路径链分段 | 高 | parser 已有 chain/PatternList | 必须保持同一关系唯一性作用域 |
+| 重复节点约束重锚定 | 中 | parser 已提取 label/property | 现有 edge lowering 丢失节点约束 |
+| 关系唯一性作用域重构 | 中低 | 可用类型集合不交作充分条件 | 跨子句 bag 语义证明复杂 |
+| 有界路径量词表示族 | 中低 | Neo4j 文档给出表示对应关系 | 方言窄、group variable 与多重度 |
 | 直接复用 GRev 源码 | 低到中 | 有公开工程和 ASG/RWC 实现 | 许可证、工程耦合和接口稳定性 |
 | 把 GRev 作为外部基线 | 高 | 公开论文与复现实验工程 | 环境版本较旧、运行成本 |
 
