@@ -220,10 +220,26 @@ class Neo4j:
         if constraints["rows"] or any(row["type"] != "LOOKUP" and row["name"] != "gsp_cost_lookup" for row in indexes["rows"]):
             raise CaseFailure("environment_error", "unexpected_schema_in_test_database", stop_target=True)
         self.execute("DROP INDEX gsp_cost_lookup IF EXISTS", {}, timeout)
-        self.execute("MATCH (n) DETACH DELETE n", {}, timeout)
+        # Delete relationships before nodes, in bounded transactions. A dense
+        # root can otherwise make DETACH DELETE exceed the transaction pool
+        # while rebuilding a perfectly valid large experiment state.
+        for query in ("MATCH ()-[r]->() WITH r LIMIT 10000 DELETE r RETURN count(*) AS removed",
+                      "MATCH (n) WITH n LIMIT 10000 DELETE n RETURN count(*) AS removed"):
+            while True:
+                result = self.execute(query, {}, timeout)
+                rows = result["rows"]
+                if (not result["complete"] or len(rows) != 1 or type(rows[0].get("removed")) is not int
+                        or not 0 <= rows[0]["removed"] <= 10000):
+                    raise CaseFailure("environment_error", "invalid_reset_batch_result", stop_target=True)
+                if rows[0]["removed"] == 0:
+                    break
         for query in state["setup"]:
             self.execute(query, {}, timeout)
         self.execute("CALL db.awaitIndexes($seconds)", {"seconds": max(1, math.ceil(timeout))}, timeout)
+        # Rebuilding a graph can leave a cached plan with cardinalities from
+        # its previous state. Refresh outside query timers before classifying
+        # a performance difference as an optimizer candidate.
+        self.execute("CALL db.prepareForReplanning()", {}, timeout)
 
     def close(self):
         self.driver.close()
@@ -585,6 +601,11 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
             validate_read_query(query)
         if case.get("reference_side") not in (None, "b", "ref") or case.get("reference_side") == "ref" and not case.get("query_ref"):
             raise ValueError("reference_side must identify b or an existing query_ref")
+        guard = case.get("bindings", {}).get("scor", {})
+        if guard.get("guard_facts"):
+            if any(guard.get(name) not in case.get("checks", [])
+                   for name in ("guard_check", "guard_cardinality_check")):
+                raise ValueError("dynamic guard requires its value and cardinality checks")
         if case.get("pattern") and case["pattern"] not in supported_patterns(database):
             raise CaseFailure("unsupported_feature", f"unsupported_pattern:{case['pattern']}")
         for check in case.get("checks", []):

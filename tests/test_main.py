@@ -167,3 +167,16 @@ def test_unsupported_pattern_is_visible_in_run_manifest(tmp_path, monkeypatch):
 def test_small_legacy_budget_requires_explicit_pattern_subset():
     with pytest.raises(ValueError, match='fewer patterns'):
         main.pattern_budgets({'patterns': ['P1', 'P2'], 'max_cases': 1})
+
+
+def test_complexity_inputs_are_saved_and_protected(tmp_path):
+    case = main.prepare_case(None, 'S1', 3, 1234, 0, 2)
+    assert case['complexity'] == 2
+    main.save_case(tmp_path, case, {}, {'status': 'no_candidate'})
+    assert main.read_case(tmp_path)[0] == case
+    file = tmp_path / 'result.json'
+    record = json.loads(file.read_text())
+    record['case']['complexity'] = 1
+    file.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match='changed'):
+        main.read_case(tmp_path)

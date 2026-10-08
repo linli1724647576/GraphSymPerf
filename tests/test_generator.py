@@ -356,3 +356,39 @@ def test_pattern_without_a_decisive_fact_is_not_given_an_answer_label_reference(
     case = instantiate(None, pattern, 4, 17, data_seed=0)
     assert "query_ref" not in case
     assert all("REFERENCE" not in statement for statement in case["setup"])
+
+
+@pytest.mark.parametrize("complexity", [1, 2])
+@pytest.mark.parametrize("pattern", [f"P{i}" for i in range(1, 17)] + SCOR_PATTERNS)
+def test_complexity_sampling_is_reproducible_keeps_state_and_preserves_pattern_contract(pattern, complexity):
+    cases = [instantiate(None, pattern, 3, seed, data_seed=0, complexity=complexity)
+             for seed in range(100, 116)]
+    assert len({tuple(case["setup"]) for case in cases}) == 1
+    assert len({json.dumps(case["checks"], sort_keys=True) for case in cases}) == 1
+    for case in cases:
+        assert case == instantiate(None, pattern, 3, case["seed"], data_seed=0, complexity=complexity)
+        assert case["complexity"] == case["source"]["complexity"] == complexity
+        assert case["source"]["role_sampling"] == "independent_seeded_random"
+        assert pattern in find_patterns(case["query_a"], bindings=case["bindings"])
+        changed = mutate(case["query_a"], pattern, bindings=case["bindings"])
+        assert parse_query(render_query(changed)) == changed
+        if pattern.startswith("S"):
+            spec = case["bindings"]["scor"]
+            assert spec["guard_check"] in case["checks"]
+            assert spec["guard_cardinality_check"] in case["checks"]
+
+
+@pytest.mark.parametrize("pattern", ["P4", "P5", "P15", "P16", "S1", "S2", "S3", "S4", "S7"])
+def test_nested_space_expands_actual_query_shapes_not_only_labels_or_seeds(pattern):
+    plain = {render_query(instantiate(None, pattern, 3, seed, data_seed=0)["query_a"])
+             for seed in range(100, 180)}
+    nested = [instantiate(None, pattern, 3, seed, data_seed=0, complexity=2)
+              for seed in range(100, 180)]
+    assert len({render_query(case["query_a"]) for case in nested}) > len(plain)
+    assert len({case["template_id"] for case in nested}) == len({render_query(case["query_a"]) for case in nested})
+
+
+@pytest.mark.parametrize("complexity", [-1, 3, True, "2"])
+def test_invalid_complexity_does_not_silently_change_generation(complexity):
+    with pytest.raises(ValueError, match="complexity"):
+        instantiate(None, "P4", 1, 0, complexity=complexity)

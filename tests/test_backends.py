@@ -58,6 +58,38 @@ def test_memgraph_restore_uses_its_schema_operations_without_neo4j_await():
                      'MATCH (n) DETACH DELETE n', 'CREATE INDEX ON :GspLow(id)', 'CREATE (:GspLow {id:1})']
 
 
+def test_neo4j_refreshes_statistics_after_rebuilding_and_waiting_for_indexes():
+    db = Neo4j.__new__(Neo4j)
+    db.settings = measurement_settings({})
+    calls = []
+    def execute(query, parameters, timeout):
+        calls.append(query)
+        rows = [{'removed': 0}] if 'AS removed' in query else []
+        return {'rows': rows, 'complete': True, 'elapsed_ms': 1}
+    db.execute = execute
+    db.restore({'setup': [INDEX, 'CREATE (:GspLow {id:1})']})
+    assert calls[-2:] == ['CALL db.awaitIndexes($seconds)', 'CALL db.prepareForReplanning()']
+
+
+def test_neo4j_reset_batches_edges_before_nodes_and_rejects_unbounded_counts():
+    db = Neo4j.__new__(Neo4j)
+    db.settings = measurement_settings({})
+    counts = iter([10000, 3, 0, 5, 0])
+    calls = []
+    def execute(query, parameters, timeout):
+        calls.append(query)
+        return {'rows': [{'removed': next(counts)}] if 'AS removed' in query else [],
+                'complete': True, 'elapsed_ms': 1}
+    db.execute = execute
+    db.restore({'setup': []})
+    resets = [q for q in calls if 'AS removed' in q]
+    assert ['DELETE r' in q for q in resets] == [True, True, True, False, False]
+    db.execute = lambda query, parameters, timeout: {'rows': [{'removed': 10001}] if 'AS removed' in query else [],
+                                                   'complete': True, 'elapsed_ms': 1}
+    with pytest.raises(CaseFailure, match='invalid_reset_batch_result'):
+        db.restore({'setup': []})
+
+
 @pytest.mark.parametrize('properties,expected', [(None, None), ([], None), ('uid', 'uid'), (['uid'], 'uid')])
 def test_memgraph_index_metadata_accepts_real_single_property_list(properties, expected):
     assert Memgraph._index_row({'index type': 'label' if expected is None else 'label+property',

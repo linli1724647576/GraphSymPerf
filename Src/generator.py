@@ -1572,7 +1572,7 @@ def _constant_forms(value: bool | None) -> tuple[Any, ...]:
             Negation(Literal(not value)))
 
 
-def _populate_variants(case: dict[str, Any], seed: int) -> None:
+def _populate_variants(case: dict[str, Any], seed: int, complexity: int = 0) -> None:
     """Finite role pools modeled after SCor's fixed candidate lists.
 
     Choices use only facts already visible in these constructed graphs: uid=1
@@ -1584,12 +1584,20 @@ def _populate_variants(case: dict[str, Any], seed: int) -> None:
     role_choices: dict[str, Any] = {}
 
     def pick(name, options, divisor=1):
-        index = seed // divisor % len(options)
+        if complexity:
+            role_seed = int.from_bytes(sha256(f"{seed}:{pattern}:{name}".encode()).digest()[:8], "big")
+            index = random.Random(role_seed).randrange(len(options))
+        else:
+            index = seed // divisor % len(options)
         selected[name] = index
         option = options[index]
         role_choices[name] = (render_expression(option) if is_dataclass(option)
                               else list(option) if isinstance(option, tuple) else option)
         return option
+
+    def drop(name):
+        selected.pop(name, None)
+        role_choices.pop(name, None)
 
     if pattern.startswith("P"):
         parts = list(clauses(query)) if isinstance(query, Query) else []
@@ -1740,14 +1748,135 @@ def _populate_variants(case: dict[str, Any], seed: int) -> None:
                     Negation(_eq(value.pattern.right.variable, "mark", False)) if form == "not_mark_false" else None))
                     if isinstance(value, (Count, Exists)) and value.pattern.relationship.type == "GSP_SC_HIGH" else value)
         case["reference_side"] = "b"
+    if complexity:
+        selected["complexity"] = complexity
+        query = _expand_predicates(case, query, complexity, pick, drop)
     case["query_a"] = query
+    case["complexity"] = complexity
     case["variant"] = selected
     case["role_choices"] = role_choices
     case["bindings"]["variant"] = selected.copy()
     case["bindings"]["role_choices"] = role_choices.copy()
     signature = json.dumps(selected, sort_keys=True, separators=(",", ":"))
     case["template_id"] = pattern + "-" + sha256(signature.encode()).hexdigest()[:10]
-    case["source"].update(template_id=case["template_id"], variant=selected.copy(), role_choices=role_choices.copy())
+    case["source"].update(template_id=case["template_id"], variant=selected.copy(), role_choices=role_choices.copy(),
+                          complexity=complexity, role_sampling="independent_seeded_random" if complexity else "finite_enumeration")
+
+
+def _nested_boolean(expression, gate, depth, pick, role):
+    """Equivalent nullable predicates under a checked non-null gate.
+
+    Each gate is true for this fixture. COALESCE with NULL and double NOT
+    preserve all three truth values even without that gate assumption.
+    """
+    for level in range(depth):
+        expression = pick(f"{role}_nest_{level}", (
+            Negation(Negation(expression)),
+            Call("coalesce", (expression, Literal(None))),
+            Boolean("AND", (expression, gate)),
+            Boolean("OR", (expression, Negation(gate))),
+            Case(gate, expression, Literal(None)),
+        ))
+    return expression
+
+
+def _expand_predicates(case, query, complexity, pick, drop):
+    """Bounded nested expressions; no new grammar or unconstrained solver."""
+    pattern = case["pattern"]
+    if pattern.startswith("S"):
+        spec = case["bindings"]["scor"]
+        guard_check = {
+            "query": "MATCH (u:ScorRoot {id: 1}) RETURN u.id AS id, u.uid AS uid, u.key AS key",
+            "expected_rows": [{"id": 1, "uid": 1, "key": 1}],
+        }
+        cardinality_check = _count_check("MATCH (u:ScorRoot) RETURN count(u) AS count", 1)
+        case["checks"].append(guard_check)
+        spec.update(guard_facts={"id": 1, "uid": 1, "key": 1}, guard_check=guard_check,
+                    guard_cardinality_check=cardinality_check)
+        # WHEN has no outer binding, so its cheap dynamic guard reads only the
+        # checked singleton root. Ordinary queries use their bound root key.
+        if pattern == "S3":
+            root = Node("guard", ("ScorRoot",), ((spec["root_key"], Literal(1)),))
+            cheap_count = Count(root, _eq("guard", "key", 1))
+            gate = Comparison(cheap_count, ">", Literal(0))
+        else:
+            variable = "e" if pattern == "S9" else "u"
+            gate = _eq(variable, "key", 1)
+        if pattern in {"S1", "S2", "S4", "S9", "S10"} or pattern == "S5" and query.where is not None:
+            drop("decisive_expression" if pattern in {"S1", "S2"} else "condition_expression" if pattern == "S4" else "empty_guard")
+            if pattern == "S4":
+                expected = spec["condition"]
+            else:
+                expected = pattern == "S1"
+            dynamic = gate if expected is True else Negation(gate) if expected is False else Case(gate, Literal(None), Literal(False))
+            dynamic = _nested_boolean(dynamic, gate, complexity, pick, "root_guard")
+            if pattern in {"S1", "S2"}:
+                projection = query.returns[0]
+                expression = projection.expression
+                query = replace(query, returns=(replace(projection, expression=replace(expression,
+                    terms=(dynamic, expression.terms[1]))),))
+            elif pattern == "S4":
+                projection = query.returns[0]
+                query = replace(query, returns=(replace(projection, expression=replace(projection.expression,
+                    condition=dynamic)),))
+            elif pattern in {"S5", "S9"} and query.where is not None:
+                query = replace(query, where=dynamic)
+            elif pattern == "S10":
+                query = replace(query, where=replace(query.where, terms=(dynamic, query.where.terms[1])))
+        elif pattern == "S3":
+            drop("decisive_expression")
+            query = replace(query, condition=_nested_boolean(gate, gate, complexity, pick, "root_guard"))
+        elif pattern == "S7":
+            drop("nonnull_prefix")
+            prefix = pick("dynamic_nonnull_prefix", (
+                Property("u", "key"), Call("coalesce", (Property("u", "uid"), Literal(None))),
+                Case(gate, Property("u", "uid"), Literal(None)), gate,
+            ))
+            prefix_value = True if prefix == gate else 1
+            for level in range(complexity):
+                prefix = pick(f"nonnull_nest_{level}", (
+                    Call("coalesce", (prefix, Literal(None))), Case(gate, prefix, Literal(None)),
+                ))
+            projection = query.returns[0]
+            query = replace(query, returns=(replace(projection, expression=replace(projection.expression,
+                args=(Literal(None), prefix, projection.expression.args[-1]))),))
+            # The checked key/uid are 1; only the equality candidate is boolean.
+            case["expected_rows"] = [{"value": prefix_value}]
+            spec["first_nonnull_value"] = prefix_value
+        if pattern in {"S1", "S2", "S3", "S4", "S7"}:
+            def correlate(value):
+                if (isinstance(value, (Count, Exists)) and isinstance(value.pattern, Edge)
+                        and value.pattern.relationship.type == "GSP_SC_HIGH"):
+                    edge = value.pattern
+                    correlated = Comparison(Property(edge.right.variable, "key"), "=", Property(edge.left.variable, "key"))
+                    base = value.where or Literal(True)
+                    combined = Boolean("AND", (base, correlated))
+                    gate = Comparison(Property(edge.left.variable, "key"), "=", Literal(1))
+                    return replace(value, where=_nested_boolean(combined, gate, complexity, pick, "high_correlated"))
+                return value
+            query = _walk_replace(query, correlate)
+    elif pattern in {"P4", "P5", "P15"}:
+        variable = query.pattern.variable
+        gate = Comparison(Property(variable, "uid"), "=", Property(variable, "uid"))
+        if pattern in {"P4", "P5"}:
+            low, high = query.where.terms
+            query = replace(query, where=replace(query.where,
+                terms=(_nested_boolean(low, gate, complexity, pick, "cheap_predicate"), high)))
+        else:
+            projection = query.returns[1]
+            query = replace(query, returns=(query.returns[0], replace(projection, expression=replace(
+                projection.expression, condition=_nested_boolean(projection.expression.condition,
+                    gate, complexity, pick, "cheap_predicate")))))
+        query = _walk_replace(query, lambda value: replace(value, where=_nested_boolean(
+            value.where, gate, complexity, pick, "high_predicate"))
+            if isinstance(value, (Count, Exists)) and value.pattern.relationship.type == "GSP_EXPAND" else value)
+    elif pattern == "P16":
+        projection = query.returns[0]
+        expression = projection.expression
+        gate = Comparison(Variable(expression.variable), "=", Variable(expression.variable))
+        query = replace(query, returns=(replace(projection, expression=replace(expression,
+            predicate=_nested_boolean(expression.predicate, gate, complexity, pick, "quantifier_predicate"))),))
+    return query
 
 
 def _add_pattern_reference(case: dict[str, Any]) -> None:
@@ -1791,7 +1920,7 @@ def _add_pattern_reference(case: dict[str, Any]) -> None:
 
 def instantiate(
     seed_query: SeedQuery | str | None, pattern: str, scale: int, seed: int,
-    *, data_seed: int | None = None,
+    *, data_seed: int | None = None, complexity: int = 0,
 ) -> dict[str, Any]:
     """Populate a finite template; query choices and graph layout have separate seeds.
 
@@ -1804,13 +1933,15 @@ def instantiate(
         raise ValueError("seed must be a nonnegative integer")
     if data_seed is not None and (type(data_seed) is not int or data_seed < 0):
         raise ValueError("data_seed must be a nonnegative integer or None")
+    if type(complexity) is not int or complexity not in (0, 1, 2):
+        raise ValueError("complexity must be 0, 1 or 2")
     actual_data_seed = seed if data_seed is None else data_seed
     skeleton = abstract_seed(seed_query, pattern)
     skeleton = replace(skeleton, source={**skeleton.source, "population_seed": seed,
                                          "data_seed": actual_data_seed})
     case = _BUILDERS[pattern](skeleton, scale, actual_data_seed)
     case["seed"], case["data_seed"] = seed, actual_data_seed
-    _populate_variants(case, seed)
+    _populate_variants(case, seed, complexity)
     _add_pattern_reference(case)
     validate_query(case["query_a"])
     if "query_ref" in case:

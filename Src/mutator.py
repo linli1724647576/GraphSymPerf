@@ -4,7 +4,7 @@ from dataclasses import fields, is_dataclass, replace
 
 from query import (
     Alias, All, Boolean, Call, Case, Comparison, Concat, ConditionalQuery, Count, Edge, Exists,
-    ListExpr, Literal, Negation, Node, Property, QueryError,
+    ListExpr, Literal, Negation, Node, Property, Query, QueryError,
     UnionAll, Variable, clauses, expression_variables, pattern_variables,
     validate_query, with_clauses,
 )
@@ -193,19 +193,59 @@ def _literal_is(expression, value):
     return isinstance(expression, Literal) and type(expression.value) is type(value) and expression.value == value
 
 
-def _constant_truth(expression):
-    """Recognize only the tiny, checked constant pool used by our templates.
+def _known_value(expression, environment=None, root_facts=None, spec=None):
+    """Evaluate the small total guard language under explicit checked facts.
 
-    Distinguish an unknown expression from a known NULL. Arbitrary properties,
-    subqueries and functions cannot certify a decisive guard.
+    This is not a property-value guesser or a general Cypher evaluator. A
+    property needs its variable and key in the checked environment. Only a
+    singleton-root node COUNT is supported; expensive edge counts are unknown.
     """
-    if isinstance(expression, Literal) and type(expression.value) in (bool, type(None)):
+    environment = environment or {}
+    if isinstance(expression, Literal):
         return True, expression.value
+    if isinstance(expression, Property):
+        values = environment.get(expression.variable, {})
+        return (True, values[expression.key]) if expression.key in values else (False, None)
+    if isinstance(expression, Count) and isinstance(expression.pattern, Node) and root_facts is not None:
+        node = expression.pattern
+        if (not _scor_root(node, spec)
+                or node.variable in environment and environment[node.variable] != root_facts):
+            return False, None
+        if expression.where is None:
+            return True, 1
+        known, value = _known_value(expression.where, {node.variable: root_facts}, root_facts, spec)
+        return (True, int(value is True)) if known and type(value) in (bool, type(None)) else (False, None)
     if isinstance(expression, Negation):
-        known, value = _constant_truth(expression.expression)
-        return (True, None if value is None else not value) if known else (False, None)
-    if isinstance(expression, Comparison) and isinstance(expression.left, Literal) and isinstance(expression.right, Literal):
-        left, right = expression.left.value, expression.right.value
+        known, value = _known_value(expression.expression, environment, root_facts, spec)
+        return ((True, None if value is None else not value)
+                if known and type(value) in (bool, type(None)) else (False, None))
+    if isinstance(expression, Boolean):
+        values = [_known_value(term, environment, root_facts, spec) for term in expression.terms]
+        if any(not known or type(value) not in (bool, type(None)) for known, value in values):
+            return False, None
+        values = [value for _, value in values]
+        if expression.operator == 'AND':
+            return True, False if False in values else None if None in values else True
+        return True, True if True in values else None if None in values else False
+    if isinstance(expression, Case):
+        known, condition = _known_value(expression.condition, environment, root_facts, spec)
+        if known and type(condition) in (bool, type(None)):
+            return _known_value(expression.then if condition is True else expression.otherwise,
+                                environment, root_facts, spec)
+        return False, None
+    if isinstance(expression, Call) and expression.name == 'coalesce':
+        for argument in expression.args:
+            known, value = _known_value(argument, environment, root_facts, spec)
+            if not known:
+                return False, None
+            if value is not None:
+                return True, value
+        return True, None
+    if isinstance(expression, Comparison):
+        a, left = _known_value(expression.left, environment, root_facts, spec)
+        b, right = _known_value(expression.right, environment, root_facts, spec)
+        if not a or not b:
+            return False, None
         if expression.operator == 'IS NULL':
             return True, left is None
         if expression.operator == 'IS NOT NULL':
@@ -220,6 +260,11 @@ def _constant_truth(expression):
         if expression.operator in operations:
             return True, operations[expression.operator]()
     return False, None
+
+
+def _constant_truth(expression):
+    known, value = _known_value(expression)
+    return (True, value) if known and type(value) in (bool, type(None)) else (False, None)
 
 
 def _constant_is(expression, value):
@@ -249,7 +294,9 @@ def _null_safe_equality(predicate, left, right, key):
 def _scor_root(node, spec):
     return (isinstance(node, Node)
             and node.labels == (spec.get('root_label', 'ScorRoot'),)
-            and node.properties == ((spec.get('root_key', 'id'), Literal(spec.get('root_value', 1))),))
+            and len(node.properties) == 1
+            and node.properties[0][0] == spec.get('root_key', 'id')
+            and _literal_is(node.properties[0][1], spec.get('root_value', 1)))
 
 
 def _scor_member(edge, spec, *, correlated=False):
@@ -262,6 +309,37 @@ def _scor_member(edge, spec, *, correlated=False):
             and edge.right.labels == (spec.get('target_label', 'ScorTarget'),)
             and ((not edge.left.labels and not edge.left.properties) if correlated
                  else _scor_root(edge.left, spec)))
+
+
+def _checked_guard_context(query, spec):
+    """Facts are usable only with the exact checks emitted by this fixture.
+
+    The runner executes these checks before timing. Keeping their complete
+    query and expected rows in the binding prevents arbitrary runtime
+    properties from acquiring a truth value solely through a pattern name.
+    """
+    facts = spec.get('guard_facts')
+    check = {'query': 'MATCH (u:ScorRoot {id: 1}) RETURN u.id AS id, u.uid AS uid, u.key AS key',
+             'expected_rows': [{'id': 1, 'uid': 1, 'key': 1}]}
+    cardinality = {'query': 'MATCH (u:ScorRoot) RETURN count(u) AS count',
+                   'expected_rows': [{'count': 1}]}
+    if (facts != {'id': 1, 'uid': 1, 'key': 1}
+            or not isinstance(facts, dict) or any(type(value) is not int for value in facts.values())
+            or spec.get('guard_check') != check
+            or spec.get('guard_cardinality_check') != cardinality
+            or spec.get('root_label') != 'ScorRoot' or spec.get('root_key') not in {'id', 'uid'}
+            or type(spec.get('root_value')) is not int or spec.get('root_value') != 1):
+        return {}, None
+    environment = {}
+    if isinstance(query, Query):
+        for part in clauses(query):
+            for variable in pattern_variables(part.pattern):
+                environment.setdefault(variable, {})
+            node = part.pattern.left if isinstance(part.pattern, Edge) else part.pattern
+            if (not part.optional and isinstance(node, Node) and node.labels == ('ScorRoot',)
+                    and (not node.properties or _scor_root(node, spec))):
+                environment[node.variable] = facts
+    return environment, facts
 
 
 def _scor_pattern(query, bindings):
@@ -279,10 +357,20 @@ def _scor_pattern(query, bindings):
     high_edges = [edge for edge in _edges(query) if edge.relationship.type == high]
     if not high_edges or any(edge.relationship.alternatives or edge.relationship.min_hops is not None for edge in high_edges):
         return None
+    environment, facts = _checked_guard_context(query, spec)
+
+    def guard_value(expression):
+        known, value = _known_value(expression, environment, facts, spec)
+        return (True, value) if known and type(value) in (bool, type(None)) else (False, None)
+
+    def guard_is(expression, expected):
+        known, value = guard_value(expression)
+        return known and value is expected
+
     if name == 'S3':
         if not isinstance(query, ConditionalQuery):
             return None
-        known, condition = _constant_truth(query.condition)
+        known, condition = guard_value(query.condition)
         if not known:
             return None
         skipped = query.otherwise if condition is True else query.then
@@ -298,18 +386,18 @@ def _scor_pattern(query, bindings):
         for expression in projections:
             if isinstance(expression, Boolean) and expression.operator == operator and len(expression.terms) == 2:
                 for cheap, expensive in (expression.terms, tuple(reversed(expression.terms))):
-                    if _constant_is(cheap, absorbing) and _only_high_inside(query, (expensive,), high):
+                    if guard_is(cheap, absorbing) and _only_high_inside(query, (expensive,), high):
                         return name
     elif name == 'S4':
         for expression in projections:
             if isinstance(expression, Case):
-                known, condition = _constant_truth(expression.condition)
+                known, condition = guard_value(expression.condition)
                 if known:
                     skipped = expression.otherwise if condition is True else expression.then
                     if _only_high_inside(query, (skipped,), high):
                         return name
     elif name == 'S5':
-        if query.limit == 0 or any(not part.optional and _constant_is(part.where, False) for part in parts):
+        if query.limit == 0 or any(not part.optional and guard_is(part.where, False) for part in parts):
             return name
     elif name == 'S6':
         if (type(query.limit) is int and 0 < query.limit <= min(big, small)
@@ -322,9 +410,10 @@ def _scor_pattern(query, bindings):
         for expression in projections:
             if isinstance(expression, Call) and expression.name == 'coalesce':
                 for index, argument in enumerate(expression.args):
-                    if not isinstance(argument, Literal):
+                    known, value = _known_value(argument, environment, facts, spec)
+                    if not known:
                         break
-                    if argument.value is not None:
+                    if value is not None:
                         if _only_high_inside(query, expression.args[index + 1:], high):
                             return name
                         break
@@ -341,7 +430,7 @@ def _scor_pattern(query, bindings):
                 return name
     elif name == 'S9':
         if (len(parts) >= 2 and not any(part.optional for part in parts)
-                and _constant_is(parts[0].where, False) and not _high_count(parts[0], high)):
+                and guard_is(parts[0].where, False) and not _high_count(parts[0], high)):
             return name
     elif name == 'S10':
         if not (query.distinct and len(parts) == 1 and isinstance(parts[0].pattern, Node)):
@@ -350,7 +439,7 @@ def _scor_pattern(query, bindings):
         if isinstance(predicate, Boolean) and predicate.operator == 'AND' and len(predicate.terms) == 2:
             for guard, membership in (predicate.terms, tuple(reversed(predicate.terms))):
                 exists = membership.expression if isinstance(membership, Negation) else membership
-                if not _constant_is(guard, False) or not isinstance(exists, Exists) or not isinstance(exists.pattern, Edge):
+                if not guard_is(guard, False) or not isinstance(exists, Exists) or not isinstance(exists.pattern, Edge):
                     continue
                 edge = exists.pattern
                 key = spec.get('match_key', 'key')

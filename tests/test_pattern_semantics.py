@@ -178,8 +178,9 @@ def test_union_all_branch_reordering_preserves_duplicates_not_just_the_set():
     assert before == after == Counter({1: 2})
 
 
+@pytest.mark.parametrize("complexity", [0, 1, 2])
 @pytest.mark.parametrize("pattern", ["P4", "P5", "P15"])
-def test_every_reference_role_combination_preserves_rows_with_decisive_and_nullable_anchors(pattern):
+def test_every_reference_role_combination_preserves_rows_with_decisive_and_nullable_anchors(pattern, complexity):
     from generator import instantiate
     flags = {1: pattern == "P5", 2: pattern != "P5"}
     if pattern == "P15":
@@ -190,7 +191,7 @@ def test_every_reference_role_combination_preserves_rows_with_decisive_and_nulla
     edges.update({("GSP_REFERENCE", uid): leaves for uid, leaves in original_edges.items()
                   if bool(flags.get(uid)) is retain_true})
     for seed in range(54):
-        case = instantiate(None, pattern, 3, seed, data_seed=0)
+        case = instantiate(None, pattern, 3, seed, data_seed=0, complexity=complexity)
         def rows(query):
             result = []
             for uid, flag in flags.items():
@@ -203,9 +204,10 @@ def test_every_reference_role_combination_preserves_rows_with_decisive_and_nulla
         assert before == Counter(tuple(row.values()) for row in case["expected_rows"])
 
 
-def test_all_reference_discards_only_a_group_irrelevant_to_the_explicit_false():
+@pytest.mark.parametrize("complexity", [0, 1, 2])
+def test_all_reference_discards_only_a_group_irrelevant_to_the_explicit_false(complexity):
     from generator import instantiate
     for seed in range(8):
-        case = instantiate(None, "P16", 3, seed, data_seed=0)
+        case = instantiate(None, "P16", 3, seed, data_seed=0, complexity=complexity)
         assert value(case["query_a"].returns[0]) is False
         assert value(case["query_ref"].returns[0]) is False

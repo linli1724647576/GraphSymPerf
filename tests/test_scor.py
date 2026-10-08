@@ -15,7 +15,7 @@ import pytest
 from generator import instantiate, load_seeds
 from mutator import find_patterns, mutate
 from query import (Alias, Boolean, Call, Case, Comparison, ConditionalQuery,
-                   Count, Exists, Literal, Negation, Property, QueryError, parse_query, render_query)
+                   Count, Exists, Literal, Negation, Node, Property, QueryError, parse_query, render_query)
 
 
 PAPER_PATTERNS = dict(zip(
@@ -247,6 +247,8 @@ def _value(expression, sizes):
     if isinstance(expression, Alias):
         return _value(expression.expression, sizes)
     if isinstance(expression, Count):
+        if isinstance(expression.pattern, Node):
+            return int(expression.where is None or _value(expression.where, sizes) is True)
         return sizes[expression.pattern.relationship.type]
     if isinstance(expression, Property):
         return sizes[f"{expression.variable}.{expression.key}"]
@@ -334,10 +336,13 @@ def test_scale_changes_high_region_without_changing_the_constructed_answer(patte
 
 
 @pytest.mark.parametrize('pattern', ['S1', 'S2', 'S3', 'S4', 'S7'])
-def test_generated_scalar_role_pools_preserve_the_reference_answer(pattern):
-    sizes = {'GSP_SC_HIGH': 12, 'GSP_SC_REF': 3, 'u.expected_count': 12}
+@pytest.mark.parametrize('complexity', [0, 1, 2])
+def test_generated_scalar_role_pools_preserve_the_reference_answer(pattern, complexity):
+    sizes = {'GSP_SC_HIGH': 12, 'GSP_SC_REF': 3, 'u.expected_count': 12,
+             'u.id': 1, 'u.uid': 1, 'u.key': 1, 'guard.key': 1,
+             'v.mark': True, 'v.key': 1}
     for seed in range(108):
-        case = instantiate(None, pattern, 3, seed, data_seed=0)
+        case = instantiate(None, pattern, 3, seed, data_seed=0, complexity=complexity)
         reference = mutate(case['query_a'], pattern, bindings=case['bindings'])
         def projection(query):
             if isinstance(query, ConditionalQuery):
@@ -345,6 +350,7 @@ def test_generated_scalar_role_pools_preserve_the_reference_answer(pattern):
             return tuple(_value(item, sizes) for item in query.returns)
         assert projection(case['query_a']) == projection(reference)
         assert projection(reference) == tuple(case['expected_rows'][0].values())
+        assert [type(value) for value in projection(reference)] == [type(value) for value in case['expected_rows'][0].values()]
 
 
 @pytest.mark.parametrize('guard', ['u.key = 1', 'coalesce(u.key, 1) = 1'])
@@ -352,3 +358,40 @@ def test_unknown_runtime_guards_cannot_certify_a_scor_replacement(guard):
     source = SOURCES['S1'].replace('RETURN true OR', f'RETURN {guard} OR')
     with pytest.raises(QueryError):
         mutate(parse_query(source), 'S1', bindings=bindings('S1'))
+
+
+@pytest.mark.parametrize('pattern', ['S1', 'S2', 'S3', 'S4', 'S7'])
+@pytest.mark.parametrize('missing', ['guard_facts', 'guard_check', 'guard_cardinality_check'])
+def test_dynamic_guards_require_the_full_explicit_checked_binding(pattern, missing):
+    case = instantiate(None, pattern, 3, 101, data_seed=0, complexity=2)
+    bad = deepcopy(case['bindings'])
+    bad['scor'].pop(missing)
+    with pytest.raises(QueryError):
+        mutate(case['query_a'], pattern, bindings=bad)
+
+
+@pytest.mark.parametrize('alteration', ['wrong_value', 'wrong_check', 'wrong_scope', 'boolean_as_integer'])
+def test_declared_guard_facts_cannot_be_transferred_to_an_unchecked_property_scope(alteration):
+    case = instantiate(None, 'S1', 3, 101, data_seed=0, complexity=2)
+    bad = deepcopy(case['bindings'])
+    query = case['query_a']
+    if alteration == 'wrong_value':
+        bad['scor']['guard_facts']['key'] = 0
+    elif alteration == 'wrong_check':
+        bad['scor']['guard_check']['expected_rows'] = [{'id': 1, 'uid': 1, 'key': 0}]
+    elif alteration == 'boolean_as_integer':
+        bad['scor']['guard_facts']['key'] = True
+    else:
+        from dataclasses import replace
+        query = replace(query, pattern=replace(query.pattern, labels=('UncheckedRoot',)))
+    with pytest.raises(QueryError):
+        mutate(query, 'S1', bindings=bad)
+
+
+def test_singleton_root_count_cannot_rebind_an_unchecked_outer_variable():
+    case = instantiate(None, 'S1', 3, 101, data_seed=0, complexity=2)
+    source = ('MATCH (u:UncheckedRoot) RETURN '
+              '(COUNT { MATCH (u:ScorRoot {id: 1}) WHERE u.key = 1 } > 0) OR '
+              '(COUNT { MATCH (u)-[:GSP_SC_HIGH]->(v:ScorTarget) } > 0) AS value')
+    with pytest.raises(QueryError):
+        mutate(parse_query(source), 'S1', bindings=case['bindings'])

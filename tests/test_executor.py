@@ -16,6 +16,18 @@ SETTINGS = {'discovery_warmups': 0, 'discovery_pairs': 2,
             'control_pairs': 2, 'bootstrap_samples': 100}
 
 
+def test_dynamic_guard_cannot_omit_runtime_fact_checks():
+    from generator import instantiate
+    from mutator import mutate
+    from query import render_query
+    case = instantiate(None, 'S1', 3, 1234, data_seed=0, complexity=2)
+    case['query_b'] = render_query(mutate(case['query_a'], 'S1', bindings=case['bindings']))
+    case['query_a'] = render_query(case['query_a'])
+    case['checks'].remove(case['bindings']['scor']['guard_check'])
+    result = run_case(case, {}, SETTINGS)
+    assert result['status'] == 'invalid_case' and result['failure_phase'] == 'configuration'
+
+
 class FakeDatabase:
     instances = []
     version = 'fake-for-unit-test'
