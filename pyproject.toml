@@ -4,62 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "graph-sym-perf"
-version = "0.0.0"
-description = "Real-database symmetry-violation performance mining for graph DBMSs."
+version = "0.1.0"
+description = "Cost-aware equivalent-query testing for graph databases."
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [
-  { name = "GraphSymPerf contributors" }
-]
-dependencies = [
-  "PyYAML>=6.0"
-]
+dependencies = ["PyYAML>=6.0", "lark>=1.2,<2", "neo4j>=5.28,<7"]
 
 [project.optional-dependencies]
-test = [
-  "pytest>=8.0",
-  "neo4j>=5.0"
-]
-neo4j = [
-  "neo4j>=5.0"
-]
-memgraph = [
-  "neo4j>=5.0",
-  "gqlalchemy>=1.8"
-]
-falkordb = [
-  "FalkorDB>=1.6"
-]
-agensgraph = [
-  "psycopg[binary]>=3.1"
-]
-apache_age = [
-  "psycopg[binary]>=3.1"
-]
-arcadedb = [
-  "requests>=2.31"
-]
-ladybugdb = [
-  "ladybug"
-]
-db = [
-  "neo4j>=5.0",
-  "gqlalchemy>=1.8",
-  "FalkorDB>=1.6",
-  "psycopg[binary]>=3.1",
-  "requests>=2.31",
-  "ladybug"
-]
+test = ["pytest>=8.0"]
+falkordb = ["falkordb>=1.7.1,<2"]
 
-[project.scripts]
-graphsymperf = "graph_sym_perf.cli.__main__:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+package-dir = {"" = "Src"}
+py-modules = ["main", "query", "generator", "mutator", "executor", "summarize"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
-markers = [
-  "contract: characterization and architecture contracts used during the runtime-first migration",
-]
+pythonpath = ["Src"]
+markers = ["integration: requires an explicitly supplied dedicated graph database"]

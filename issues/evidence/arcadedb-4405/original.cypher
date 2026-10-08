@@ -1,4 +1,0 @@
-MATCH (n0 :L1)
-WHERE ((n0.k5) = -1862396709)
-UNWIND [(n0.k6), (n0.k10)] AS a0
-RETURN 1 AS a1;

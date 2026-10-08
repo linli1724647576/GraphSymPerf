@@ -1,0 +1,41 @@
+# Use a dedicated test database: each case replaces its graph and gsp_cost_lookup index.
+database:
+  dbms: neo4j # neo4j, memgraph, or falkordb
+  uri: bolt://127.0.0.1:7687
+  user: neo4j
+  password_env: GRAPHSYMPERF_NEO4J_PASSWORD
+  database: neo4j
+  dedicated: true
+  allow_reset: false
+
+generation:
+  log_files: [] # Built-in templates; GDsmith logs are an optional input.
+  data_seed: 0 # Keep graph state fixed while query seeds select different bindings.
+  limit: 20
+  # Optional: run a GDsmith command first, then read the explicit log_files above.
+  # command: [java, -jar, /absolute/path/to/gdsmith.jar, ...]
+  # cwd: /absolute/path/to/gdsmith
+  # timeout_seconds: 120
+
+patterns: [P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15, P16, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10]
+scales: [100, 1000]
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+cases_per_pattern: 20
+seconds_per_pattern: 120
+schedule_seed: 0
+output: results
+
+measurement:
+  discovery_warmups: 3
+  discovery_pairs: 6
+  screen_ratio: 2.0
+  confirmation_sessions: 2
+  confirmation_warmups: 5
+  confirmation_pairs: 20
+  control_pairs: 10
+  ratio: 3.0
+  ci_low: 2.0
+  direction_consistency: 0.75
+  bootstrap_samples: 10000
+  timeout_seconds: 10
+  max_rows: 100000

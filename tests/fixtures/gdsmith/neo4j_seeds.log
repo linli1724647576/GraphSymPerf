@@ -1,0 +1,4 @@
+-- Genuine GDsmith query excerpts; see neo4j_seeds.source.json.
+-- seed value: 6480018929472491564
+MATCH (n1)<-[r1 :T1]-(n2 :L2 :L0) WHERE ((n2.k6) AND true) UNWIND [(r1.k51)] AS a0 RETURN max('c') AS a1, a0;
+MATCH (n0 :L1) MATCH (n0), (n0 :L1) WHERE (n0.k7) MATCH (n0 :L1) WHERE ((n0.k11) OR false) RETURN DISTINCT 0 AS a0;

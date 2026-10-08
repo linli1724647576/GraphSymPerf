@@ -1,7 +1,0 @@
-OpenCypher Native Execution Plan
-=================================
-
-Using Traditional Execution (Non-Optimized)
-
-Reason: Query pattern not yet supported by optimizer
-Execution will use step-by-step interpretation

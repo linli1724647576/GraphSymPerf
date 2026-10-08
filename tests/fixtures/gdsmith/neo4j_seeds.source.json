@@ -1,0 +1,23 @@
+{
+  "generator": "gdsmith",
+  "source_log": "runs/neo4j_3x1000_2026_07_13_gate/neo4j_gate_1x100_2026_07_13-3f511bd22f82/shards/neo4j-000/gdsmith_raw/logs/neo4j/database0-cur.log",
+  "source_log_sha256": "9081798f8d7031e348a6bff663712392dbb43fa96f95ddbb08be3697e816034c",
+  "source_log_seed": 6480018929472491564,
+  "gdsmith_commit": "b2166f1b70cfa9b5816fe707327dd6aed2a22a45",
+  "gdsmith_dirty": true,
+  "jar_sha256": null,
+  "jar_provenance_note": "Historical resolved_manifest.json records the source revision and dirty state but not the JAR digest. No JAR identity is inferred.",
+  "fixture_sha256": "1645833bf81cde000db6bba11da7b9d9b10ad5e162a972f34058df9df70069c4",
+  "excerpts": [
+    {
+      "fixture_line": 3,
+      "original_line": 391,
+      "query_sha256": "4abb22bf0c035baad99794c59b9fea2ed4973e312486821d6be5fb6bc0928960"
+    },
+    {
+      "fixture_line": 4,
+      "original_line": 275,
+      "query_sha256": "a38771afba062ee2900545c9d6e97702d70d2036e830de21b26ac6fb2d29ab0a"
+    }
+  ]
+}
