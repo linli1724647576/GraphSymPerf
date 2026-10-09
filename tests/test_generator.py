@@ -1,10 +1,12 @@
 import hashlib
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import generator
 from generator import (
     PatternNotApplicable,
     SeedImportError,
@@ -326,6 +328,65 @@ def test_data_seed_changes_layout_without_resampling_query_choices():
     assert first["template_id"] == second["template_id"]
     assert first["setup"] != second["setup"]
     assert first["expected_rows"] == second["expected_rows"]
+
+
+@pytest.mark.parametrize("pattern", [f"P{i}" for i in range(1, 17)] + SCOR_PATTERNS)
+def test_builtin_skeleton_does_not_parse_a_language_seed(monkeypatch, pattern):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("builtin skeleton must be constructed directly in IR")
+
+    monkeypatch.setattr(generator, "extract_seed_pattern", forbidden)
+    monkeypatch.setattr(generator, "extract_seed_boolean", forbidden)
+    skeleton = generator.abstract_seed(None, pattern)
+    assert skeleton.seed_pattern.left.variable == "u"
+    assert skeleton.seed_pattern.right.variable == "v"
+    if pattern in {"P4", "P5"}:
+        assert skeleton.operator == ("AND" if pattern == "P4" else "OR")
+        assert "boolean_expression_span" not in skeleton.source
+    case = instantiate(None, pattern, 2, 17, data_seed=0, complexity=1)
+    assert case["source"]["raw_query"] is None
+
+
+@pytest.mark.parametrize("pattern", [f"P{i}" for i in range(1, 17)] + SCOR_PATTERNS)
+def test_skeleton_display_is_not_a_source_of_execution_roles(monkeypatch, pattern):
+    original = generator.abstract_seed
+    before = instantiate(None, pattern, 2, 17, data_seed=0, complexity=1)
+    monkeypatch.setattr(generator, "abstract_seed", lambda seed, name: replace(
+        original(seed, name), text="Display only: $unexpected(x), unrelated to a query language"))
+    after = instantiate(None, pattern, 2, 17, data_seed=0, complexity=1)
+    assert {key: value for key, value in before.items() if key != "skeleton"} == {
+        key: value for key, value in after.items() if key != "skeleton"}
+
+
+@pytest.mark.parametrize("pattern", list(generator._ENRICHMENTS))
+def test_enrichment_roles_do_not_depend_on_display_spelling(monkeypatch, pattern):
+    before = abstract_seed(None, pattern)
+    operation, _ = generator._ENRICHMENTS[pattern]
+    monkeypatch.setitem(generator._ENRICHMENTS, pattern, (operation, "A language-neutral display with no placeholders"))
+    after = abstract_seed(None, pattern)
+    assert after.placeholders == before.placeholders
+    assert after.seed_pattern == before.seed_pattern
+    assert after.text != before.text
+
+
+@pytest.mark.parametrize("pattern,index", [("P4", 0), ("P5", 1)])
+def test_real_seed_retains_cypher_frontend_extraction(monkeypatch, pattern, index):
+    calls = []
+    extract_pattern, extract_boolean = generator.extract_seed_pattern, generator.extract_seed_boolean
+
+    def pattern_frontend(text):
+        calls.append("pattern")
+        return extract_pattern(text)
+
+    def boolean_frontend(text, operator):
+        calls.append(operator)
+        return extract_boolean(text, operator)
+
+    monkeypatch.setattr(generator, "extract_seed_pattern", pattern_frontend)
+    monkeypatch.setattr(generator, "extract_seed_boolean", boolean_frontend)
+    skeleton = abstract_seed(seeds()[index], pattern)
+    assert calls == ["pattern", "AND" if pattern == "P4" else "OR"]
+    assert "boolean_expression_span" in skeleton.source
 
 
 @pytest.mark.parametrize("data_seed", [-1, True, "0"])

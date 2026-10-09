@@ -20,9 +20,13 @@ from executor import measurement_settings, run_case, supported_patterns
 from generator import PatternNotApplicable, instantiate, load_seeds
 from mutator import PATTERNS, mutate
 from query import parse_query, render_query, split_statements
+from ir import from_data, to_data
+from languages import DBMS, LANGUAGES, UnsupportedFeature, UnsupportedLanguage, generate, render_saved
 
 
 ROOT = Path(__file__).resolve().parent.parent
+CASE_EXTENSION_FIELDS = ("query_ir", "graph_spec", "state_checks", "index_requirements", "language",
+                         "target_dbms", "output_columns", "required_features", "compile_error", "ir_hash", "verified_features", "source_input_hash")
 
 
 def read_config(path: Path) -> dict:
@@ -45,8 +49,14 @@ def read_config(path: Path) -> dict:
             raise ValueError(f"{name} must be a nonempty list of integers >= {minimum}")
         config[name] = list(dict.fromkeys(values))
     database.setdefault("dbms", "neo4j")
-    if database["dbms"] not in {"neo4j", "memgraph", "falkordb"}:
-        raise ValueError("database.dbms must be neo4j, memgraph, or falkordb")
+    if database["dbms"] not in DBMS:
+        raise ValueError(f"database.dbms must be one of {', '.join(DBMS)}")
+    database.setdefault("language", "cypher")
+    if database["language"] not in LANGUAGES:
+        raise ValueError(f"database.language must be one of {', '.join(LANGUAGES)}")
+    verified = database.get("verified_features", [])
+    if not isinstance(verified, list) or any(not isinstance(value, str) for value in verified):
+        raise ValueError("database.verified_features must be a list of feature names")
     config.setdefault("schedule_seed", 0)
     if type(config["schedule_seed"]) is not int or config["schedule_seed"] < 0:
         raise ValueError("schedule_seed must be a nonnegative integer")
@@ -58,6 +68,9 @@ def read_config(path: Path) -> dict:
     if not isinstance(files, list) or any(not isinstance(p, str) for p in files):
         raise ValueError("generation.log_files must be a list of paths")
     base = path.resolve().parent
+    if database["dbms"] == "ladybug":
+        database["uri"] = str((base / database.get("path", database.get("uri", "../results/ladybug-test"))).resolve())
+        database["path"] = database["uri"]
     generation["log_files"] = [str((base / p).resolve()) for p in files]
     generation.setdefault("data_seed", 0)
     if type(generation["data_seed"]) is not int or generation["data_seed"] < 0:
@@ -82,7 +95,8 @@ def read_config(path: Path) -> dict:
     return config
 
 
-def case_digest(case: dict, format_version: int = 2) -> str:
+def case_digest(case: dict, format_version: int | None = None) -> str:
+    format_version = format_version or (3 if case.get("query_ir") else 2)
     fields = ("pattern", "seed", "scale", "setup", "query_a", "query_b", "parameters", "checks", "expected_rows")
     if format_version >= 2:
         fields += ("query_ref", "template_id", "bindings", "reference_side", "required_cypher", "data_seed")
@@ -90,12 +104,28 @@ def case_digest(case: dict, format_version: int = 2) -> str:
             fields += ("complexity",)
         if "state_variant" in case:
             fields += ("state_variant",)
+    if format_version >= 3:
+        fields += ("query_ir", "graph_spec", "state_checks", "index_requirements", "language",
+                   "target_dbms", "output_columns", "required_features", "compile_error", "ir_hash")
+        if "verified_features" in case:
+            fields += ("verified_features",)
+        if "source_input_hash" in case:
+            fields += ("source_input_hash",)
     data = {name: case.get(name) for name in fields}
     return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
-def save_case(directory: Path, case: dict, measurement: dict, result: dict, *, format_version: int = 2) -> None:
-    if format_version not in {1, 2} or format_version == 1 and case.get("query_ref"):
+def extension_digest(case: dict) -> str | None:
+    """Protect added execution metadata without changing legacy input IDs."""
+    data = {name: case[name] for name in CASE_EXTENSION_FIELDS if name in case}
+    if not data:
+        return None
+    return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+
+
+def save_case(directory: Path, case: dict, measurement: dict, result: dict, *, format_version: int | None = None) -> None:
+    format_version = format_version or (3 if case.get("query_ir") else 2)
+    if format_version not in {1, 2, 3} or format_version == 1 and case.get("query_ref"):
         raise ValueError("invalid input format for reference query")
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "setup.cypher").write_text("\n\n".join(s.rstrip("; \n") + ";" for s in case["setup"]) + "\n", encoding="utf-8")
@@ -111,6 +141,11 @@ def save_case(directory: Path, case: dict, measurement: dict, result: dict, *, f
         "measurement": measurement,
         "result": result,
     }
+    extension_hash = extension_digest(case)
+    if extension_hash is not None:
+        # Write this for format 3 too: changing a record's format does not
+        # discard integrity protection for metadata outside a legacy digest.
+        record["extension_hash"] = extension_hash
     temporary = directory / "result.json.tmp"
     temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     temporary.replace(directory / "result.json")
@@ -118,7 +153,7 @@ def save_case(directory: Path, case: dict, measurement: dict, result: dict, *, f
 
 def read_case(directory: Path) -> tuple[dict, dict]:
     record = json.loads((directory / "result.json").read_text(encoding="utf-8"))
-    if record.get("format_version") not in {1, 2}:
+    if record.get("format_version") not in {1, 2, 3}:
         raise ValueError("unsupported result format")
     case = record["case"]
     case["setup"] = list(split_statements((directory / "setup.cypher").read_text(encoding="utf-8")))
@@ -127,9 +162,39 @@ def read_case(directory: Path) -> tuple[dict, dict]:
         if len(statements) != 1:
             raise ValueError("each query file must contain one read query")
         case[f"query_{side}"] = statements[0]
-        parse_query(statements[0])
+        if record["format_version"] < 3 and not case.get("query_ir"):
+            parse_query(statements[0])
     if case_digest(case, record["format_version"]) != record.get("input_hash"):
         raise ValueError("saved inputs have changed; the recorded cost conditions no longer describe this case")
+    extension_hash = extension_digest(case)
+    if ((extension_hash is not None and record["format_version"] < 3)
+            or "extension_hash" in record):
+        if extension_hash != record.get("extension_hash"):
+            raise ValueError("saved execution metadata have changed or lack an extension hash")
+    if record["format_version"] == 3 and not case.get("query_ir"):
+        raise ValueError("format 3 requires query IR")
+    if "query_ir" in case:
+        sides = {"a", "b", "ref"} if record.get("has_reference") else {"a", "b"}
+        if not isinstance(case["query_ir"], dict) or set(case["query_ir"]) != sides:
+            raise ValueError("saved query IR must describe exactly the archived query sides")
+        for value in case["query_ir"].values():
+            from_data(value)
+        if not case.get("compile_error"):
+            for side in case["query_ir"]:
+                compiled = render_saved(from_data(case["query_ir"][side]), case.get("target_dbms", "neo4j"),
+                                        case.get("language", "cypher"))
+                if compiled.text != case[f"query_{side}"]:
+                    raise ValueError("saved compiled query differs from its query IR")
+                if case.get("output_columns", {}).get(side) != [list(item) for item in compiled.columns]:
+                    raise ValueError("saved compiled metadata differ from their query IR")
+                # Feature classification may gain new names after an archive
+                # was written. Historical flags cannot invent requirements.
+                if not set(case.get("required_features", {}).get(side, ())) <= compiled.required_features:
+                    raise ValueError("saved compiled metadata differ from their query IR")
+            logical = {key: case.get(key) for key in ("query_ir", "graph_spec", "parameters", "expected_rows")}
+            digest = hashlib.sha256(json.dumps(logical, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+            if case.get("ir_hash") != digest:
+                raise ValueError("saved compiled metadata differ from their query IR")
     return case, record["measurement"]
 
 
@@ -171,16 +236,50 @@ def write_run(directory: Path, record: dict) -> None:
     temporary.replace(directory / "run.json")
 
 
-def prepare_case(source, pattern, scale, seed, data_seed, complexity=0, state_variant="original"):
+def compile_case(case: dict, database: dict) -> dict:
+    """Compile preserved IR for one target; unsupported syntax is recorded."""
+    target, language = database.get("dbms", "neo4j"), database.get("language", "cypher")
+    case.update(target_dbms=target, language=language)
+    case.pop("compile_error", None)
+    verified = database.get("verified_features", ())
+    if verified:
+        case["verified_features"] = sorted(set(verified))
+    else:
+        case.pop("verified_features", None)
+    case["output_columns"], case["required_features"] = {}, {}
+    try:
+        compiled = {side: generate(from_data(value), target, language, verified_features=verified)
+                    for side, value in case["query_ir"].items()}
+    except (UnsupportedFeature, UnsupportedLanguage) as exc:
+        case["compile_error"] = {"status": "unsupported_feature", "reason": str(exc)}
+        return case
+    names = [tuple(logical for _, logical in query.columns) for query in compiled.values()]
+    if any(value != names[0] for value in names[1:]):
+        case["compile_error"] = {"status": "invalid_case", "reason": "query_output_columns_differ"}
+        return case
+    for side, query in compiled.items():
+        case[f"query_{side}"] = query.text
+        case["output_columns"][side] = [list(item) for item in query.columns]
+        case["required_features"][side] = sorted(query.required_features)
+    if case["query_a"] == case["query_b"]:
+        case["compile_error"] = {"status": "unsupported_transform", "reason": "target_erases_query_difference"}
+    logical = {key: case.get(key) for key in ("query_ir", "graph_spec", "parameters", "expected_rows")}
+    case["ir_hash"] = hashlib.sha256(json.dumps(logical, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+    return case
+
+
+def prepare_case(source, pattern, scale, seed, data_seed, complexity=0, state_variant="original", *, database=None):
     case = instantiate(source, pattern, scale, seed, data_seed=data_seed, complexity=complexity,
                        state_variant=state_variant)
     query_a = parse_query(case["query_a"]) if isinstance(case["query_a"], str) else case["query_a"]
     query_b = mutate(query_a, pattern, bindings=case.get("bindings"))
+    case["query_ir"] = {"a": to_data(query_a), "b": to_data(query_b)}
     case.update(pattern=pattern, seed=seed, scale=scale,
                 query_a=render_query(query_a), query_b=render_query(query_b))
     if case.get("query_ref") is not None and not isinstance(case["query_ref"], str):
+        case["query_ir"]["ref"] = to_data(case["query_ref"])
         case["query_ref"] = render_query(case["query_ref"])
-    return case
+    return compile_case(case, database or {})
 
 
 def run(config: dict) -> int:
@@ -190,7 +289,7 @@ def run(config: dict) -> int:
     measurement = config.get("measurement", {})
     dbms = config["database"].get("dbms", "neo4j")
     budgets = pattern_budgets(config)
-    record = {"format_version": 1, "kind": "discovery", "dbms": dbms, "database_version": "unknown",
+    record = {"format_version": 1, "kind": "discovery", "dbms": dbms, "language": config["database"].get("language", "cypher"), "database_version": "unknown",
               "patterns": config["patterns"], "budgets": budgets, "schedule_seed": config.get("schedule_seed", 0),
               "per_pattern": {pattern: {"attempted": 0, "executed": 0, "elapsed_seconds": 0.0,
                                          "stop_reason": "pending"} for pattern in config["patterns"]}}
@@ -222,7 +321,8 @@ def run(config: dict) -> int:
             for source in sources[offset:] + sources[:offset]:
                 try:
                     case = prepare_case(source, pattern, scale, seed, generation.get("data_seed", 0),
-                                        generation.get("complexity", 0), generation.get("state_variant", "original"))
+                                        generation.get("complexity", 0), generation.get("state_variant", "original"),
+                                        database=config["database"])
                     break
                 except PatternNotApplicable:
                     skipped += 1
@@ -265,6 +365,15 @@ def replay(directory: Path, config: dict) -> int:
     # Retain legacy identity too: upgrading the hash scheme would turn the
     # same historical input into another case in pattern contribution reports.
     format_version = json.loads((directory / "result.json").read_text(encoding="utf-8"))["format_version"]
+    if case.get("query_ir"):
+        different_target = (case.get("target_dbms", "neo4j"), case.get("language", "cypher")) != (
+            config["database"].get("dbms", "neo4j"), config["database"].get("language", "cypher"))
+        different_features = set(case.get("verified_features", ())) != set(config["database"].get("verified_features", ()))
+        if different_target or different_features:
+            source_hash = case_digest(case, format_version)
+            case = compile_case(case, config["database"])
+            case["source_input_hash"] = source_hash
+            format_version = 3
     # Replaying never invokes the generator or overwrites the original evidence.
     output = new_run_directory(config["output"]) / f"replay-{case['pattern']}-{case_digest(case, format_version)[:8]}"
     dbms = config["database"].get("dbms", "neo4j")
@@ -273,6 +382,7 @@ def replay(directory: Path, config: dict) -> int:
     result.setdefault("dbms", dbms)
     save_case(output, case, measurement, result, format_version=format_version)
     write_run(output.parent, {"format_version": 1, "kind": "replay", "dbms": result["dbms"],
+                              "language": case.get("language", "cypher"),
                               "database_version": result.get("database_version", "unknown"),
                               "patterns": [case["pattern"]], "budgets": {}, "per_pattern": {}})
     print(f"Replay: {result['status']} — {output}")

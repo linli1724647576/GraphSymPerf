@@ -20,6 +20,7 @@ DEFAULT_MEASUREMENT = {
     "confirmation_pairs": 20, "control_pairs": 10, "ratio": 3.0,
     "ci_low": 2.0, "direction_consistency": 0.75, "bootstrap_samples": 10_000,
     "timeout_seconds": 10.0, "max_rows": 100_000,
+    "collect_plans": False,
 }
 
 
@@ -61,6 +62,8 @@ _INDEX_CHECK = ("SHOW INDEXES YIELD name, state, labelsOrTypes, properties "
 def supported_patterns(config):
     """Conservative syntax coverage; a server can still reject a newer feature."""
     name = config.get("dbms", "neo4j").lower()
+    if config.get("language", "cypher") != "cypher":
+        return set()
     patterns = {f"P{i}" for i in range(1, 17)} | {f"S{i}" for i in range(1, 11)}
     if name == "neo4j":
         return patterns
@@ -70,12 +73,15 @@ def supported_patterns(config):
         # Keep EXISTS/COUNT subqueries intact: rewriting them as list creation
         # changes the optimization mechanism that this experiment measures.
         return patterns - {"P4", "P5", "P15", "S1", "S2", "S3", "S4", "S7", "S8", "S10"}
+    if name in {"arcadedb", "age", "ladybug"}:
+        return patterns - {"P7", "S3"}
     raise ValueError(f"unsupported dbms: {name}")
 
 
 def make_database(config, settings):
     name = config.get("dbms", "neo4j").lower()
-    adapters = {"neo4j": Neo4j, "memgraph": Memgraph, "falkordb": FalkorDB}
+    adapters = {"neo4j": Neo4j, "memgraph": Memgraph, "falkordb": FalkorDB,
+                "arcadedb": ArcadeDB, "age": ApacheAGE, "ladybug": LadybugDB}
     if name not in adapters:
         raise CaseFailure("configuration_error", "unsupported_dbms", stop_target=True)
     return adapters[name](config, settings)
@@ -243,6 +249,15 @@ class Neo4j:
 
     def close(self):
         self.driver.close()
+
+    def explain(self, query, parameters, analyze=True):
+        with self.driver.session(database=self.database) as session:
+            cursor = session.run(self._query(("PROFILE " if analyze else "EXPLAIN ") + query,
+                                            timeout=self.settings["timeout_seconds"]), parameters)
+            rows = [dict(row) for row in cursor] if isinstance(self, Memgraph) else []
+            summary = cursor.consume()
+            return {"format": "native", "analyze": analyze,
+                    "plan": summary.profile if analyze else summary.plan, "rows": rows}
 
 
 class Memgraph(Neo4j):
@@ -435,6 +450,16 @@ class FalkorDB:
     def close(self):
         self.client.close()
 
+    def explain(self, query, parameters, analyze=True):
+        command = "GRAPH.PROFILE" if analyze else "GRAPH.EXPLAIN"
+        text = self.graph._build_params_header(parameters or None) + query
+        arguments = [command, self.database, text]
+        if analyze:
+            arguments.extend(("TIMEOUT", max(1, math.ceil(self.settings["timeout_seconds"] * 1000))))
+        rows = self.graph.execute_command(*arguments)
+        return {"format": "native", "analyze": analyze,
+                "operators": [row.decode() if isinstance(row, bytes) else row for row in rows]}
+
 
 def _result(db, query, parameters, settings):
     try:
@@ -445,6 +470,12 @@ def _result(db, query, parameters, settings):
         raise
     if not result.get("complete") or len(result["rows"]) > settings["max_rows"]:
         raise CaseFailure("incomplete_result", "result_row_limit_exceeded")
+    columns = getattr(db, "_output_columns", {}).get(query)
+    if columns:
+        physical = {item[0] for item in columns}
+        if any(set(row) != physical for row in result["rows"]):
+            raise CaseFailure("incomplete_result", "compiled_projection_columns_differ")
+        result = {**result, "rows": [{logical: row[source] for source, logical in columns} for row in result["rows"]]}
     elapsed = result.get("elapsed_ms")
     if type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed <= 0:
         raise CaseFailure("measurement_error", "invalid_elapsed_time")
@@ -453,10 +484,14 @@ def _result(db, query, parameters, settings):
 
 def check_case(db, case: dict, settings: dict):
     """Check cost facts, a full independent reference when supplied, and A/B."""
-    for index, check in enumerate(case.get("checks", [])):
-        _, actual = _result(db, check["query"], case.get("parameters", {}), settings)
-        if actual != typed_bag(check["expected_rows"]):
-            raise CaseFailure("cost_check_failed", f"cost_check_{index}")
+    if hasattr(db, "check_state"):
+        evidence = db.check_state(case)
+        db._state_evidence = {"checks": evidence, "indexes": getattr(db, "index_evidence", [])}
+    else:
+        for index, check in enumerate(case.get("checks", [])):
+            _, actual = _result(db, check["query"], case.get("parameters", {}), settings)
+            if actual != typed_bag(check["expected_rows"]):
+                raise CaseFailure("cost_check_failed", f"cost_check_{index}")
     parameters = case.get("parameters", {})
     reference = case.get("query_ref") or (case.get("query_b") if case.get("reference_side") == "b" else None)
     db._reference_query = reference
@@ -464,7 +499,8 @@ def check_case(db, case: dict, settings: dict):
     if reference:
         reference_result, reference_bag = _result(db, reference, parameters, settings)
         if "expected_rows" in case and reference_bag != typed_bag(case["expected_rows"]):
-            raise CaseFailure("reference_mismatch", "reference_differs_from_constructed_result")
+            raise CaseFailure("reference_mismatch", "reference_differs_from_constructed_result", details={
+                "actual_reference_rows": reference_result["rows"][:10], "expected_rows": case["expected_rows"][:10]})
         db._reference_evidence = {"elapsed_ms": reference_result["elapsed_ms"],
                                   "validated": "expected_rows" in case}
     left, baseline = _result(db, case["query_a"], parameters, settings)
@@ -477,7 +513,8 @@ def check_case(db, case: dict, settings: dict):
             "rows_a": len(left["rows"]), "rows_b": len(right_result["rows"]),
             "sample_a": left["rows"][:10], "sample_b": right_result["rows"][:10]})
     if "expected_rows" in case and baseline != typed_bag(case["expected_rows"]):
-        raise CaseFailure("reference_mismatch", "queries_differ_from_constructed_reference")
+        raise CaseFailure("reference_mismatch", "queries_differ_from_constructed_reference", details={
+            "actual_rows": left["rows"][:10], "expected_rows": case["expected_rows"][:10]})
     if reference and reference_bag != baseline:
         raise CaseFailure("reference_mismatch", "queries_differ_from_reference_query")
     return baseline, len(left["rows"])
@@ -536,6 +573,8 @@ def measurement_settings(measurement):
     if unknown:
         raise ValueError(f"unknown measurement settings: {sorted(unknown)}")
     settings = {**DEFAULT_MEASUREMENT, **measurement}
+    if type(settings["collect_plans"]) is not bool:
+        raise ValueError("collect_plans must be boolean")
     for key in ("discovery_warmups", "discovery_pairs", "confirmation_sessions", "confirmation_warmups", "confirmation_pairs", "control_pairs", "bootstrap_samples", "max_rows"):
         value = settings[key]
         if type(value) is not int or value < (0 if "warmups" in key else 1):
@@ -557,14 +596,16 @@ def measurement_settings(measurement):
 def state_fingerprint(case, database):
     """Identify the actual graph/checks, not the pattern or random seed."""
     state = {"setup": case["setup"], "checks": case.get("checks", []),
-             "target": {key: database.get(key) for key in ("dbms", "uri", "database", "user")}}
+             "graph_spec": case.get("graph_spec"), "state_checks": case.get("state_checks"),
+             "target": {key: database.get(key) for key in ("dbms", "uri", "path", "database", "graph", "user", "language")}}
     return hashlib.sha256(json.dumps(state, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
 def _restore_state(db, case, fingerprint, cache, *, force=False):
     if hasattr(db, "prepare_state"):
         db.prepare_state(case)
-    reused = not force and cache is not None and cache.get("fingerprint") == fingerprint and db.health()
+    reused = (not force and getattr(db, "persistent_state", True) and cache is not None
+              and cache.get("fingerprint") == fingerprint and db.health())
     if not reused:
         if cache is not None:
             cache.clear()
@@ -587,9 +628,49 @@ def _passed(summary, sessions, settings):
             summary["median_delta_ms"] > summary["noise_p99_ms"])
 
 
+def _bind_outputs(db, case):
+    db._output_columns = {}
+    for side, columns in case.get("output_columns", {}).items():
+        text = case[f"query_{side}"]
+        if text in db._output_columns and db._output_columns[text] != columns:
+            raise CaseFailure("invalid_case", "same_query_has_conflicting_output_columns")
+        db._output_columns[text] = columns
+    if hasattr(db, "_columns"):
+        db._columns.update({query: tuple(item[0] for item in columns)
+                            for query, columns in db._output_columns.items()})
+
+
+def _collect_plans(db, case, report):
+    """Native diagnostics run after timing and do not change candidate gates."""
+    plans = {}
+    for side in ("a", "b", "ref"):
+        if not case.get(f"query_{side}"):
+            continue
+        try:
+            plans[side] = db.explain(case[f"query_{side}"], case.get("parameters", {}), analyze=True)
+        except Exception as exc:
+            plans[side] = {"status": "unavailable", "reason": type(exc).__name__}
+            if isinstance(exc, CaseFailure):
+                plans[side].update(reason=exc.reason, **exc.details)
+                if exc.stop_target:
+                    report["stop_target"] = True
+                    break
+            elif (isinstance(exc, (TimeoutError, ConnectionError, OSError))
+                  or re.search(r"timeout|timedout|serviceunavailable|sessionexpired|connection|transport|socket|pipe",
+                               str(getattr(exc, "code", type(exc).__name__)), re.I)):
+                # Diagnostic failure must not leave an unknown running query
+                # while the following case starts measuring.
+                report["stop_target"] = True
+                break
+    report["plans"] = plans
+    if hasattr(db, "index_evidence"):
+        report["index_evidence"] = db.index_evidence
+
+
 def run_case(case: dict, database: dict, measurement: dict | None = None, *, state_cache: dict | None = None) -> dict:
     """Execute one case. Failures are reportable; stop_target forbids continuation."""
     report = {"status": "started", "reason": "", "stop_target": False, "dbms": database.get("dbms", "neo4j"),
+              "language": database.get("language", "cypher"),
               "discovery": {"warmups": [], "samples": []}, "confirmation_sessions": [], "summary": None,
               "reference_comparisons": {}, "comparisons": {}}
     # Keep the old top-level sample fields, but never use the aggregate report
@@ -606,6 +687,29 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
     try:
         settings = measurement_settings(measurement or {})
         report["measurement"] = settings
+        if case.get("compile_error"):
+            raise CaseFailure(case["compile_error"]["status"], case["compile_error"]["reason"])
+        if case.get("query_ir"):
+            from ir import from_data
+            from languages import UnsupportedFeature, UnsupportedLanguage, validate_language
+            try:
+                for value in case["query_ir"].values():
+                    validate_language(from_data(value), database.get("dbms", "neo4j"),
+                                      database.get("language", "cypher"),
+                                      verified_features=database.get("verified_features", ()))
+            except (UnsupportedFeature, UnsupportedLanguage) as exc:
+                raise CaseFailure("unsupported_feature", str(exc)) from exc
+        if case.get("graph_spec"):
+            from state import GraphSpec
+            spec = GraphSpec.from_dict(case["graph_spec"])
+            if (case.get("state_checks", spec.state_checks()) != spec.state_checks()
+                    or case.get("index_requirements", spec.indexes) != spec.indexes):
+                raise CaseFailure("invalid_case", "graph_recipe_and_cost_metadata_differ")
+        if database.get("language", "cypher") != "cypher":
+            raise CaseFailure("unsupported_feature", "language_generator_not_implemented")
+        if (case.get("target_dbms") and case["target_dbms"] != database.get("dbms", "neo4j")
+                and not {case["target_dbms"], database.get("dbms", "neo4j")} <= {"neo4j", "memgraph", "falkordb"}):
+            raise CaseFailure("invalid_case", "query_compiled_for_different_database")
         for query in (case["query_a"], case["query_b"], *([case["query_ref"]] if case.get("query_ref") else [])):
             validate_read_query(query)
         if case.get("reference_side") not in (None, "b", "ref") or case.get("reference_side") == "ref" and not case.get("query_ref"):
@@ -625,6 +729,7 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
         fingerprint = state_fingerprint(case, database)
         phase = "discovery_setup"
         db = make_database(database, settings)
+        _bind_outputs(db, case)
         report["database_version"] = getattr(db, "version", "unknown")
         if hasattr(db, "server_result_limit"):
             report["server_resultset_size"] = db.server_result_limit
@@ -637,6 +742,10 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 raise
         report["state_reused"] = _restore_state(db, case, fingerprint, state_cache)
         baseline, report["result_rows"] = check_case(db, case, settings)
+        if hasattr(db, "_state_evidence"):
+            report["state_evidence"] = db._state_evidence
+        if hasattr(db, "query_engine"):
+            report["query_engine"] = db.query_engine
         _remember_state(db, fingerprint, state_cache)
         phase = "discovery"
         rng = random.Random(seed)
@@ -668,14 +777,15 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
         current_comparison = None
         if "reference_direction" in ab:
             report["reference_direction"] = ab["reference_direction"]
-        db.close()
-        db = None
         if not active:
             report.update(status="no_candidate", reason="discovery_gate_not_met")
             return report
+        db.close()
+        db = None
         for number in range(settings["confirmation_sessions"]):
             phase = f"confirmation_{number + 1}_setup"
             db = make_database(database, settings)
+            _bind_outputs(db, case)
             _restore_state(db, case, fingerprint, state_cache, force=True)
             fresh_baseline, _ = check_case(db, case, settings)
             if fresh_baseline != baseline:
@@ -696,8 +806,9 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 noise_floors.append(session["noise_p99_ms"])
                 pooled.extend(session["samples"])
             current_comparison = None
-            db.close()
-            db = None
+            if number < settings["confirmation_sessions"] - 1:
+                db.close()
+                db = None
         candidates = []
         for name, queries, comparison, slow, pooled, noise_floors in active:
             summary = summarize(pooled, slow, bootstrap_samples=settings["bootstrap_samples"], seed=seed)
@@ -747,6 +858,9 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
     except Exception as exc:
         report.update(status="environment_error", reason=type(exc).__name__, stop_target=True, failure_phase=phase)
     finally:
+        if (db is not None and report["status"] in {"candidate", "no_candidate", "not_confirmed"}
+                and (report.get("measurement", {}).get("collect_plans") or report["status"] == "candidate")):
+            _collect_plans(db, case, report)
         if (current_comparison is not None and report["status"] not in {"candidate", "no_candidate", "not_confirmed"}
                 and current_comparison["status"] != "timeout_candidate"):
             current_comparison.update(status=comparison_failure_status or report["status"], failure_phase=phase)
@@ -760,7 +874,7 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
             for key in ("ratio_lower_bound", "reference_elapsed_ms", "elapsed_lower_bound_ms", "cancellation_verified", "failure_phase"):
                 if key in comparison:
                     report["comparisons"][name][key] = comparison[key]
-        if state_cache is not None and report["status"] not in {"candidate", "no_candidate", "not_confirmed"}:
+        if state_cache is not None and (report.get("stop_target") or report["status"] not in {"candidate", "no_candidate", "not_confirmed"}):
             state_cache.clear()
         if db is not None:
             try:
@@ -770,3 +884,705 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 if state_cache is not None:
                     state_cache.clear()
     return report
+
+
+
+
+import base64
+from http.client import HTTPConnection, HTTPSConnection, HTTPException
+from io import BytesIO
+from collections import defaultdict
+import json
+import math
+import re
+import socket
+from time import perf_counter
+from urllib.error import HTTPError
+from urllib.parse import quote, urlsplit
+
+
+
+def _native_identifier(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise CaseFailure("unsupported_feature", "unsupported_schema_identifier")
+    return value
+
+
+def _recipe(state):
+    from state import GraphSpec
+    if "graph_spec" not in state:
+        raise CaseFailure("unsupported_feature", "structured_graph_recipe_required")
+    spec = GraphSpec.from_dict(state["graph_spec"])
+    # AGE labels and ArcadeDB record types are not Neo4j multi-label sets.
+    if spec.pattern == "P7":
+        raise CaseFailure("unsupported_feature", "multi_label_conjunction_not_supported")
+    return spec
+
+
+def _verify_rendered_checks(db, spec):
+    from state import render_state_checks
+    evidence = []
+    for number, check in enumerate(render_state_checks(spec.state_checks())):
+        if hasattr(db, "_columns"):
+            db._columns[check["query"]] = tuple(check["expected_rows"][0])
+        actual = db.execute(check["query"], {}, db.settings["timeout_seconds"])
+        if not actual["complete"] or typed_bag(actual["rows"]) != typed_bag(check["expected_rows"]):
+            raise CaseFailure("cost_check_failed", f"structured_cost_check_{number}")
+        evidence.append({"query": check["query"], "rows": actual["rows"]})
+    return evidence
+
+
+def _cypher_data(value):
+    """GraphSpec data has only integer/boolean/null properties and collections."""
+    if value is None:
+        return "null"
+    if type(value) is bool:
+        return str(value).lower()
+    if type(value) is int:
+        return str(value)
+    if type(value) is list:
+        return "[" + ", ".join(_cypher_data(item) for item in value) + "]"
+    if type(value) is dict:
+        return "{" + ", ".join(f"{_native_identifier(key)}: {_cypher_data(item)}" for key, item in value.items()) + "}"
+    raise CaseFailure("unsupported_feature", "unsupported_graph_property_type")
+
+
+
+
+class ArcadeDB:
+    """Native HTTP Cypher reads and typed JSONL graph loading."""
+
+    def __init__(self, config, settings):
+        self.database, self.settings = _target_name(config), settings
+        self.uri = config["uri"].rstrip("/")
+        parsed = urlsplit(self.uri)
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username
+                or parsed.password or parsed.query or parsed.fragment):
+            raise CaseFailure("configuration_error", "arcadedb_http_uri_required", stop_target=True)
+        self._authorization = "Basic " + base64.b64encode(
+            f"{config['user']}:{_password(config)}".encode()).decode()
+        connection = HTTPSConnection if parsed.scheme == "https" else HTTPConnection
+        self._connection = connection(parsed.hostname, parsed.port, timeout=settings["timeout_seconds"])
+        self._base_path = parsed.path.rstrip("/")
+        self._spec = None
+        try:
+            info = self._request("/api/v1/server?mode=basic", None, settings["timeout_seconds"])
+            if not isinstance(info.get("version"), str) or not info["version"]:
+                raise CaseFailure("environment_error", "arcadedb_version_unavailable", stop_target=True)
+            self.version = "ArcadeDB/" + info["version"]
+            probe = self.execute("RETURN 1 AS connected", {}, settings["timeout_seconds"])
+            if not probe["complete"] or probe["rows"] != [{"connected": 1}]:
+                raise CaseFailure("environment_error", "arcadedb_connection_probe_failed", stop_target=True)
+        except Exception:
+            self.close()
+            raise
+
+
+    def _request(self, path, payload, timeout, *, content_type="application/json"):
+        data = payload if isinstance(payload, bytes) else (None if payload is None else json.dumps(payload, allow_nan=False).encode())
+        headers = {"Authorization": self._authorization, "Content-Type": content_type,
+                   "Accept": "application/json"}
+        try:
+            self._connection.timeout = timeout
+            if self._connection.sock is None:
+                self._connection.connect()
+            else:
+                self._connection.sock.settimeout(timeout)
+            # TCP/TLS establishment is outside the query timer. A server that
+            # closes an idle socket may fail this request; never retry an
+            # already submitted statement whose execution state is unknown.
+            started = perf_counter()
+            self._connection.request("GET" if data is None else "POST", self._base_path + path,
+                                     body=data, headers=headers)
+            response = self._connection.getresponse()
+            body = response.read()
+            if response.status >= 300:
+                # http.client never follows redirects. Preserve the existing
+                # HTTP status classification without forwarding credentials.
+                raise HTTPError(self.uri + path, response.status, response.reason,
+                                response.headers, BytesIO(body))
+            result = json.loads(body)
+            elapsed = (perf_counter() - started) * 1000
+        except HTTPError as exc:
+            message = exc.read().decode("utf-8", errors="replace")[:1000]
+            if "timeout" in message.lower() or "timed out" in message.lower():
+                raise CaseFailure("timeout", "arcadedb_server_timeout", stop_target=True,
+                                  details={"cancellation_verified": False, "elapsed_lower_bound_ms": None}) from exc
+            status = "configuration_error" if exc.code in {401, 403} else (
+                "unsupported_feature" if _syntax_error("", message) or re.search(r"parse|not supported|unsupported|syntax", message, re.I) else "query_error")
+            raise CaseFailure(status, f"arcadedb_http_{exc.code}", stop_target=status == "configuration_error",
+                              details={"server_message": message}) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            self._connection.close()
+            raise CaseFailure("timeout", "arcadedb_client_timeout", stop_target=True,
+                              details={"cancellation_verified": False, "elapsed_lower_bound_ms": None}) from exc
+        except (OSError, HTTPException) as exc:
+            self._connection.close()
+            raise CaseFailure("environment_error", "arcadedb_transport_error", stop_target=True) from exc
+        except (ValueError, TypeError) as exc:
+            self._connection.close()
+            raise CaseFailure("environment_error", "arcadedb_invalid_json", stop_target=True) from exc
+        if not isinstance(result, dict) or result.get("error"):
+            raise CaseFailure("query_error", "arcadedb_invalid_response", stop_target=True)
+        result["_client_elapsed_ms"] = elapsed
+        return result
+
+
+    def _query(self, text, parameters, timeout, *, language="opencypher", command=False):
+        endpoint = "command" if command else "query"
+        return self._request(f"/api/v1/{endpoint}/{quote(self.database, safe='')}", {
+            "language": language, "command": text, "params": parameters,
+            "limit": self.settings["max_rows"] + 1, "serializer": "record"}, timeout)
+
+    def _sql(self, text, parameters=None, *, command=False):
+        result = self._query(text, parameters or {}, self.settings["timeout_seconds"], language="sql", command=command)
+        rows = result.get("result")
+        if not isinstance(rows, list) or result.get("truncated") or len(rows) > self.settings["max_rows"]:
+            raise CaseFailure("environment_error", "arcadedb_native_result_incomplete", stop_target=True)
+        return rows
+
+    def execute(self, query, parameters, timeout):
+        result = self._query(query, parameters, timeout)
+        rows = result.get("result")
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise CaseFailure("incomplete_result", "arcadedb_invalid_result_rows")
+        complete = len(rows) <= self.settings["max_rows"] and result.get("truncated") is not True
+        if "limit" in result and result["limit"] > 0 and result["limit"] < self.settings["max_rows"] + 1:
+            raise CaseFailure("configuration_error", "arcadedb_server_result_cap_too_small", stop_target=True)
+        return {"rows": rows[:self.settings["max_rows"]], "complete": complete,
+                "elapsed_ms": result["_client_elapsed_ms"]}
+
+
+    def explain(self, query, parameters, analyze=True):
+        result = self._query(("PROFILE " if analyze else "EXPLAIN ") + query,
+                             parameters, self.settings["timeout_seconds"])
+        fields = {key: result[key] for key in ("explain", "explainPlan", "profile") if key in result}
+        if not fields:
+            # Some Cypher versions return a plan as a result row.
+            rows = result.get("result", [])
+            if rows and any(key.lower() in {"plan", "executionplan", "profile"} for key in rows[0]):
+                fields = {"result": [rows[0]]}
+        if not fields:
+            raise CaseFailure("unsupported_feature", "arcadedb_execution_plan_unavailable")
+        return {"format": "arcadedb_native", "analyze": analyze, "plan": fields}
+
+    def health(self):
+        try:
+            result = self.execute("RETURN 1 AS connected", {}, self.settings["timeout_seconds"])
+            return result["complete"] and result["rows"] == [{"connected": 1}]
+        except Exception:
+            return False
+
+    def _batch(self, records):
+        payload = "".join(json.dumps(record, allow_nan=False) + "\n" for record in records).encode()
+        return self._request(f"/api/v1/batch/{quote(self.database, safe='')}?wal=true&lightEdges=false",
+                             payload, self.settings["timeout_seconds"], content_type="application/x-ndjson")
+
+    def restore(self, state):
+        spec = _recipe(state)
+        schema = spec.schema()
+        current = self._sql("SELECT name, type FROM schema:types")
+        if any(row.get("type") not in {"vertex", "edge"} for row in current):
+            raise CaseFailure("environment_error", "unexpected_schema_in_test_database", stop_target=True)
+        self._sql("DROP INDEX gsp_cost_lookup IF EXISTS", command=True)
+        # All records belong to the explicitly resettable test database. Drop
+        # edge types first; no connectivity is retained across graph states.
+        for row in sorted(current, key=lambda row: row["type"] != "edge"):
+            self._sql(f"DROP TYPE {_native_identifier(row['name'])} UNSAFE", command=True)
+        for kind, entries in (("VERTEX", schema["nodes"]), ("EDGE", schema["relationships"])):
+            for entry in entries:
+                name = _native_identifier(entry["label" if kind == "VERTEX" else "type"])
+                self._sql(f"CREATE {kind} TYPE {name}", command=True)
+                for key, type_name in entry["properties"].items():
+                    native_type = {"integer": "LONG", "boolean": "BOOLEAN"}[type_name]
+                    self._sql(f"CREATE PROPERTY {name}.{_native_identifier(key)} {native_type}", command=True)
+        identities = {}
+        for batch in spec.iter_batches("nodes", 1000):
+            records = [{"@type": "vertex", "@class": row["labels"][0],
+                        "@id": f"{row['labels'][0]}:{row['uid']}", **row["properties"]} for row in batch]
+            if any(len(row["labels"]) != 1 for row in batch):
+                raise CaseFailure("unsupported_feature", "multi_label_conjunction_not_supported")
+            loaded = self._batch(records)
+            mapping = loaded.get("idMapping", {})
+            if (loaded.get("verticesCreated") != len(records) or loaded.get("edgesCreated") != 0
+                    or set(mapping) != {row["@id"] for row in records}
+                    or any(not isinstance(rid, str) or not re.fullmatch(r"#\d+:\d+", rid) for rid in mapping.values())):
+                raise CaseFailure("environment_error", "arcadedb_vertex_batch_incomplete", stop_target=True)
+            identities.update(mapping)
+        for batch in spec.iter_batches("edges", 1000):
+            records = [{"@type": "edge", "@class": row["type"],
+                        "@from": identities[f"{row['source_label']}:{row['source']}"],
+                        "@to": identities[f"{row['target_label']}:{row['target']}"],
+                        **row["properties"]} for row in batch]
+            loaded = self._batch(records)
+            if loaded.get("edgesCreated") != len(records) or loaded.get("verticesCreated") != 0:
+                raise CaseFailure("environment_error", "arcadedb_edge_batch_incomplete", stop_target=True)
+        for index in spec.indexes:
+            self._sql(f"CREATE INDEX {_native_identifier(index['name'])} ON "
+                      f"{_native_identifier(index['label'])} ({_native_identifier(index['property'])}) NOTUNIQUE", command=True)
+        # Schema DDL resets this database's plans; counts come from the new
+        # physical types. No nonexistent ANALYZE/cache procedure is invented.
+        self._spec = spec
+        self._check_indexes(spec)
+
+    def _check_indexes(self, spec):
+        types = self._sql("SELECT name, indexes FROM schema:types")
+        indexes = [index for row in types for index in row.get("indexes", [])]
+        physical = self._sql("SELECT typeName, properties, valid FROM schema:indexes")
+        for required in spec.indexes:
+            if not any(row.get("name") == required["name"] and row.get("typeName") == required["label"]
+                       and row.get("properties") == [required["property"]] for row in indexes):
+                raise CaseFailure("cost_check_failed", "arcadedb_cost_index_missing")
+            matches = [row for row in physical if row.get("typeName") == required["label"]
+                       and row.get("properties") in ([required["property"]], [[required["property"]]])]
+            if not matches or any(row.get("valid") is not True for row in matches):
+                raise CaseFailure("cost_check_failed", "arcadedb_cost_index_invalid")
+        return {"kind": "LSM_TREE_property", "includes_whole_property_map": False,
+                "indexes": indexes, "physical_indexes": physical}
+
+    def check_state(self, state):
+        spec = _recipe(state)
+        return {"indexes": self._check_indexes(spec), "checks": _verify_rendered_checks(self, spec),
+                "preparation": "fresh_schema_and_native_indexes"}
+
+    def close(self):
+        self._connection.close()
+
+
+
+def _agtype_value(value):
+    """Decode only AGE's scalar/list/map fragment; never erase entity types."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if not isinstance(value, str):
+        raise CaseFailure("incomplete_result", "unexpected_age_driver_value")
+    try:
+        parsed = json.loads(value, parse_constant=lambda name: (_ for _ in ()).throw(ValueError(name)))
+        # Graph entities and numeric annotations are deliberately unsupported;
+        # accepting their JSON prefix would silently discard semantic types.
+        typed_bag([{ "value": parsed }])
+        return parsed
+    except (ValueError, TypeError) as exc:
+        raise CaseFailure("incomplete_result", "unsupported_agtype_value") from exc
+
+
+class ApacheAGE:
+    """One psycopg session; native graph labels, property indexes and plans."""
+
+    def __init__(self, config, settings):
+        self.database, self.settings = _target_name(config), settings
+        self.graph = _native_identifier(config.get("graph_name", "gsp_cases"))
+        from psycopg import connect, sql
+        self._sql_module = sql
+        self.connection = connect(config["uri"], dbname=self.database,
+                                  user=config["user"], password=_password(config), autocommit=True,
+                                  prepare_threshold=None,
+                                  connect_timeout=max(1, math.ceil(settings["timeout_seconds"])))
+        self._columns, self._prepared, self._spec = {}, {}, None
+        try:
+            self._sql("LOAD 'age'")
+            self._sql('SET search_path = ag_catalog, "$user", public')
+            rows = self._sql("SELECT extversion FROM pg_extension WHERE extname = 'age'")
+            if len(rows) != 1:
+                raise CaseFailure("environment_error", "age_extension_unavailable", stop_target=True)
+            pg = self._sql("SHOW server_version")[0][0]
+            self.version = f"Apache AGE/{rows[0][0]} PostgreSQL/{pg}"
+            self._sql("SELECT 1")
+        except Exception:
+            self.close()
+            raise
+
+    def _sql(self, statement, parameters=None):
+        with self.connection.cursor() as cursor:
+            cursor.execute(statement, parameters)
+            return cursor.fetchall() if cursor.description else []
+
+    def _signature(self, query):
+        if query not in self._columns:
+            from query import parse_query, projection_names
+            try:
+                self._columns[query] = projection_names(parse_query(query))
+            except ValueError as exc:
+                raise CaseFailure("unsupported_feature", "age_requires_known_output_columns") from exc
+        return self._columns[query]
+
+    def _cypher_sql(self, query, columns, *, parameters=False):
+        sql = self._sql_module
+        signature = sql.SQL(", ").join(sql.SQL("{} agtype").format(sql.Identifier(name)) for name in columns)
+        if not columns:
+            signature = sql.SQL("unused agtype")
+        # AGE requires its second argument to be dollar-quoted, rather than
+        # just any SQL string constant. Choose a delimiter absent from the
+        # complete input, so embedded quotes/SQL cannot escape this literal.
+        tag = "$gsp$"
+        while tag in query:
+            tag = tag[:-1] + "_" + "$"
+        text = sql.SQL(tag + query + tag)
+        return sql.SQL("SELECT * FROM ag_catalog.cypher({}, {}{}) AS ({})").format(
+            sql.Literal(self.graph), text, sql.SQL(", $1") if parameters else sql.SQL(""), signature)
+
+    def _statement(self, query, parameters, columns):
+        sql = self._sql_module
+        if not parameters:
+            return self._cypher_sql(query, columns)
+        key = (query, columns)
+        if key not in self._prepared:
+            name = "gsp_query_" + str(len(self._prepared))
+            self._sql(sql.SQL("PREPARE {} (agtype) AS {}").format(
+                sql.Identifier(name), self._cypher_sql(query, columns, parameters=True)))
+            self._prepared[key] = name
+        return sql.SQL("EXECUTE {} ({})").format(
+            sql.Identifier(self._prepared[key]), sql.Literal(json.dumps(parameters, allow_nan=False)))
+
+    def _run(self, query, parameters, timeout, columns, *, decode=True, prefix=None):
+        sql = self._sql_module
+        self._sql(sql.SQL("SET statement_timeout = {}").format(sql.Literal(max(1, math.ceil(timeout * 1000)))))
+        started = perf_counter()
+        try:
+            statement = self._statement(query, parameters, columns)
+            if prefix:
+                statement = sql.SQL(prefix + " ") + statement
+            started = perf_counter()
+            with self.connection.cursor() as cursor:
+                cursor.execute(statement)
+                raw = cursor.fetchmany(self.settings["max_rows"] + 1)
+                if decode and any(len(row) != len(columns) for row in raw):
+                    raise CaseFailure("incomplete_result", "age_result_column_width_mismatch")
+                rows = ([dict(zip(columns, (_agtype_value(value) for value in row))) for row in raw]
+                        if decode else raw)
+            elapsed = (perf_counter() - started) * 1000
+        except CaseFailure:
+            raise
+        except Exception as exc:
+            identity = getattr(exc, "sqlstate", None) or type(exc).__name__
+            message = str(exc)[:1000]
+            if identity == "57014":
+                # PostgreSQL has acknowledged cancellation. Autocommit leaves
+                # no failed transaction; require a subsequent successful query.
+                healthy = self.health()
+                elapsed = (perf_counter() - started) * 1000
+                raise CaseFailure("timeout", "age_statement_timeout", stop_target=not healthy, details={
+                    "cancellation_verified": healthy,
+                    "elapsed_lower_bound_ms": min(timeout * 1000, elapsed)}) from exc
+            if identity in {"42601", "0A000", "42883"} or _syntax_error("", message):
+                raise CaseFailure("unsupported_feature", identity, details={"server_message": message}) from exc
+            if str(identity).startswith("08") or getattr(self.connection, "closed", False):
+                raise CaseFailure("environment_error", identity, stop_target=True) from exc
+            raise CaseFailure("query_error", identity, details={"server_message": message}) from exc
+        return {"rows": rows[:self.settings["max_rows"]], "complete": len(raw) <= self.settings["max_rows"],
+                "elapsed_ms": elapsed}
+
+    def execute(self, query, parameters, timeout):
+        return self._run(query, parameters, timeout, self._signature(query))
+
+    def explain(self, query, parameters, analyze=True):
+        prefix = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)" if analyze else "EXPLAIN (FORMAT JSON)"
+        result = self._run(query, parameters, self.settings["timeout_seconds"], self._signature(query),
+                           decode=False, prefix=prefix)
+        if not result["complete"] or len(result["rows"]) != 1:
+            raise CaseFailure("environment_error", "age_plan_incomplete", stop_target=True)
+        return {"format": "postgresql_json", "analyze": analyze, "plan": result["rows"][0][0]}
+
+    def health(self):
+        try:
+            return self._sql("SELECT 1") == [(1,)]
+        except Exception:
+            return False
+
+    def _build(self, text):
+        # Graph setup is generated from GraphSpec, not accepted as arbitrary
+        # imported Cypher. A no-RETURN AGE command has one dummy agtype column.
+        self._run(text, {}, self.settings["timeout_seconds"], (), decode=False)
+
+    def restore(self, state):
+        spec = _recipe(state)
+        sql = self._sql_module
+        self._sql("DEALLOCATE ALL")
+        self._prepared.clear()
+        existing = self._sql("SELECT name FROM ag_catalog.ag_graph WHERE name = %s", (self.graph,))
+        if existing:
+            self._sql("SELECT ag_catalog.drop_graph(%s, true)", (self.graph,))
+        self._sql("SELECT ag_catalog.create_graph(%s)", (self.graph,))
+        schema = spec.schema()
+        for node in schema["nodes"]:
+            self._sql("SELECT ag_catalog.create_vlabel(%s, %s)", (self.graph, node["label"]))
+        for edge in schema["relationships"]:
+            self._sql("SELECT ag_catalog.create_elabel(%s, %s)", (self.graph, edge["type"]))
+        # Temporary GIN indexes make batched UID endpoint lookup practical.
+        # Required label GIN indexes remain; all helper indexes are removed
+        # before measurements, so noise labels do not gain hidden indexes.
+        required = {index["label"]: index for index in spec.indexes}
+        helpers = []
+        for number, node in enumerate(schema["nodes"]):
+            name = required[node["label"]]["name"] if node["label"] in required else f"gsp_load_{number}"
+            self._sql(sql.SQL("CREATE INDEX {} ON {}.{} USING gin (properties)").format(
+                sql.Identifier(name), sql.Identifier(self.graph), sql.Identifier(node["label"])))
+            if node["label"] not in required:
+                helpers.append(name)
+        for index in spec.indexes:
+            # Inline property maps lower to containment (GIN); WHERE property
+            # equality lowers to agtype_access_operator (BTree). Both target
+            # the same low-cost role, without indexing noise labels.
+            self._sql(sql.SQL("CREATE INDEX {} ON {}.{} ((ag_catalog.agtype_access_operator("
+                              "VARIADIC ARRAY[properties, {}::ag_catalog.agtype])))").format(
+                sql.Identifier(index["name"] + "_scalar"), sql.Identifier(self.graph),
+                sql.Identifier(index["label"]), sql.Literal(json.dumps(index["property"]))))
+        for batch in spec.iter_batches("nodes", 1000):
+            groups = defaultdict(list)
+            for row in batch:
+                if len(row["labels"]) != 1:
+                    raise CaseFailure("unsupported_feature", "multi_label_conjunction_not_supported")
+                groups[row["labels"][0]].append(row["properties"])
+            for label, rows in groups.items():
+                self._build(f"UNWIND {_cypher_data(rows)} AS props CREATE (n:{_native_identifier(label)}) SET n = props")
+        for batch in spec.iter_batches("edges", 1000):
+            groups = defaultdict(list)
+            for row in batch:
+                groups[(row["source_label"], row["target_label"], row["type"])].append(
+                    {"source": row["source"], "target": row["target"], **row["properties"]})
+            for (source, target, kind), rows in groups.items():
+                keys = sorted(set().union(*(set(row) - {"source", "target"} for row in rows)))
+                properties = " {" + ", ".join(f"{_native_identifier(key)}: row.{key}" for key in keys) + "}" if keys else ""
+                self._build(f"UNWIND {_cypher_data(rows)} AS row MATCH "
+                            f"(s:{_native_identifier(source)} {{uid: row.source}}), "
+                            f"(t:{_native_identifier(target)} {{uid: row.target}}) "
+                            f"CREATE (s)-[e:{_native_identifier(kind)}{properties}]->(t)")
+        for name in helpers:
+            self._sql(sql.SQL("DROP INDEX {}.{}").format(sql.Identifier(self.graph), sql.Identifier(name)))
+        for label in [node["label"] for node in schema["nodes"]] + [edge["type"] for edge in schema["relationships"]]:
+            # Flush GIN's pending list from graph loading as well as updating
+            # planner statistics. With ANALYZE alone, the pending entries made
+            # an 8,001-node low-label scan cheaper than the ready GIN lookup.
+            self._sql(sql.SQL("VACUUM (ANALYZE) {}.{}").format(sql.Identifier(self.graph), sql.Identifier(label)))
+        self._sql("DISCARD PLANS")
+        self._spec = spec
+        self._check_indexes(spec)
+
+    def _check_indexes(self, spec):
+        evidence = []
+        for index in spec.indexes:
+            for name, kind, token in ((index["name"], "GIN_property_map", "USING gin (properties)"),
+                                       (index["name"] + "_scalar", "BTREE_property_expression", "USING btree")):
+                rows = self._sql("SELECT i.indisvalid, i.indisready, t.relname, pg_get_indexdef(i.indexrelid) "
+                                 "FROM pg_index i JOIN pg_class x ON x.oid = i.indexrelid "
+                                 "JOIN pg_class t ON t.oid = i.indrelid JOIN pg_namespace n ON n.oid = t.relnamespace "
+                                 "WHERE n.nspname = %s AND x.relname = %s", (self.graph, name))
+                if len(rows) != 1 or rows[0][0:3] != (True, True, index["label"]) or token not in rows[0][3]:
+                    raise CaseFailure("cost_check_failed", "age_cost_index_missing_or_invalid")
+                if kind == "BTREE_property_expression" and ("agtype_access_operator" not in rows[0][3]
+                                                             or json.dumps(index["property"]) not in rows[0][3]):
+                    raise CaseFailure("cost_check_failed", "age_cost_index_wrong_property")
+                evidence.append({"name": name, "label": index["label"], "property": index["property"],
+                                 "definition": rows[0][3], "kind": kind,
+                                 "includes_whole_property_map": kind == "GIN_property_map", "valid": True, "ready": True})
+        return evidence
+
+    def check_state(self, state):
+        spec = _recipe(state)
+        return {"indexes": self._check_indexes(spec), "checks": _verify_rendered_checks(self, spec),
+                "preparation": "fresh_graph_vacuum_analyze_discard_plans"}
+
+    def close(self):
+        self.connection.close()
+
+class LadybugDB:
+    persistent_state = False
+    """Embedded typed graph; each rebuild owns only a fresh test subdirectory."""
+
+    def __init__(self, config, settings):
+        from pathlib import Path
+        import ladybug
+
+        self.database, self.settings = _target_name(config), settings
+        directory = config.get("path")
+        if not isinstance(directory, str) or not directory.strip() or directory == ":memory:":
+            raise CaseFailure("configuration_error", "ladybug_explicit_test_directory_required", stop_target=True)
+        self.directory = Path(directory).expanduser().resolve()
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._module, self.config = ladybug, config
+        self._work, self.db, self.connection = None, None, None
+        self.version = "LadybugDB/" + ladybug.Database.get_version()
+        self.index_evidence = []
+        self._new_database()
+
+    def _new_database(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        self.close()
+        self._work = TemporaryDirectory(prefix="gsp-", dir=self.directory)
+        try:
+            self.db = self._module.Database(str(Path(self._work.name) / "state.lbdb"),
+                                           buffer_pool_size=self.config.get("buffer_pool_size", 268435456),
+                                           max_num_threads=self.config.get("threads", 1),
+                                           backend=self.config.get("backend", "auto"))
+            self.connection = self._module.Connection(self.db, num_threads=self.config.get("threads", 1))
+            if not self.health():
+                raise CaseFailure("environment_error", "ladybug_connection_unhealthy", stop_target=True)
+        except Exception:
+            self.close()
+            raise
+
+    @staticmethod
+    def _identifier(value):
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", value):
+            raise CaseFailure("invalid_case", "invalid_graph_identifier")
+        return "`" + value + "`"
+
+    def execute(self, query, parameters, timeout):
+        # The official C-API wrapper can reject this shape without executing it.
+        # Such a reply must not become lower-bound performance evidence.
+        if (not self.connection._using_pybind_backend() and timeout > 0
+                and len(re.findall(r"\bUNWIND\s+RANGE\s*\(", query, re.I)) >= 2):
+            raise CaseFailure("unsupported_feature", "ladybug_capi_nested_range_timeout_guard")
+        cursor = None
+        self.connection.set_query_timeout(max(1, math.ceil(timeout * 1000)))
+        started = perf_counter()
+        try:
+            cursor = self.connection.execute(query, parameters)
+            if isinstance(cursor, list):
+                for result in cursor:
+                    result.close()
+                cursor = None
+                raise CaseFailure("invalid_case", "one_statement_required")
+            names, types = cursor.get_column_names(), cursor.get_column_data_types()
+            if len(names) != len(set(names)):
+                raise CaseFailure("incomplete_result", "duplicate_output_aliases")
+            if any(re.search(r"\b(NODE|REL|RECURSIVE_REL)\b", kind, re.I) for kind in types):
+                raise CaseFailure("incomplete_result", "graph_object_projection_requires_scalar_properties")
+            rows = []
+            while cursor.has_next() and len(rows) < self.settings["max_rows"]:
+                values = cursor.get_next()
+                if len(values) != len(names):
+                    raise CaseFailure("incomplete_result", "invalid_result_row_width")
+                rows.append(dict(zip(names, values)))
+            complete = not cursor.has_next()
+            elapsed = (perf_counter() - started) * 1000
+            return {"rows": rows, "complete": complete, "elapsed_ms": elapsed}
+        except CaseFailure:
+            raise
+        except RuntimeError as exc:
+            message = str(exc)
+            if re.search(r"\binterrupted\b|timed?\s*out|timeout", message, re.I):
+                self.connection.interrupt()
+                healthy = self.health()
+                elapsed = (perf_counter() - started) * 1000
+                raise CaseFailure("timeout", "ladybug_query_interrupted", stop_target=not healthy, details={
+                    "cancellation_verified": healthy, "server_message": message[:1000],
+                    "elapsed_lower_bound_ms": min(timeout * 1000, elapsed) if healthy else None}) from exc
+            status = "unsupported_feature" if re.search(r"Parser exception|not (?:yet )?implemented|not supported", message, re.I) else "query_error"
+            raise CaseFailure(status, "ladybug_query_error", details={"server_message": message[:1000]}) from exc
+        finally:
+            if cursor is not None:
+                cursor.close()
+
+    def health(self):
+        cursor = None
+        try:
+            self.connection.set_query_timeout(max(1, math.ceil(self.settings["timeout_seconds"] * 1000)))
+            cursor = self.connection.execute("RETURN 1 AS connected")
+            return (not isinstance(cursor, list) and cursor.get_next() == [1] and not cursor.has_next())
+        except Exception:
+            return False
+        finally:
+            if cursor is not None and not isinstance(cursor, list):
+                cursor.close()
+
+    def restore(self, case):
+        import csv
+        from contextlib import ExitStack
+        from pathlib import Path
+        from state import GraphSpec
+
+        if "graph_spec" not in case:
+            raise CaseFailure("unsupported_feature", "ladybug_restore_requires_graph_spec")
+        spec = GraphSpec.from_dict(case["graph_spec"])
+        if spec.pattern == "P7":
+            raise CaseFailure("unsupported_feature", "ladybug_has_single_label_nodes")
+        schema = spec.schema()
+        node_tables = {table["label"]: table for table in schema["nodes"]}
+        edge_tables = {table["type"]: table for table in schema["relationships"]}
+        primary = {label: "uid" for label in node_tables}
+        for index in spec.indexes:
+            if primary[index["label"]] != "uid" and primary[index["label"]] != index["property"]:
+                raise CaseFailure("unsupported_feature", "ladybug_one_primary_index_per_table")
+            primary[index["label"]] = index["property"]
+        sql_types = {"integer": "INT64", "boolean": "BOOLEAN"}
+        timeout = self.settings["timeout_seconds"]
+        self._new_database()
+        directory = Path(self._work.name)
+        for label, table in node_tables.items():
+            columns = [self._identifier(key) + " " + sql_types[kind] + (" PRIMARY KEY" if key == primary[label] else "")
+                       for key, kind in table["properties"].items()]
+            self.execute(f"CREATE NODE TABLE {self._identifier(label)}({', '.join(columns)})", {}, timeout)
+        for kind, table in edge_tables.items():
+            columns = [f"FROM {self._identifier(pair['source_label'])} TO {self._identifier(pair['target_label'])}"
+                       for pair in table["endpoints"]]
+            columns.extend(self._identifier(key) + " " + sql_types[value] for key, value in table["properties"].items())
+            self.execute(f"CREATE REL TABLE {self._identifier(kind)}({', '.join(columns)})", {}, timeout)
+
+        # COPY expects endpoint primary keys. Keep an identity map only where
+        # that key differs from uid; uid remains scoped by its node table.
+        foreign_keys, files = {}, {}
+        def cell(value):
+            return str(value).lower() if type(value) is bool else value
+        with ExitStack() as stack:
+            writers = {}
+            def writer(key):
+                if key not in writers:
+                    path = directory / ("import-" + str(len(files)) + ".csv")
+                    files[key] = path
+                    handle = stack.enter_context(path.open("w", newline="", encoding="utf-8"))
+                    writers[key] = csv.writer(handle)
+                return writers[key]
+            for batch in spec.iter_batches("nodes"):
+                for node in batch:
+                    if len(node["labels"]) != 1:
+                        raise CaseFailure("unsupported_feature", "ladybug_has_single_label_nodes")
+                    label, props = node["labels"][0], node["properties"]
+                    if primary[label] != "uid":
+                        foreign_keys[label, node["uid"]] = props[primary[label]]
+                    writer(("node", label)).writerow([cell(props.get(key)) for key in node_tables[label]["properties"]])
+            for batch in spec.iter_batches("edges"):
+                for edge in batch:
+                    source, target = edge["source_label"], edge["target_label"]
+                    source_key = foreign_keys[source, edge["source"]] if primary[source] != "uid" else edge["source"]
+                    target_key = foreign_keys[target, edge["target"]] if primary[target] != "uid" else edge["target"]
+                    writer(("edge", edge["type"], source, target)).writerow([source_key, target_key] +
+                        [cell(edge["properties"].get(key)) for key in edge_tables[edge["type"]]["properties"]])
+        for key, path in files.items():
+            literal = "'" + str(path).replace("\\", "\\\\").replace("'", "\\'") + "'"
+            options = "header=false, auto_detect=false, ignore_errors=false"
+            if key[0] == "edge":
+                options += f", from='{key[2]}', to='{key[3]}'"
+            self.execute(f"COPY {self._identifier(key[1])} FROM {literal} ({options})", {}, timeout)
+            path.unlink()
+        self.index_evidence = []
+        for index in spec.indexes:
+            result = self.execute(f"CALL table_info('{index['label']}') RETURN *", {}, timeout)
+            key = index["property"]
+            if not result["complete"] or not any(row.get("name") == key and row.get("primary key") is True for row in result["rows"]):
+                raise CaseFailure("environment_error", "ladybug_primary_index_not_operational", stop_target=True)
+            self.index_evidence.append({**index, "kind": "primary_key_hash", "verified": True})
+
+    def explain(self, query, parameters, analyze=True):
+        result = self.execute(("PROFILE " if analyze else "EXPLAIN ") + query, parameters, self.settings["timeout_seconds"])
+        return {"dbms": "ladybugdb", "format": "native", "analyze": analyze,
+                "rows": result["rows"], "complete": result["complete"]}
+
+    def check_state(self, state):
+        spec = _recipe(state)
+        return _verify_rendered_checks(self, spec)
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+        if self.db is not None:
+            self.db.close()
+            self.db = None
+        if self._work is not None:
+            self._work.cleanup()
+            self._work = None

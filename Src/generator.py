@@ -16,6 +16,8 @@ import subprocess
 import time
 from typing import Any
 
+from state import GraphSpec
+
 from query import (
     Alias,
     All,
@@ -319,6 +321,49 @@ _ENRICHMENTS = {
 }
 
 
+# Typed cost roles are execution metadata; the display text above is not.
+# Keep their order and names stable for previously recorded cases.
+_ENRICHMENT_ROLES = {
+    "P2": (("lowCostNode", "node_pattern", "low", ("u",)),
+           ("forwardType", "relationship_type", "structural", ()),
+           ("highCostNode", "node_pattern", "high", ("v",))),
+    "P3": (("lowCostNode", "node_pattern", "low", ("u",)),
+           ("R", "structural", "structural", ()),
+           ("min", "integer", "structural", ()), ("max", "integer", "structural", ()),
+           ("highCostNode", "node_pattern", "high", ("v",))),
+    "P6": (("highCostPattern", "graph_pattern", "high", ("u", "v")),
+           ("indexedKey", "property_key", "structural", ()),
+           ("lowCostValue", "scalar_expression", "low", ())),
+    "P7": (("lowCostLabel", "label", "low", ()), ("highCostLabel", "label", "high", ()),
+           ("R", "structural", "structural", ())),
+    "P8": (("lowCostNode", "node_pattern", "low", ("u",)),
+           ("lowCostType", "relationship_type", "low", ()),
+           ("highCostType", "relationship_type", "high", ())),
+    "P9": (("U", "structural", "structural", ()),
+           ("lowCostPredicate", "boolean_expression", "low", ("u",)),
+           ("highCostPattern", "graph_pattern", "high", ("u", "v"))),
+    "P10": (("lowCostPattern", "graph_pattern", "low", ("a",)),
+            ("highCostPattern", "graph_pattern", "high", ("b", "c"))),
+    "P11": (("lowCostNode", "node_pattern", "low", ("u",)),
+            ("lowCostPattern", "graph_pattern", "low", ("u", "v")),
+            ("highCostPattern", "graph_pattern", "high", ("u", "w"))),
+    "P12": (("lowCostNode", "node_pattern", "low", ("u",)),
+            ("R", "structural", "structural", ()), ("S", "structural", "structural", ()),
+            ("highCostNode", "node_pattern", "high", ("w",))),
+    "P13": (("lowCostNode", "node_pattern", "low", ("u",)),
+            ("lowCostPattern", "graph_pattern", "low", ("u", "v")),
+            ("highCostPattern", "graph_pattern", "high", ("u", "w"))),
+    "P14": (("lowCostQuery", "query", "low", ()), ("highCostQuery", "query", "high", ())),
+    "P15": (("U", "structural", "structural", ("u",)),
+            ("lowCostBool", "boolean_expression", "low", ("u",)),
+            ("lowCostExpr", "scalar_expression", "low", ("u",)),
+            ("highCostExpr", "scalar_expression", "high", ("u",))),
+    "P16": (("lowCostList", "list_expression", "low", ()),
+            ("highCostList", "list_expression", "high", ()),
+            ("predicate", "boolean_expression", "structural", ("x",))),
+}
+
+
 _SCOR_SPECS = {
     "S1": (
         "1.1",
@@ -421,32 +466,27 @@ def abstract_seed(seed_query: SeedQuery | str | None, pattern: str) -> Skeleton:
         raise PatternNotApplicable(f"pattern {pattern!r} is not implemented")
     builtin = seed_query is None
     if builtin:
-        # This is an internal fragment used to bind our own templates, not a
-        # GDsmith query and not an experimental input query.
-        seed_query = SeedQuery(
-            "MATCH (u)-[:R]->(v) WHERE u.keep = true AND v.keep = true OR u.keep = false RETURN u.uid, v.uid",
-            {"generator": "builtin_template", "builtin_pattern": pattern},
-        )
-    if isinstance(seed_query, str):
-        seed_query = SeedQuery(
-            seed_query,
-            {"generator": "provided", "query_sha256": sha256(seed_query.encode()).hexdigest()},
-        )
-    if not isinstance(seed_query, SeedQuery):
-        raise TypeError("seed_query must be SeedQuery or str")
-    try:
-        seed_pattern = extract_seed_pattern(seed_query.text)
-    except ValueError as exc:
-        raise PatternNotApplicable(f"seed has no supported first MATCH fragment: {exc}") from exc
+        seed_pattern = Edge(Node("u"), Relationship(type="R"), Node("v"))
+        source = {"generator": "builtin_template", "builtin_pattern": pattern,
+                  "raw_query": None, "derivation_preserves_original_result": False}
+    else:
+        if isinstance(seed_query, str):
+            seed_query = SeedQuery(
+                seed_query,
+                {"generator": "provided", "query_sha256": sha256(seed_query.encode()).hexdigest()},
+            )
+        if not isinstance(seed_query, SeedQuery):
+            raise TypeError("seed_query must be SeedQuery or str")
+        try:
+            seed_pattern = extract_seed_pattern(seed_query.text)
+        except ValueError as exc:
+            raise PatternNotApplicable(f"seed has no supported first MATCH fragment: {exc}") from exc
+        source = {**seed_query.source, "raw_query": seed_query.text,
+                  "derivation_preserves_original_result": False}
     changes: list[str] = [
         "derive_first_match_fragment",
         "rebind_labels_types_properties_and_projection",
     ]
-    source = {
-        **seed_query.source,
-        "raw_query": seed_query.text,
-        "derivation_preserves_original_result": False,
-    }
     if pattern == "P1":
         if not isinstance(seed_pattern, Edge):
             raise PatternNotApplicable("P1 requires a single-edge fragment in the seed")
@@ -463,17 +503,18 @@ def abstract_seed(seed_query: SeedQuery | str | None, pattern: str) -> Skeleton:
         operator = None
     elif pattern in {"P4", "P5"}:
         operator = "AND" if pattern == "P4" else "OR"
-        site = extract_seed_boolean(seed_query.text, operator)
-        if site is None:
-            raise PatternNotApplicable(
-                f"{pattern} requires an actual {operator} in a seed WHERE clause"
-            )
+        if not builtin:
+            site = extract_seed_boolean(seed_query.text, operator)
+            if site is None:
+                raise PatternNotApplicable(
+                    f"{pattern} requires an actual {operator} in a seed WHERE clause"
+                )
+            source["boolean_expression_span"] = list(site)
         primary = seed_pattern.left if isinstance(seed_pattern, Edge) else seed_pattern
         variable = primary.variable
         changes.extend(
             ["derive_primary_node_match", "retain_boolean_operator_and_repopulate_operands"]
         )
-        source["boolean_expression_span"] = list(site)
         placeholders = (
             Placeholder("lowCostPredicate", "boolean_expression", "low", (variable,)),
             Placeholder("highCostBool", "boolean_expression", "high", (variable,)),
@@ -503,42 +544,7 @@ def abstract_seed(seed_query: SeedQuery | str | None, pattern: str) -> Skeleton:
         source["seed_syntax_enriched"] = True
         source["enrichment_origin"] = "python_seed_adapter"
         operator = None
-        kinds = {
-            "Node": "node_pattern",
-            "Pattern": "graph_pattern",
-            "Label": "label",
-            "Type": "relationship_type",
-            "Query": "query",
-            "Bool": "boolean_expression",
-            "Predicate": "boolean_expression",
-            "List": "list_expression",
-            "Expr": "scalar_expression",
-            "Value": "scalar_expression",
-        }
-        placeholders_list = []
-        for name in dict.fromkeys(re.findall(r"\$([A-Za-z][A-Za-z0-9]*)", text)):
-            kind = next(
-                (kind for suffix, kind in kinds.items() if name.endswith(suffix)), "structural"
-            )
-            kind = {
-                "indexedKey": "property_key",
-                "min": "integer",
-                "max": "integer",
-                "predicate": "boolean_expression",
-            }.get(name, kind)
-            role = (
-                "low"
-                if name.startswith("lowCost")
-                else "high" if name.startswith("highCost") else "structural"
-            )
-            arguments = re.search(r"\$" + name + r"\(([^)]*)\)", text)
-            variables = tuple(arguments.group(1).split(",")) if arguments else ()
-            if pattern == "P15":
-                variables = ("u",)
-            elif pattern == "P16" and name == "predicate":
-                variables = ("x",)
-            placeholders_list.append(Placeholder(name, kind, role, variables))
-        placeholders = tuple(placeholders_list)
+        placeholders = tuple(Placeholder(*role) for role in _ENRICHMENT_ROLES[pattern])
     source["derivation_steps"] = changes
     source["generation_mode"] = "builtin_template" if builtin else "seed_adapter"
     if builtin:
@@ -2034,6 +2040,10 @@ def instantiate(
         case["bindings"]["anchor_candidates"] = 3 if pattern == "P13" else 1
     _populate_variants(case, seed, complexity)
     _add_pattern_reference(case)
+    graph = GraphSpec(pattern, scale, actual_data_seed, state_variant)
+    case["graph_spec"] = graph.to_dict()
+    case["state_checks"] = graph.state_checks()
+    case["index_requirements"] = graph.indexes
     validate_query(case["query_a"])
     if "query_ref" in case:
         validate_query(case["query_ref"])

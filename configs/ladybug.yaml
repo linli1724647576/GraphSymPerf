@@ -1,0 +1,50 @@
+patterns:
+- P1
+- P2
+- P3
+- P4
+- P5
+- P6
+- P8
+- P9
+- P10
+- P11
+- P12
+- P13
+- P14
+- P15
+- P16
+- S1
+- S2
+- S4
+- S5
+- S6
+- S7
+- S8
+- S9
+- S10
+scales:
+- 100
+- 1000
+- 10000
+seeds:
+- 0
+- 20261009
+- 214501591
+- 37783193
+cases_per_pattern: 12
+seconds_per_pattern: 120
+generation:
+  complexity: 1
+  data_seed: 0
+measurement:
+  collect_plans: true
+database:
+  dbms: ladybug
+  language: cypher
+  path: ../results/ladybug-test
+  database: gsp_test
+  threads: 1
+  dedicated: true
+  allow_reset: false
+output: ../results/ladybug

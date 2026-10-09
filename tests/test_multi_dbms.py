@@ -13,7 +13,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.skipif(
     not os.getenv("GRAPHSYMPERF_TEST_CONFIG_DIR"), reason="no dedicated multi-DBMS test configurations supplied")]
 
 
-@pytest.fixture(scope="module", params=["neo4j", "memgraph", "falkordb"])
+@pytest.fixture(scope="module", params=["neo4j", "memgraph", "falkordb", "arcadedb", "age", "ladybug"])
 def target(request):
     config = read_config(Path(os.environ["GRAPHSYMPERF_TEST_CONFIG_DIR"]) / f"{request.param}.yaml")
     return config, {}
@@ -25,7 +25,7 @@ def test_real_variants_references_and_replay_files(target, pattern, seed, tmp_pa
     config, state_cache = target
     if pattern not in supported_patterns(config["database"]):
         pytest.skip("pattern outside this backend's supported fragment")
-    case = prepare_case(None, pattern, 3, seed, 0)
+    case = prepare_case(None, pattern, 3, seed, 0, database=config["database"])
     report = run_case(case, config["database"], config["measurement"], state_cache=state_cache)
     if report["status"] == "unsupported_feature":
         pytest.skip(f"target version rejects feature: {report['reason']}")
@@ -46,8 +46,10 @@ def test_real_variants_references_and_replay_files(target, pattern, seed, tmp_pa
 ])
 def test_real_cost_state_variants_preserve_full_results(target, pattern, variant, rows):
     config, state_cache = target
-    case = prepare_case(None, pattern, 3, 214501591, 0, 2, variant)
+    case = prepare_case(None, pattern, 3, 214501591, 0, 2, variant, database=config["database"])
     report = run_case(case, config["database"], config["measurement"], state_cache=state_cache)
+    if report["status"] in {"unsupported_feature", "unsupported_transform"}:
+        pytest.skip(f"target version rejects feature: {report['reason']}")
     assert report["status"] in {"no_candidate", "not_confirmed", "candidate"}, report
     assert report["result_rows"] == rows
     assert report["comparisons"]["ab"]["pair_kind"] == "symmetry"

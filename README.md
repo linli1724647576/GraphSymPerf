@@ -9,8 +9,11 @@ Src/
   main.py        配置、实验预算、保存与重放
   generator.py   模板、候选绑定、受控构图、参考查询
   mutator.py     对称变换与高成本引用替换
-  query.py       受限 AST、解析、渲染与作用域检查
-  executor.py    Neo4j / Memgraph / FalkorDB 执行与重复测量
+  ir.py          语言无关的受限查询结构、验证和序列化
+  query.py       受限 Cypher 解析、渲染与旧接口兼容
+  languages.py   目标方言生成、输出列映射与能力检查
+  state.py       有限图状态描述、分批数据与成本检查
+  executor.py    六种数据库执行、原生计划与重复测量
   summarize.py   独立 BUG 与 pattern 贡献汇总
 config.yaml      单个测试目标和实验参数
 bugs.csv         人工核查后的 BUG 对应表，初始为空
@@ -22,7 +25,7 @@ tests/          离线测试与显式启用的数据库集成测试
 在仓库根目录执行：
 
 ```bash
-uv sync --locked --extra test --extra falkordb
+uv sync --locked --extra test --extra falkordb --extra age --extra ladybug
 source .venv/bin/activate
 export GRAPHSYMPERF_NEO4J_PASSWORD='你的测试库密码'
 python Src/main.py --config config.yaml
@@ -56,6 +59,14 @@ FalkorDB 的 `database` 是独立图名；有认证时填写 `password_env`。�
 
 每个数据库版本的功能支持以实际执行为准。不支持的模式或语法记录为 `unsupported_feature`，不能计为发现 BUG，也不能以改写成另一种操作来宣称实现了原机制。
 
+新增目标示例在 `configs/arcadedb.yaml`、`configs/age.yaml`、`configs/ladybug.yaml`。先准备专用测试目标，填写连接与密码环境变量，再显式开启 `allow_reset`。ArcadeDB 需要预先建立指定数据库；AGE 需要在指定 PostgreSQL 库安装 AGE 扩展，`graph` 仅指定本工具重建的图；Ladybug 使用指定目录中自己创建的临时子目录，每次独立连接都重新构图。嵌入式图不会被错误地跨连接复用。
+
+ArcadeDB 使用原生 `opencypher` 前端；框架中的语言名仍为 `cypher`。AGE 使用原生 Cypher 包装及 PostgreSQL 计划，成本入口分别验证属性映射 GIN 和属性表达式 BTree；建图后对实验表执行 `VACUUM (ANALYZE)`，清理 GIN 待处理项并刷新统计。Ladybug 使用类型化节点／关系表及主键索引，路径显式指定原生 `TRAIL`。它的多标签语义不能用于 P7。每个目标的已验证版本和支持范围见 [Cypher 实测覆盖](docs/cypher-support.md)。
+
+骨架和成本角色直接使用结构化数据，内置模板不依赖解析虚构的 Cypher 种子。流程是骨架 → `GraphSpec` → 状态绑定 → 查询 IR → 语义保持变换 → 目标方言。图状态按有限 recipe 分批构造，成本数量、属性、逆关系和参考区域在真实目标中检查。解析器仅负责可选 Cypher 种子导入，公共 IR 不依赖语言渲染器；生成时保留布尔项、标签、路径和分支顺序。
+
+Gremlin 与 GQL 已预留同一个语言生成接口，目前明确返回 `UnsupportedLanguage`，尚无执行实现。`languages.generate()` 支持经过目标版本验证的 `verified_features` 覆盖保守语法限制；它不能覆盖已知的语义不兼容。不同类型的 COALESCE、路径重复规则和可选匹配的 NULL 延展必须在目标语言中另行验证。
+
 ## 模板与图状态
 
 默认直接使用自有模板，`generation.log_files: []`，不依赖 GDsmith。配置日志路径可继续使用 GDsmith 作为可选结构输入；这不是保持 GDsmith 原查询结果的变换，等价性从模板实例化后的查询开始。
@@ -84,6 +95,8 @@ S 模式以小参考区域替换高成本关系引用；LIMIT 和 EXISTS 保留�
 
 普通查询计时包含提交到完整消费结果，连接建立不计入查询耗时。初筛后使用两次重建状态的重复确认、平衡 AB/BA 顺序和 A/A、B/B 噪声对照。`candidate` 仅表示稳定性能差异；仍需核查执行计划、可避免工作、缩减案例和根因，才能登记为 BUG。
 
+`measurement.collect_plans: true` 在计时结束后保存原生 PROFILE；性能候选默认采集计划。计划失败会单独记录，不能代替结果与性能检查。各引擎的 DB Hits、算子输出数量、loops 和缓冲区统计保留原名，不转换成一个虚假的统一工作量指标。
+
 每个比较独立保存 `pair_kind`、`status` 和测量摘要：`comparisons.ab` 保存原始 A/B 证据；`reference_comparisons` 保存 A/reference、B/reference 样本。顶层 `candidate_comparison` 仅标出差异最大的已通过比较，不能用它判断 A/B 是否命中。SCor 的 HIGH/REF 属于参考比较。P16 把失败元素从列表头移到尾，普通顺序 ALL 求值会增加谓词检查次数；这种预期工作差异不能直接登记为遗漏优化。
 
 Neo4j 先分批删除关系、再分批删除节点，避免密集图清理占满单次事务内存。每次重建图并等待索引后，调用 `db.prepareForReplanning()` 更新统计并清理查询缓存；这一步不计入被测查询耗时。它避免把前一图状态的陈旧计划误算为新性能问题。
@@ -93,6 +106,8 @@ Neo4j 先分批删除关系、再分批删除节点，避免密集图清理占�
 ## 保存与重放
 
 每次运行创建 `results/<运行>/`。每例包含 `setup.cypher`、`query_a.cypher`、`query_b.cypher`、可选的 `query_ref.cypher` 和 `result.json`，保存绑定、来源、预期结果、版本、全部样本和输入指纹。
+
+新格式 3 在 `result.json` 中额外保存查询 IR、图状态描述、实际方言、输出列映射与逻辑 `ir_hash`。`setup.cypher` 保留传统构图展示，新适配器以 `graph_spec` 分批构图；它不是 AGE/Ladybug 的可直接执行建图脚本。新库的 `query_*.cypher` 是实际执行文本。格式 1/2 的原 `input_hash` 保持兼容；旧格式携带新增执行元数据时，另用 `extension_hash` 校验。跨目标重放使用已保存 IR 重新生成，不重新调用随机生成器。
 
 ```bash
 python Src/main.py --config config.yaml --replay results/<运行>/<案例>
@@ -119,6 +134,10 @@ python Src/summarize.py --results results --bugs bugs.csv --output results/summa
 输出 `summary.csv`（每系统、每 pattern 的有效案例、候选、独立 BUG、独有 BUG、用时与 BUG/小时）和 `pattern_bug.csv`（BUG × pattern 对应矩阵）。`symmetry_candidates` 与 `reference_candidates` 分别统计独立比较的命中，每案例每类最多计一次，两列可重叠。历史结果缺少独立 AB 状态时，候选还记入 `unclassified_candidates`，该列也可与明确的参考候选重叠。不能从历史顶层 winner 反推对称候选。同系统同输入的重放去重，同根因跨规模／模板归并。缺少预算清单的旧结果不计算 BUG/小时；未执行或不支持的模式保留覆盖状态。
 
 支持重复的 `--dbms` 与 `--version` 过滤。版本过滤仅计入该版本经过人工核查的对应案例，不把旧版本的确认自动归到新版。对比“仅 S”与“加入 P”时使用相同总预算；比较单个模式时使用相同模式预算。独有命中是观察结果，声称边际贡献还需移除该模式的消融实验。
+
+新增可重复的 `--language` 过滤，旧记录默认 `cypher`。`summary.csv` 按数据库 × 语言 × Pattern 分组；`exclusive_bugs` 表示该语言内所选 Pattern 的独占命中。`pattern_bug.csv` 仍按 `(dbms, bug_id)` 跨语言去重，`bugs.csv` 保持六列；未经核验的语言案例不能借用其他语言的确认。
+
+汇总读取所选目录内 `EXCLUDED.json` 的显式标记：`include_in_analysis: false` 排除对应范围的结果及运行清单。无效清单报错，不根据目录名猜测。语义冒烟测试、受干扰的轮次及不同计时口径的旧结果应单独保存并标记，不能混进正式贡献统计。
 
 ## 测试
 
