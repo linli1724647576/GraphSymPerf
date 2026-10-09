@@ -1,6 +1,6 @@
 # Selected local issue evidence
 
-Generated only from the verified issue inventory. These records annotate local reproductions; they are neither submitted issues nor developer confirmations. This directory's bugs.csv is the selected annotation export; the repository owner can synchronize it to the root bugs.csv.
+Generated only from the verified issue inventory. These records preserve local annotations at experiment completion, before subsequent user submissions or upstream dispositions. This directory's bugs.csv is the frozen experiment snapshot; the root bugs.csv maintains the project registry and later issue information.
 
 Standard records retain their original input_hash and case metadata. Full samples, graph files and plans remain in the original evidence paths. These compact files cannot be passed to main.py --replay.
 

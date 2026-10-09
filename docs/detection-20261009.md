@@ -37,13 +37,13 @@ BUG list 按 `数据库/Pattern/报告` 分类。原生补测放在 `数据库/N
 
 [登记清单](../results/detection-20261009/issue_inventory.csv) 从每份报告的实际查询找到唯一正式输入，并重新计算全部 40 组样本、同查询噪声与固定种子 0 的 bootstrap 区间。原始区间也单独保留，不能用最显著的参考比较替代报告中的 A／B 对照。
 
-[注册元数据](../results/detection-20261009/registered/README.md) 与根 bugs.csv 对应。内置 Pattern 保留原 input_hash；原生机制根据实际 setup、查询、参数和 schema mapping 生成输入指纹，单列为 native:<mechanism>，不伪装成公共 IR 或 P1–P16 输入。
+[注册元数据](../results/detection-20261009/registered/README.md) 保存实验完成时的登记快照。根 bugs.csv 后续维护项目总账和上游状态，部分本地编号已关联为 GitHub issue 编号；原输入指纹不变。内置 Pattern 保留原 input_hash；原生机制根据实际 setup、查询、参数和 schema mapping 生成输入指纹，单列为 native:<mechanism>，不伪装成公共 IR 或 P1–P16 输入。
 
 ```bash
 python Src/summarize.py --results results/detection-20261009/registered --bugs bugs.csv --output results/detection-20261009/registered/summary
 ```
 
-结果为人工核查后的本地 reproduced 条目，尚未向开发者提交或取得开发者确认。不同数据库和不同可复现现象分开登记；登记数量不表示已经证明的独立源代码根因数。例如 JanusGraph 与 HugeGraph 的 filter-wrapper 都涉及共同的 TinkerPop 策略次序机制。
+实验完成时这些结果登记为人工核查后的本地 reproduced 条目。本次实验操作未向开发者提交报告；用户后续提交的 issue 和登记状态以根 bugs.csv 为准。不同数据库和不同可复现现象分开登记；登记数量不表示已经证明的独立源代码根因数。例如 JanusGraph 与 HugeGraph 的 filter-wrapper 都涉及共同的 TinkerPop 策略次序机制。
 
 本轮含定向机制补测与规模调整，不是相同预算的 Pattern 对比实验。仅能报告本轮具体命中；不能据此估计完整 Pattern 覆盖、边际贡献、发现率或 BUG／小时。
 

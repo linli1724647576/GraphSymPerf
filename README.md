@@ -122,15 +122,19 @@ python Src/main.py --config config.yaml --replay results/<运行>/<案例>
 
 ## BUG 与 pattern 贡献
 
-`bugs.csv` 使用以下六列，只登记已经核查的案例：
+根 `bugs.csv` 是长期维护的 BUG 总账，包含上游 issue 和已有本地案例。原六列保持兼容，当前追加类型、本地验证状态、状态来源、更新日期和报告路径：
 
 ```text
-case_id,dbms,bug_id,status,issue_url,database_version
+case_id,dbms,bug_id,status,issue_url,database_version,bug_type,local_status,status_source,last_updated,local_report
 ```
 
-`case_id` 是 `result.json` 的 `input_hash`；也接受至少 8 位且唯一的前缀。同根因不同案例使用同一 `bug_id`；一个 BUG 可由多个 pattern 命中，每个案例单独登记。不同 DBMS 的 BUG 分开计数。`database_version` 必须与实际记录一致；同一 BUG 跨版本仍使用同一 ID，但逐版本登记经过核查的案例。
+上游条目按完整 `issue_url` 更新，ID 使用数据库内的 `GH-<issue编号>`。未提交的本地记录保留原 `BUGxxx`；找到与上游正文一致的查询、建图和计划后合并，保留原输入指纹与本地报告路径。`dbms` 使用执行器的名称，例如 `age`、`ladybug`、`memgraph`。已提交 issue 的计数按唯一 URL 去重，同一问题的多个输入不新增 BUG 数量。
 
-状态为 `needs_review/reproduced/confirmed/fixed/rejected`。`reproduced` 指已经人工核查根因与证据的缺陷，不能只因为重跑得到性能差异就使用它。只有 `reproduced/confirmed/fixed` 的案例进入 BUG 贡献统计；开发者确认数量应另看 `confirmed/fixed`。
+`case_id` 是已核查输入的 `input_hash`，也接受至少 8 位且唯一的前缀；`database_version` 必须与该输入实际记录一致。尚无可靠关联的历史 issue 留空这两列，不编造指纹、版本或 Pattern。`local_report` 只表示报告对应关系，单独填写它不产生 Pattern 贡献。同根因不同输入使用同一 `bug_id`；同一 BUG 跨版本逐条登记经过核查的案例。
+
+`status` 保存登记状态，支持 `pending/confirmed/fixed/uninterested` 及本地的 `needs_review/reproduced/rejected`。本次上游状态直接采用用户清单，`status_source=user_provided`，登记日期为 `2026-10-10`；GitHub 的 open/closed 不代替开发者的确认或修复结论。后续更新同一 URL 的状态、来源及 `last_updated`，不重复追加；同一 issue 关联多个输入时，各行保持相同上游状态。
+
+`local_status` 独立保存实际案例的核查结果。`pending` 可以与 `local_status=reproduced` 共存；有该列时，空值表示尚未登记本地验证。只有关联了实际输入、版本且本地状态为 `reproduced/confirmed/fixed` 的性能案例进入 Pattern 贡献。`Logical BUG` 保留在总账，单列维护，不计为遗漏优化。旧六列 CSV 继续用原 `status` 判断本地验证。
 
 ```bash
 python Src/summarize.py --results results --bugs bugs.csv --output results/summary
@@ -140,11 +144,11 @@ python Src/summarize.py --results results --bugs bugs.csv --output results/summa
 
 支持重复的 `--dbms` 与 `--version` 过滤。版本过滤仅计入该版本经过人工核查的对应案例，不把旧版本的确认自动归到新版。对比“仅 S”与“加入 P”时使用相同总预算；比较单个模式时使用相同模式预算。独有命中是观察结果，声称边际贡献还需移除该模式的消融实验。
 
-新增可重复的 `--language` 过滤，旧记录默认 `cypher`。`summary.csv` 按数据库 × 语言 × Pattern 分组；`exclusive_bugs` 表示该语言内所选 Pattern 的独占命中。`pattern_bug.csv` 仍按 `(dbms, bug_id)` 跨语言去重，`bugs.csv` 保持六列；未经核验的语言案例不能借用其他语言的确认。
+新增可重复的 `--language` 过滤，旧记录默认 `cypher`。`summary.csv` 按数据库 × 语言 × Pattern 分组；`exclusive_bugs` 表示该语言内所选 Pattern 的独占命中。`pattern_bug.csv` 按 `(dbms, bug_id)` 跨语言去重；未经核验的语言案例不能借用其他语言的确认。矩阵的 `status` 是登记状态，计入贡献的依据仍是关联输入的本地验证，不能把 pending 条目说成开发者已确认。
 
 汇总读取所选目录内 `EXCLUDED.json` 的显式标记：`include_in_analysis: false` 排除对应范围的结果及运行清单。无效清单报错，不根据目录名猜测。语义冒烟测试、受干扰的轮次及不同计时口径的旧结果应单独保存并标记，不能混进正式贡献统计。
 
-本轮真实实验及报告见 [2026-10-09 实验记录](docs/detection-20261009.md) 和 [BUG list](<BUG list/README.md>)。本轮筛选后的元数据、原始配对样本、原生计划与复现输入保存在 `results/detection-20261009/`。其中 `registered/` 用于复核登记数量；原生机制使用 `native:<mechanism>` 分类，不能算成 P1–P16 的命中，也不能用于比较各 Pattern 的发现率。
+本轮真实实验及报告见 [2026-10-09 实验记录](docs/detection-20261009.md) 和 [BUG list](<BUG list/README.md>)。本轮筛选后的元数据、原始配对样本、原生计划与复现输入保存在 `results/detection-20261009/`。其中 `registered/bugs.csv` 保存实验完成时的登记快照；根 `bugs.csv` 持续维护后续上游信息。原生机制使用 `native:<mechanism>` 分类，不能算成 P1–P16 的命中，也不能用于比较各 Pattern 的发现率。
 
 ```bash
 python Src/summarize.py --results results/detection-20261009/registered --bugs bugs.csv --output results/detection-20261009/registered/summary

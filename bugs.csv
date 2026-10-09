@@ -1,15 +1,45 @@
-case_id,dbms,bug_id,status,issue_url,database_version
-0645c6acfc410b694045dc5b5029fec0b10f81e3e5350708fe86678f554e7a2a,age,BUG001,reproduced,,Apache AGE/1.7.0 PostgreSQL/18.1 (Debian 18.1-1.pgdg13+2)
-986519cd6402aca0a4ed1bc80c09792e89ccadd8393fe6dcb34705a6817c4843,age,BUG002,reproduced,,Apache AGE/1.7.0 PostgreSQL/18.1 (Debian 18.1-1.pgdg13+2)
-17effe433d8f6bfd033ecb222611398844611512cd6074ea570342aaa21a1931,arcadedb,BUG001,reproduced,,ArcadeDB/26.10.1-SNAPSHOT (build ebdf527641ba444364bb9e29aa020e9e04824862/1788464335463/main)
-119722182d63f442c873f85c86c240f69144137dac0ea7382a74441172933983,arcadedb,BUG002,reproduced,,ArcadeDB/26.10.1-SNAPSHOT (build ebdf527641ba444364bb9e29aa020e9e04824862/1788464335463/main)
-c18504f99ef3018ef3b90ae18ed5358f9b7d10eaf55a6f09b6666352de1e1c57,falkordb,BUG002,reproduced,,FalkorDB/module_version=41808
-7556be7edc73aa47dde2c59d9da939de01abb58e0deab6c39c2aafc3292d4106,falkordb,BUG001,reproduced,,FalkorDB/module_version=41808
-4bbff105dd1d4a1c0e486ddafdd5748b8e35c661103e8783cbdd1e052af6e32c,hugegraph,BUG002,reproduced,,ApacheHugeGraph/1.7.0
-f2afab2c87787a23106b3bd30ba704cf927a02979456ead76dfd9fccb4616a2d,hugegraph,BUG001,reproduced,,ApacheHugeGraph/1.7.0
-d66fc51e75ffdd97b0b283dd97074e6305a5d197e5ee2a99625a732245c7f3de,janusgraph,BUG001,reproduced,,JanusGraph/1.1.0
-5719ae330252ad008046e630332ae571d8459889cd9236cf7355f7ca0fca0ccc,janusgraph,BUG002,reproduced,,JanusGraph/1.1.0
-9d3d5be196a5e1d44a1904c097e603efd2294cd155c2543fc0ad084fcf2d9ead,ladybug,BUG001,reproduced,,LadybugDB/0.21.2
-742450cd664da0ce4008364b5df9bfd4f43697e1c821b44f4603c2859bb92748,ladybug,BUG002,reproduced,,LadybugDB/0.21.2
-fc5bfe459aafa25a9a579e121629f673e494068eb61a236b82f709a5aedd2f53,memgraph,BUG002,reproduced,,Memgraph/3.10.1
-f9f594c12ee1fa294cb9e0fccf5f9fb4ac97a81da5922b271b11a1987559ba24,memgraph,BUG001,reproduced,,Memgraph/3.10.1
+case_id,dbms,bug_id,status,issue_url,database_version,bug_type,local_status,status_source,last_updated,local_report
+,age,GH-2428,confirmed,https://github.com/apache/age/issues/2428,,Performance BUG,,user_provided,2026-10-10,
+,age,GH-2480,confirmed,https://github.com/apache/age/issues/2480,,Performance BUG,,user_provided,2026-10-10,
+,age,GH-2481,pending,https://github.com/apache/age/issues/2481,,Performance BUG,,user_provided,2026-10-10,
+0645c6acfc410b694045dc5b5029fec0b10f81e3e5350708fe86678f554e7a2a,age,BUG001,reproduced,,Apache AGE/1.7.0 PostgreSQL/18.1 (Debian 18.1-1.pgdg13+2),Performance BUG,reproduced,local_experiment,2026-10-10,BUG list/Apache AGE/Native/correlated-count/BUG001.md
+986519cd6402aca0a4ed1bc80c09792e89ccadd8393fe6dcb34705a6817c4843,age,BUG002,reproduced,,Apache AGE/1.7.0 PostgreSQL/18.1 (Debian 18.1-1.pgdg13+2),Performance BUG,reproduced,local_experiment,2026-10-10,BUG list/Apache AGE/Native/property-index/BUG002.md
+,arcadedb,GH-4405,fixed,https://github.com/ArcadeData/arcadedb/issues/4405,,Performance BUG,,user_provided,2026-10-10,
+,arcadedb,GH-5116,fixed,https://github.com/ArcadeData/arcadedb/issues/5116,,Performance BUG,,user_provided,2026-10-10,
+,arcadedb,GH-5117,fixed,https://github.com/ArcadeData/arcadedb/issues/5117,,Performance BUG,,user_provided,2026-10-10,
+,arcadedb,GH-5360,fixed,https://github.com/ArcadeData/arcadedb/issues/5360,,Logical BUG,,user_provided,2026-10-10,
+,arcadedb,GH-5362,fixed,https://github.com/ArcadeData/arcadedb/issues/5362,,Performance BUG,,user_provided,2026-10-10,
+,arcadedb,GH-5363,fixed,https://github.com/ArcadeData/arcadedb/issues/5363,,Performance BUG,,user_provided,2026-10-10,
+17effe433d8f6bfd033ecb222611398844611512cd6074ea570342aaa21a1931,arcadedb,GH-9579,pending,https://github.com/ArcadeData/arcadedb/issues/9579,ArcadeDB/26.10.1-SNAPSHOT (build ebdf527641ba444364bb9e29aa020e9e04824862/1788464335463/main),Performance BUG,reproduced,user_provided,2026-10-10,BUG list/ArcadeDB/P4/BUG001.md
+119722182d63f442c873f85c86c240f69144137dac0ea7382a74441172933983,arcadedb,GH-9580,pending,https://github.com/ArcadeData/arcadedb/issues/9580,ArcadeDB/26.10.1-SNAPSHOT (build ebdf527641ba444364bb9e29aa020e9e04824862/1788464335463/main),Performance BUG,reproduced,user_provided,2026-10-10,BUG list/ArcadeDB/S7/BUG002.md
+,falkordb,GH-2081,fixed,https://github.com/FalkorDB/FalkorDB/issues/2081,,Performance BUG,,user_provided,2026-10-10,
+7556be7edc73aa47dde2c59d9da939de01abb58e0deab6c39c2aafc3292d4106,falkordb,GH-3227,pending,https://github.com/FalkorDB/FalkorDB/issues/3227,FalkorDB/module_version=41808,Performance BUG,reproduced,user_provided,2026-10-10,BUG list/FalkorDB/P13/BUG001.md
+c18504f99ef3018ef3b90ae18ed5358f9b7d10eaf55a6f09b6666352de1e1c57,falkordb,GH-3228,pending,https://github.com/FalkorDB/FalkorDB/issues/3228,FalkorDB/module_version=41808,Performance BUG,reproduced,user_provided,2026-10-10,BUG list/FalkorDB/P10/BUG002.md
+f2afab2c87787a23106b3bd30ba704cf927a02979456ead76dfd9fccb4616a2d,hugegraph,BUG001,reproduced,,ApacheHugeGraph/1.7.0,Performance BUG,reproduced,local_experiment,2026-10-10,BUG list/HugeGraph/Native/filter-wrapper/BUG001.md
+4bbff105dd1d4a1c0e486ddafdd5748b8e35c661103e8783cbdd1e052af6e32c,hugegraph,BUG002,reproduced,,ApacheHugeGraph/1.7.0,Performance BUG,reproduced,local_experiment,2026-10-10,BUG list/HugeGraph/Native/count-nonnull/BUG002.md
+d66fc51e75ffdd97b0b283dd97074e6305a5d197e5ee2a99625a732245c7f3de,janusgraph,BUG001,reproduced,,JanusGraph/1.1.0,Performance BUG,reproduced,local_experiment,2026-10-10,BUG list/JanusGraph/Native/filter-wrapper/BUG001.md
+5719ae330252ad008046e630332ae571d8459889cd9236cf7355f7ca0fca0ccc,janusgraph,BUG002,reproduced,,JanusGraph/1.1.0,Performance BUG,reproduced,local_experiment,2026-10-10,BUG list/JanusGraph/Native/unique-singleton/BUG002.md
+,ladybug,GH-668,confirmed,https://github.com/LadybugDB/ladybug/issues/668,,Performance BUG,,user_provided,2026-10-10,
+,ladybug,GH-669,confirmed,https://github.com/LadybugDB/ladybug/issues/669,,Performance BUG,,user_provided,2026-10-10,
+,ladybug,GH-696,fixed,https://github.com/LadybugDB/ladybug/issues/696,,Logical BUG,,user_provided,2026-10-10,
+,ladybug,GH-697,fixed,https://github.com/LadybugDB/ladybug/issues/697,,Logical BUG,,user_provided,2026-10-10,
+,ladybug,GH-698,fixed,https://github.com/LadybugDB/ladybug/issues/698,,Performance BUG,,user_provided,2026-10-10,
+,ladybug,GH-720,fixed,https://github.com/LadybugDB/ladybug/issues/720,,Performance BUG,,user_provided,2026-10-10,
+,ladybug,GH-721,fixed,https://github.com/LadybugDB/ladybug/issues/721,,Performance BUG,,user_provided,2026-10-10,
+9d3d5be196a5e1d44a1904c097e603efd2294cd155c2543fc0ad084fcf2d9ead,ladybug,BUG001,reproduced,,LadybugDB/0.21.2,Performance BUG,reproduced,local_experiment,2026-10-10,BUG list/LadybugDB/Native/coalesce-count/BUG001.md
+742450cd664da0ce4008364b5df9bfd4f43697e1c821b44f4603c2859bb92748,ladybug,BUG002,reproduced,,LadybugDB/0.21.2,Performance BUG,reproduced,local_experiment,2026-10-10,BUG list/LadybugDB/Native/path-pruning/BUG002.md
+,memgraph,GH-4208,confirmed,https://github.com/memgraph/memgraph/issues/4208,,Performance BUG,,user_provided,2026-10-10,
+,memgraph,GH-4456,pending,https://github.com/memgraph/memgraph/issues/4456,,Performance BUG,,user_provided,2026-10-10,
+,memgraph,GH-4457,pending,https://github.com/memgraph/memgraph/issues/4457,,Performance BUG,,user_provided,2026-10-10,
+,memgraph,GH-4458,pending,https://github.com/memgraph/memgraph/issues/4458,,Performance BUG,,user_provided,2026-10-10,
+,memgraph,GH-4459,fixed,https://github.com/memgraph/memgraph/issues/4459,,Performance BUG,,user_provided,2026-10-10,
+f9f594c12ee1fa294cb9e0fccf5f9fb4ac97a81da5922b271b11a1987559ba24,memgraph,GH-5091,pending,https://github.com/memgraph/memgraph/issues/5091,Memgraph/3.10.1,Performance BUG,reproduced,user_provided,2026-10-10,BUG list/Memgraph/P11/BUG001.md
+fc5bfe459aafa25a9a579e121629f673e494068eb61a236b82f709a5aedd2f53,memgraph,BUG002,reproduced,,Memgraph/3.10.1,Performance BUG,reproduced,local_experiment,2026-10-10,BUG list/Memgraph/P10/BUG002.md
+,neo4j,GH-13783,fixed,https://github.com/neo4j/neo4j/issues/13783,,Performance BUG,,user_provided,2026-10-10,
+,neo4j,GH-13813,confirmed,https://github.com/neo4j/neo4j/issues/13813,,Performance BUG,,user_provided,2026-10-10,
+,neo4j,GH-13814,uninterested,https://github.com/neo4j/neo4j/issues/13814,,Performance BUG,,user_provided,2026-10-10,
+,neo4j,GH-13864,confirmed,https://github.com/neo4j/neo4j/issues/13864,,Performance BUG,,user_provided,2026-10-10,
+,neo4j,GH-13865,confirmed,https://github.com/neo4j/neo4j/issues/13865,,Performance BUG,,user_provided,2026-10-10,
+,neo4j,GH-13866,confirmed,https://github.com/neo4j/neo4j/issues/13866,,Logical BUG,,user_provided,2026-10-10,
+,neo4j,GH-13867,confirmed,https://github.com/neo4j/neo4j/issues/13867,,Performance BUG,,user_provided,2026-10-10,
+,neo4j,GH-14007,pending,https://github.com/neo4j/neo4j/issues/14007,,Performance BUG,,user_provided,2026-10-10,BUG list/Neo4j/P4/BUG002.md

@@ -13,12 +13,16 @@ import math
 from pathlib import Path
 import re
 import sys
+from urllib.parse import urlsplit
 
 
 BUG_FIELDS = ("case_id", "dbms", "bug_id", "status", "issue_url", "database_version")
-BUG_STATUSES = {"needs_review", "reproduced", "confirmed", "fixed", "rejected"}
+OPTIONAL_BUG_FIELDS = ("bug_type", "local_status", "status_source", "last_updated", "local_report")
+LOCAL_BUG_STATUSES = {"needs_review", "reproduced", "confirmed", "fixed", "rejected"}
+BUG_STATUSES = LOCAL_BUG_STATUSES | {"pending", "uninterested"}
 VALIDATED = {"reproduced", "confirmed", "fixed"}
-STATUS_RANK = {"needs_review": 0, "rejected": 1, "reproduced": 2, "confirmed": 3, "fixed": 4}
+STATUS_RANK = {"needs_review": 0, "pending": 0, "uninterested": 0,
+               "rejected": 1, "reproduced": 2, "confirmed": 3, "fixed": 4}
 VALID_CASE = {"no_candidate", "not_confirmed", "candidate", "timing_observation"}
 CANDIDATE = {"candidate", "timeout_candidate"}
 SUMMARY_FIELDS = (
@@ -149,42 +153,86 @@ def load_records(root):
 
 
 def load_bugs(path, records):
-    """Validate all annotations before applying any report filter."""
+    """Read legacy annotations or an extended, public-issue registry.
+
+    An issue without a recorded case remains in the registry, but receives no
+    pattern attribution. Public status and local validation are independent.
+    """
     identities = {(r["dbms"], r["case_id"], r["version"]) for r in records}
     bugs, bug_metadata = {}, {}
+    local_statuses, bug_types = {}, {}
     try:
         handle = path.open(newline="", encoding="utf-8-sig")
     except OSError as exc:
         raise ValueError(f"{path}: cannot read bug annotations: {exc}") from exc
     with handle:
         reader = csv.DictReader(handle)
-        if reader.fieldnames != list(BUG_FIELDS):
-            raise ValueError(f"{path}: header must be {','.join(BUG_FIELDS)}")
+        fields = reader.fieldnames or []
+        if (fields[:len(BUG_FIELDS)] != list(BUG_FIELDS) or len(fields) != len(set(fields))
+                or set(fields[len(BUG_FIELDS):]) - set(OPTIONAL_BUG_FIELDS)):
+            raise ValueError(f"{path}: header must begin with {','.join(BUG_FIELDS)}; "
+                             f"optional fields: {','.join(OPTIONAL_BUG_FIELDS)}")
+        extended = len(fields) > len(BUG_FIELDS)
         for number, row in enumerate(reader, 2):
             if None in row or any(value is None for value in row.values()):
                 raise ValueError(f"{path}:{number}: malformed CSV row")
             row = {key: value.strip() for key, value in row.items()}
             dbms, prefix = row["dbms"].lower(), row["case_id"].lower()
-            if not re.fullmatch(r"[0-9a-f]{8,64}", prefix):
-                raise ValueError(f"{path}:{number}: case_id requires 8–64 hexadecimal characters")
-            matches = [key for key in identities if key[0] == dbms and key[1].startswith(prefix)
-                       and key[2] == row["database_version"]]
-            if len(matches) != 1:
-                raise ValueError(f"{path}:{number}: case_id is {'ambiguous' if matches else 'not recorded'} "
-                                 f"for {dbms}/{row['database_version']}")
+            if not dbms:
+                raise ValueError(f"{path}:{number}: dbms is required")
             if not row["bug_id"] or row["status"] not in BUG_STATUSES:
                 raise ValueError(f"{path}:{number}: bug_id or status is invalid")
+            local_status = row.get("local_status", row["status"])
+            if "local_status" in row and local_status not in LOCAL_BUG_STATUSES | {""}:
+                raise ValueError(f"{path}:{number}: local_status is invalid")
+            type_names = {"": "", "performance": "performance", "performance bug": "performance",
+                          "logical": "logical", "logical bug": "logical"}
+            bug_type = type_names.get(row.get("bug_type", "").lower())
+            if bug_type is None:
+                raise ValueError(f"{path}:{number}: bug_type is invalid")
+            matches = []
+            if not prefix and extended:
+                try:
+                    url = urlsplit(row["issue_url"])
+                    valid_url = (url.scheme in {"http", "https"} and bool(url.hostname)
+                                 and bool(url.path.strip("/")) and url.username is None
+                                 and not any(c.isspace() for c in row["issue_url"]))
+                except ValueError:
+                    valid_url = False
+                if not valid_url:
+                    raise ValueError(f"{path}:{number}: an unlinked issue requires a valid issue_url")
+            elif not re.fullmatch(r"[0-9a-f]{8,64}", prefix):
+                raise ValueError(f"{path}:{number}: case_id requires 8–64 hexadecimal characters")
+            else:
+                matches = [key for key in identities if key[0] == dbms and key[1].startswith(prefix)
+                           and key[2] == row["database_version"]]
+                if len(matches) != 1:
+                    raise ValueError(f"{path}:{number}: case_id is {'ambiguous' if matches else 'not recorded'} "
+                                     f"for {dbms}/{row['database_version']}")
             bug_key = (dbms, row["bug_id"])
             prior = bug_metadata.get(bug_key)
-            if prior and (("rejected" in {prior["status"], row["status"]} and
-                           bool({prior["status"], row["status"]} & VALIDATED)) or
-                          (prior["issue_url"] and row["issue_url"] and prior["issue_url"] != row["issue_url"])):
+            if "local_status" in row and prior and prior["status"] != row["status"]:
+                raise ValueError(f"{path}:{number}: conflicting public status for {dbms}/{row['bug_id']}")
+            checked = local_statuses.setdefault(bug_key, set())
+            checked.add(local_status)
+            if (("rejected" in checked and bool(checked & VALIDATED)) or
+                    (prior and prior["issue_url"] and row["issue_url"] and prior["issue_url"] != row["issue_url"])):
                 raise ValueError(f"{path}:{number}: conflicting status or issue_url for {dbms}/{row['bug_id']}")
-            status = max((row["status"], (prior or {}).get("status", "needs_review")), key=STATUS_RANK.get)
+            if bug_type:
+                if bug_key in bug_types and bug_types[bug_key] != bug_type:
+                    raise ValueError(f"{path}:{number}: conflicting bug_type for {dbms}/{row['bug_id']}")
+                bug_types[bug_key] = bug_type
+            # A separate local_status makes status the public disposition.
+            # Preserve legacy rank merging only for legacy case annotations.
+            status = row["status"] if "local_status" in row else max(
+                (row["status"], (prior or {}).get("status", "needs_review")), key=STATUS_RANK.get)
             bug_metadata[bug_key] = {"status": status,
                                      "issue_url": row["issue_url"] or (prior or {}).get("issue_url", "")}
-            if row["status"] in VALIDATED:
+            if matches and local_status in VALIDATED:
                 bugs.setdefault(bug_key, set()).add(matches[0])
+    # Explicitly reported logical bugs are maintained, not counted as missed
+    # optimizations, even if another annotation of the same bug omits its type.
+    bugs = {key: cases for key, cases in bugs.items() if bug_types.get(key) != "logical"}
     return bugs, bug_metadata
 
 
@@ -242,8 +290,6 @@ def build_summary(records, runs, bugs, metadata, *, dbms=None, version=None, lan
 
     bug_patterns, bug_groups = {}, {}
     for bug_key, annotated in bugs.items():
-        if metadata[bug_key]["status"] not in VALIDATED:
-            continue
         observed = {(cases[key[:2]]["language"], cases[key[:2]]["pattern"])
                     for key in annotated if key in selected_versions}
         if observed:

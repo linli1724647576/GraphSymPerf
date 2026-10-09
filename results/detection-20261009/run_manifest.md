@@ -14,6 +14,6 @@ Classification: built-in P/S reports use BUG list/<DBMS>/<Pattern>/; native mech
 
 Exclusions: EXCLUDED.json marks invalid or supporting scopes. Unconfirmed noise, resource termination, incomplete preparation, normal explicit traversal-order effects, and superseded comparison forms are not registered. The inventory is derived from the final report queries and cannot substitute a more significant reference comparison.
 
-Outcome: root bugs.csv mirrors registered/bugs.csv, with 14 local reproduced entries and blank upstream URLs. No developer confirmation, upstream submission or cross-DBMS unique source-root count is claimed.
+Outcome at experiment completion: registered/bugs.csv preserves 14 local reproduced entries and blank upstream URLs. The root bugs.csv now maintains the project registry and subsequent user-provided upstream dispositions; linked entries retain their original case identities. This experiment did not submit upstream reports or establish a cross-DBMS unique source-root count.
 
 Validation: 1185 offline tests passed, 242 explicitly opt-in integration tests were deselected; actual database execution evidence is the independent paired experiment, state and literal reproduction records. The temporary containers and their volumes are removed after all reports and raw evidence are saved; cached images remain available for reproduction.

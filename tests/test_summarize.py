@@ -30,6 +30,16 @@ def annotations(root, rows=()):
     return path
 
 
+def registry(root, rows, fields=None):
+    path = root / "registry.csv"
+    fields = fields or (*BUG_FIELDS, "bug_type", "local_status", "status_source", "last_updated", "local_report")
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
 def manifest(root, directory, patterns=("P1",), kind="discovery", *, attempted=2, elapsed=10, reason="case_budget"):
     path = root / directory
     path.mkdir(parents=True, exist_ok=True)
@@ -117,6 +127,147 @@ def test_invalid_annotations_fail_before_writing_outputs(tmp_path, rows, match):
     with pytest.raises(ValueError, match=match):
         summarize(results, annotations(tmp_path, rows), output)
     assert not output.exists()
+
+
+@pytest.mark.parametrize("status", ["pending", "uninterested", "confirmed", "fixed"])
+def test_public_registry_without_case_never_gets_pattern_credit(tmp_path, status):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64)
+    bugs = registry(tmp_path, [{"dbms": "neo4j", "bug_id": "GH13813", "status": status,
+                               "issue_url": "https://github.com/neo4j/neo4j/issues/13813",
+                               "bug_type": "Performance BUG", "status_source": "user_provided",
+                               "last_updated": "2026-10-10"}])
+    rows, matrix = summarize(results, bugs, tmp_path / "out")
+    assert rows[0]["unique_bugs"] == 0 and matrix == []
+
+
+def test_pending_public_status_preserves_locally_reproduced_pattern_credit(tmp_path):
+    results = tmp_path / "results"
+    identity = "1" * 64
+    record(results, "a", identity)
+    url = "https://github.com/neo4j/neo4j/issues/14007"
+    bugs = registry(tmp_path, [{"case_id": identity, "dbms": "neo4j", "bug_id": "GH14007",
+                               "status": "pending", "issue_url": url, "database_version": "Neo4j/5",
+                               "local_status": "reproduced", "bug_type": "Performance BUG"}])
+    rows, matrix = summarize(results, bugs, tmp_path / "out")
+    assert rows[0]["unique_bugs"] == 1
+    assert matrix == [{"dbms": "neo4j", "bug_id": "GH14007", "status": "pending", "issue_url": url, "P1": 1}]
+    with (tmp_path / "out" / "pattern_bug.csv").open() as handle:
+        assert next(csv.DictReader(handle))["status"] == "pending"
+
+
+def test_blank_explicit_local_status_does_not_infer_local_validation(tmp_path):
+    results = tmp_path / "results"
+    identity = "1" * 64
+    record(results, "a", identity)
+    bugs = registry(tmp_path, [{"case_id": identity, "dbms": "neo4j", "bug_id": "GH13813",
+                               "status": "confirmed", "issue_url": "https://example.org/issues/13813",
+                               "database_version": "Neo4j/5", "local_status": ""}])
+    rows, matrix = summarize(results, bugs, tmp_path / "out")
+    assert rows[0]["unique_bugs"] == 0 and matrix == []
+
+
+def test_registry_rejects_conflicting_public_status_for_shared_bug(tmp_path):
+    results = tmp_path / "results"
+    identity = "1" * 64
+    record(results, "a", identity)
+    row = {"case_id": identity, "dbms": "neo4j", "bug_id": "GH14007",
+           "issue_url": "https://github.com/neo4j/neo4j/issues/14007",
+           "database_version": "Neo4j/5", "local_status": "reproduced"}
+    bugs = registry(tmp_path, [{**row, "status": "pending"}, {**row, "status": "fixed"}])
+    with pytest.raises(ValueError, match="conflicting public status"):
+        summarize(results, bugs, tmp_path / "out")
+
+
+def test_registry_shared_case_rows_preserve_one_public_issue(tmp_path):
+    results = tmp_path / "results"
+    first, second = "1" * 64, "2" * 64
+    record(results, "a", first, pattern="P1")
+    record(results, "b", second, pattern="S1")
+    row = {"dbms": "neo4j", "bug_id": "GH14007", "status": "pending",
+           "issue_url": "https://github.com/neo4j/neo4j/issues/14007",
+           "database_version": "Neo4j/5", "local_status": "reproduced"}
+    bugs = registry(tmp_path, [{**row, "case_id": first}, {**row, "case_id": second}])
+    rows, matrix = summarize(results, bugs, tmp_path / "out")
+    assert all(r["unique_bugs"] == 1 and r["exclusive_bugs"] == 0 for r in rows)
+    assert len(matrix) == 1 and matrix[0]["status"] == "pending"
+
+
+@pytest.mark.parametrize("bug_type", ["Logical BUG", "logical", "LOGICAL BUG"])
+def test_explicit_logical_bug_is_not_missed_optimization_credit(tmp_path, bug_type):
+    results = tmp_path / "results"
+    identity = "1" * 64
+    record(results, "a", identity)
+    bugs = registry(tmp_path, [{"case_id": identity, "dbms": "neo4j", "bug_id": "GH13866",
+                               "status": "confirmed", "database_version": "Neo4j/5",
+                               "local_status": "reproduced", "bug_type": bug_type}])
+    rows, matrix = summarize(results, bugs, tmp_path / "out")
+    assert rows[0]["unique_bugs"] == 0 and matrix == []
+
+
+@pytest.mark.parametrize("changes,match", [
+    ({"issue_url": ""}, "issue_url"),
+    ({"issue_url": "not-a-url"}, "issue_url"),
+    ({"issue_url": "javascript:alert(1)"}, "issue_url"),
+    ({"issue_url": "https://"}, "issue_url"),
+    ({"dbms": ""}, "dbms"),
+    ({"bug_id": ""}, "bug_id"),
+    ({"local_status": "pending"}, "local_status"),
+])
+def test_invalid_public_registry_rows_fail_before_outputs(tmp_path, changes, match):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64)
+    row = {"dbms": "neo4j", "bug_id": "GH13813", "status": "pending",
+           "issue_url": "https://github.com/neo4j/neo4j/issues/13813", **changes}
+    output = tmp_path / "out"
+    with pytest.raises(ValueError, match=match):
+        summarize(results, registry(tmp_path, [row]), output)
+    assert not output.exists()
+
+
+def test_unlinked_public_rows_require_extended_registry_header(tmp_path):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64)
+    bugs = annotations(tmp_path, [("", "neo4j", "GH13813", "confirmed", "https://example.org/issues/13813")])
+    with pytest.raises(ValueError, match="case_id"):
+        summarize(results, bugs, tmp_path / "out")
+
+
+@pytest.mark.parametrize("case_id,version,match", [
+    ("a" * 64, "Neo4j/5", "not recorded"),
+    ("1" * 64, "Neo4j/7", "not recorded"),
+    ("12345678", "Neo4j/5", "ambiguous"),
+])
+def test_extended_registry_preserves_exact_case_validation(tmp_path, case_id, version, match):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64)
+    record(results, "b", "12345678" + "a" * 56)
+    record(results, "c", "12345678" + "b" * 56)
+    bugs = registry(tmp_path, [{"case_id": case_id, "dbms": "neo4j", "bug_id": "GH13813",
+                               "status": "pending", "database_version": version,
+                               "local_status": "reproduced", "issue_url": "https://example.org/issues/13813"}])
+    with pytest.raises(ValueError, match=match):
+        summarize(results, bugs, tmp_path / "out")
+
+
+def test_extended_registry_rejects_conflicting_local_validation(tmp_path):
+    results = tmp_path / "results"
+    identity = "1" * 64
+    record(results, "a", identity)
+    row = {"case_id": identity, "dbms": "neo4j", "bug_id": "GH13813", "status": "pending",
+           "database_version": "Neo4j/5", "issue_url": "https://example.org/issues/13813"}
+    bugs = registry(tmp_path, [{**row, "local_status": "reproduced"}, {**row, "local_status": "rejected"}])
+    with pytest.raises(ValueError, match="conflicting status"):
+        summarize(results, bugs, tmp_path / "out")
+
+
+def test_registry_header_rejects_unknown_or_duplicate_optional_fields(tmp_path):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64)
+    for extra in [("pattern",), ("local_status", "local_status")]:
+        bugs = registry(tmp_path, [], fields=(*BUG_FIELDS, *extra))
+        with pytest.raises(ValueError, match="header"):
+            summarize(results, bugs, tmp_path / "out")
 
 
 def test_prefix_ambiguity_and_exact_record_filters(tmp_path):
