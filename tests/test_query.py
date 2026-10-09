@@ -176,6 +176,39 @@ def test_named_path_seed_extraction_preserves_first_edge_and_stops_before_later_
     assert (edge.left.variable, edge.right.variable) == ('u', 'v')
 
 
+@pytest.mark.parametrize('predicate', [
+    'x.keep = true', 'coalesce(x.keep, false) = true',
+    '(x.keep = true) AND NOT (x.keep = false)',
+    'CASE WHEN x.keep IS NULL THEN false ELSE x.keep = true END',
+])
+def test_nodes_path_is_confined_to_a_node_local_all_predicate(predicate):
+    text = f'MATCH p = (u:A)-[:R*1..3]-(v:B) WHERE all(x IN nodes(p) WHERE {predicate}) RETURN u.uid, v.uid, length(p) AS hops'
+    query = parse_query(text)
+    assert parse_query(render_query(query)) == query
+
+
+@pytest.mark.parametrize('text', [
+    'MATCH p = (u)-[:R*1..3]-(v) RETURN nodes(p) AS leaked',
+    'MATCH p = (u)-[:R*1..3]-(v) RETURN size(nodes(p)) AS size',
+    'MATCH p = (u)-[:R*1..3]-(v) RETURN coalesce(nodes(p), []) AS leaked',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN (nodes(p) + []) WHERE x.keep = true) RETURN u.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(p) WHERE x = x) RETURN u.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(p) WHERE u.keep = true) RETURN u.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(p) WHERE x.uid = u.uid) RETURN u.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(p) WHERE length(p) = 2) RETURN u.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(p) WHERE EXISTS { MATCH (x)-[:S]->(w) }) RETURN u.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(p) WHERE x.keep = true) RETURN x.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(p IN nodes(p) WHERE p.keep = true) RETURN u.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(u) WHERE x.keep = true) RETURN u.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(missing) WHERE x.keep = true) RETURN u.uid',
+    'MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(p, p) WHERE x.keep = true) RETURN u.uid',
+    'RETURN nodes(null) AS leaked',
+])
+def test_nodes_path_cannot_escape_all_or_observe_position_scope_or_entities(text):
+    with pytest.raises(QueryError):
+        parse_query(text)
+
+
 def test_extract_boolean_still_uses_real_subtrees_with_new_keywords():
     source = 'MATCH (n) WHERE n.x = 1 OR n.y = 2 RETURN n.id UNION ALL MATCH (m) RETURN m.id'
     start, end = extract_seed_boolean(source, 'OR')

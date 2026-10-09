@@ -392,3 +392,136 @@ def test_nested_space_expands_actual_query_shapes_not_only_labels_or_seeds(patte
 def test_invalid_complexity_does_not_silently_change_generation(complexity):
     with pytest.raises(ValueError, match="complexity"):
         instantiate(None, "P4", 1, 0, complexity=complexity)
+
+
+@pytest.mark.parametrize("pattern", ["P10", "P11"])
+@pytest.mark.parametrize("complexity", [0, 1, 2])
+def test_empty_low_is_an_explicit_checked_state_not_a_query_edit(pattern, complexity):
+    states = []
+    for seed in range(12):
+        original = instantiate(None, pattern, 3, seed, data_seed=0, complexity=complexity)
+        empty = instantiate(None, pattern, 3, seed, data_seed=0, complexity=complexity, state_variant="empty_low")
+        assert original == instantiate(None, pattern, 3, seed, data_seed=0,
+                                       complexity=complexity, state_variant="original")
+        assert "state_variant" not in original
+        assert empty["query_a"] == original["query_a"]
+        assert empty["expected_rows"] == []
+        assert empty["bindings"]["low_candidates"] == 0
+        assert empty["bindings"]["high_candidates"] == original["bindings"]["high_candidates"] == 13
+        assert empty["bindings"]["high_matches"] == 1
+        assert empty["bindings"]["cost_kind"] == "empty_input_pruning"
+        assert empty["source"]["state_variant"] == empty["state_variant"] == "empty_low"
+        assert "query_ref" not in empty
+        assert pattern in find_patterns(empty["query_a"], bindings=empty["bindings"])
+        changed = mutate(empty["query_a"], pattern, bindings=empty["bindings"])
+        assert changed == mutate(original["query_a"], pattern, bindings=original["bindings"])
+        assert parse_query(render_query(changed)) == changed
+        assert any(check["expected_rows"] == [{"count": 0}] for check in empty["checks"])
+        if pattern == "P10":
+            assert "GspLow {uid: 1, id: 0}" in empty["setup"][1]
+            assert empty["checks"][1]["expected_rows"] == [{"count": 0}]
+        else:
+            assert empty["bindings"]["anchor_candidates"] == 1
+            assert "GspAnchor {uid: 0}" in empty["setup"][1]
+            assert empty["checks"][1]["expected_rows"] == [{"count": 1}]
+            assert empty["checks"][2]["expected_rows"] == [{"count": 0}]
+            assert empty["checks"][-1] == {
+                "query": "MATCH ()-[r:GSP_LOW]->() RETURN count(r) AS count",
+                "expected_rows": [{"count": 1}],
+            }
+        states.append(tuple(empty["setup"]))
+    assert len(set(states)) == 1
+
+
+@pytest.mark.parametrize("pattern", ["P1", "P3", "P13", "S1", "S10"])
+def test_empty_low_is_rejected_for_patterns_without_an_empty_input_contract(pattern):
+    with pytest.raises(PatternNotApplicable, match="P10 and P11"):
+        instantiate(None, pattern, 3, 0, state_variant="empty_low")
+
+
+@pytest.mark.parametrize("variant", [None, True, "typo", []])
+def test_unknown_state_variant_cannot_silently_fall_back(variant):
+    with pytest.raises(ValueError, match="state_variant"):
+        instantiate(None, "P10", 3, 0, state_variant=variant)
+
+
+@pytest.mark.parametrize("pattern,count", [("P11", 8), ("P13", 10)])
+@pytest.mark.parametrize("complexity", [0, 1, 2])
+def test_multi_low_preserves_query_and_high_region_while_checking_eight_low_matches(pattern, count, complexity):
+    states = set()
+    for seed in range(12):
+        original = instantiate(None, pattern, 3, seed, data_seed=0, complexity=complexity)
+        multi = instantiate(None, pattern, 3, seed, data_seed=0, complexity=complexity, state_variant="multi_low")
+        assert multi["query_a"] == original["query_a"]
+        assert multi["setup"][:3] == original["setup"]
+        assert len(multi["setup"]) == 4
+        assert "uid: -i" in multi["setup"][-1]
+        assert multi["state_variant"] == multi["source"]["state_variant"] == "multi_low"
+        assert multi["role_choices"]["state_variant"] == "multi_low"
+        assert multi["bindings"]["low_branch_multiplicity"] == 8
+        assert multi["bindings"]["multiplicity_anchor_uid"] == 1
+        assert multi["bindings"]["root_high_candidates"] == 13
+        assert multi["bindings"]["high_candidates"] == original["bindings"]["high_candidates"]
+        assert len(multi["expected_rows"]) == count
+        low_values = {row["v.uid"] for row in multi["expected_rows"] if row["u.uid"] == 1}
+        assert low_values == {2 if pattern == "P11" else 10, *range(-1, -8, -1)}
+        assert any("{uid: 1})-[:GSP_LOW]" in check["query"] and
+                   check["expected_rows"] == [{"count": 8}] for check in multi["checks"])
+        if pattern == "P13":
+            assert multi["expected_rows"][-2:] == original["expected_rows"][-2:]
+            assert multi["bindings"]["total_high_matches"] == 2
+            assert multi["bindings"]["total_low_matches"] == 9
+            assert multi["checks"][3:5] == original["checks"][3:5]
+            assert any("{uid: 3})-[:GSP_LOW]" in check["query"] and
+                       check["expected_rows"] == [{"count": 0}] for check in multi["checks"])
+        else:
+            assert multi["checks"][3:5] == original["checks"][3:5]
+        changed = mutate(multi["query_a"], pattern, bindings=multi["bindings"])
+        assert changed == mutate(original["query_a"], pattern, bindings=original["bindings"])
+        assert not multi["query_a"].distinct and not changed.distinct
+        assert parse_query(render_query(changed)) == changed
+        states.add(tuple(multi["setup"]))
+    assert len(states) == 1
+
+
+@pytest.mark.parametrize("pattern", ["P1", "P3", "P10", "P15", "S1"])
+def test_multi_low_is_rejected_without_a_shared_anchor_branch_contract(pattern):
+    with pytest.raises(PatternNotApplicable, match="P11 and P13"):
+        instantiate(None, pattern, 3, 0, state_variant="multi_low")
+
+
+@pytest.mark.parametrize("complexity", [0, 1, 2])
+def test_pruning_path_checks_the_failure_prefix_and_never_loses_all_when_moving_anchor_filter(complexity):
+    states = set()
+    placements = set()
+    for seed in range(20):
+        case = instantiate(None, "P3", 4, seed, data_seed=0, complexity=complexity, state_variant="pruning_path")
+        query = case["query_a"]
+        assert query.pattern.relationship.min_hops == 1 and query.pattern.relationship.max_hops == 3
+        assert case["expected_rows"] == [{"u.uid": 1, "v.uid": 3, "hops": 2}]
+        assert case["bindings"]["failure_entry_uid"] == 0
+        assert case["bindings"]["failure_entry_keep"] is False
+        assert case["bindings"]["failure_fanout"] == 4
+        assert case["bindings"]["cost_kind"] == "path_prefix_pruning"
+        assert case["state_variant"] == "pruning_path"
+        assert "noise_chains" not in case["bindings"]
+        assert "nodes(p)" in render_query(query) and "nodes(p)" in case["skeleton"]
+        assert any(check["expected_rows"] == [{"keep": False}] for check in case["checks"])
+        assert any("GspBad {uid: 0})-[:GSP_LINK]->(m:GspMiddle)" in check["query"] and
+                   check["expected_rows"] == [{"count": 4}] for check in case["checks"])
+        placement = case["role_choices"]["anchor_constraint"]
+        placements.add(placement)
+        if placement == "where":
+            assert not query.pattern.left.properties
+            assert "u.id = 1" in render_query(query) and "AND all(" in render_query(query)
+        changed = mutate(query, "P3", bindings=case["bindings"])
+        assert changed.returns == query.returns
+        assert parse_query(render_query(changed)) == changed
+        states.add(tuple(case["setup"]))
+    assert len(states) == 1 and placements == {"map", "where"}
+
+
+@pytest.mark.parametrize("pattern", ["P1", "P10", "P11", "P13", "S1"])
+def test_pruning_path_is_not_manufactured_for_a_non_path_pattern(pattern):
+    with pytest.raises(PatternNotApplicable, match="P3"):
+        instantiate(None, pattern, 4, 0, state_variant="pruning_path")

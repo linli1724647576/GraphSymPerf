@@ -229,6 +229,10 @@ def test_reference_first_and_common_slow_queries_are_detected(fake):
     assert all(c['status'] == 'candidate' for c in report['reference_comparisons'].values())
     assert all(len(c['confirmation_sessions']) == 2 for c in report['reference_comparisons'].values())
     assert len(fake.instances) == 3  # shared restores, not recursive runs
+    assert report['comparisons']['ab']['status'] == 'no_candidate'
+    assert report['comparisons']['ab']['pair_kind'] == 'symmetry'
+    assert report['comparisons']['ab']['summary'] is None
+    assert all(c['pair_kind'] == 'reference' for c in report['reference_comparisons'].values())
 
 
 def test_independent_reference_mismatch_blocks_all_measurement(fake):
@@ -263,6 +267,9 @@ def test_high_timeout_with_fast_reference_keeps_lower_bound_and_stop_state(fake,
     assert report['ratio_lower_bound'] == 200
     assert report['summary'] is None and report['discovery']['samples'] == []
     assert report['timed_out_side'] == 'a'
+    assert report['candidate_comparison'] == 'ab'
+    assert report['comparisons']['ab']['pair_kind'] == 'reference'
+    assert report['comparisons']['ab']['status'] == 'timeout_candidate'
 
 
 def test_unknown_timeout_or_timed_out_reference_is_inconclusive(fake):
@@ -323,6 +330,8 @@ def test_scor_requires_tested_query_to_be_slower_than_reference(fake):
     assert report['status'] == 'no_candidate'
     assert report['reference_direction'] == 'reference_not_faster'
     assert len(fake.instances) == 1
+    assert report['comparisons']['ab']['pair_kind'] == 'reference'
+    assert report['comparisons']['ab']['status'] == 'no_candidate'
 
 
 def test_slow_independent_reference_records_difference_without_bug_candidate(fake):
@@ -340,3 +349,94 @@ def test_slow_independent_reference_records_difference_without_bug_candidate(fak
         assert comparison['reference_direction'] == 'reference_not_faster'
         assert comparison['status'] == 'no_candidate'
     assert len(fake.instances) == 1
+
+
+def test_ab_candidate_status_and_summary_survive_a_faster_reference_winner(fake):
+    original = fake.execute
+    reference = 'RETURN 1 AS reference_value'
+    def execute(self, query, parameters, timeout):
+        result = original(self, query, parameters, timeout)
+        result['elapsed_ms'] = 1 if query == reference else 2 if query == CASE['query_a'] else 10
+        return result
+    fake.execute = execute
+    report = run_case({**CASE, 'query_ref': reference}, {}, SETTINGS)
+    ab = report['comparisons']['ab']
+    assert report['status'] == ab['status'] == 'candidate'
+    assert report['candidate_comparison'] == 'query_b_vs_ref'
+    assert report['summary']['median_ratio'] == 10
+    assert ab['summary']['median_ratio'] == 5
+    assert ab['summary'] is not report['summary']
+    assert ab['pair_kind'] == 'symmetry'
+    assert ab['discovery'] == report['discovery']
+    assert ab['confirmation_sessions'] == report['confirmation_sessions']
+    assert len(ab['confirmation_sessions']) == 2
+    # Actual saved JSON must retain both summaries without introducing cycles.
+    import json
+    saved = json.loads(json.dumps(report))
+    assert saved['comparisons']['ab']['summary']['median_ratio'] == 5
+    assert saved['summary']['median_ratio'] == 10
+    for name, comparison in saved['reference_comparisons'].items():
+        assert saved['comparisons'][name] == {key: comparison[key] for key in ('pair_kind', 'status', 'summary')}
+        assert 'confirmation_sessions' not in saved['comparisons'][name]
+
+
+def test_unconfirmed_ab_status_remains_independent_of_confirmed_reference(fake):
+    original = fake.execute
+    reference = 'RETURN 1 AS reference_value'
+    def execute(self, query, parameters, timeout):
+        result = original(self, query, parameters, timeout)
+        result['elapsed_ms'] = 1 if query == reference else 4 if query == CASE['query_a'] else 10
+        return result
+    fake.execute = execute
+    report = run_case({**CASE, 'query_ref': reference}, {}, SETTINGS)
+    assert report['status'] == 'candidate'
+    assert report['comparisons']['ab']['status'] == 'not_confirmed'
+    assert report['comparisons']['ab']['summary']['median_ratio'] == 2.5
+    assert all(c['status'] == 'candidate' for c in report['reference_comparisons'].values())
+
+
+def test_legacy_scor_case_without_reference_side_is_never_labelled_symmetry(fake):
+    report = run_case({**CASE, 'pattern': 'S1'}, {}, SETTINGS)
+    assert report['pair_kind'] == report['comparisons']['ab']['pair_kind'] == 'reference'
+    assert report['comparisons']['ab']['status'] == 'no_candidate'
+
+
+def test_failed_ab_measurement_is_stored_in_the_independent_comparison(fake):
+    fake.timeout = True
+    report = run_case(CASE, {}, SETTINGS)
+    assert report['status'] == 'timeout'
+    assert report['comparisons']['ab']['status'] == 'timeout'
+    assert report['comparisons']['ab']['failure_phase'] == 'discovery'
+
+
+@pytest.mark.parametrize('side', ['a', 'b'])
+@pytest.mark.parametrize('during_measurement', [False, True])
+def test_independent_reference_timeout_is_not_a_symmetry_candidate(fake, side, during_measurement):
+    original = fake.execute
+    reference = 'RETURN 1 AS reference_value'
+    target = CASE[f'query_{side}']
+    def execute(self, query, parameters, timeout):
+        # Initial validation consumes three queries (check/ref/A), then B.
+        # Delay timeout until AB measurement when requested to also exercise
+        # the finally block with AB as current_comparison.
+        if query == target and (not during_measurement or len(self.calls) >= 4):
+            self.calls.append(query)
+            raise CaseFailure('timeout', 'server-timeout', details={
+                'cancellation_verified': True, 'elapsed_lower_bound_ms': 1000})
+        return original(self, query, parameters, timeout)
+    fake.execute = execute
+    report = run_case({**CASE, 'pattern': 'P4', 'query_ref': reference, 'reference_side': 'ref'}, {}, SETTINGS)
+    name = f'query_{side}_vs_ref'
+    assert report['status'] == 'timeout_candidate'
+    assert report['candidate_comparison'] == name
+    assert report['comparisons']['ab']['pair_kind'] == 'symmetry'
+    assert report['comparisons']['ab']['status'] == 'timeout'
+    assert report['comparisons'][name]['pair_kind'] == 'reference'
+    assert report['comparisons'][name]['status'] == 'timeout_candidate'
+    assert report['comparisons'][name]['summary'] is None
+    assert report['comparisons'][name]['ratio_lower_bound'] > 3
+    assert report['reference_comparisons'][name]['status'] == 'timeout_candidate'
+    assert not any(c['pair_kind'] == 'symmetry' and c['status'] == 'timeout_candidate'
+                   for c in report['comparisons'].values())
+    if not during_measurement and side == 'a':
+        assert CASE['query_b'] not in fake.instances[0].calls

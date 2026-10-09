@@ -591,8 +591,17 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
     """Execute one case. Failures are reportable; stop_target forbids continuation."""
     report = {"status": "started", "reason": "", "stop_target": False, "dbms": database.get("dbms", "neo4j"),
               "discovery": {"warmups": [], "samples": []}, "confirmation_sessions": [], "summary": None,
-              "reference_comparisons": {}}
+              "reference_comparisons": {}, "comparisons": {}}
+    # Keep the old top-level sample fields, but never use the aggregate report
+    # as the AB comparison itself: a reference winner must not overwrite AB.
+    reference_pair = case.get("reference_side") == "b" or case.get("pattern") in tuple(f"S{i}" for i in range(1, 11))
+    ab = {"pair_kind": "reference" if reference_pair else "symmetry", "status": "started",
+          "discovery": report["discovery"], "confirmation_sessions": report["confirmation_sessions"], "summary": None}
+    report["pair_kind"] = ab["pair_kind"]
+    report["comparisons"]["ab"] = ab
     db = None
+    current_comparison = None
+    comparison_failure_status = None
     phase = "configuration"
     try:
         settings = measurement_settings(measurement or {})
@@ -631,22 +640,24 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
         _remember_state(db, fingerprint, state_cache)
         phase = "discovery"
         rng = random.Random(seed)
-        comparisons = [("ab", (case["query_a"], case["query_b"]), report)]
+        comparisons = [("ab", (case["query_a"], case["query_b"]), ab)]
         if case.get("query_ref"):
             for side in ("a", "b"):
                 name = f"query_{side}_vs_ref"
-                comparison = {"discovery": {"warmups": [], "samples": []}, "confirmation_sessions": [], "summary": None}
+                comparison = {"pair_kind": "reference", "status": "started",
+                              "discovery": {"warmups": [], "samples": []}, "confirmation_sessions": [], "summary": None}
                 report["reference_comparisons"][name] = comparison
                 comparisons.append((name, (case[f"query_{side}"], case["query_ref"]), comparison))
         active = []
         for name, queries, comparison in comparisons:
+            current_comparison = comparison
             discovery = comparison["discovery"]
             _measure(db, case, baseline, settings, rng, settings["discovery_warmups"], discovery["warmups"], queries=queries)
             _measure(db, case, baseline, settings, rng, settings["discovery_pairs"], discovery["samples"], queries=queries)
             samples = discovery["samples"]
             slow = "a" if median(sample["a_ms"] - sample["b_ms"] for sample in samples) > 0 else "b"
             discovery["summary"] = summarize(samples, slow)
-            reference_comparison = name != "ab" or case.get("reference_side") == "b"
+            reference_comparison = comparison["pair_kind"] == "reference"
             if (not reference_comparison or slow == "a") and (discovery["summary"]["median_ratio"] >= settings["screen_ratio"] and
                     discovery["summary"]["direction_consistency"] >= settings["direction_consistency"]):
                 active.append((name, queries, comparison, slow, [], []))
@@ -654,6 +665,9 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 comparison["status"] = "no_candidate"
                 if reference_comparison and slow != "a":
                     comparison["reference_direction"] = "reference_not_faster"
+        current_comparison = None
+        if "reference_direction" in ab:
+            report["reference_direction"] = ab["reference_direction"]
         db.close()
         db = None
         if not active:
@@ -670,6 +684,7 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
             phase = f"confirmation_{number + 1}"
             rng = random.Random(seed + 104729 * (number + 1))
             for name, queries, comparison, slow, pooled, noise_floors in active:
+                current_comparison = comparison
                 session = {"session": number + 1, "warmups": [], "samples": [], "control_a": [], "control_b": []}
                 comparison["confirmation_sessions"].append(session)
                 _measure(db, case, baseline, settings, rng, settings["confirmation_warmups"], session["warmups"], queries=queries)
@@ -680,6 +695,7 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 session["noise_p99_ms"] = max(_quantile([abs(sample["a_ms"] - sample["b_ms"]) for sample in session[f"control_{side}"]], 0.99) for side in ("a", "b"))
                 noise_floors.append(session["noise_p99_ms"])
                 pooled.extend(session["samples"])
+            current_comparison = None
             db.close()
             db = None
         candidates = []
@@ -694,9 +710,10 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
         report.update(status="candidate" if candidates else "not_confirmed", reason="performance_difference_confirmed" if candidates else "confirmation_gate_not_met")
         if candidates:
             report["candidate_comparison"], report["summary"] = max(candidates, key=lambda item: item[1]["median_ratio"])
-        elif report["summary"] is None:
-            report["summary"] = max((comparison["summary"] for _, _, comparison, *_ in active), key=lambda item: item["median_ratio"])
+        else:
+            report["summary"] = ab["summary"] or max((comparison["summary"] for _, _, comparison, *_ in active), key=lambda item: item["median_ratio"])
     except CaseFailure as exc:
+        comparison_failure_status = exc.status
         report.update(status=exc.status, reason=exc.reason, stop_target=exc.stop_target, failure_phase=phase)
         report.update(exc.details)
         reference = getattr(db, "_reference_evidence", None)
@@ -709,11 +726,40 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 report.update(status="timeout_candidate", reason="tested_query_timed_out_with_fast_reference",
                               reference_elapsed_ms=reference["elapsed_ms"], ratio_lower_bound=lower / reference["elapsed_ms"],
                               timed_out_side="a" if timed_query == case.get("query_a") else "b")
+                if case.get("query_ref"):
+                    # A fast independent Qref says nothing about Q/Qsym's
+                    # timing gap when the counterpart has not completed.
+                    name = f"query_{report['timed_out_side']}_vs_ref"
+                    comparison = report["reference_comparisons"].setdefault(name, {
+                        "pair_kind": "reference", "status": "started", "summary": None,
+                        "discovery": {"warmups": [], "samples": []}, "confirmation_sessions": []})
+                    ab.update(status="timeout", failure_phase=phase)
+                else:
+                    # check_case's only other registered reference is query_b.
+                    # Keep SCor's AB pair labelled reference, never symmetry.
+                    name, comparison = "ab", ab
+                comparison.update(status="timeout_candidate", failure_phase=phase,
+                                  reference_elapsed_ms=reference["elapsed_ms"], ratio_lower_bound=lower / reference["elapsed_ms"],
+                                  elapsed_lower_bound_ms=lower, cancellation_verified=exc.details.get("cancellation_verified", False))
+                report["candidate_comparison"] = name
     except (ValueError, KeyError, TypeError) as exc:
         report.update(status="invalid_case" if phase == "configuration" else "environment_error", reason=type(exc).__name__, stop_target=phase != "configuration", failure_phase=phase)
     except Exception as exc:
         report.update(status="environment_error", reason=type(exc).__name__, stop_target=True, failure_phase=phase)
     finally:
+        if (current_comparison is not None and report["status"] not in {"candidate", "no_candidate", "not_confirmed"}
+                and current_comparison["status"] != "timeout_candidate"):
+            current_comparison.update(status=comparison_failure_status or report["status"], failure_phase=phase)
+        elif ab["status"] == "started" and report["status"] not in {"candidate", "no_candidate", "not_confirmed"}:
+            ab.update(status=comparison_failure_status or report["status"], failure_phase=phase)
+        # Reference raw samples remain in their legacy field. Include compact
+        # independent results in the authoritative comparison map without
+        # serializing those same samples twice.
+        for name, comparison in report["reference_comparisons"].items():
+            report["comparisons"][name] = {key: comparison[key] for key in ("pair_kind", "status", "summary")}
+            for key in ("ratio_lower_bound", "reference_elapsed_ms", "elapsed_lower_bound_ms", "cancellation_verified", "failure_phase"):
+                if key in comparison:
+                    report["comparisons"][name][key] = comparison[key]
         if state_cache is not None and report["status"] not in {"candidate", "no_candidate", "not_confirmed"}:
             state_cache.clear()
         if db is not None:

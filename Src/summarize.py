@@ -23,6 +23,7 @@ VALID_CASE = {"no_candidate", "not_confirmed", "candidate"}
 CANDIDATE = {"candidate", "timeout_candidate"}
 SUMMARY_FIELDS = (
     "dbms", "pattern", "versions", "attempted", "cases", "valid", "candidate",
+    "symmetry_candidates", "reference_candidates", "unclassified_candidates",
     "unique_bugs", "exclusive_bugs", "elapsed_seconds", "bugs_per_hour",
     "case_budget", "time_budget_seconds", "budget_coverage", "stop_reasons",
 )
@@ -55,6 +56,31 @@ def _dbms(data, path):
     raise ValueError(f"{path}: dbms is missing and cannot be inferred from database_version")
 
 
+def _comparison_candidates(result, path):
+    """Use independent pair statuses, never the top-level winning summary."""
+    families = set()
+    comparisons = result.get("comparisons", {})
+    if not isinstance(comparisons, dict):
+        raise ValueError(f"{path}: result.comparisons must be an object")
+    references = result.get("reference_comparisons", {})
+    if not isinstance(references, dict):
+        raise ValueError(f"{path}: result.reference_comparisons must be an object")
+    # Some records put only AB in comparisons and retain the reference pairs
+    # in reference_comparisons.  New compact entries override the same pair's
+    # older record, without suppressing other independently measured pairs.
+    pairs = {name: ("reference", pair) for name, pair in references.items()}
+    pairs.update({name: (None, pair) for name, pair in comparisons.items()})
+    for default_kind, pair in pairs.values():
+        if not isinstance(pair, dict):
+            raise ValueError(f"{path}: each comparison must be an object")
+        kind = pair.get("pair_kind", default_kind)
+        if kind in {"symmetry", "reference"} and pair.get("status") in CANDIDATE:
+            families.add(kind)
+    ab = comparisons.get("ab", {})
+    ab_recorded = ab.get("pair_kind") in {"symmetry", "reference"} and isinstance(ab.get("status"), str) and bool(ab["status"])
+    return families, result.get("status") in CANDIDATE and not ab_recorded
+
+
 def load_records(root):
     records, runs, patterns_by_case = [], [], {}
     for path in sorted(root.rglob("result.json")):
@@ -76,9 +102,11 @@ def load_records(root):
         if key in patterns_by_case and patterns_by_case[key] != pattern:
             raise ValueError(f"{path}: identical input_hash has conflicting patterns")
         patterns_by_case[key] = pattern
+        families, unclassified = _comparison_candidates(result, path)
         records.append({"dbms": target, "case_id": identity,
                         "pattern": pattern, "version": version,
-                        "status": status, "path": path})
+                        "status": status, "path": path,
+                        "candidate_families": families, "unclassified_candidate": unclassified})
     for path in sorted(root.rglob("run.json")):
         data = _json(path)
         data = {**data, "dbms": _dbms(data, path), "path": path}
@@ -148,9 +176,12 @@ def build_summary(records, runs, bugs, metadata, *, dbms=None, version=None):
         key = (record["dbms"], record["case_id"])
         if key in cases and cases[key]["pattern"] != record["pattern"]:
             raise ValueError(f"{record['path']}: identical input_hash has conflicting patterns")
-        item = cases.setdefault(key, {"pattern": record["pattern"], "statuses": set(), "versions": set()})
+        item = cases.setdefault(key, {"pattern": record["pattern"], "statuses": set(), "versions": set(),
+                                      "candidate_families": set(), "unclassified_candidate": False})
         item["statuses"].add(record["status"])
         item["versions"].add(record["version"])
+        item["candidate_families"].update(record["candidate_families"])
+        item["unclassified_candidate"] |= record["unclassified_candidate"]
         group = groups.setdefault((record["dbms"], record["pattern"]), {"cases": set(), "runs": [], "records": []})
         group["cases"].add(key)
         group["records"].append(record)
@@ -217,6 +248,9 @@ def build_summary(records, runs, bugs, metadata, *, dbms=None, version=None):
                "attempted": attempted if covered else len(entries), "cases": len(entries),
                "valid": sum(bool(e["statuses"] & VALID_CASE) for e in entries),
                "candidate": sum(bool(e["statuses"] & CANDIDATE) for e in entries),
+               "symmetry_candidates": sum("symmetry" in e["candidate_families"] for e in entries),
+               "reference_candidates": sum("reference" in e["candidate_families"] for e in entries),
+               "unclassified_candidates": sum(e["unclassified_candidate"] for e in entries),
                "unique_bugs": len(matching_bugs),
                "exclusive_bugs": sum(len(bug_patterns[key]) == 1 for key in matching_bugs),
                "elapsed_seconds": round(elapsed, 6) if covered else "",

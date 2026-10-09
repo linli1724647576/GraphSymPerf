@@ -7,12 +7,13 @@ import pytest
 from summarize import BUG_FIELDS, main, summarize
 
 
-def record(root, directory, case_id, pattern="P1", status="candidate", dbms="neo4j", version="Neo4j/5"):
+def record(root, directory, case_id, pattern="P1", status="candidate", dbms="neo4j", version="Neo4j/5", result_fields=None):
     path = root / directory
     path.mkdir(parents=True, exist_ok=True)
     data = {"format_version": 1, "input_hash": case_id,
             "case": {"pattern": pattern, "seed": 1, "scale": 100},
             "result": {"status": status, "dbms": dbms, "database_version": version}}
+    data["result"].update(result_fields or {})
     (path / "result.json").write_text(json.dumps(data))
     return path
 
@@ -221,3 +222,83 @@ def test_interrupted_run_does_not_report_complete_time_budget(tmp_path, reason, 
     row = summarize(results, annotations(tmp_path), tmp_path / "out")[0][0]
     assert row["budget_coverage"] == "incomplete_run"
     assert row["elapsed_seconds"] == row["bugs_per_hour"] == ""
+
+
+def test_independent_comparison_families_do_not_follow_top_level_winner(tmp_path):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64, result_fields={
+        "candidate_comparison": "query_a_vs_ref", "summary": {"median_ratio": 100},
+        "comparisons": {"ab": {"pair_kind": "symmetry", "status": "not_confirmed"},
+                        "query_a_vs_ref": {"pair_kind": "reference", "status": "candidate"},
+                        "query_b_vs_ref": {"pair_kind": "reference", "status": "candidate"}}})
+    row = summarize(results, annotations(tmp_path), tmp_path / "out")[0][0]
+    assert row["candidate"] == 1 and row["symmetry_candidates"] == 0
+    assert row["reference_candidates"] == 1 and row["unclassified_candidates"] == 0
+
+
+def test_case_can_hit_both_comparison_families_without_replay_inflation(tmp_path):
+    results = tmp_path / "results"
+    fields = {"comparisons": {"ab": {"pair_kind": "symmetry", "status": "candidate"},
+                              "query_a_vs_ref": {"pair_kind": "reference", "status": "timeout_candidate"}}}
+    record(results, "a", "1" * 64, result_fields=fields)
+    record(results, "replay/a", "1" * 64, result_fields=fields)
+    row = summarize(results, annotations(tmp_path), tmp_path / "out")[0][0]
+    assert row["cases"] == row["candidate"] == 1
+    assert row["symmetry_candidates"] == row["reference_candidates"] == 1
+    assert row["unclassified_candidates"] == 0
+
+
+def test_reference_ab_pair_is_not_counted_as_symmetry(tmp_path):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64, pattern="S1", result_fields={
+        "comparisons": {"ab": {"pair_kind": "reference", "status": "candidate"}}})
+    row = summarize(results, annotations(tmp_path), tmp_path / "out")[0][0]
+    assert row["symmetry_candidates"] == row["unclassified_candidates"] == 0
+    assert row["reference_candidates"] == 1
+
+
+@pytest.mark.parametrize("winner", ["ab", "query_a_vs_ref"])
+def test_legacy_winner_does_not_reconstruct_independent_ab_status(tmp_path, winner):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64, result_fields={
+        "candidate_comparison": winner, "summary": {"median_ratio": 100},
+        "reference_comparisons": {"query_a_vs_ref": {"status": "candidate"}}})
+    row = summarize(results, annotations(tmp_path), tmp_path / "out")[0][0]
+    assert row["symmetry_candidates"] == 0
+    assert row["reference_candidates"] == row["unclassified_candidates"] == 1
+
+
+def test_explicit_new_comparisons_override_legacy_reference_fields(tmp_path):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64, status="no_candidate", result_fields={
+        "comparisons": {"ab": {"pair_kind": "symmetry", "status": "no_candidate"},
+                        "query_a_vs_ref": {"pair_kind": "reference", "status": "not_confirmed"}},
+        "reference_comparisons": {"query_a_vs_ref": {"status": "candidate"}}})
+    row = summarize(results, annotations(tmp_path), tmp_path / "out")[0][0]
+    assert row["candidate"] == row["symmetry_candidates"] == row["reference_candidates"] == row["unclassified_candidates"] == 0
+
+
+def test_ab_only_comparisons_preserve_independent_reference_candidates(tmp_path):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64, result_fields={
+        "candidate_comparison": "query_a_vs_ref", "summary": {"median_ratio": 100},
+        "comparisons": {"ab": {"pair_kind": "symmetry", "status": "not_confirmed"}},
+        "reference_comparisons": {
+            "query_a_vs_ref": {"pair_kind": "reference", "status": "candidate"},
+            "query_b_vs_ref": {"pair_kind": "reference", "status": "candidate"}}})
+    row = summarize(results, annotations(tmp_path), tmp_path / "out")[0][0]
+    assert row["symmetry_candidates"] == row["unclassified_candidates"] == 0
+    assert row["candidate"] == row["reference_candidates"] == 1
+
+
+def test_compact_pair_overrides_only_matching_reference_pair(tmp_path):
+    results = tmp_path / "results"
+    record(results, "a", "1" * 64, result_fields={
+        "comparisons": {"ab": {"pair_kind": "symmetry", "status": "no_candidate"},
+                        "query_a_vs_ref": {"pair_kind": "reference", "status": "not_confirmed"}},
+        "reference_comparisons": {
+            "query_a_vs_ref": {"pair_kind": "reference", "status": "candidate"},
+            "query_b_vs_ref": {"pair_kind": "reference", "status": "candidate"}}})
+    row = summarize(results, annotations(tmp_path), tmp_path / "out")[0][0]
+    assert row["symmetry_candidates"] == row["unclassified_candidates"] == 0
+    assert row["reference_candidates"] == 1

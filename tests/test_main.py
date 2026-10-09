@@ -61,6 +61,32 @@ def test_configuration_never_enables_reset_implicitly(tmp_path):
         main.read_config(path)
 
 
+@pytest.mark.parametrize('variant,patterns', [('empty_low', ['P10', 'P11']), ('multi_low', ['P11', 'P13']), ('pruning_path', ['P3'])])
+def test_state_variants_are_saved_and_replayed_with_checked_results(tmp_path, variant, patterns):
+    for pattern in patterns:
+        case = main.prepare_case(None, pattern, 3, 1234, 0, 2, variant)
+        assert case['state_variant'] == variant
+        directory = tmp_path / pattern
+        main.save_case(directory, case, {}, {'status': 'no_candidate'})
+        assert main.read_case(directory)[0] == case
+        original = main.prepare_case(None, pattern, 3, 1234, 0, 2)
+        assert 'state_variant' not in original
+        if variant != 'pruning_path':
+            assert original['query_a'] == case['query_a'] and original['query_b'] == case['query_b']
+        else:
+            assert 'all(' in case['query_a'] and 'all(' in case['query_b']
+        assert main.case_digest(original) != main.case_digest(case)
+
+
+@pytest.mark.parametrize('variant,patterns', [('empty_low', ['P13']), ('multi_low', ['P10']), ('pruning_path', ['P1']), ('unknown', ['P11'])])
+def test_config_rejects_undefined_state_variants(tmp_path, variant, patterns):
+    path = tmp_path / 'config.yaml'
+    path.write_text(yaml.safe_dump({'database': {'dedicated': True, 'allow_reset': True},
+                                    'patterns': patterns, 'generation': {'state_variant': variant}}))
+    with pytest.raises(ValueError, match='state'):
+        main.read_config(path)
+
+
 def test_environment_failure_stops_later_cases(tmp_path, monkeypatch):
     config = {'database': {}, 'generation': {'log_files': [str(FIXTURE)]},
               'patterns': ['P1', 'P4', 'P5'], 'scales': [2], 'seeds': [0],

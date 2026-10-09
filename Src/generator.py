@@ -842,7 +842,34 @@ def _chain_state(scale: int, seed: int) -> tuple[list[str], list[dict[str, Any]]
 
 
 def _build_p3(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
-    setup, checks = _chain_state(scale, seed)
+    pruning_path = skeleton.source.get("state_variant") == "pruning_path"
+    if pruning_path:
+        offset = _offset(seed)
+        setup = [
+            _index("GspLow", "id"),
+            "CREATE (u:GspLow {uid: 1, id: 1, keep: true})-[:GSP_LINK]->"
+            "(:GspMiddle {uid: 2, keep: true})-[:GSP_LINK]->(:GspHigh {uid: 3, keep: true}) "
+            "CREATE (u)-[:GSP_LINK]->(:GspBad {uid: 0, keep: false})",
+            f"MATCH (b:GspBad {{uid: 0}}) UNWIND range(1, {scale}) AS i "
+            f"CREATE (b)-[:GSP_LINK]->(:GspMiddle {{uid: {offset}+2*i, keep: true}})"
+            f"-[:GSP_LINK]->(:GspHigh {{uid: {offset}+2*i+1, keep: true}})",
+        ]
+        checks = [
+            _index_check("GspLow", "id"),
+            _count_check("MATCH (u:GspLow {id: 1}) RETURN count(u) AS count", 1),
+            _count_check("MATCH (v:GspHigh) RETURN count(v) AS count", scale + 1),
+            _count_check("MATCH ()-[r:GSP_LINK]->() RETURN count(r) AS count", 2 * scale + 3),
+            {"query": "MATCH (:GspLow {id: 1})-[:GSP_LINK]->(b:GspBad {uid: 0}) RETURN b.keep AS keep",
+             "expected_rows": [{"keep": False}]},
+            _count_check("MATCH (:GspBad {uid: 0})-[:GSP_LINK]->(m:GspMiddle) RETURN count(m) AS count", scale),
+            {"query": "MATCH (u:GspLow {id: 1})-[:GSP_LINK]->(m:GspMiddle {uid: 2})-[:GSP_LINK]->(v:GspHigh {uid: 3}) "
+                      "RETURN u.keep AS u_keep, m.keep AS m_keep, v.keep AS v_keep",
+             "expected_rows": [{"u_keep": True, "m_keep": True, "v_keep": True}]},
+        ]
+        skeleton = replace(skeleton, text="MATCH p = $lowCostNode(u)-[:$R*$min..$max]-$highCostNode(v) "
+                           "WHERE all(x IN nodes(p) WHERE x.keep = true) RETURN u.uid, v.uid, length(p) AS hops")
+    else:
+        setup, checks = _chain_state(scale, seed)
     path = Edge(
         _node("u", "GspLow", "id"),
         Relationship(type="GSP_LINK", min_hops=1, max_hops=3),
@@ -850,9 +877,8 @@ def _build_p3(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
         "undirected",
         path_variable="p",
     )
-    query = Query(
-        path, None, (*_returns("u", "v"), Alias(Call("length", (Variable("p"),)), "hops"))
-    )
+    predicate = All("x", Call("nodes", (Variable("p"),)), _eq("x", "keep", True)) if pruning_path else None
+    query = Query(path, predicate, (*_returns("u", "v"), Alias(Call("length", (Variable("p"),)), "hops")))
     checks.append(
         _count_check(
             "MATCH (:GspLow {id: 1})-[:GSP_LINK]->(:GspMiddle)-[:GSP_LINK]->(:GspHigh) RETURN count(*) AS count",
@@ -1010,9 +1036,11 @@ def _build_p9(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
 
 def _build_p10(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
     offset = _offset(seed)
+    empty_low = skeleton.source.get("state_variant") == "empty_low"
+    low_id = 0 if empty_low else 1
     setup = [
         _index("GspLow", "id"),
-        "CREATE (:GspLow {uid: 1, id: 1}), (:GspHigh {uid: 2})-[:GSP_LINK]->(:GspTarget {uid: 3, keep: true})",
+        f"CREATE (:GspLow {{uid: 1, id: {low_id}}}), (:GspHigh {{uid: 2}})-[:GSP_LINK]->(:GspTarget {{uid: 3, keep: true}})",
         (
             f"UNWIND range(1, {scale}) AS i CREATE (b:GspHigh {{uid: {offset}+5*i}}) "
             "WITH b, i UNWIND range(1, 4) AS j "
@@ -1025,7 +1053,7 @@ def _build_p10(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
     query = Query(_node("a", "GspLow", "id"), None, _returns("a", "b", "c"), matches=(high,))
     checks = [
         _index_check("GspLow", "id"),
-        _count_check("MATCH (a:GspLow {id: 1}) RETURN count(a) AS count", 1),
+        _count_check("MATCH (a:GspLow {id: 1}) RETURN count(a) AS count", 0 if empty_low else 1),
         _count_check(
             "MATCH (:GspHigh)-[r:GSP_LINK]->(:GspTarget) RETURN count(r) AS count", 4 * scale + 1
         ),
@@ -1041,18 +1069,29 @@ def _build_p10(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
         query,
         setup,
         checks,
-        [{"a.uid": 1, "b.uid": 2, "c.uid": 3}],
+        [] if empty_low else [{"a.uid": 1, "b.uid": 2, "c.uid": 3}],
         {"independent_variables": [["a"], ["b", "c"]], "high_candidates": 4 * scale + 1},
     )
 
 
 def _build_p11(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
     offset = _offset(seed)
+    empty_low = skeleton.source.get("state_variant") == "empty_low"
+    multi_low = skeleton.source.get("state_variant") == "multi_low"
+    low_uids = [2, *range(-1, -8, -1)] if multi_low else [2]
+    first_create = ("CREATE (u:GspAnchor {uid: 1}) "
+                    "CREATE (:GspAnchor {uid: 0})-[:GSP_LOW]->(:GspLow {uid: 2}) "
+                    "CREATE (u)-[:GSP_HIGH]->(:GspHigh {uid: 3, keep: true})"
+                    if empty_low else
+                    "CREATE (u:GspAnchor {uid: 1})-[:GSP_LOW]->(:GspLow {uid: 2}) CREATE (u)-[:GSP_HIGH]->(:GspHigh {uid: 3, keep: true})")
     setup = [
         _index("GspAnchor"),
-        "CREATE (u:GspAnchor {uid: 1})-[:GSP_LOW]->(:GspLow {uid: 2}) CREATE (u)-[:GSP_HIGH]->(:GspHigh {uid: 3, keep: true})",
+        first_create,
         f"MATCH (u:GspAnchor {{uid: 1}}) UNWIND range(1, {4 * scale}) AS i CREATE (u)-[:GSP_HIGH]->(:GspHigh {{uid: {offset}+i, keep: false}})",
     ]
+    if multi_low:
+        setup.append("MATCH (u:GspAnchor {uid: 1}) UNWIND range(1, 7) AS i "
+                     "CREATE (u)-[:GSP_LOW]->(:GspLow {uid: -i})")
     query = Query(
         _node("u", "GspAnchor", "uid"),
         None,
@@ -1066,7 +1105,7 @@ def _build_p11(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
         _index_check("GspAnchor", "uid"),
         _count_check("MATCH (u:GspAnchor {uid: 1}) RETURN count(u) AS count", 1),
         _count_check(
-            "MATCH (:GspAnchor {uid: 1})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count", 1
+            "MATCH (:GspAnchor {uid: 1})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count", 0 if empty_low else len(low_uids)
         ),
         _count_check(
             "MATCH (:GspAnchor {uid: 1})-[:GSP_HIGH]->(w:GspHigh) RETURN count(w) AS count",
@@ -1077,6 +1116,12 @@ def _build_p11(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
             1,
         ),
     ]
+    if empty_low:
+        # A global LOW edge remains, so emptiness belongs to the bound uid=1
+        # anchor rather than a globally absent relationship type.
+        checks.append(_count_check("MATCH ()-[r:GSP_LOW]->() RETURN count(r) AS count", 1))
+    elif multi_low:
+        checks.append(_count_check("MATCH (v:GspLow) RETURN count(DISTINCT v.uid) AS count", 8))
     return _pack(
         skeleton,
         scale,
@@ -1084,8 +1129,8 @@ def _build_p11(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
         query,
         setup,
         checks,
-        [{"u.uid": 1, "v.uid": 2, "w.uid": 3}],
-        {"shared_anchor": "u", "low_candidates": 1, "high_candidates": 4 * scale + 1},
+        [] if empty_low else [{"u.uid": 1, "v.uid": uid, "w.uid": 3} for uid in low_uids],
+        {"shared_anchor": "u", "low_candidates": 0 if empty_low else len(low_uids), "high_candidates": 4 * scale + 1},
     )
 
 
@@ -1111,6 +1156,8 @@ def _build_p12(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
 
 def _build_p13(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
     offset = _offset(seed)
+    multi_low = skeleton.source.get("state_variant") == "multi_low"
+    low_uids = [10, *range(-1, -8, -1)] if multi_low else [10]
     setup = [
         _index("GspAnchor"),
         (
@@ -1121,6 +1168,9 @@ def _build_p13(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
         ),
         f"MATCH (u:GspAnchor {{uid: 1}}) UNWIND range(1, {4 * scale}) AS i CREATE (u)-[:GSP_HIGH]->(:GspHigh {{uid: {offset}+i, keep: false}})",
     ]
+    if multi_low:
+        setup.append("MATCH (u:GspAnchor {uid: 1}) UNWIND range(1, 7) AS i "
+                     "CREATE (u)-[:GSP_LOW]->(:GspLow {uid: -i})")
     query = Query(
         _node("u", "GspAnchor"),
         None,
@@ -1137,7 +1187,7 @@ def _build_p13(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
     checks = [
         _index_check("GspAnchor", "uid"),
         _count_check("MATCH (u:GspAnchor) RETURN count(u) AS count", 3),
-        _count_check("MATCH (:GspAnchor)-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count", 2),
+        _count_check("MATCH (:GspAnchor)-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count", len(low_uids) + 1),
         _count_check(
             "MATCH (:GspAnchor)-[:GSP_HIGH]->(w:GspHigh) RETURN count(w) AS count", 4 * scale + 2
         ),
@@ -1146,8 +1196,16 @@ def _build_p13(skeleton: Skeleton, scale: int, seed: int) -> dict[str, Any]:
             2,
         ),
     ]
-    rows = [
-        {"u.uid": 1, "v.uid": 10, "w.uid": 20},
+    if multi_low:
+        checks.extend([
+            _count_check("MATCH (:GspAnchor {uid: 1})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count", 8),
+            _count_check("MATCH (:GspAnchor {uid: 2})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count", 1),
+            _count_check("MATCH (:GspAnchor {uid: 3})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count", 0),
+            _count_check("MATCH (:GspAnchor {uid: 2})-[:GSP_HIGH]->(w:GspHigh) WHERE w.keep = true RETURN count(w) AS count", 0),
+            _count_check("MATCH (:GspAnchor {uid: 3})-[:GSP_HIGH]->(w:GspHigh) WHERE w.keep = true RETURN count(w) AS count", 1),
+            _count_check("MATCH (v:GspLow) RETURN count(DISTINCT v.uid) AS count", 9),
+        ])
+    rows = [{"u.uid": 1, "v.uid": uid, "w.uid": 20} for uid in low_uids] + [
         {"u.uid": 2, "v.uid": 11, "w.uid": None},
         {"u.uid": 3, "v.uid": None, "w.uid": 21},
     ]
@@ -1582,6 +1640,8 @@ def _populate_variants(case: dict[str, Any], seed: int, complexity: int = 0) -> 
     pattern, query = case["pattern"], case["query_a"]
     selected: dict[str, Any] = {}
     role_choices: dict[str, Any] = {}
+    if case["source"].get("state_variant") in {"empty_low", "multi_low", "pruning_path"}:
+        selected["state_variant"] = role_choices["state_variant"] = case["source"]["state_variant"]
 
     def pick(name, options, divisor=1):
         if complexity:
@@ -1609,9 +1669,12 @@ def _populate_variants(case: dict[str, Any], seed: int, complexity: int = 0) -> 
                 key, value = node.properties[0]
                 bare = replace(node, properties=())
                 graph = replace(first.pattern, left=bare) if isinstance(first.pattern, Edge) else bare
-                parts[0] = replace(first, pattern=graph, where=Comparison(Property(node.variable, key), "=", value))
+                moved = Comparison(Property(node.variable, key), "=", value)
+                predicate = Boolean("AND", (moved, first.where)) if first.where is not None else moved
+                parts[0] = replace(first, pattern=graph, where=predicate)
         if pattern == "P3":
-            bounds = pick("path_bounds", ((1, 3), (2, 2), (1, 2), (2, 3)), 2)
+            bounds_pool = ((1, 3),) if case["source"].get("state_variant") == "pruning_path" else ((1, 3), (2, 2), (1, 2), (2, 3))
+            bounds = pick("path_bounds", bounds_pool, 2)
             edge = parts[0].pattern
             parts[0] = replace(parts[0], pattern=replace(edge, relationship=replace(
                 edge.relationship, min_hops=bounds[0], max_hops=bounds[1])))
@@ -1920,7 +1983,7 @@ def _add_pattern_reference(case: dict[str, Any]) -> None:
 
 def instantiate(
     seed_query: SeedQuery | str | None, pattern: str, scale: int, seed: int,
-    *, data_seed: int | None = None, complexity: int = 0,
+    *, data_seed: int | None = None, complexity: int = 0, state_variant: str = "original",
 ) -> dict[str, Any]:
     """Populate a finite template; query choices and graph layout have separate seeds.
 
@@ -1935,12 +1998,40 @@ def instantiate(
         raise ValueError("data_seed must be a nonnegative integer or None")
     if type(complexity) is not int or complexity not in (0, 1, 2):
         raise ValueError("complexity must be 0, 1 or 2")
+    if not isinstance(state_variant, str) or state_variant not in {"original", "empty_low", "multi_low", "pruning_path"}:
+        raise ValueError("state_variant must be original, empty_low, multi_low or pruning_path")
+    if state_variant == "empty_low" and pattern not in {"P10", "P11"}:
+        raise PatternNotApplicable("empty_low state is only implemented for P10 and P11")
+    if state_variant == "multi_low" and pattern not in {"P11", "P13"}:
+        raise PatternNotApplicable("multi_low state is only implemented for P11 and P13")
+    if state_variant == "pruning_path" and pattern != "P3":
+        raise PatternNotApplicable("pruning_path state is only implemented for P3")
     actual_data_seed = seed if data_seed is None else data_seed
     skeleton = abstract_seed(seed_query, pattern)
     skeleton = replace(skeleton, source={**skeleton.source, "population_seed": seed,
                                          "data_seed": actual_data_seed})
+    if state_variant != "original":
+        skeleton = replace(skeleton, source={**skeleton.source, "state_variant": state_variant})
     case = _BUILDERS[pattern](skeleton, scale, actual_data_seed)
     case["seed"], case["data_seed"] = seed, actual_data_seed
+    if state_variant != "original":
+        case["state_variant"] = state_variant
+        case["bindings"]["state_variant"] = state_variant
+        if state_variant == "empty_low":
+            case["bindings"].update(low_candidates=0, cost_kind="empty_input_pruning", high_matches=1)
+        elif state_variant == "multi_low":
+            case["bindings"].update(low_candidates=8, low_branch_multiplicity=8,
+                                    multiplicity_anchor_uid=1, root_high_candidates=4 * scale + 1,
+                                    cost_kind="repeated_branch_work", high_matches=1,
+                                    total_low_matches=9 if pattern == "P13" else 8)
+            if pattern == "P13":
+                case["bindings"]["total_high_matches"] = 2
+        else:
+            case["bindings"].pop("noise_chains", None)
+            case["bindings"].update(cost_kind="path_prefix_pruning", failure_entry_uid=0,
+                                    failure_entry_keep=False, failure_fanout=scale, noise_paths=scale,
+                                    witness_hops=2, predicate="all(x IN nodes(p) WHERE x.keep = true)")
+        case["bindings"]["anchor_candidates"] = 3 if pattern == "P13" else 1
     _populate_variants(case, seed, complexity)
     _add_pattern_reference(case)
     validate_query(case["query_a"])

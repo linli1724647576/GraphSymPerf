@@ -37,7 +37,8 @@ def value(expression, environment=None):
     if isinstance(expression, Variable):
         return environment[expression.name]
     if isinstance(expression, Property):
-        return environment[expression.variable].get(expression.key)
+        entity = environment[expression.variable]
+        return None if entity is None else entity.get(expression.key)
     if isinstance(expression, (Exists, Count)):
         edge = expression.pattern
         anchor = environment[edge.left.variable]["uid"]
@@ -70,6 +71,11 @@ def value(expression, environment=None):
         start, end, *steps = [value(arg, environment) for arg in expression.args]
         step = steps[0] if steps else 1
         return list(range(start, end + (1 if step > 0 else -1), step))
+    if isinstance(expression, Call) and expression.name == 'nodes':
+        return environment[expression.args[0].name]
+    if isinstance(expression, Call) and expression.name == 'length':
+        path = environment[expression.args[0].name]
+        return None if path is None else len(path) - 1
     if isinstance(expression, Case):
         branch = expression.then if value(expression.condition, environment) is True else expression.otherwise
         return value(branch, environment)
@@ -211,3 +217,122 @@ def test_all_reference_discards_only_a_group_irrelevant_to_the_explicit_false(co
         case = instantiate(None, "P16", 3, seed, data_seed=0, complexity=complexity)
         assert value(case["query_a"].returns[0]) is False
         assert value(case["query_ref"].returns[0]) is False
+
+
+@pytest.mark.parametrize("pattern", ["P10", "P11"])
+def test_empty_low_has_equal_empty_bags_with_a_nonempty_required_high_branch(pattern):
+    from generator import instantiate
+    for seed in range(12):
+        case = instantiate(None, pattern, 3, seed, data_seed=0, state_variant="empty_low")
+        changed = mutate(case["query_a"], pattern, bindings=case["bindings"])
+        # P10 is a Cartesian product; P11 is that product within the selected
+        # anchor. A mandatory empty low relation annihilates either order.
+        low, high = [], [(2, 3)]
+        forward = Counter((a, b) for a in low for b in high)
+        reverse = Counter((a, b) for b in high for a in low)
+        assert forward == reverse == Counter()
+        assert high and case["expected_rows"] == []
+        assert case["query_a"].returns == changed.returns
+        from query import clauses
+        assert all(not part.optional for part in clauses(case["query_a"]))
+        assert all(not part.optional for part in clauses(changed))
+
+
+@pytest.mark.parametrize("pattern", ["P11", "P13"])
+def test_multi_low_bag_and_optional_null_extension_survive_every_branch_order(pattern):
+    from generator import instantiate
+    from query import clauses
+    low_first = 2 if pattern == "P11" else 10
+    high_first = 3 if pattern == "P11" else 20
+    low = {1: [{"uid": low_first}, *({"uid": uid} for uid in range(-1, -8, -1))]}
+    high = {1: [{"uid": high_first, "keep": True}, *({"uid": 100 + i, "keep": False} for i in range(12))]}
+    anchors = [1]
+    if pattern == "P13":
+        anchors = [1, 2, 3]
+        low[2], high[2] = [{"uid": 11}], []
+        low[3], high[3] = [], [{"uid": 21, "keep": True}]
+
+    def rows(query):
+        environments = [{"u": {"uid": uid}} for uid in anchors]
+        for part in clauses(query)[1:]:
+            variable = part.pattern.right.variable
+            branch = low if part.pattern.relationship.type == "GSP_LOW" else high
+            next_rows = []
+            for environment in environments:
+                candidates = branch.get(environment["u"]["uid"], [])
+                matching = [environment | {variable: candidate} for candidate in candidates
+                            if part.where is None or value(part.where, environment | {variable: candidate}) is True]
+                next_rows.extend(matching if matching else [environment | {variable: None}] if part.optional else [])
+            environments = next_rows
+        return Counter(tuple(value(item, environment) for item in query.returns) for environment in environments)
+
+    for seed in range(12):
+        case = instantiate(None, pattern, 3, seed, data_seed=0, complexity=2, state_variant="multi_low")
+        changed = mutate(case["query_a"], pattern, bindings=case["bindings"])
+        expected = Counter(tuple(row.values()) for row in case["expected_rows"])
+        assert rows(case["query_a"]) == rows(changed) == expected
+        assert sum(expected.values()) == (8 if pattern == "P11" else 10)
+        if pattern == "P13":
+            assert expected[(2, 11, None)] == expected[(3, None, 21)] == 1
+    # Even equal projected property values must retain bag multiplicity.
+    # This independent variant does not change the generated distinct UIDs.
+    low[1].append(low[1][0].copy())
+    assert rows(case["query_a"]) == rows(changed)
+    assert rows(case["query_a"])[(1, low_first, high_first)] == 2
+
+
+def test_path_all_preserves_three_valued_results_under_node_order_reversal():
+    query = parse_query('MATCH p = (u)-[:R*1..3]-(v) WHERE all(x IN nodes(p) WHERE x.keep = true) RETURN length(p) AS hops')
+    changed = mutate(query, 'P3')
+    for flags in product((True, False, None), repeat=4):
+        path = [{"keep": flag} for flag in flags]
+        assert value(query.where, {"p": path}) is value(changed.where, {"p": list(reversed(path))})
+
+
+@pytest.mark.parametrize('scale', [1, 3, 5])
+def test_pruning_path_has_one_true_witness_and_all_noise_paths_fail_in_both_directions(scale):
+    from generator import instantiate
+    # Independent tiny graph enumeration with relationship-unique trails.
+    nodes = {1: {"uid": 1, "id": 1, "keep": True}, 2: {"uid": 2, "keep": True},
+             3: {"uid": 3, "keep": True}, 0: {"uid": 0, "keep": False}}
+    labels = {1: {"GspLow"}, 2: {"GspMiddle"}, 3: {"GspHigh"}, 0: {"GspBad"}}
+    edges = [(1, 2), (2, 3), (1, 0)]
+    for index in range(scale):
+        middle, high = 100 + 2 * index, 101 + 2 * index
+        nodes[middle], nodes[high] = {"uid": middle, "keep": True}, {"uid": high, "keep": True}
+        labels[middle], labels[high] = {"GspMiddle"}, {"GspHigh"}
+        edges.extend([(0, middle), (middle, high)])
+    adjacency = {uid: [] for uid in nodes}
+    for identity, (left, right) in enumerate(edges):
+        adjacency[left].append((identity, right))
+        adjacency[right].append((identity, left))
+
+    def matches(pattern, uid):
+        return set(pattern.labels) <= labels[uid] and all(nodes[uid].get(key) == literal.value for key, literal in pattern.properties)
+
+    def rows(query):
+        edge = query.pattern
+        result = Counter()
+        def visit(path, used):
+            hops = len(used)
+            if hops >= edge.relationship.min_hops and matches(edge.right, path[-1]):
+                environment = {edge.left.variable: nodes[path[0]], edge.right.variable: nodes[path[-1]],
+                               edge.path_variable: [nodes[uid] for uid in path]}
+                if value(query.where, environment) is True:
+                    result[tuple(value(item, environment) for item in query.returns)] += 1
+            if hops < edge.relationship.max_hops:
+                for relationship, following in adjacency[path[-1]]:
+                    if relationship not in used:
+                        visit([*path, following], used | {relationship})
+        for uid in nodes:
+            if matches(edge.left, uid):
+                visit([uid], set())
+        return result
+
+    assert len(edges) == 2 * scale + 3
+    assert len(adjacency[0]) - 1 == scale
+    for seed in range(12):
+        case = instantiate(None, 'P3', scale, seed, data_seed=0, complexity=2, state_variant='pruning_path')
+        changed = mutate(case['query_a'], 'P3', bindings=case['bindings'])
+        assert rows(case['query_a']) == rows(changed) == Counter({(1, 3, 2): 1})
+        assert case['expected_rows'] == [{"u.uid": 1, "v.uid": 3, "hops": 2}]

@@ -73,7 +73,7 @@ def _pure(expression):
     if isinstance(expression, (Literal, Property, Variable)):
         return True
     if isinstance(expression, Call):
-        if expression.name.lower() not in {'length', 'coalesce', 'range', 'size'}:
+        if expression.name.lower() not in {'length', 'coalesce', 'range', 'size', 'nodes'}:
             return False
         if expression.name.lower() == 'range':
             return (len(expression.args) in (2, 3)
@@ -85,8 +85,14 @@ def _pure(expression):
 
 
 def _length_only(expression, path):
+    """Allow only reversal-invariant path observations: length and local ALL."""
     if isinstance(expression, Call) and expression.name.lower() == 'length' and expression.args == (Variable(path),):
         return True
+    if (isinstance(expression, All) and isinstance(expression.items, Call)
+            and expression.items.name == 'nodes' and expression.items.args == (Variable(path),)):
+        # validate_query confines the binder to pure node-local properties.
+        # ALL is invariant to reversing the list, unlike positional access.
+        return _length_only(expression.predicate, path)
     if isinstance(expression, Variable) and expression.name == path:
         return False
     if isinstance(expression, Property) and expression.variable == path:

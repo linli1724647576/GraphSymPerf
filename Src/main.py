@@ -65,6 +65,14 @@ def read_config(path: Path) -> dict:
     generation.setdefault("complexity", 0)
     if type(generation["complexity"]) is not int or generation["complexity"] not in {0, 1, 2}:
         raise ValueError("generation.complexity must be 0, 1, or 2")
+    generation.setdefault("state_variant", "original")
+    if not isinstance(generation["state_variant"], str) or generation["state_variant"] not in {
+            "original", "empty_low", "multi_low", "pruning_path"}:
+        raise ValueError("generation.state_variant must be original, empty_low, multi_low, or pruning_path")
+    state_patterns = {"empty_low": {"P10", "P11"}, "multi_low": {"P11", "P13"}, "pruning_path": {"P3"}}
+    if generation["state_variant"] in state_patterns and any(
+            p not in state_patterns[generation["state_variant"]] for p in config["patterns"]):
+        raise ValueError(f"{generation['state_variant']} state is not defined for the selected patterns")
     if "cwd" in generation:
         generation["cwd"] = str((base / generation["cwd"]).resolve())
     config["output"] = str((base / config.get("output", "results")).resolve())
@@ -80,6 +88,8 @@ def case_digest(case: dict, format_version: int = 2) -> str:
         fields += ("query_ref", "template_id", "bindings", "reference_side", "required_cypher", "data_seed")
         if "complexity" in case:
             fields += ("complexity",)
+        if "state_variant" in case:
+            fields += ("state_variant",)
     data = {name: case.get(name) for name in fields}
     return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
@@ -161,8 +171,9 @@ def write_run(directory: Path, record: dict) -> None:
     temporary.replace(directory / "run.json")
 
 
-def prepare_case(source, pattern, scale, seed, data_seed, complexity=0):
-    case = instantiate(source, pattern, scale, seed, data_seed=data_seed, complexity=complexity)
+def prepare_case(source, pattern, scale, seed, data_seed, complexity=0, state_variant="original"):
+    case = instantiate(source, pattern, scale, seed, data_seed=data_seed, complexity=complexity,
+                       state_variant=state_variant)
     query_a = parse_query(case["query_a"]) if isinstance(case["query_a"], str) else case["query_a"]
     query_b = mutate(query_a, pattern, bindings=case.get("bindings"))
     case.update(pattern=pattern, seed=seed, scale=scale,
@@ -211,7 +222,7 @@ def run(config: dict) -> int:
             for source in sources[offset:] + sources[:offset]:
                 try:
                     case = prepare_case(source, pattern, scale, seed, generation.get("data_seed", 0),
-                                        generation.get("complexity", 0))
+                                        generation.get("complexity", 0), generation.get("state_variant", "original"))
                     break
                 except PatternNotApplicable:
                     skipped += 1

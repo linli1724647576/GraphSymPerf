@@ -508,7 +508,7 @@ def render_expression(expression: Expression) -> str:
         operator = "EXISTS" if isinstance(expression, Exists) else "COUNT"
         return f"{operator} {{ MATCH {render_pattern(expression.pattern)}{where} }}"
     if isinstance(expression, Call):
-        if expression.name not in ("length", "coalesce", "range", "size"):
+        if expression.name not in ("length", "coalesce", "range", "size", "nodes"):
             raise QueryError(f"Unsupported function: {expression.name}")
         return expression.name + "(" + ", ".join(map(render_expression, expression.args)) + ")"
     if isinstance(expression, Case):
@@ -596,6 +596,31 @@ def _bind_pattern(pattern: Pattern, scope: dict[str, str], optional: bool = Fals
     return scope | {name: kind + ("?" if optional else "") for name, kind in local.items() if name not in scope}
 
 
+def _node_local_predicate(expression: Expression, variable: str) -> bool:
+    """Only the ALL binder's own scalar properties may be observed.
+
+    No entity value, other variable, nested graph query or positional/path
+    observation can escape through this restricted universal predicate.
+    """
+    if isinstance(expression, Literal):
+        return True
+    if isinstance(expression, Property):
+        return expression.variable == variable
+    if isinstance(expression, Comparison):
+        parts = (expression.left, expression.right)
+    elif isinstance(expression, Boolean):
+        parts = expression.terms
+    elif isinstance(expression, Negation):
+        parts = (expression.expression,)
+    elif isinstance(expression, Case):
+        parts = (expression.condition, expression.then, expression.otherwise)
+    elif isinstance(expression, Call) and expression.name == "coalesce":
+        parts = expression.args
+    else:
+        return False
+    return all(_node_local_predicate(part, variable) for part in parts)
+
+
 def _validate_expression(expression: Expression, scope: dict[str, str]) -> str:
     if isinstance(expression, Literal):
         _literal(expression)
@@ -605,7 +630,7 @@ def _validate_expression(expression: Expression, scope: dict[str, str]) -> str:
         if expression.name not in scope:
             raise QueryError(f"Unbound variable: {expression.name}")
         if scope[expression.name].rstrip("?") == "path":
-            raise QueryError("A path may only be observed through length(path)")
+            raise QueryError("A path may only be observed through length(path) or node-local ALL(nodes(path))")
         if scope[expression.name].rstrip("?") in ("node", "relationship"):
             raise QueryError("Use graph properties rather than graph entities in scalar expressions")
         return scope[expression.name]
@@ -645,6 +670,8 @@ def _validate_expression(expression: Expression, scope: dict[str, str]) -> str:
         return "boolean" if isinstance(expression, Exists) else "integer"
     if isinstance(expression, Call):
         render_expression(expression)
+        if expression.name == "nodes":
+            raise QueryError("nodes(path) is only allowed as ALL's direct input")
         if expression.name == "length":
             if len(expression.args) != 1:
                 raise QueryError("length requires one path argument")
@@ -689,7 +716,17 @@ def _validate_expression(expression: Expression, scope: dict[str, str]) -> str:
         _identifier(expression.variable)
         if expression.variable in scope:
             raise QueryError("ALL cannot shadow an existing variable")
-        kind = _validate_expression(expression.items, scope)
+        if isinstance(expression.items, Call) and expression.items.name == "nodes":
+            args = expression.items.args
+            if (len(args) != 1 or not isinstance(args[0], Variable)
+                    or scope.get(args[0].name, "").rstrip("?") != "path"):
+                raise QueryError("ALL nodes(path) requires one bound path variable")
+            if not _node_local_predicate(expression.predicate, expression.variable):
+                raise QueryError("ALL nodes(path) requires a node-local scalar property predicate")
+            render_expression(expression.items)
+            kind = "list:node"
+        else:
+            kind = _validate_expression(expression.items, scope)
         if kind != "null" and not kind.startswith("list:"):
             raise QueryError("ALL requires a known list or null")
         element = kind[5:] if kind.startswith("list:") else "null"

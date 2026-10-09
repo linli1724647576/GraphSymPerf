@@ -37,3 +37,17 @@ def test_real_variants_references_and_replay_files(target, pattern, seed, tmp_pa
     assert report["dbms"] == config["database"]["dbms"]
     if case.get("query_ref"):
         assert report["reference_comparisons"], report
+
+
+@pytest.mark.parametrize("pattern,variant,rows", [
+    ("P10", "empty_low", 0), ("P11", "empty_low", 0),
+    ("P11", "multi_low", 8), ("P13", "multi_low", 10),
+    ("P3", "pruning_path", 1),
+])
+def test_real_cost_state_variants_preserve_full_results(target, pattern, variant, rows):
+    config, state_cache = target
+    case = prepare_case(None, pattern, 3, 214501591, 0, 2, variant)
+    report = run_case(case, config["database"], config["measurement"], state_cache=state_cache)
+    assert report["status"] in {"no_candidate", "not_confirmed", "candidate"}, report
+    assert report["result_rows"] == rows
+    assert report["comparisons"]["ab"]["pair_kind"] == "symmetry"
