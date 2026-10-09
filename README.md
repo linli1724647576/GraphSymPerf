@@ -12,8 +12,9 @@ Src/
   ir.py          语言无关的受限查询结构、验证和序列化
   query.py       受限 Cypher 解析、渲染与旧接口兼容
   languages.py   目标方言生成、输出列映射与能力检查
+  gremlin.py     公共 IR 到受限 Gremlin 遍历的参数化生成
   state.py       有限图状态描述、分批数据与成本检查
-  executor.py    六种数据库执行、原生计划与重复测量
+  executor.py    八种数据库执行、原生计划与重复测量
   summarize.py   独立 BUG 与 pattern 贡献汇总
 config.yaml      单个测试目标和实验参数
 bugs.csv         人工核查后的 BUG 对应表，初始为空
@@ -65,7 +66,9 @@ ArcadeDB 使用原生 `opencypher` 前端；框架中的语言名仍为 `cypher`
 
 骨架和成本角色直接使用结构化数据，内置模板不依赖解析虚构的 Cypher 种子。流程是骨架 → `GraphSpec` → 状态绑定 → 查询 IR → 语义保持变换 → 目标方言。图状态按有限 recipe 分批构造，成本数量、属性、逆关系和参考区域在真实目标中检查。解析器仅负责可选 Cypher 种子导入，公共 IR 不依赖语言渲染器；生成时保留布尔项、标签、路径和分支顺序。
 
-Gremlin 与 GQL 已预留同一个语言生成接口，目前明确返回 `UnsupportedLanguage`，尚无执行实现。`languages.generate()` 支持经过目标版本验证的 `verified_features` 覆盖保守语法限制；它不能覆盖已知的语义不兼容。不同类型的 COALESCE、路径重复规则和可选匹配的 NULL 延展必须在目标语言中另行验证。
+Gremlin 已实际接入 JanusGraph 1.1.0 与 Apache HugeGraph 1.7.0，分别完成 12 项、11 项 Pattern 的小图执行；配置示例为 `configs/janusgraph.yaml`、`configs/hugegraph.yaml`。公共 IR 直接生成受限、无 lambda 的参数化遍历，未实现任意 Gremlin 文本解析或全语言统一解析器。GQL 仍明确返回 `UnsupportedLanguage`。启动、支持范围和语义证据见 [Gremlin 实测覆盖](docs/gremlin-support.md)。
+
+`languages.generate()` 支持经过目标版本验证的 `verified_features` 覆盖保守语法限制；它不能覆盖已知的语义不兼容。Gremlin 的可空结果投影必须显式验证后启用；可变长度路径、OPTIONAL 和多标签合取尚不支持。显式遍历改变起点或执行顺序时，即使结果相同、耗时差异稳定，也只记录 `timing_observation`，不自动计为遗漏优化候选或 BUG。
 
 ## 模板与图状态
 
@@ -105,9 +108,9 @@ Neo4j 先分批删除关系、再分批删除节点，避免密集图清理占�
 
 ## 保存与重放
 
-每次运行创建 `results/<运行>/`。每例包含 `setup.cypher`、`query_a.cypher`、`query_b.cypher`、可选的 `query_ref.cypher` 和 `result.json`，保存绑定、来源、预期结果、版本、全部样本和输入指纹。
+每次运行创建 `results/<运行>/`。每例包含 `setup.cypher`、`query_a.cypher`、`query_b.cypher`、可选的 `query_ref.cypher` 和 `result.json`，保存绑定、来源、预期结果、版本、全部样本和输入指纹。Gremlin 查询文件使用 `.gremlin` 后缀；实际参数保存在 `result.json` 的 `query_bindings` 中，重放时同时校验查询文本和参数。
 
-新格式 3 在 `result.json` 中额外保存查询 IR、图状态描述、实际方言、输出列映射与逻辑 `ir_hash`。`setup.cypher` 保留传统构图展示，新适配器以 `graph_spec` 分批构图；它不是 AGE/Ladybug 的可直接执行建图脚本。新库的 `query_*.cypher` 是实际执行文本。格式 1/2 的原 `input_hash` 保持兼容；旧格式携带新增执行元数据时，另用 `extension_hash` 校验。跨目标重放使用已保存 IR 重新生成，不重新调用随机生成器。
+新格式 3 在 `result.json` 中额外保存查询 IR、图状态描述、实际方言、输出列映射与逻辑 `ir_hash`。`setup.cypher` 保留传统构图展示，新适配器以 `graph_spec` 分批构图；它不是 AGE/Ladybug/Gremlin 的可直接执行建图脚本。新库的 `query_*.cypher` 或 `query_*.gremlin` 是实际执行文本。格式 1/2 的原 `input_hash` 保持兼容；旧格式携带新增执行元数据时，另用 `extension_hash` 校验。跨目标重放使用已保存 IR 重新生成，不重新调用随机生成器。
 
 ```bash
 python Src/main.py --config config.yaml --replay results/<运行>/<案例>
@@ -131,7 +134,7 @@ case_id,dbms,bug_id,status,issue_url,database_version
 python Src/summarize.py --results results --bugs bugs.csv --output results/summary
 ```
 
-输出 `summary.csv`（每系统、每 pattern 的有效案例、候选、独立 BUG、独有 BUG、用时与 BUG/小时）和 `pattern_bug.csv`（BUG × pattern 对应矩阵）。`symmetry_candidates` 与 `reference_candidates` 分别统计独立比较的命中，每案例每类最多计一次，两列可重叠。历史结果缺少独立 AB 状态时，候选还记入 `unclassified_candidates`，该列也可与明确的参考候选重叠。不能从历史顶层 winner 反推对称候选。同系统同输入的重放去重，同根因跨规模／模板归并。缺少预算清单的旧结果不计算 BUG/小时；未执行或不支持的模式保留覆盖状态。
+输出 `summary.csv`（每系统、每 pattern 的有效案例、候选、独立 BUG、独有 BUG、用时与 BUG/小时）和 `pattern_bug.csv`（BUG × pattern 对应矩阵）。Gremlin 的稳定遍历耗时差异单列 `timing_observations`，不并入性能候选。`symmetry_candidates` 与 `reference_candidates` 分别统计独立比较的命中，每案例每类最多计一次，两列可重叠。历史结果缺少独立 AB 状态时，候选还记入 `unclassified_candidates`，该列也可与明确的参考候选重叠。不能从历史顶层 winner 反推对称候选。同系统同输入的重放去重，同根因跨规模／模板归并。缺少预算清单的旧结果不计算 BUG/小时；未执行或不支持的模式保留覆盖状态。
 
 支持重复的 `--dbms` 与 `--version` 过滤。版本过滤仅计入该版本经过人工核查的对应案例，不把旧版本的确认自动归到新版。对比“仅 S”与“加入 P”时使用相同总预算；比较单个模式时使用相同模式预算。独有命中是观察结果，声称边际贡献还需移除该模式的消融实验。
 

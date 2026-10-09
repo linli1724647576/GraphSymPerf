@@ -1,19 +1,19 @@
 """Generate a small language subset from the shared query IR.
 
-Gremlin and GQL are deliberate extension points. They fail explicitly until
-their generators and result semantics have been verified against real engines.
+Gremlin supports a checked explicit-traversal subset on JanusGraph/HugeGraph.
+GQL remains an extension point and fails explicitly until implemented.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Iterable, Mapping
 
 from ir import Alias, ConditionalQuery, QueryError, QueryTree, UnionAll, requirements
 from query import projection_names, render_query
 
 
-DBMS = ("neo4j", "memgraph", "falkordb", "arcadedb", "age", "ladybug")
+DBMS = ("neo4j", "memgraph", "falkordb", "arcadedb", "age", "ladybug", "janusgraph", "hugegraph")
 LANGUAGES = ("cypher", "gremlin", "gql")
 AGE_TESTED_LIMITS = frozenset({"relationship_alternatives", "label_rebinding", "all", "boolean_expression_coalesce"})
 
@@ -37,6 +37,7 @@ class CompiledQuery:
     # Physical engine labels and historical logical result labels, in order.
     columns: tuple[tuple[str, str], ...]
     required_features: frozenset[str]
+    bindings: dict = field(default_factory=dict)
 
     @property
     def column_map(self) -> dict[str, str]:
@@ -56,10 +57,15 @@ class CompiledQuery:
 def validate_language(query: QueryTree, dbms: str = "neo4j", language: str = "cypher", *,
                       verified_features: Iterable[str] = ()) -> frozenset[str]:
     language = language.lower()
+    if language == "gremlin" and dbms in {"janusgraph", "hugegraph"}:
+        from gremlin import validate_gremlin
+        return validate_gremlin(query, dbms, verified_features=verified_features)
     if language != "cypher":
         raise UnsupportedLanguage(language)
     if dbms not in DBMS:
         raise QueryError(f"Unknown database target: {dbms}")
+    if dbms in {"janusgraph", "hugegraph"}:
+        raise UnsupportedLanguage(language)
     needed = requirements(query)
     unsupported = set()
     if dbms != "neo4j" and "conditional_query" in needed:
@@ -101,6 +107,9 @@ def generate(query: QueryTree, dbms: str = "neo4j", language: str = "cypher", *,
     This check rejects known semantic mismatches; it is not a claim that every
     identified feature is implemented by every release of the target engine.
     """
+    if language.lower() == "gremlin" and dbms in {"janusgraph", "hugegraph"}:
+        from gremlin import generate_gremlin
+        return generate_gremlin(query, dbms, verified_features=verified_features)
     needed = validate_language(query, dbms, language, verified_features=verified_features)
     return _render_compiled(query, dbms, needed)
 
@@ -112,6 +121,9 @@ def render_saved(query: QueryTree, dbms: str = "neo4j", language: str = "cypher"
     Execution must use generate or validate_language to apply current gates.
     IR scope/type validation and known language/dialect checks remain required.
     """
+    if language.lower() == "gremlin" and dbms in {"janusgraph", "hugegraph"}:
+        from gremlin import generate_gremlin
+        return generate_gremlin(query, dbms, verified_features=("gremlin_null_projection",))
     if language.lower() != "cypher":
         raise UnsupportedLanguage(language)
     if dbms not in DBMS:

@@ -19,10 +19,10 @@ BUG_FIELDS = ("case_id", "dbms", "bug_id", "status", "issue_url", "database_vers
 BUG_STATUSES = {"needs_review", "reproduced", "confirmed", "fixed", "rejected"}
 VALIDATED = {"reproduced", "confirmed", "fixed"}
 STATUS_RANK = {"needs_review": 0, "rejected": 1, "reproduced": 2, "confirmed": 3, "fixed": 4}
-VALID_CASE = {"no_candidate", "not_confirmed", "candidate"}
+VALID_CASE = {"no_candidate", "not_confirmed", "candidate", "timing_observation"}
 CANDIDATE = {"candidate", "timeout_candidate"}
 SUMMARY_FIELDS = (
-    "dbms", "language", "pattern", "versions", "attempted", "cases", "valid", "candidate",
+    "dbms", "language", "pattern", "versions", "attempted", "cases", "valid", "candidate", "timing_observations",
     "symmetry_candidates", "reference_candidates", "unclassified_candidates",
     "unique_bugs", "exclusive_bugs", "elapsed_seconds", "bugs_per_hour",
     "case_budget", "time_budget_seconds", "budget_coverage", "stop_reasons",
@@ -290,6 +290,7 @@ def build_summary(records, runs, bugs, metadata, *, dbms=None, version=None, lan
                "attempted": attempted if covered else len(entries), "cases": len(entries),
                "valid": sum(bool(e["statuses"] & VALID_CASE) for e in entries),
                "candidate": sum(bool(e["statuses"] & CANDIDATE) for e in entries),
+               "timing_observations": sum("timing_observation" in e["statuses"] for e in entries),
                "symmetry_candidates": sum("symmetry" in e["candidate_families"] for e in entries),
                "reference_candidates": sum("reference" in e["candidate_families"] for e in entries),
                "unclassified_candidates": sum(e["unclassified_candidate"] for e in entries),

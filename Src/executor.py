@@ -10,6 +10,7 @@ import json
 import os
 import random
 import re
+import zlib
 from statistics import median
 from time import perf_counter, monotonic, sleep
 
@@ -62,7 +63,13 @@ _INDEX_CHECK = ("SHOW INDEXES YIELD name, state, labelsOrTypes, properties "
 def supported_patterns(config):
     """Conservative syntax coverage; a server can still reject a newer feature."""
     name = config.get("dbms", "neo4j").lower()
-    if config.get("language", "cypher") != "cypher":
+    language = config.get("language", "cypher")
+    if language == "gremlin" and name in {"janusgraph", "hugegraph"}:
+        patterns = {f"P{i}" for i in range(1, 16)} - {"P3", "P7", "P13"}
+        if name == "hugegraph":
+            patterns -= {"P12"}
+        return patterns
+    if language != "cypher":
         return set()
     patterns = {f"P{i}" for i in range(1, 17)} | {f"S{i}" for i in range(1, 11)}
     if name == "neo4j":
@@ -81,7 +88,8 @@ def supported_patterns(config):
 def make_database(config, settings):
     name = config.get("dbms", "neo4j").lower()
     adapters = {"neo4j": Neo4j, "memgraph": Memgraph, "falkordb": FalkorDB,
-                "arcadedb": ArcadeDB, "age": ApacheAGE, "ladybug": LadybugDB}
+                "arcadedb": ArcadeDB, "age": ApacheAGE, "ladybug": LadybugDB,
+                "janusgraph": JanusGraph, "hugegraph": ApacheHugeGraph}
     if name not in adapters:
         raise CaseFailure("configuration_error", "unsupported_dbms", stop_target=True)
     return adapters[name](config, settings)
@@ -461,7 +469,22 @@ class FalkorDB:
                 "operators": [row.decode() if isinstance(row, bytes) else row for row in rows]}
 
 
+def _query_input(case, side):
+    bindings = case.get("query_bindings", {}).get(side)
+    return {"text": case[f"query_{side}"], "bindings": bindings} if bindings else case[f"query_{side}"]
+
+
+def _same_query(left, right):
+    """Request identity includes scalar binding types, unlike Python equality."""
+    left_text, left_bindings = (left["text"], left["bindings"]) if isinstance(left, dict) else (left, {})
+    right_text, right_bindings = (right["text"], right["bindings"]) if isinstance(right, dict) else (right, {})
+    return left_text == right_text and typed_value(left_bindings) == typed_value(right_bindings)
+
+
 def _result(db, query, parameters, settings):
+    if isinstance(query, dict):
+        parameters = {**parameters, **query["bindings"]}
+        query = query["text"]
     try:
         result = db.execute(query, parameters, settings["timeout_seconds"])
     except CaseFailure as exc:
@@ -493,7 +516,8 @@ def check_case(db, case: dict, settings: dict):
             if actual != typed_bag(check["expected_rows"]):
                 raise CaseFailure("cost_check_failed", f"cost_check_{index}")
     parameters = case.get("parameters", {})
-    reference = case.get("query_ref") or (case.get("query_b") if case.get("reference_side") == "b" else None)
+    reference = (_query_input(case, "ref") if case.get("query_ref") else
+                 _query_input(case, "b") if case.get("reference_side") == "b" else None)
     db._reference_query = reference
     db._reference_evidence = None
     if reference:
@@ -503,11 +527,11 @@ def check_case(db, case: dict, settings: dict):
                 "actual_reference_rows": reference_result["rows"][:10], "expected_rows": case["expected_rows"][:10]})
         db._reference_evidence = {"elapsed_ms": reference_result["elapsed_ms"],
                                   "validated": "expected_rows" in case}
-    left, baseline = _result(db, case["query_a"], parameters, settings)
-    if reference == case["query_b"]:
+    left, baseline = _result(db, _query_input(case, "a"), parameters, settings)
+    if _same_query(reference, _query_input(case, "b")):
         right_result, right = reference_result, reference_bag
     else:
-        right_result, right = _result(db, case["query_b"], parameters, settings)
+        right_result, right = _result(db, _query_input(case, "b"), parameters, settings)
     if right != baseline:
         raise CaseFailure("result_mismatch", "query_a_and_b_differ", details={
             "rows_a": len(left["rows"]), "rows_b": len(right_result["rows"]),
@@ -527,7 +551,7 @@ def _schedule(count, rng):
 
 
 def _measure(db, case, baseline, settings, rng, count, output, *, queries=None):
-    queries = queries or (case["query_a"], case["query_b"])
+    queries = queries or (_query_input(case, "a"), _query_input(case, "b"))
     for order in _schedule(count, rng):
         sample = {"order": order, "a_ms": None, "b_ms": None, "a_status": "pending", "b_status": "pending"}
         output.append(sample)
@@ -536,7 +560,7 @@ def _measure(db, case, baseline, settings, rng, count, output, *, queries=None):
                 result, bag = _result(db, queries[0 if side == "a" else 1], case.get("parameters", {}), settings)
                 if bag != baseline:
                     raise CaseFailure("result_mismatch", "result_changed_during_measurement")
-                if queries[0 if side == "a" else 1] == getattr(db, "_reference_query", None):
+                if _same_query(queries[0 if side == "a" else 1], getattr(db, "_reference_query", None)):
                     db._reference_evidence = {"elapsed_ms": result["elapsed_ms"],
                                               "validated": getattr(db, "_reference_evidence", {}).get("validated", False)}
                 sample[f"{side}_ms"] = result["elapsed_ms"]
@@ -597,7 +621,7 @@ def state_fingerprint(case, database):
     """Identify the actual graph/checks, not the pattern or random seed."""
     state = {"setup": case["setup"], "checks": case.get("checks", []),
              "graph_spec": case.get("graph_spec"), "state_checks": case.get("state_checks"),
-             "target": {key: database.get(key) for key in ("dbms", "uri", "path", "database", "graph", "user", "language")}}
+             "target": {key: database.get(key) for key in ("dbms", "uri", "path", "database", "graph", "graph_binding", "traversal_source", "user", "language")}}
     return hashlib.sha256(json.dumps(state, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
@@ -647,7 +671,8 @@ def _collect_plans(db, case, report):
         if not case.get(f"query_{side}"):
             continue
         try:
-            plans[side] = db.explain(case[f"query_{side}"], case.get("parameters", {}), analyze=True)
+            parameters = {**case.get("parameters", {}), **case.get("query_bindings", {}).get(side, {})}
+            plans[side] = db.explain(case[f"query_{side}"], parameters, analyze=True)
         except Exception as exc:
             plans[side] = {"status": "unavailable", "reason": type(exc).__name__}
             if isinstance(exc, CaseFailure):
@@ -676,7 +701,8 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
     # Keep the old top-level sample fields, but never use the aggregate report
     # as the AB comparison itself: a reference winner must not overwrite AB.
     reference_pair = case.get("reference_side") == "b" or case.get("pattern") in tuple(f"S{i}" for i in range(1, 11))
-    ab = {"pair_kind": "reference" if reference_pair else "symmetry", "status": "started",
+    traversal_mode = database.get("language", "cypher") == "gremlin"
+    ab = {"pair_kind": "explicit_traversal" if traversal_mode else "reference" if reference_pair else "symmetry", "status": "started",
           "discovery": report["discovery"], "confirmation_sessions": report["confirmation_sessions"], "summary": None}
     report["pair_kind"] = ab["pair_kind"]
     report["comparisons"]["ab"] = ab
@@ -705,13 +731,23 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
             if (case.get("state_checks", spec.state_checks()) != spec.state_checks()
                     or case.get("index_requirements", spec.indexes) != spec.indexes):
                 raise CaseFailure("invalid_case", "graph_recipe_and_cost_metadata_differ")
-        if database.get("language", "cypher") != "cypher":
+        if database.get("language", "cypher") not in {"cypher", "gremlin"}:
             raise CaseFailure("unsupported_feature", "language_generator_not_implemented")
+        if traversal_mode and not case.get("query_ir"):
+            raise CaseFailure("invalid_case", "gremlin_requires_checked_query_ir")
         if (case.get("target_dbms") and case["target_dbms"] != database.get("dbms", "neo4j")
                 and not {case["target_dbms"], database.get("dbms", "neo4j")} <= {"neo4j", "memgraph", "falkordb"}):
             raise CaseFailure("invalid_case", "query_compiled_for_different_database")
-        for query in (case["query_a"], case["query_b"], *([case["query_ref"]] if case.get("query_ref") else [])):
-            validate_read_query(query)
+        for side in ("a", "b", *(("ref",) if case.get("query_ref") else ())):
+            if traversal_mode:
+                from languages import generate
+                compiled = generate(from_data(case["query_ir"][side]), database["dbms"], "gremlin",
+                                    verified_features=database.get("verified_features", ()))
+                if (compiled.text != case[f"query_{side}"] or
+                        typed_value(compiled.bindings) != typed_value(case.get("query_bindings", {}).get(side, {}))):
+                    raise CaseFailure("invalid_case", "gremlin_text_or_bindings_differ_from_ir")
+            else:
+                validate_read_query(case[f"query_{side}"])
         if case.get("reference_side") not in (None, "b", "ref") or case.get("reference_side") == "ref" and not case.get("query_ref"):
             raise ValueError("reference_side must identify b or an existing query_ref")
         guard = case.get("bindings", {}).get("scor", {})
@@ -721,8 +757,9 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 raise ValueError("dynamic guard requires its value and cardinality checks")
         if case.get("pattern") and case["pattern"] not in supported_patterns(database):
             raise CaseFailure("unsupported_feature", f"unsupported_pattern:{case['pattern']}")
-        for check in case.get("checks", []):
-            validate_read_query(check["query"], schema_check=True)
+        if not traversal_mode:
+            for check in case.get("checks", []):
+                validate_read_query(check["query"], schema_check=True)
         seed = case.get("seed", 0)
         if type(seed) is not int:
             raise ValueError("case seed must be an integer")
@@ -749,14 +786,14 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
         _remember_state(db, fingerprint, state_cache)
         phase = "discovery"
         rng = random.Random(seed)
-        comparisons = [("ab", (case["query_a"], case["query_b"]), ab)]
+        comparisons = [("ab", (_query_input(case, "a"), _query_input(case, "b")), ab)]
         if case.get("query_ref"):
             for side in ("a", "b"):
                 name = f"query_{side}_vs_ref"
-                comparison = {"pair_kind": "reference", "status": "started",
+                comparison = {"pair_kind": "explicit_traversal" if traversal_mode else "reference", "status": "started",
                               "discovery": {"warmups": [], "samples": []}, "confirmation_sessions": [], "summary": None}
                 report["reference_comparisons"][name] = comparison
-                comparisons.append((name, (case[f"query_{side}"], case["query_ref"]), comparison))
+                comparisons.append((name, (_query_input(case, side), _query_input(case, "ref")), comparison))
         active = []
         for name, queries, comparison in comparisons:
             current_comparison = comparison
@@ -815,10 +852,11 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
             summary["noise_p99_ms"] = max(noise_floors)
             comparison["summary"] = summary
             passed = _passed(summary, comparison["confirmation_sessions"], settings)
-            comparison["status"] = "candidate" if passed else "not_confirmed"
+            comparison["status"] = "timing_observation" if passed and traversal_mode else "candidate" if passed else "not_confirmed"
             if passed:
                 candidates.append((name, summary))
-        report.update(status="candidate" if candidates else "not_confirmed", reason="performance_difference_confirmed" if candidates else "confirmation_gate_not_met")
+        report.update(status="timing_observation" if candidates and traversal_mode else "candidate" if candidates else "not_confirmed",
+                      reason="explicit_traversal_work_difference" if candidates and traversal_mode else "performance_difference_confirmed" if candidates else "confirmation_gate_not_met")
         if candidates:
             report["candidate_comparison"], report["summary"] = max(candidates, key=lambda item: item[1]["median_ratio"])
         else:
@@ -828,7 +866,7 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
         report.update(status=exc.status, reason=exc.reason, stop_target=exc.stop_target, failure_phase=phase)
         report.update(exc.details)
         reference = getattr(db, "_reference_evidence", None)
-        if exc.status == "timeout" and reference and reference["validated"]:
+        if not traversal_mode and exc.status == "timeout" and reference and reference["validated"]:
             lower = exc.details.get("elapsed_lower_bound_ms")
             timed_query = exc.details.get("timed_out_query")
             if (timed_query in (case.get("query_a"), case.get("query_b")) and
@@ -858,13 +896,13 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
     except Exception as exc:
         report.update(status="environment_error", reason=type(exc).__name__, stop_target=True, failure_phase=phase)
     finally:
-        if (db is not None and report["status"] in {"candidate", "no_candidate", "not_confirmed"}
-                and (report.get("measurement", {}).get("collect_plans") or report["status"] == "candidate")):
+        if (db is not None and report["status"] in {"candidate", "no_candidate", "not_confirmed", "timing_observation"}
+                and (report.get("measurement", {}).get("collect_plans") or report["status"] in {"candidate", "timing_observation"})):
             _collect_plans(db, case, report)
-        if (current_comparison is not None and report["status"] not in {"candidate", "no_candidate", "not_confirmed"}
+        if (current_comparison is not None and report["status"] not in {"candidate", "no_candidate", "not_confirmed", "timing_observation"}
                 and current_comparison["status"] != "timeout_candidate"):
             current_comparison.update(status=comparison_failure_status or report["status"], failure_phase=phase)
-        elif ab["status"] == "started" and report["status"] not in {"candidate", "no_candidate", "not_confirmed"}:
+        elif ab["status"] == "started" and report["status"] not in {"candidate", "no_candidate", "not_confirmed", "timing_observation"}:
             ab.update(status=comparison_failure_status or report["status"], failure_phase=phase)
         # Reference raw samples remain in their legacy field. Include compact
         # independent results in the authoritative comparison map without
@@ -874,7 +912,7 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
             for key in ("ratio_lower_bound", "reference_elapsed_ms", "elapsed_lower_bound_ms", "cancellation_verified", "failure_phase"):
                 if key in comparison:
                     report["comparisons"][name][key] = comparison[key]
-        if state_cache is not None and (report.get("stop_target") or report["status"] not in {"candidate", "no_candidate", "not_confirmed"}):
+        if state_cache is not None and (report.get("stop_target") or report["status"] not in {"candidate", "no_candidate", "not_confirmed", "timing_observation"}):
             state_cache.clear()
         if db is not None:
             try:
@@ -1586,3 +1624,527 @@ class LadybugDB:
         if self._work is not None:
             self._work.cleanup()
             self._work = None
+
+
+"""Gremlin HTTP adapters for JanusGraph and Apache HugeGraph.
+
+Sources: TinkerPop reference #connecting-via-http; JanusGraph index-management;
+HugeGraph Gremlin API and native SchemaManager (version-tag source).
+"""
+
+from http.client import HTTPConnection, HTTPSConnection, HTTPException
+from time import perf_counter
+from urllib.parse import urlsplit
+import base64
+import json
+import math
+import re
+import socket
+
+def _graphson_value(value):
+    """Decode the scalar/list/map fragment, never stringify graph entities."""
+    if type(value) in (str, bool, int) or value is None:
+        return value
+    if type(value) is float and math.isfinite(value):
+        return value
+    if type(value) is list:
+        return [_graphson_value(item) for item in value]
+    if type(value) is not dict:
+        raise CaseFailure("incomplete_result", "unsupported_graphson_value")
+    if set(value) == {"@type", "@value"}:
+        kind, raw = value["@type"], value["@value"]
+        if kind in {"g:Int32", "g:Int64", "gx:BigInteger"} and type(raw) is int:
+            return raw
+        if kind in {"g:Float", "g:Double"} and type(raw) in (int, float) and math.isfinite(raw):
+            return float(raw)
+        if kind == "g:List" and type(raw) is list:
+            return [_graphson_value(item) for item in raw]
+        if kind == "g:Map" and type(raw) is list and len(raw) % 2 == 0:
+            result = {}
+            for key, item in zip(raw[::2], raw[1::2]):
+                key = _graphson_value(key)
+                if not isinstance(key, str) or key in result:
+                    raise CaseFailure("incomplete_result", "graphson_map_keys_not_unique_strings")
+                result[key] = _graphson_value(item)
+            return result
+        raise CaseFailure("incomplete_result", f"unsupported_graphson_type:{kind}")
+    if not all(type(key) is str for key in value):
+        raise CaseFailure("incomplete_result", "graphson_map_keys_not_strings")
+    return {key: _graphson_value(item) for key, item in value.items()}
+
+
+def _gremlin_data(envelope, *, require_list=True, max_items=None):
+    """Return decoded items; expand only top-level traversal bulk."""
+    data = envelope.get("result", {}).get("data")
+    if isinstance(data, dict) and data.get("@type") == "g:List":
+        data = data.get("@value")
+    if type(data) is not list:
+        if require_list:
+            raise CaseFailure("incomplete_result", "gremlin_response_data_not_a_list")
+        data = [data]
+    items = []
+    for value in data:
+        if isinstance(value, dict) and value.get("@type") == "g:Traverser":
+            raw = value.get("@value", {})
+            bulk = _graphson_value(raw.get("bulk"))
+            if type(bulk) is not int or not 0 < bulk <= 10_000_001:
+                raise CaseFailure("incomplete_result", "invalid_gremlin_bulk")
+            items.extend([_graphson_value(raw.get("value"))] * (min(bulk, max_items - len(items)) if max_items else bulk))
+        else:
+            items.append(_graphson_value(value))
+        if max_items and len(items) >= max_items:
+            break
+    return items
+
+
+def _g_literal(value):
+    return json.dumps(value, ensure_ascii=False, allow_nan=False)
+
+
+def _g_properties(prefix, properties):
+    for key, value in properties.items():
+        _native_identifier(key)
+        prefix += (f".hasNot({_g_literal(key)})" if value is None else
+                   f".has({_g_literal(key)}, {_g_literal(value)})")
+    return prefix
+
+
+def _gremlin_state_checks(checks, *, scan_edges=False):
+    """Render the finite structural vocabulary directly as Gremlin."""
+    result = []
+    def edge_start(label):
+        if scan_edges:
+            # HugeGraph's label index materializes batches of edge IDs and
+            # serializes the full IdQuery as an off-heap cache key. The key
+            # has a 16 KiB limit. Untimed population checks can scan instead,
+            # keeping experiment traversals and physical indexes unchanged.
+            return f"g.E().filter{{ t -> t.get().label() == {_g_literal(label)} }}"
+        return f"g.E().hasLabel({_g_literal(label)})"
+
+    def count_query(text, expected):
+        result.append({"query": text + '.count().project("count").by(__.identity())',
+                       "expected_rows": [{"count": expected}]})
+    for check in checks:
+        kind = check["kind"]
+        if kind == "node_count":
+            query = "g.V()"
+            for label in check["labels"]:
+                query += f".hasLabel({_g_literal(label)})"
+            count_query(_g_properties(query, check["properties"]), check["expected"])
+        elif kind == "edge_count":
+            query = edge_start(check["type"])
+            for side, step in (("source", "outV"), ("target", "inV")):
+                condition = f"__.{step}()"
+                if check.get(side + "_label"):
+                    condition += f".hasLabel({_g_literal(check[side + '_label'])})"
+                condition = _g_properties(condition, check.get(side + "_properties", {}))
+                if condition != f"__.{step}()":
+                    query += f".filter({condition})"
+            count_query(query, check["expected"])
+        elif kind == "node_properties":
+            query = f"g.V().hasLabel({_g_literal(check['label'])}).has(\"uid\", {check['uid']})"
+            keys = list(check["properties"])
+            query += ".project(" + ", ".join(_g_literal(key) for key in keys) + ")"
+            for key in keys:
+                query += f".by(__.coalesce(__.values({_g_literal(key)}), __.constant(null)))"
+            result.append({"query": query, "expected_rows": [check["properties"]]})
+        elif kind == "distinct_values":
+            query = (f"g.V().hasLabel({_g_literal(check['label'])})" if "label" in check else
+                     edge_start(check["type"]))
+            count_query(query + f".values({_g_literal(check['property'])}).dedup()", check["expected"])
+        elif kind == "inverse_edges":
+            key = _g_literal(check["pair_key"])
+            query = (edge_start(check["forward"]) + ".filter{ t -> def f=t.get(); "
+                     f"g.V(f.inVertex().id()).outE({_g_literal(check['reverse'])})"
+                     ".filter{ b -> b.get().inVertex().id() == f.outVertex().id() }"
+                     f".has({key}, f.value({key})).count().next() != 1 }}")
+            count_query(query, check["expected"])
+        elif kind == "reference_edges":
+            for first, second, guarded in ((check["reference"], check["original"], False),
+                                           (check["original"], check["reference"], True)):
+                source = f"__.outV().hasLabel({_g_literal(check['source_label'])})"
+                if guarded:
+                    source += (f".has({_g_literal(check['guard_property'])}, true)" if check["guard_value"] else
+                               f".not(__.has({_g_literal(check['guard_property'])}, true))")
+                query = (edge_start(first) + f".filter({source})"
+                         f".filter(__.inV().hasLabel({_g_literal(check['target_label'])}))"
+                         f".filter{{ t -> def e=t.get(); g.V(e.outVertex().id()).outE({_g_literal(second)})"
+                         ".filter{ other -> other.get().inVertex().id() == e.inVertex().id() }.count().next() == 0 }")
+                count_query(query, check["expected"])
+        elif kind == "literal":
+            result.append({"query": f"g.inject({_g_literal(check['value'])}).project(\"value\").by(__.identity())",
+                           "expected_rows": [{"value": check["expected"]}]})
+        else:
+            raise CaseFailure("unsupported_feature", f"unsupported_gremlin_state_check:{kind}")
+    return result
+
+
+class GremlinHTTP:
+    """One persistent HTTP connection; generated traversal results only."""
+    backend = "gremlin"
+    mime = "application/vnd.gremlin-v3.0+json"
+
+    def __init__(self, config, settings):
+        self.database, self.settings = _target_name(config), settings
+        self.config = config
+        parsed = urlsplit(config["uri"])
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username
+                or parsed.password or parsed.query or parsed.fragment):
+            raise CaseFailure("configuration_error", "gremlin_http_uri_required", stop_target=True)
+        self._endpoint = parsed.path.rstrip("/") or "/"
+        self._connection = (HTTPSConnection if parsed.scheme == "https" else HTTPConnection)(
+            parsed.hostname, parsed.port, timeout=settings["timeout_seconds"])
+        self._headers = {"Content-Type": "application/json", "Accept": self.mime}
+        if config.get("user"):
+            self._headers["Authorization"] = "Basic " + base64.b64encode(
+                f"{config['user']}:{_password(config)}".encode()).decode()
+        self._graph_binding = config.get("graph_binding", "graph")
+        self._traversal_source = config.get("traversal_source", "g")
+        if not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_\-]+", name)
+                   for name in (self._graph_binding, self._traversal_source)):
+            raise CaseFailure("configuration_error", "invalid_gremlin_binding", stop_target=True)
+        self._spec = None
+        self.query_engine = "Gremlin-Groovy HTTP"
+        try:
+            if not self.health():
+                raise CaseFailure("environment_error", "gremlin_connection_probe_failed", stop_target=True)
+            values, _ = self._script(self._version_script(), {}, settings["timeout_seconds"])
+            if len(values) != 1 or not isinstance(values[0], str) or not values[0]:
+                raise CaseFailure("environment_error", "gremlin_version_unavailable", stop_target=True)
+            self.version = self.backend + "/" + values[0]
+        except Exception:
+            self.close()
+            raise
+
+    def _request(self, script, parameters, timeout):
+        payload = {"gremlin": script, "language": "gremlin-groovy", "bindings": parameters,
+                   "aliases": {"g": self._traversal_source, "_gsp_graph": self._graph_binding}}
+        data = json.dumps(payload, allow_nan=False).encode()
+        started = None
+        try:
+            self._connection.timeout = timeout
+            if self._connection.sock is None:
+                self._connection.connect()
+            else:
+                self._connection.sock.settimeout(timeout)
+            started = perf_counter()
+            self._connection.request("POST", self._endpoint, body=data, headers=self._headers)
+            response = self._connection.getresponse()
+            body = response.read()
+            if response.getheader("Content-Encoding", "").lower() == "gzip":
+                import gzip
+                body = gzip.decompress(body)
+            envelope = json.loads(body)
+            status = envelope.get("status", {})
+            code = status.get("code")
+            if response.status >= 300 or code not in (200, 204):
+                message = str(status.get("message") or envelope.get("message") or response.reason)[:1000]
+                if code == 598 or re.search(r"timed? ?out|timeout", message, re.I):
+                    raise CaseFailure("timeout", f"{self.backend}_server_timeout", stop_target=True,
+                                      details={"cancellation_verified": False, "elapsed_lower_bound_ms": None})
+                category = "configuration_error" if response.status in (401, 403) or code in (401, 403) else (
+                    "unsupported_feature" if re.search(r"syntax|not supported|unsupported|No signature|unable to resolve class", message, re.I)
+                    else "query_error")
+                raise CaseFailure(category, f"{self.backend}_server_{code or response.status}",
+                                  stop_target=category == "configuration_error", details={"server_message": message})
+            if code == 204:
+                envelope["result"] = {"data": [], "meta": {}}
+            return envelope, (perf_counter() - started) * 1000
+        except CaseFailure:
+            raise
+        except (TimeoutError, socket.timeout) as exc:
+            self._connection.close()
+            raise CaseFailure("timeout", f"{self.backend}_network_timeout", stop_target=True,
+                              details={"cancellation_verified": False, "elapsed_lower_bound_ms": None}) from exc
+        except (HTTPException, OSError, ValueError, TypeError, EOFError, zlib.error) as exc:
+            self._connection.close()
+            raise CaseFailure("environment_error", f"{self.backend}_{type(exc).__name__}", stop_target=True) from exc
+
+    def _script(self, script, parameters=None, timeout=None, *, require_list=False, max_items=None):
+        envelope, elapsed = self._request(script, parameters or {}, timeout or self.settings["timeout_seconds"])
+        started = perf_counter()
+        values = _gremlin_data(envelope, require_list=require_list, max_items=max_items)
+        return values, elapsed + (perf_counter() - started) * 1000
+
+    def execute(self, query, parameters, timeout):
+        # The compiler emits one traversal, not a script with terminal steps.
+        # Consume max_rows + 1 on the server so truncation is visible and HTTP
+        # never attempts to materialize a multi-million-row output.
+        values, elapsed = self._script(f"({query}).limit({self.settings['max_rows'] + 1}).toList()", parameters, timeout,
+                                      require_list=True, max_items=self.settings["max_rows"] + 1)
+        if any(not isinstance(row, dict) for row in values):
+            raise CaseFailure("incomplete_result", "gremlin_projection_must_be_a_map")
+        typed_bag(values)
+        return {"rows": values[:self.settings["max_rows"]], "complete": len(values) <= self.settings["max_rows"],
+                "elapsed_ms": elapsed}
+
+    def health(self):
+        try:
+            values, _ = self._script("g.inject(1).project('connected').by(__.identity()).toList()")
+            return values == [{"connected": 1}]
+        except Exception:
+            return False
+
+    def explain(self, query, parameters, *, analyze=False):
+        suffix = ".profile().next()" if analyze else ".explain()"
+        envelope, _ = self._request(f"({query}){suffix}", parameters, self.settings["timeout_seconds"])
+        if not envelope.get("result", {}).get("data"):
+            raise CaseFailure("unsupported_feature", "gremlin_execution_plan_unavailable")
+        # Preserve native GraphSON metrics and units, not Cypher DB Hits.
+        return {"format": self.backend + "_gremlin_graphson", "analyze": analyze,
+                "plan": envelope["result"]["data"]}
+
+    def _recipe(self, case):
+        from state import GraphSpec
+        if "graph_spec" not in case:
+            raise CaseFailure("unsupported_feature", "structured_graph_recipe_required")
+        spec = GraphSpec.from_dict(case["graph_spec"])
+        if spec.pattern == "P7":
+            raise CaseFailure("unsupported_feature", "gremlin_single_vertex_label")
+        return spec
+
+    def _reset(self):
+        # Bounded data deletion in the explicitly resettable test graph.
+        for kind in ("E", "V"):
+            while True:
+                values, _ = self._script(f"def n=g.{kind}().limit(1000).count().next(); "
+                                         f"g.{kind}().limit(1000).drop().iterate(); n")
+                if len(values) != 1 or type(values[0]) is not int or not 0 <= values[0] <= 1000:
+                    raise CaseFailure("environment_error", "gremlin_reset_batch_invalid", stop_target=True)
+                if values[0] == 0:
+                    break
+
+    def restore(self, case):
+        spec = self._recipe(case)
+        self._reset()
+        self._prepare_schema(spec)
+        for batch in spec.iter_batches("nodes", 250):
+            if any(len(row["labels"]) != 1 for row in batch):
+                raise CaseFailure("unsupported_feature", "gremlin_single_vertex_label")
+            values, _ = self._script(self._vertex_script(), {"gsp_rows": batch})
+            if values != [len(batch)]:
+                raise CaseFailure("environment_error", "gremlin_vertex_batch_incomplete", stop_target=True)
+        offset = 0
+        for batch in spec.iter_batches("edges", 250):
+            for number, row in enumerate(batch, offset):
+                row["ordinal"] = number
+            values, _ = self._script(self._edge_script(), {"gsp_rows": batch})
+            if values != [len(batch)]:
+                raise CaseFailure("environment_error", "gremlin_edge_batch_incomplete", stop_target=True)
+            offset += len(batch)
+        self._spec = spec
+        self.index_evidence = self._check_indexes(spec)
+
+    def check_state(self, case):
+        spec = self._recipe(case)
+        checks = []
+        for number, check in enumerate(_gremlin_state_checks(spec.state_checks())):
+            actual = self.execute(check["query"], {}, self.settings["timeout_seconds"])
+            if not actual["complete"] or typed_bag(actual["rows"]) != typed_bag(check["expected_rows"]):
+                raise CaseFailure("cost_check_failed", f"gremlin_structured_cost_check_{number}")
+            checks.append({"query": check["query"], "rows": actual["rows"]})
+        self.index_evidence = self._check_indexes(spec)
+        return {"indexes": self.index_evidence, "checks": checks,
+                "preparation": "bounded_data_reset_native_schema_and_indexes"}
+
+    def close(self):
+        self._connection.close()
+
+
+class JanusGraph(GremlinHTTP):
+    backend = "JanusGraph"
+
+    def _version_script(self):
+        return "org.janusgraph.graphdb.configuration.JanusGraphConstants.VERSION"
+
+    def _prepare_schema(self, spec):
+        schema = spec.schema()
+        keys = {"_gsp_identity": "string"}
+        for entry in schema["nodes"] + schema["relationships"]:
+            keys.update(entry["properties"])
+        indexes = [{"name": "gsp_internal_identity", "property": "_gsp_identity"}] + [
+            {**index, "name": index["name"] + "_" + index["label"] + "_" + index["property"]} for index in spec.indexes]
+        statements = ["_gsp_graph.tx().rollback(); def m=_gsp_graph.openManagement()"]
+        for key, kind in keys.items():
+            native = {"integer": "Long", "boolean": "Boolean", "string": "String"}[kind]
+            statements.append(f"if(m.getPropertyKey({_g_literal(key)})==null) "
+                              f"m.makePropertyKey({_g_literal(key)}).dataType({native}.class).cardinality(org.janusgraph.core.Cardinality.SINGLE).make()")
+        for node in schema["nodes"]:
+            label = _g_literal(node["label"])
+            statements.append(f"if(m.getVertexLabel({label})==null) m.makeVertexLabel({label}).make()")
+        for edge in schema["relationships"]:
+            label = _g_literal(edge["type"])
+            statements.append(f"if(m.getEdgeLabel({label})==null) m.makeEdgeLabel({label}).multiplicity(org.janusgraph.core.Multiplicity.MULTI).make()")
+        for index in indexes:
+            builder = (f"m.buildIndex({_g_literal(index['name'])}, org.apache.tinkerpop.gremlin.structure.Vertex.class)"
+                       f".addKey(m.getPropertyKey({_g_literal(index['property'])}))")
+            if index.get("label"):
+                builder += f".indexOnly(m.getVertexLabel({_g_literal(index['label'])}))"
+            else:
+                builder += ".unique()"
+            statements.append(f"if(m.getGraphIndex({_g_literal(index['name'])})==null) {builder}.buildCompositeIndex()")
+        statements += ["m.commit()", "true"]
+        self._script("; ".join(statements))
+        # New keys are enabled immediately. Existing schema keys may need the
+        # registered -> enabled lifecycle even after the data graph is empty.
+        for index in indexes:
+            name = _g_literal(index["name"])
+            wait = (f"org.janusgraph.graphdb.database.management.ManagementSystem.awaitGraphIndexStatus(_gsp_graph, {name})"
+                    ".status(org.janusgraph.core.schema.SchemaStatus.REGISTERED, org.janusgraph.core.schema.SchemaStatus.ENABLED)"
+                    f".timeout({max(1, math.ceil(self.settings['timeout_seconds']))}, java.time.temporal.ChronoUnit.SECONDS).call().getSucceeded()")
+            values, _ = self._script(wait)
+            if values != [True]:
+                raise CaseFailure("cost_check_failed", "janusgraph_index_registration_timeout")
+            self._script(f"def m=_gsp_graph.openManagement(); def i=m.getGraphIndex({name}); "
+                         "if(i.getFieldKeys().any{ i.getIndexStatus(it)!=org.janusgraph.core.schema.SchemaStatus.ENABLED }) "
+                         "m.updateIndex(i, org.janusgraph.core.schema.SchemaAction.ENABLE_INDEX).get(); m.commit(); true")
+
+    def _vertex_script(self):
+        return ("gsp_rows.each{ r -> def v=g.addV(r.labels[0]).property('_gsp_identity', r.labels[0]+':'+r.uid).next(); "
+                "r.properties.each{ k,x -> if(x!=null) v.property(k, x instanceof Number ? x.longValue() : x) } }; gsp_rows.size()")
+
+    def _edge_script(self):
+        return ("gsp_rows.each{ r -> def a=g.V().has('_gsp_identity', r.source_label+':'+r.source).next(); "
+                "def b=g.V().has('_gsp_identity', r.target_label+':'+r.target).next(); def e=a.addEdge(r.type,b); "
+                "r.properties.each{ k,x -> if(x!=null) e.property(k, x instanceof Number ? x.longValue() : x) } }; gsp_rows.size()")
+
+    def _check_indexes(self, spec):
+        evidence = []
+        for index in spec.indexes:
+            name = index["name"] + "_" + index["label"] + "_" + index["property"]
+            values, _ = self._script(
+                f"_gsp_graph.tx().rollback(); def m=_gsp_graph.openManagement(); def i=m.getGraphIndex({_g_literal(name)}); "
+                "def r=i==null ? null : [name:i.name(), keys:i.getFieldKeys().collect{it.name()}, "
+                "state:i.getFieldKeys().collect{i.getIndexStatus(it).toString()}, "
+                "label:i.getSchemaTypeConstraint()==null ? null : i.getSchemaTypeConstraint().name(), composite:i.isCompositeIndex()]; m.rollback(); [r]")
+            if (len(values) != 1 or not isinstance(values[0], dict) or values[0].get("keys") != [index["property"]]
+                    or values[0].get("label") != index["label"] or values[0].get("state") != ["ENABLED"]
+                    or values[0].get("composite") is not True):
+                raise CaseFailure("cost_check_failed", "janusgraph_cost_index_not_enabled")
+            evidence.append({"kind": "label_scoped_composite", **values[0]})
+        return evidence
+
+
+class ApacheHugeGraph(GremlinHTTP):
+    backend = "ApacheHugeGraph"
+    # HugeGraph's REST proxy exposes JSON scalars/maps and keeps graph entities
+    # in a separate native shape. Experiment queries project properties only.
+    mime = "application/json"
+
+    def _version_script(self):
+        return "org.apache.hugegraph.version.CoreVersion.VERSION.toString()"
+
+    def _recipe(self, case):
+        spec = super()._recipe(case)
+        if any(len(edge["endpoints"]) != 1 for edge in spec.schema()["relationships"]):
+            # HugeGraph's ordinary edge label has one source/target label pair.
+            # Parent/subtype encoding would alter the logical relation labels.
+            raise CaseFailure("unsupported_feature", "hugegraph_multi_endpoint_relationship_type")
+        return spec
+
+    def _prepare_schema(self, spec):
+        schema = spec.schema()
+        keys = {"_gsp_edge_ordinal": "integer"}
+        for entry in schema["nodes"] + schema["relationships"]:
+            keys.update(entry["properties"])
+        # Only experiment labels/indexes are rebuilt; graph and server remain.
+        # Emptying the graph does not permit mutating immutable edge endpoints.
+        seconds = max(1, math.ceil(self.settings["timeout_seconds"]))
+        reset = ("def s=_gsp_graph.schema(); def names=s.getEdgeLabels().collect{it.name()}; "
+                 "if(names.any{ !it.startsWith('GSP_') }) throw new IllegalStateException('unexpected edge schema'); "
+                 "names.each{ n -> def id=s.edgeLabel(n).remove(); if(id!=null && "
+                 f"!_gsp_graph.taskScheduler().waitUntilTaskCompleted(id,{seconds}).success()) "
+                 "throw new IllegalStateException('edge schema removal failed') }; "
+                 "s.getIndexLabels().findAll{it.name().startsWith('gsp_cost_lookup_')}.each{ i -> "
+                 "def id=s.indexLabel(i.name()).remove(); if(id!=null && "
+                 f"!_gsp_graph.taskScheduler().waitUntilTaskCompleted(id,{seconds}).success()) "
+                 "throw new IllegalStateException('index removal failed') }; true")
+        self._script(reset)
+        statements = ["def s=_gsp_graph.schema()"]
+        for key, kind in keys.items():
+            statements.append(f"s.propertyKey({_g_literal(key)}).{ {'integer': 'asLong', 'boolean': 'asBoolean'}[kind] }().ifNotExist().create()")
+        for node in schema["nodes"]:
+            label, properties = _g_literal(node["label"]), list(node["properties"])
+            args = ", ".join(_g_literal(key) for key in properties)
+            statements.append(f"if(s.getVertexLabels().any{{it.name()=={label}}}) "
+                              f"s.vertexLabel({label}).properties({args}).nullableKeys({args}).append(); "
+                              f"else s.vertexLabel({label}).useCustomizeStringId().properties({args}).nullableKeys({args}).create()")
+        for edge in schema["relationships"]:
+            label = _g_literal(edge["type"])
+            args = ", ".join(_g_literal(key) for key in [*edge["properties"], "_gsp_edge_ordinal"])
+            endpoint = edge["endpoints"][0]
+            statements.append(f"s.edgeLabel({label}).link({_g_literal(endpoint['source_label'])}, "
+                              f"{_g_literal(endpoint['target_label'])}).multiTimes().properties({args})"
+                              ".sortKeys('_gsp_edge_ordinal').create()")
+        for index in spec.indexes:
+            name = index["name"] + "_" + index["label"] + "_" + index["property"]
+            statements.append(f"s.indexLabel({_g_literal(name)}).onV({_g_literal(index['label'])})"
+                              f".by({_g_literal(index['property'])}).secondary().create()")
+        statements.append("true")
+        self._script("; ".join(statements))
+
+    def _vertex_script(self):
+        return ("gsp_rows.each{ r -> def v=g.addV(r.labels[0]).property(org.apache.tinkerpop.gremlin.structure.T.id, "
+                "r.labels[0]+':'+r.uid).next(); r.properties.each{ k,x -> if(x!=null) "
+                "v.property(k, x instanceof Number ? x.longValue() : x) } }; gsp_rows.size()")
+
+    def _edge_script(self):
+        return ("gsp_rows.each{ r -> def a=g.V(r.source_label+':'+r.source).next(); "
+                "def b=g.V(r.target_label+':'+r.target).next(); "
+                "def props=['_gsp_edge_ordinal', r.ordinal.longValue()]; "
+                "r.properties.each{ k,x -> if(x!=null){ props.add(k); props.add(x instanceof Number ? x.longValue() : x) } }; "
+                "a.addEdge(r.type,b,props.toArray()) }; gsp_rows.size()")
+
+    def check_state(self, case):
+        spec = self._recipe(case)
+        rendered = []
+        for check in spec.state_checks():
+            if check["kind"] == "node_count":
+                query = "g.V()"
+                for label in check["labels"]:
+                    query += f".hasLabel({_g_literal(label)})"
+                # HugeGraph rejects a root has(property) without an index.
+                # These are population checks, not timed experiment queries;
+                # scan and inspect their properties without inventing indexes.
+                predicates = []
+                for key, value in check["properties"].items():
+                    present = f"v.property({_g_literal(key)}).isPresent()"
+                    predicates.append(f"!{present}" if value is None else
+                                      f"({present} && v.value({_g_literal(key)}) == {_g_literal(value)})")
+                if predicates:
+                    query += ".filter{ t -> def v=t.get(); " + " && ".join(predicates) + " }"
+                rendered.append({"query": query + '.count().project("count").by(__.identity())',
+                                 "expected_rows": [{"count": check["expected"]}]})
+            elif check["kind"] == "node_properties":
+                identity = f"{check['label']}:{check['uid']}"
+                keys = list(check["properties"])
+                query = f"g.V({_g_literal(identity)}).project(" + ", ".join(_g_literal(key) for key in keys) + ")"
+                for key in keys:
+                    query += f".by(__.coalesce(__.values({_g_literal(key)}), __.constant(null)))"
+                rendered.append({"query": query, "expected_rows": [check["properties"]]})
+            else:
+                rendered.extend(_gremlin_state_checks([check], scan_edges=True))
+        evidence = []
+        for number, check in enumerate(rendered):
+            actual = self.execute(check["query"], {}, self.settings["timeout_seconds"])
+            if not actual["complete"] or typed_bag(actual["rows"]) != typed_bag(check["expected_rows"]):
+                raise CaseFailure("cost_check_failed", f"hugegraph_structured_cost_check_{number}")
+            evidence.append({"query": check["query"], "rows": actual["rows"]})
+        self.index_evidence = self._check_indexes(spec)
+        return {"indexes": self.index_evidence, "checks": evidence,
+                "preparation": "bounded_data_reset_native_schema_and_indexes"}
+
+    def _check_indexes(self, spec):
+        evidence = []
+        for index in spec.indexes:
+            name = index["name"] + "_" + index["label"] + "_" + index["property"]
+            values, _ = self._script(f"def s=_gsp_graph.schema(); def i=s.getIndexLabel({_g_literal(name)}); "
+                                    "[[name:i.name(), status:i.status().toString(), kind:i.indexType().toString(), "
+                                    "label:_gsp_graph.vertexLabel(i.baseValue()).name(), "
+                                    "keys:i.indexFields().collect{_gsp_graph.propertyKey(it).name()}]]")
+            if (len(values) != 1 or not isinstance(values[0], dict) or values[0].get("keys") != [index["property"]]
+                    or values[0].get("label") != index["label"] or values[0].get("status") != "CREATED"
+                    or values[0].get("kind") != "SECONDARY"):
+                raise CaseFailure("cost_check_failed", "hugegraph_cost_index_not_ready")
+            evidence.append({"kind": "label_scoped_secondary", **values[0]})
+        return evidence

@@ -1,4 +1,4 @@
-"""Generate, check, and replay cost-aware Cypher query pairs."""
+"""Generate, check, and replay cost-aware query pairs from shared IR."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import uuid
 
 import yaml
 
-from executor import measurement_settings, run_case, supported_patterns
+from executor import measurement_settings, run_case, supported_patterns, typed_value
 from generator import PatternNotApplicable, instantiate, load_seeds
 from mutator import PATTERNS, mutate
 from query import parse_query, render_query, split_statements
@@ -26,7 +26,7 @@ from languages import DBMS, LANGUAGES, UnsupportedFeature, UnsupportedLanguage, 
 
 ROOT = Path(__file__).resolve().parent.parent
 CASE_EXTENSION_FIELDS = ("query_ir", "graph_spec", "state_checks", "index_requirements", "language",
-                         "target_dbms", "output_columns", "required_features", "compile_error", "ir_hash", "verified_features", "source_input_hash")
+                         "target_dbms", "output_columns", "required_features", "compile_error", "ir_hash", "verified_features", "source_input_hash", "query_bindings")
 
 
 def read_config(path: Path) -> dict:
@@ -111,6 +111,8 @@ def case_digest(case: dict, format_version: int | None = None) -> str:
             fields += ("verified_features",)
         if "source_input_hash" in case:
             fields += ("source_input_hash",)
+        if "query_bindings" in case:
+            fields += ("query_bindings",)
     data = {name: case.get(name) for name in fields}
     return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
@@ -129,10 +131,11 @@ def save_case(directory: Path, case: dict, measurement: dict, result: dict, *, f
         raise ValueError("invalid input format for reference query")
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "setup.cypher").write_text("\n\n".join(s.rstrip("; \n") + ";" for s in case["setup"]) + "\n", encoding="utf-8")
+    suffix = "gremlin" if case.get("language") == "gremlin" else "cypher"
     for side in ("a", "b"):
-        (directory / f"query_{side}.cypher").write_text(case[f"query_{side}"].rstrip("; \n") + ";\n", encoding="utf-8")
+        (directory / f"query_{side}.{suffix}").write_text(case[f"query_{side}"].rstrip("; \n") + ";\n", encoding="utf-8")
     if case.get("query_ref"):
-        (directory / "query_ref.cypher").write_text(case["query_ref"].rstrip("; \n") + ";\n", encoding="utf-8")
+        (directory / f"query_ref.{suffix}").write_text(case["query_ref"].rstrip("; \n") + ";\n", encoding="utf-8")
     record = {
         "format_version": format_version,
         "input_hash": case_digest(case, format_version),
@@ -158,7 +161,9 @@ def read_case(directory: Path) -> tuple[dict, dict]:
     case = record["case"]
     case["setup"] = list(split_statements((directory / "setup.cypher").read_text(encoding="utf-8")))
     for side in (("a", "b", "ref") if record.get("has_reference") else ("a", "b")):
-        statements = split_statements((directory / f"query_{side}.cypher").read_text(encoding="utf-8"))
+        suffix = "gremlin" if case.get("language") == "gremlin" else "cypher"
+        text = (directory / f"query_{side}.{suffix}").read_text(encoding="utf-8")
+        statements = (text.strip().rstrip(";"),) if suffix == "gremlin" else split_statements(text)
         if len(statements) != 1:
             raise ValueError("each query file must contain one read query")
         case[f"query_{side}"] = statements[0]
@@ -187,6 +192,8 @@ def read_case(directory: Path) -> tuple[dict, dict]:
                     raise ValueError("saved compiled query differs from its query IR")
                 if case.get("output_columns", {}).get(side) != [list(item) for item in compiled.columns]:
                     raise ValueError("saved compiled metadata differ from their query IR")
+                if typed_value(compiled.bindings) != typed_value(case.get("query_bindings", {}).get(side, {})):
+                    raise ValueError("saved bindings differ from their query IR")
                 # Feature classification may gain new names after an archive
                 # was written. Historical flags cannot invent requirements.
                 if not set(case.get("required_features", {}).get(side, ())) <= compiled.required_features:
@@ -247,6 +254,7 @@ def compile_case(case: dict, database: dict) -> dict:
     else:
         case.pop("verified_features", None)
     case["output_columns"], case["required_features"] = {}, {}
+    case.pop("query_bindings", None)
     try:
         compiled = {side: generate(from_data(value), target, language, verified_features=verified)
                     for side, value in case["query_ir"].items()}
@@ -261,7 +269,11 @@ def compile_case(case: dict, database: dict) -> dict:
         case[f"query_{side}"] = query.text
         case["output_columns"][side] = [list(item) for item in query.columns]
         case["required_features"][side] = sorted(query.required_features)
-    if case["query_a"] == case["query_b"]:
+        if query.bindings:
+            case.setdefault("query_bindings", {})[side] = query.bindings
+    if (case["query_a"] == case["query_b"] and
+            typed_value(case.get("query_bindings", {}).get("a", {})) ==
+            typed_value(case.get("query_bindings", {}).get("b", {}))):
         case["compile_error"] = {"status": "unsupported_transform", "reason": "target_erases_query_difference"}
     logical = {key: case.get(key) for key in ("query_ir", "graph_spec", "parameters", "expected_rows")}
     case["ir_hash"] = hashlib.sha256(json.dumps(logical, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
@@ -390,7 +402,7 @@ def replay(directory: Path, config: dict) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Cost-aware Cypher query testing (P1–P16, SCor S1–S10).")
+    parser = argparse.ArgumentParser(description="Cost-aware graph query testing (P1–P16, SCor S1–S10).")
     parser.add_argument("--config", type=Path, default=ROOT / "config.yaml")
     parser.add_argument("--replay", type=Path, help="replay a saved case using the configured test database")
     args = parser.parse_args(argv)

@@ -1,0 +1,39 @@
+patterns:
+- P1
+- P2
+- P4
+- P5
+- P6
+- P8
+- P9
+- P10
+- P11
+- P12
+- P14
+- P15
+scales:
+- 100
+- 1000
+seeds:
+- 17
+cases_per_pattern: 2
+seconds_per_pattern: 90
+generation:
+  complexity: 0
+  data_seed: 0
+measurement:
+  collect_plans: true
+  timeout_seconds: 30
+  max_rows: 10000
+database:
+  dbms: janusgraph
+  language: gremlin
+  uri: http://127.0.0.1:8182/gremlin
+  database: gsp_test
+  graph_binding: graph
+  traversal_source: g
+  verified_features:
+  - gremlin_null_projection
+  dedicated: true
+  allow_reset: false
+output: ../results/janusgraph
