@@ -1,0 +1,59 @@
+{
+  "dbms": "janusgraph",
+  "language": "gremlin",
+  "mechanism": "filter-wrapper",
+  "status": "native_probe_failed",
+  "attribution": "native_optimizer_rule_probe",
+  "pattern_id": null,
+  "graph_recipe_pattern": "S1",
+  "graph_spec": {
+    "version": 1,
+    "pattern": "S1",
+    "scale": 10000,
+    "data_seed": 42,
+    "state_variant": "original",
+    "include_reference": true
+  },
+  "queries": {
+    "a": "g.V().hasLabel('ScorRoot').has('id',1).filter(__.out('GSP_SC_HIGH').has('mark',false)).filter(__.has('id',0)).project('uid').by(__.values('uid'))",
+    "b": "g.V().hasLabel('ScorRoot').has('id',1).filter(__.out('GSP_SC_HIGH').has('mark',false)).has('id',0).project('uid').by(__.values('uid'))"
+  },
+  "parameters": {},
+  "expected_rows": [],
+  "settings": {
+    "discovery_warmups": 3,
+    "discovery_pairs": 6,
+    "screen_ratio": 2.0,
+    "confirmation_sessions": 2,
+    "confirmation_warmups": 3,
+    "confirmation_pairs": 20,
+    "control_pairs": 10,
+    "ratio": 5.0,
+    "min_delta_ms": 100.0,
+    "ci_low": 5.0,
+    "direction_consistency": 0.95,
+    "bootstrap_samples": 10000,
+    "timeout_seconds": 60,
+    "max_rows": 10000,
+    "collect_plans": true
+  },
+  "equivalence": "filter(has(id,0)) is the same pure vertex filter as has(id,0); both inputs retain the same written order and indexed anchor; the SINGLE id=1 anchor cannot also satisfy id=0",
+  "work_obligation": "after the wrapper is inlined, the existing cheaper HasStep should be moved before the expensive traversal filter; inspect strategy order and downstream vertex access",
+  "sources": {
+    "janus_version": "https://raw.githubusercontent.com/JanusGraph/janusgraph/v1.1.0/pom.xml",
+    "huge_version": "https://raw.githubusercontent.com/apache/hugegraph/1.7.0/hugegraph-server/pom.xml",
+    "tp_373_ranking": "https://raw.githubusercontent.com/apache/tinkerpop/3.7.3/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/FilterRankingStrategy.java",
+    "tp_373_inline": "https://raw.githubusercontent.com/apache/tinkerpop/3.7.3/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/InlineFilterStrategy.java",
+    "tp_351_ranking": "https://raw.githubusercontent.com/apache/tinkerpop/3.5.1/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/FilterRankingStrategy.java",
+    "tp_351_inline": "https://raw.githubusercontent.com/apache/tinkerpop/3.5.1/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/InlineFilterStrategy.java",
+    "tp_373_count": "https://raw.githubusercontent.com/apache/tinkerpop/3.7.3/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/CountStrategy.java",
+    "tp_351_count": "https://raw.githubusercontent.com/apache/tinkerpop/3.5.1/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/CountStrategy.java"
+  },
+  "confirmation_sessions": [],
+  "database_version": "JanusGraph/1.1.0",
+  "failure": "CaseFailure",
+  "reason": "JanusGraph_server_500",
+  "details": {
+    "server_message": "Name cannot be in protected namespace: key"
+  }
+}

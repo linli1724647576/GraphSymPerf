@@ -1,0 +1,27 @@
+patterns:
+- P10
+scales:
+- 750000
+seeds:
+- 214501591
+cases_per_pattern: 2
+seconds_per_pattern: 60
+generation:
+  complexity: 0
+  data_seed: 0
+measurement:
+  collect_plans: true
+  ratio: 5
+  min_delta_ms: 100
+  ci_low: 5
+  direction_consistency: 0.95
+  timeout_seconds: 60
+  max_rows: 10000
+database:
+  dbms: falkordb
+  uri: redis://127.0.0.1:16379
+  database: gsp_test
+  language: cypher
+  dedicated: true
+  allow_reset: true
+output: /Users/sakuraq/Documents/科研实习/GraphSymPerf/results/detection-20261009/falkordb/empty_low

@@ -1,0 +1,32 @@
+{
+  "age_native_probe.py": {
+    "original_path": "/private/tmp/gsp-detection-20261009/age_native_probe.py",
+    "original_sha256": "5928d0ae9b40abe4e09c6095a62f8534110bcdde584bd9a16a1daa88a69cab19",
+    "archived_sha256": "873d05699573d3a92344d377105960f95e5bc4b5e436c2976bc519add886234b",
+    "changes": "Only WORKSPACE locates Src through __file__ ancestors."
+  },
+  "age_coalesce_index.py": {
+    "original_path": "/private/tmp/gsp-detection-20261009/age_coalesce_index.py",
+    "original_sha256": "05ceaf53fcd5aa294c4dc3986f07eea5b2895cbdedc2bfbcdc8608c13486b424",
+    "archived_sha256": "05ceaf53fcd5aa294c4dc3986f07eea5b2895cbdedc2bfbcdc8608c13486b424",
+    "changes": "Unmodified wrapper."
+  },
+  "gremlin_native_probe.py": {
+    "original_path": "/private/tmp/gsp-detection-20261009/gremlin_native_probe.py",
+    "original_sha256": "4dba8319b0f28f0bdb7a4f4379162385329d0e96904327262c7233e12c98f939",
+    "archived_sha256": "014890be4d81e11b98ad868c29ff8515bf09b647ab3da5c13fa019362b262c35",
+    "changes": "Only WORKSPACE locates Src through __file__ ancestors."
+  },
+  "ladybug_native_probe.py": {
+    "original_path": "/private/tmp/gsp-detection-20261009/ladybug_native_probe.py",
+    "original_sha256": "fc574a8f33a09a626737db4be65b84e1b6eb8ff5d9c882946f6be4fa95ed4cf2",
+    "archived_sha256": "ff70b86389069187666518774f7888af5d8f722f6acaa6d11cafe0dd279e6a4b",
+    "changes": "Only WORKSPACE locates Src through __file__ ancestors."
+  },
+  "ladybug_inline_probe.py": {
+    "original_path": "/private/tmp/gsp-detection-20261009/ladybug_inline_probe.py",
+    "original_sha256": "20d497d62f890ced9289b925a3471f4d702ae56a85c8cd4cbf74eb04182725bf",
+    "archived_sha256": "20d497d62f890ced9289b925a3471f4d702ae56a85c8cd4cbf74eb04182725bf",
+    "changes": "Unmodified wrapper."
+  }
+}

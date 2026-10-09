@@ -1,0 +1,152 @@
+{
+  "current_counts": {
+    "rows": [
+      {
+        "labels": {
+          "GspLow": 1,
+          "GspHigh": 750001,
+          "GspTarget": 3000001
+        },
+        "relTypes": {
+          "GSP_LINK": 3000001
+        },
+        "nodeCount": 3750003,
+        "relCount": 3000001
+      }
+    ],
+    "complete": true,
+    "elapsed_ms": 3.1791250221431255
+  },
+  "query_a": {
+    "query": "MATCH (a:GspLow) WHERE (a.id = 1) MATCH (b:GspHigh)-[:GSP_LINK]->(c:GspTarget) WHERE (c.keep = true) RETURN a.uid, b.uid, c.uid",
+    "results": [
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 1.8879170529544353
+      },
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 0.6588338874280453
+      },
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 0.6833749357610941
+      }
+    ],
+    "profile": {
+      "format": "native",
+      "analyze": true,
+      "operators": [
+        "Results | Records produced: 0, Execution time: 0.000126 ms",
+        "    Project | Records produced: 0, Execution time: 0.000332 ms",
+        "        Cartesian Product | Records produced: 0, Execution time: 0.000209 ms",
+        "            Node By Index Scan | (a:GspLow) | Records produced: 0, Execution time: 0.011000 ms",
+        "            Conditional Traverse | (c)->(b:GspHigh) | Records produced: 0, Execution time: 0.000000 ms",
+        "                Filter | Records produced: 0, Execution time: 0.000000 ms",
+        "                    Node By Label Scan | (c:GspTarget) | Records produced: 0, Execution time: 0.000000 ms"
+      ]
+    }
+  },
+  "query_b": {
+    "query": "MATCH (b:GspHigh)-[:GSP_LINK]->(c:GspTarget) WHERE (c.keep = true) MATCH (a:GspLow) WHERE (a.id = 1) RETURN a.uid, b.uid, c.uid",
+    "results": [
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 192.07991706207395
+      },
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 147.00333285145462
+      },
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 135.6023750267923
+      }
+    ],
+    "profile": {
+      "format": "native",
+      "analyze": true,
+      "operators": [
+        "Results | Records produced: 0, Execution time: 0.000249 ms",
+        "    Project | Records produced: 0, Execution time: 0.000417 ms",
+        "        Cartesian Product | Records produced: 0, Execution time: 0.001500 ms",
+        "            Conditional Traverse | (b)->(b) | Records produced: 1, Execution time: 0.107208 ms",
+        "                Filter | Records produced: 1, Execution time: 140.830707 ms",
+        "                    Node By Label Scan | (c:GspTarget) | Records produced: 3000001, Execution time: 84.066585 ms",
+        "            Node By Index Scan | (a:GspLow) | Records produced: 0, Execution time: 0.018167 ms"
+      ]
+    }
+  },
+  "single_match_low_first": {
+    "query": "MATCH (a:GspLow), (b:GspHigh)-[:GSP_LINK]->(c:GspTarget) WHERE a.id=1 AND coalesce(c.keep,false)=true RETURN a.uid,b.uid,c.uid",
+    "results": [
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 1.0067080147564411
+      },
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 0.3056249115616083
+      },
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 0.26420806534588337
+      }
+    ],
+    "profile": {
+      "format": "native",
+      "analyze": true,
+      "operators": [
+        "Results | Records produced: 0, Execution time: 0.000125 ms",
+        "    Project | Records produced: 0, Execution time: 0.000041 ms",
+        "        Cartesian Product | Records produced: 0, Execution time: 0.000084 ms",
+        "            Node By Index Scan | (a:GspLow) | Records produced: 0, Execution time: 0.001500 ms",
+        "            Conditional Traverse | (c)->(b:GspHigh) | Records produced: 0, Execution time: 0.000000 ms",
+        "                Filter | Records produced: 0, Execution time: 0.000000 ms",
+        "                    Node By Label Scan | (c:GspTarget) | Records produced: 0, Execution time: 0.000000 ms"
+      ]
+    }
+  },
+  "single_match_high_first": {
+    "query": "MATCH (b:GspHigh)-[:GSP_LINK]->(c:GspTarget), (a:GspLow) WHERE a.id=1 AND coalesce(c.keep,false)=true RETURN a.uid,b.uid,c.uid",
+    "results": [
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 167.38129081204534
+      },
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 200.37420792505145
+      },
+      {
+        "rows": [],
+        "complete": true,
+        "elapsed_ms": 164.47658301331103
+      }
+    ],
+    "profile": {
+      "format": "native",
+      "analyze": true,
+      "operators": [
+        "Results | Records produced: 0, Execution time: 0.000167 ms",
+        "    Project | Records produced: 0, Execution time: 0.000374 ms",
+        "        Cartesian Product | Records produced: 0, Execution time: 0.001042 ms",
+        "            Conditional Traverse | (b)->(b) | Records produced: 1, Execution time: 0.066416 ms",
+        "                Filter | Records produced: 1, Execution time: 170.200013 ms",
+        "                    Node By Label Scan | (c:GspTarget) | Records produced: 3000001, Execution time: 81.502529 ms",
+        "            Node By Index Scan | (a:GspLow) | Records produced: 0, Execution time: 0.011417 ms"
+      ]
+    }
+  }
+}

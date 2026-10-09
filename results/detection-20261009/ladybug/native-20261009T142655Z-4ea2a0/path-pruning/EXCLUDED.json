@@ -1,0 +1,4 @@
+{
+  "include_in_analysis": false,
+  "reason": "Earlier fixed-chain control; final issue uses the identical three-hop recursive TRAIL on both sides."
+}

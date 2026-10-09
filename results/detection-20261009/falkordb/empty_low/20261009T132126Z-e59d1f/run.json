@@ -1,0 +1,19 @@
+{
+  "format_version": 1,
+  "kind": "discovery",
+  "dbms": "falkordb",
+  "language": "cypher",
+  "database_version": "FalkorDB/module_version=41808",
+  "patterns": [
+    "P10"
+  ],
+  "budgets": {},
+  "per_pattern": {
+    "P10": {
+      "attempted": 1,
+      "executed": 1,
+      "elapsed_seconds": 19.496426166035235,
+      "stop_reason": "inputs_exhausted"
+    }
+  }
+}

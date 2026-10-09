@@ -1,0 +1,823 @@
+{
+  "statistics": {
+    "rows": [
+      {
+        "label": "GspAnchor",
+        "property": [
+          "uid"
+        ],
+        "num estimation nodes": 1,
+        "num groups": 1,
+        "avg group size": 1.0,
+        "chi-squared value": 0.0,
+        "avg degree": 200009.0
+      }
+    ],
+    "complete": true,
+    "elapsed_ms": 0.3492089454084635
+  },
+  "query_a": {
+    "query": "MATCH (u:GspAnchor {uid: 1}) MATCH (u)-[:GSP_HIGH]->(w:GspHigh) WHERE (NOT (w.keep = false)) MATCH (u)-[:GSP_LOW]->(v:GspLow) RETURN u.uid, v.uid, w.uid",
+    "results": [
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 22.147209150716662
+      },
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 20.851582987233996
+      },
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 20.81587491557002
+      }
+    ],
+    "profile": {
+      "format": "native",
+      "analyze": true,
+      "plan": "{\"absolute_time\":0.016213696406232665,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.002292424941755261,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.19418923279341385,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.0014588158720260753,\"actual_hits\":2,\"children\":[{\"absolute_time\":0.007252398906643917,\"actual_hits\":2,\"children\":[{\"absolute_time\":17.355365707680274,\"actual_hits\":2,\"children\":[{\"absolute_time\":4.213477042946169,\"actual_hits\":200011,\"children\":[{\"absolute_time\":4.1680453486459295e-05,\"actual_hits\":2,\"children\":[],\"name\":\"Once\",\"relative_time\":1.9127993052712924e-06}],\"name\":\"ScanAll (w)\",\"relative_time\":0.19336488176987493}],\"name\":\"Filter (w :GspHigh), Generic {w}\",\"relative_time\":0.7964724155212187}],\"name\":\"Expand (w)<-[anon2:GSP_HIGH]-(u)\",\"relative_time\":0.00033282707911720487}],\"name\":\"Filter (u :GspAnchor), {u.uid}\",\"relative_time\":6.694797568449523e-05}],\"name\":\"Expand (u)-[anon4:GSP_LOW]->(v)\",\"relative_time\":0.008911731963258951}],\"name\":\"Filter (v :GspLow)\",\"relative_time\":0.00010520396178992108}],\"name\":\"Produce {u.uid, v.uid, w.uid}\",\"relative_time\":0.0007440789297505328}",
+      "rows": [
+        {
+          "OPERATOR": "* Produce {u.uid, v.uid, w.uid}",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.074408 %",
+          "ABSOLUTE TIME": "  0.016214 ms"
+        },
+        {
+          "OPERATOR": "* Filter (v :GspLow)",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.010520 %",
+          "ABSOLUTE TIME": "  0.002292 ms"
+        },
+        {
+          "OPERATOR": "* Expand (u)-[anon4:GSP_LOW]->(v)",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.891173 %",
+          "ABSOLUTE TIME": "  0.194189 ms"
+        },
+        {
+          "OPERATOR": "* Filter (u :GspAnchor), {u.uid}",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": "  0.006695 %",
+          "ABSOLUTE TIME": "  0.001459 ms"
+        },
+        {
+          "OPERATOR": "* Expand (w)<-[anon2:GSP_HIGH]-(u)",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": "  0.033283 %",
+          "ABSOLUTE TIME": "  0.007252 ms"
+        },
+        {
+          "OPERATOR": "* Filter (w :GspHigh), Generic {w}",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": " 79.647242 %",
+          "ABSOLUTE TIME": " 17.355366 ms"
+        },
+        {
+          "OPERATOR": "* ScanAll (w)",
+          "ACTUAL HITS": 200011,
+          "RELATIVE TIME": " 19.336488 %",
+          "ABSOLUTE TIME": "  4.213477 ms"
+        },
+        {
+          "OPERATOR": "* Once",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": "  0.000191 %",
+          "ABSOLUTE TIME": "  0.000042 ms"
+        }
+      ]
+    }
+  },
+  "query_b": {
+    "query": "MATCH (u:GspAnchor {uid: 1}) MATCH (u)-[:GSP_LOW]->(v:GspLow) MATCH (u)-[:GSP_HIGH]->(w:GspHigh) WHERE (NOT (w.keep = false)) RETURN u.uid, v.uid, w.uid",
+    "results": [
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 192.19891703687608
+      },
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 166.80683312006295
+      },
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 181.15449999459088
+      }
+    ],
+    "profile": {
+      "format": "native",
+      "analyze": true,
+      "plan": "{\"absolute_time\":0.02750318079678549,\"actual_hits\":9,\"children\":[{\"absolute_time\":136.61259118069725,\"actual_hits\":9,\"children\":[{\"absolute_time\":37.10458288442936,\"actual_hits\":1600009,\"children\":[{\"absolute_time\":0.009834470709153598,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.01566847875695658,\"actual_hits\":9,\"children\":[{\"absolute_time\":3.039434849933242,\"actual_hits\":9,\"children\":[{\"absolute_time\":4.057760954677253,\"actual_hits\":200011,\"children\":[{\"absolute_time\":0.0,\"actual_hits\":2,\"children\":[],\"name\":\"Once\",\"relative_time\":0.0}],\"name\":\"ScanAll (v)\",\"relative_time\":0.022435007597374844}],\"name\":\"Filter (v :GspLow)\",\"relative_time\":0.016804771082283197}],\"name\":\"Expand (v)<-[anon2:GSP_LOW]-(u)\",\"relative_time\":8.662965706406102e-05}],\"name\":\"Filter (u :GspAnchor), {u.uid}\",\"relative_time\":5.437393368914468e-05}],\"name\":\"Expand (u)-[anon4:GSP_HIGH]->(w)\",\"relative_time\":0.20514801345063666}],\"name\":\"Filter (w :GspHigh), Generic {w}\",\"relative_time\":0.7553191415830418}],\"name\":\"Produce {u.uid, v.uid, w.uid}\",\"relative_time\":0.00015206269591031988}",
+      "rows": [
+        {
+          "OPERATOR": "* Produce {u.uid, v.uid, w.uid}",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.015206 %",
+          "ABSOLUTE TIME": "  0.027503 ms"
+        },
+        {
+          "OPERATOR": "* Filter (w :GspHigh), Generic {w}",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": " 75.531914 %",
+          "ABSOLUTE TIME": " 136.612591 ms"
+        },
+        {
+          "OPERATOR": "* Expand (u)-[anon4:GSP_HIGH]->(w)",
+          "ACTUAL HITS": 1600009,
+          "RELATIVE TIME": " 20.514801 %",
+          "ABSOLUTE TIME": " 37.104583 ms"
+        },
+        {
+          "OPERATOR": "* Filter (u :GspAnchor), {u.uid}",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.005437 %",
+          "ABSOLUTE TIME": "  0.009834 ms"
+        },
+        {
+          "OPERATOR": "* Expand (v)<-[anon2:GSP_LOW]-(u)",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.008663 %",
+          "ABSOLUTE TIME": "  0.015668 ms"
+        },
+        {
+          "OPERATOR": "* Filter (v :GspLow)",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  1.680477 %",
+          "ABSOLUTE TIME": "  3.039435 ms"
+        },
+        {
+          "OPERATOR": "* ScanAll (v)",
+          "ACTUAL HITS": 200011,
+          "RELATIVE TIME": "  2.243501 %",
+          "ABSOLUTE TIME": "  4.057761 ms"
+        },
+        {
+          "OPERATOR": "* Once",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": "  0.000000 %",
+          "ABSOLUTE TIME": "  0.000000 ms"
+        }
+      ]
+    }
+  },
+  "single_match_high_first": {
+    "query": "MATCH (u:GspAnchor {uid:1})-[:GSP_HIGH]->(w:GspHigh), (u)-[:GSP_LOW]->(v:GspLow) WHERE NOT (w.keep=false) RETURN u.uid,v.uid,w.uid",
+    "results": [
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 24.829958099871874
+      },
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 20.342540927231312
+      },
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 20.65487508662045
+      }
+    ],
+    "profile": {
+      "format": "native",
+      "analyze": true,
+      "plan": "{\"absolute_time\":0.003917080386457106,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.003250343299400577,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.0020418823291106186,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.17676867020586212,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.001083447766466859,\"actual_hits\":2,\"children\":[{\"absolute_time\":0.0031253300955774777,\"actual_hits\":2,\"children\":[{\"absolute_time\":17.26674036991057,\"actual_hits\":2,\"children\":[{\"absolute_time\":4.246781876006558,\"actual_hits\":200011,\"children\":[{\"absolute_time\":0.0,\"actual_hits\":2,\"children\":[],\"name\":\"Once\",\"relative_time\":0.0}],\"name\":\"ScanAll (w)\",\"relative_time\":0.1956707895413894}],\"name\":\"Filter (w :GspHigh), Generic {w}\",\"relative_time\":0.7955663416750827}],\"name\":\"Expand (w)<-[anon1:GSP_HIGH]-(u)\",\"relative_time\":0.00014399981568023594}],\"name\":\"Filter (u :GspAnchor), {u.uid}\",\"relative_time\":4.9919936102481786e-05}],\"name\":\"Expand (u)-[anon3:GSP_LOW]->(v)\",\"relative_time\":0.008144629574874144}],\"name\":\"EdgeUniquenessFilter\",\"relative_time\":9.407987957775414e-05}],\"name\":\"Filter (v :GspLow)\",\"relative_time\":0.00014975980830744538}],\"name\":\"Produce {u.uid, v.uid, w.uid}\",\"relative_time\":0.0001804797689858957}",
+      "rows": [
+        {
+          "OPERATOR": "* Produce {u.uid, v.uid, w.uid}",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.018048 %",
+          "ABSOLUTE TIME": "  0.003917 ms"
+        },
+        {
+          "OPERATOR": "* Filter (v :GspLow)",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.014976 %",
+          "ABSOLUTE TIME": "  0.003250 ms"
+        },
+        {
+          "OPERATOR": "* EdgeUniquenessFilter",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.009408 %",
+          "ABSOLUTE TIME": "  0.002042 ms"
+        },
+        {
+          "OPERATOR": "* Expand (u)-[anon3:GSP_LOW]->(v)",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.814463 %",
+          "ABSOLUTE TIME": "  0.176769 ms"
+        },
+        {
+          "OPERATOR": "* Filter (u :GspAnchor), {u.uid}",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": "  0.004992 %",
+          "ABSOLUTE TIME": "  0.001083 ms"
+        },
+        {
+          "OPERATOR": "* Expand (w)<-[anon1:GSP_HIGH]-(u)",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": "  0.014400 %",
+          "ABSOLUTE TIME": "  0.003125 ms"
+        },
+        {
+          "OPERATOR": "* Filter (w :GspHigh), Generic {w}",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": " 79.556634 %",
+          "ABSOLUTE TIME": " 17.266740 ms"
+        },
+        {
+          "OPERATOR": "* ScanAll (w)",
+          "ACTUAL HITS": 200011,
+          "RELATIVE TIME": " 19.567079 %",
+          "ABSOLUTE TIME": "  4.246782 ms"
+        },
+        {
+          "OPERATOR": "* Once",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": "  0.000000 %",
+          "ABSOLUTE TIME": "  0.000000 ms"
+        }
+      ]
+    }
+  },
+  "single_match_low_first": {
+    "query": "MATCH (u:GspAnchor {uid:1})-[:GSP_LOW]->(v:GspLow), (u)-[:GSP_HIGH]->(w:GspHigh) WHERE NOT (w.keep=false) RETURN u.uid,v.uid,w.uid",
+    "results": [
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 173.05120802484453
+      },
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 184.77895809337497
+      },
+      {
+        "rows": [
+          {
+            "u.uid": 1,
+            "v.uid": 2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -1,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -2,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -3,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -4,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -5,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -6,
+            "w.uid": 3
+          },
+          {
+            "u.uid": 1,
+            "v.uid": -7,
+            "w.uid": 3
+          }
+        ],
+        "complete": true,
+        "elapsed_ms": 169.9764160439372
+      }
+    ],
+    "profile": {
+      "format": "native",
+      "analyze": true,
+      "plan": "{\"absolute_time\":0.009208653130557807,\"actual_hits\":9,\"children\":[{\"absolute_time\":132.02158483296108,\"actual_hits\":9,\"children\":[{\"absolute_time\":15.145234295580261,\"actual_hits\":1600009,\"children\":[{\"absolute_time\":48.791236084043135,\"actual_hits\":1600009,\"children\":[{\"absolute_time\":0.00766693292317935,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.010792041451649194,\"actual_hits\":9,\"children\":[{\"absolute_time\":2.807389161408743,\"actual_hits\":9,\"children\":[{\"absolute_time\":3.983304998501376,\"actual_hits\":200011,\"children\":[{\"absolute_time\":0.0,\"actual_hits\":2,\"children\":[],\"name\":\"Once\",\"relative_time\":0.0}],\"name\":\"ScanAll (v)\",\"relative_time\":0.019643827706559074}],\"name\":\"Filter (v :GspLow)\",\"relative_time\":0.013844751785947294}],\"name\":\"Expand (v)<-[anon1:GSP_LOW]-(u)\",\"relative_time\":5.322138348883635e-05}],\"name\":\"Filter (u :GspAnchor), {u.uid}\",\"relative_time\":3.780978595345903e-05}],\"name\":\"Expand (u)-[anon3:GSP_HIGH]->(w)\",\"relative_time\":0.24061592963270054}],\"name\":\"EdgeUniquenessFilter\",\"relative_time\":0.07468932787968269}],\"name\":\"Filter (w :GspHigh), Generic {w}\",\"relative_time\":0.6510697189849305}],\"name\":\"Produce {u.uid, v.uid, w.uid}\",\"relative_time\":4.541284073757851e-05}",
+      "rows": [
+        {
+          "OPERATOR": "* Produce {u.uid, v.uid, w.uid}",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.004541 %",
+          "ABSOLUTE TIME": "  0.009209 ms"
+        },
+        {
+          "OPERATOR": "* Filter (w :GspHigh), Generic {w}",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": " 65.106972 %",
+          "ABSOLUTE TIME": " 132.021585 ms"
+        },
+        {
+          "OPERATOR": "* EdgeUniquenessFilter",
+          "ACTUAL HITS": 1600009,
+          "RELATIVE TIME": "  7.468933 %",
+          "ABSOLUTE TIME": " 15.145234 ms"
+        },
+        {
+          "OPERATOR": "* Expand (u)-[anon3:GSP_HIGH]->(w)",
+          "ACTUAL HITS": 1600009,
+          "RELATIVE TIME": " 24.061593 %",
+          "ABSOLUTE TIME": " 48.791236 ms"
+        },
+        {
+          "OPERATOR": "* Filter (u :GspAnchor), {u.uid}",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.003781 %",
+          "ABSOLUTE TIME": "  0.007667 ms"
+        },
+        {
+          "OPERATOR": "* Expand (v)<-[anon1:GSP_LOW]-(u)",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  0.005322 %",
+          "ABSOLUTE TIME": "  0.010792 ms"
+        },
+        {
+          "OPERATOR": "* Filter (v :GspLow)",
+          "ACTUAL HITS": 9,
+          "RELATIVE TIME": "  1.384475 %",
+          "ABSOLUTE TIME": "  2.807389 ms"
+        },
+        {
+          "OPERATOR": "* ScanAll (v)",
+          "ACTUAL HITS": 200011,
+          "RELATIVE TIME": "  1.964383 %",
+          "ABSOLUTE TIME": "  3.983305 ms"
+        },
+        {
+          "OPERATOR": "* Once",
+          "ACTUAL HITS": 2,
+          "RELATIVE TIME": "  0.000000 %",
+          "ABSOLUTE TIME": "  0.000000 ms"
+        }
+      ]
+    }
+  }
+}

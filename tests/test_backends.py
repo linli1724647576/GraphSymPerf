@@ -50,12 +50,27 @@ def test_memgraph_restore_uses_its_schema_operations_without_neo4j_await():
     calls = []
     def execute(query, parameters, timeout):
         calls.append(query)
-        rows = [{'index type': 'label+property', 'label': 'GspAnchor', 'property': 'uid'}] if query == 'SHOW INDEX INFO' else []
+        rows = ([{'index type': 'label+property', 'label': 'GspAnchor', 'property': 'uid'}]
+                if query == 'SHOW INDEX INFO' else
+                [{'label': 'GspLow', 'property': 'id', 'num estimation nodes': 1}]
+                if query == 'ANALYZE GRAPH' else [])
         return {'rows': rows, 'complete': True, 'elapsed_ms': 1}
     db._execute = execute
     db.restore({'setup': [INDEX, 'CREATE (:GspLow {id:1})']})
     assert calls == ['SHOW INDEX INFO', 'SHOW CONSTRAINT INFO', 'DROP INDEX ON :GspAnchor(uid)',
-                     'MATCH (n) DETACH DELETE n', 'CREATE INDEX ON :GspLow(id)', 'CREATE (:GspLow {id:1})']
+                     'MATCH (n) DETACH DELETE n', 'CREATE INDEX ON :GspLow(id)', 'CREATE (:GspLow {id:1})',
+                     'ANALYZE GRAPH']
+    assert db.statistics_evidence == [{'label': 'GspLow', 'property': 'id', 'num estimation nodes': 1}]
+
+
+def test_memgraph_refuses_incomplete_statistics_preparation():
+    db = Memgraph.__new__(Memgraph)
+    db.settings = measurement_settings({})
+    db._execute = lambda query, parameters, timeout: {
+        'rows': [], 'complete': query != 'ANALYZE GRAPH', 'elapsed_ms': 1}
+    with pytest.raises(CaseFailure, match='statistics_preparation_incomplete') as failure:
+        db.restore({'setup': [INDEX]})
+    assert failure.value.stop_target
 
 
 def test_neo4j_refreshes_statistics_after_rebuilding_and_waiting_for_indexes():

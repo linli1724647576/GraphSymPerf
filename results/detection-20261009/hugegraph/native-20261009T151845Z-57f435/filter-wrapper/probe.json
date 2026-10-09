@@ -1,0 +1,861 @@
+{
+  "dbms": "hugegraph",
+  "language": "gremlin",
+  "mechanism": "filter-wrapper",
+  "status": "no_screen_signal",
+  "attribution": "native_optimizer_rule_probe",
+  "pattern_id": null,
+  "graph_recipe_pattern": "S1",
+  "graph_spec": {
+    "version": 1,
+    "pattern": "S1",
+    "scale": 10000,
+    "data_seed": 42,
+    "state_variant": "original",
+    "include_reference": true
+  },
+  "native_schema_mapping": {},
+  "native_schema": {
+    "nodes": [
+      {
+        "label": "ScorRoot",
+        "properties": {
+          "uid": "integer",
+          "id": "integer",
+          "key": "integer",
+          "expected_count": "integer"
+        }
+      },
+      {
+        "label": "ScorTarget",
+        "properties": {
+          "uid": "integer",
+          "mark": "boolean",
+          "key": "integer"
+        }
+      }
+    ],
+    "relationships": [
+      {
+        "type": "GSP_SC_HIGH",
+        "source_labels": [
+          "ScorRoot"
+        ],
+        "target_labels": [
+          "ScorTarget"
+        ],
+        "properties": {},
+        "endpoints": [
+          {
+            "source_label": "ScorRoot",
+            "target_label": "ScorTarget"
+          }
+        ]
+      },
+      {
+        "type": "GSP_SC_REF",
+        "source_labels": [
+          "ScorRoot"
+        ],
+        "target_labels": [
+          "ScorTarget"
+        ],
+        "properties": {},
+        "endpoints": [
+          {
+            "source_label": "ScorRoot",
+            "target_label": "ScorTarget"
+          }
+        ]
+      }
+    ]
+  },
+  "queries": {
+    "a": "g.V().hasLabel('ScorRoot').has('id',1).filter(__.out('GSP_SC_HIGH').has('mark',false)).filter(__.has('id',0)).project('uid').by(__.values('uid'))",
+    "b": "g.V().hasLabel('ScorRoot').has('id',1).filter(__.out('GSP_SC_HIGH').has('mark',false)).has('id',0).project('uid').by(__.values('uid'))"
+  },
+  "parameters": {},
+  "expected_rows": [],
+  "settings": {
+    "discovery_warmups": 3,
+    "discovery_pairs": 6,
+    "screen_ratio": 2.0,
+    "confirmation_sessions": 2,
+    "confirmation_warmups": 3,
+    "confirmation_pairs": 20,
+    "control_pairs": 10,
+    "ratio": 5.0,
+    "min_delta_ms": 100.0,
+    "ci_low": 5.0,
+    "direction_consistency": 0.95,
+    "bootstrap_samples": 10000,
+    "timeout_seconds": 60,
+    "max_rows": 10000,
+    "collect_plans": true
+  },
+  "equivalence": "filter(has(id,0)) is the same pure vertex filter as has(id,0); both inputs retain the same written order and indexed anchor; the SINGLE id=1 anchor cannot also satisfy id=0",
+  "work_obligation": "after the wrapper is inlined, the existing cheaper HasStep should be moved before the expensive traversal filter; inspect strategy order and downstream vertex access",
+  "sources": {
+    "janus_version": "https://raw.githubusercontent.com/JanusGraph/janusgraph/v1.1.0/pom.xml",
+    "huge_version": "https://raw.githubusercontent.com/apache/hugegraph/1.7.0/hugegraph-server/pom.xml",
+    "tp_373_ranking": "https://raw.githubusercontent.com/apache/tinkerpop/3.7.3/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/FilterRankingStrategy.java",
+    "tp_373_inline": "https://raw.githubusercontent.com/apache/tinkerpop/3.7.3/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/InlineFilterStrategy.java",
+    "tp_351_ranking": "https://raw.githubusercontent.com/apache/tinkerpop/3.5.1/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/FilterRankingStrategy.java",
+    "tp_351_inline": "https://raw.githubusercontent.com/apache/tinkerpop/3.5.1/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/InlineFilterStrategy.java",
+    "tp_373_count": "https://raw.githubusercontent.com/apache/tinkerpop/3.7.3/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/CountStrategy.java",
+    "tp_351_count": "https://raw.githubusercontent.com/apache/tinkerpop/3.5.1/gremlin-core/src/main/java/org/apache/tinkerpop/gremlin/process/traversal/strategy/optimization/CountStrategy.java",
+    "janus_local_range": "https://raw.githubusercontent.com/JanusGraph/janusgraph/v1.1.0/janusgraph-core/src/main/java/org/janusgraph/graphdb/tinkerpop/optimize/strategy/JanusGraphLocalQueryOptimizerStrategy.java",
+    "janus_has_folder": "https://raw.githubusercontent.com/JanusGraph/janusgraph/v1.1.0/janusgraph-core/src/main/java/org/janusgraph/graphdb/tinkerpop/optimize/step/HasStepFolder.java",
+    "janus_unique_adjacency": "https://raw.githubusercontent.com/JanusGraph/janusgraph/v1.1.0/janusgraph-core/src/main/java/org/janusgraph/graphdb/tinkerpop/optimize/strategy/AdjacentVertexHasUniquePropertyOptimizerStrategy.java"
+  },
+  "confirmation_sessions": [],
+  "database_version": "ApacheHugeGraph/1.7.0",
+  "state_evidence": {
+    "indexes": [
+      {
+        "kind": "SECONDARY",
+        "name": "gsp_cost_lookup_ScorRoot_id",
+        "status": "CREATED",
+        "label": "ScorRoot",
+        "keys": [
+          "id"
+        ]
+      }
+    ],
+    "checks": [
+      {
+        "query": "g.V().hasLabel(\"ScorRoot\").count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "g.V().hasLabel(\"ScorRoot\").values(\"uid\").dedup().count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "g.V().hasLabel(\"ScorTarget\").count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 40003
+          }
+        ]
+      },
+      {
+        "query": "g.V().hasLabel(\"ScorTarget\").values(\"uid\").dedup().count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 40003
+          }
+        ]
+      },
+      {
+        "query": "g.V(\"ScorRoot:1\").project(\"uid\", \"id\", \"key\", \"expected_count\").by(__.coalesce(__.values(\"uid\"), __.constant(null))).by(__.coalesce(__.values(\"id\"), __.constant(null))).by(__.coalesce(__.values(\"key\"), __.constant(null))).by(__.coalesce(__.values(\"expected_count\"), __.constant(null)))",
+        "rows": [
+          {
+            "uid": 1,
+            "id": 1,
+            "key": 1,
+            "expected_count": 40000
+          }
+        ]
+      },
+      {
+        "query": "g.V().hasLabel(\"ScorRoot\").filter{ t -> def v=t.get(); (v.property(\"uid\").isPresent() && v.value(\"uid\") == 1) && (v.property(\"id\").isPresent() && v.value(\"id\") == 1) && (v.property(\"key\").isPresent() && v.value(\"key\") == 1) && (v.property(\"expected_count\").isPresent() && v.value(\"expected_count\") == 40000) }.count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "g.V().hasLabel(\"ScorTarget\").filter{ t -> def v=t.get(); (v.property(\"mark\").isPresent() && v.value(\"mark\") == true) && (v.property(\"key\").isPresent() && v.value(\"key\") == 1) }.count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 40003
+          }
+        ]
+      },
+      {
+        "query": "g.E().filter{ t -> t.get().label() == \"GSP_SC_HIGH\" }.count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 40000
+          }
+        ]
+      },
+      {
+        "query": "g.E().filter{ t -> t.get().label() == \"GSP_SC_REF\" }.count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 3
+          }
+        ]
+      },
+      {
+        "query": "g.E().filter{ t -> t.get().label() == \"GSP_SC_HIGH\" }.filter(__.outV().hasLabel(\"ScorRoot\").has(\"uid\", 1)).filter(__.inV().hasLabel(\"ScorTarget\")).count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 40000
+          }
+        ]
+      },
+      {
+        "query": "g.E().filter{ t -> t.get().label() == \"GSP_SC_REF\" }.filter(__.outV().hasLabel(\"ScorRoot\").has(\"uid\", 1)).filter(__.inV().hasLabel(\"ScorTarget\")).count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 3
+          }
+        ]
+      },
+      {
+        "query": "g.E().filter{ t -> t.get().label() == \"GSP_SC_HIGH\" }.filter(__.outV().hasLabel(\"ScorRoot\").has(\"id\", 1).has(\"key\", 1)).filter(__.inV().hasLabel(\"ScorTarget\").has(\"mark\", true).has(\"key\", 1)).count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 40000
+          }
+        ]
+      },
+      {
+        "query": "g.E().filter{ t -> t.get().label() == \"GSP_SC_REF\" }.filter(__.outV().hasLabel(\"ScorRoot\").has(\"id\", 1).has(\"key\", 1)).filter(__.inV().hasLabel(\"ScorTarget\").has(\"mark\", true).has(\"key\", 1)).count().project(\"count\").by(__.identity())",
+        "rows": [
+          {
+            "count": 3
+          }
+        ]
+      }
+    ],
+    "preparation": "bounded_data_reset_native_schema_and_indexes"
+  },
+  "discovery": {
+    "warmups": [
+      {
+        "order": "AB",
+        "a_ms": 79.76137497462332,
+        "b_ms": 2.649834146723151,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 48.00800001248717,
+        "b_ms": 2.401708159595728,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "BA",
+        "a_ms": 48.92891715280712,
+        "b_ms": 1.8358328379690647,
+        "a_status": "ok",
+        "b_status": "ok"
+      }
+    ],
+    "samples": [
+      {
+        "order": "BA",
+        "a_ms": 48.48741623573005,
+        "b_ms": 7.302209036424756,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "BA",
+        "a_ms": 48.76812407746911,
+        "b_ms": 2.595416037365794,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "BA",
+        "a_ms": 51.819083048030734,
+        "b_ms": 2.6706659700721502,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 46.03175004012883,
+        "b_ms": 2.6041241362690926,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 48.20300010032952,
+        "b_ms": 2.3925418499857187,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 46.54104122892022,
+        "b_ms": 2.6139169931411743,
+        "a_status": "ok",
+        "b_status": "ok"
+      }
+    ],
+    "logical_rows": {
+      "a": [],
+      "b": []
+    },
+    "summary": {
+      "slow_side": "a",
+      "median_ratio": 18.297597120815354,
+      "median_delta_ms": 44.86879124306142,
+      "direction_consistency": 1.0
+    },
+    "native_diagnostics": {
+      "a": {
+        "strategy_explanation": {
+          "format": "ApacheHugeGraph_gremlin_graphson",
+          "analyze": false,
+          "plan": [
+            {
+              "original": [
+                "GraphStep(vertex,[])",
+                "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                "TraversalFilterStep([HasStep([id.eq(0)])])",
+                "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+              ],
+              "intermediate": [
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "TraversalFilterStep([HasStep([id.eq(0)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "ConnectiveStrategy",
+                  "category": "DecorationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "TraversalFilterStep([HasStep([id.eq(0)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "IdentityRemovalStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "TraversalFilterStep([HasStep([id.eq(0)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "MatchPredicateStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "TraversalFilterStep([HasStep([id.eq(0)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "FilterRankingStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "InlineFilterStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "CountStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "IncidentToAdjacentStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "RepeatUnrollStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "PathRetractionStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "EarlyLimitStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "AdjacentToIncidentStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "ByModulatorOptimizationStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "LazyBarrierStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "HugeGraphStepStrategy",
+                  "category": "ProviderOptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "HugeCountStepStrategy",
+                  "category": "ProviderOptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "HugeVertexStepStrategy",
+                  "category": "ProviderOptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "HugePrimaryKeyStrategy",
+                  "category": "ProviderOptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "ProfileStrategy",
+                  "category": "FinalizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "StandardVerificationStrategy",
+                  "category": "VerificationStrategy"
+                }
+              ],
+              "final": [
+                "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1)])",
+                "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                "HasStep([id.eq(0)])",
+                "ProjectStep([uid],[value(uid)])"
+              ]
+            }
+          ]
+        },
+        "profile_work": {
+          "format": "ApacheHugeGraph_gremlin_graphson",
+          "analyze": true,
+          "plan": [
+            {
+              "dur": 47.797292,
+              "metrics": [
+                {
+                  "dur": 2.305541,
+                  "counts": {
+                    "traverserCount": 1,
+                    "elementCount": 1
+                  },
+                  "name": "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1)])",
+                  "annotations": {
+                    "percentDur": 4.8235808003516185
+                  },
+                  "id": "8.0.0()"
+                },
+                {
+                  "dur": 45.459543,
+                  "counts": {},
+                  "name": "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                  "annotations": {
+                    "percentDur": 95.10903462899111
+                  },
+                  "id": "2.0.0()",
+                  "metrics": [
+                    {
+                      "dur": 45.386333,
+                      "counts": {},
+                      "name": "HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])",
+                      "id": "0.1.0(2.0.0())"
+                    }
+                  ]
+                },
+                {
+                  "dur": 0.018124,
+                  "counts": {},
+                  "name": "HasStep([id.eq(0)])",
+                  "annotations": {
+                    "percentDur": 0.037918466175866195
+                  },
+                  "id": "7.0.0()"
+                },
+                {
+                  "dur": 0.014084,
+                  "counts": {},
+                  "name": "ProjectStep([uid],[value(uid)])",
+                  "annotations": {
+                    "percentDur": 0.029466104481400326
+                  },
+                  "id": "4.0.0()"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "b": {
+        "strategy_explanation": {
+          "format": "ApacheHugeGraph_gremlin_graphson",
+          "analyze": false,
+          "plan": [
+            {
+              "original": [
+                "GraphStep(vertex,[])",
+                "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                "HasStep([id.eq(0)])",
+                "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+              ],
+              "intermediate": [
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "ConnectiveStrategy",
+                  "category": "DecorationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "IdentityRemovalStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "HasStep([id.eq(0)])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "MatchPredicateStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1)])",
+                    "HasStep([id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "FilterRankingStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "InlineFilterStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "CountStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "IncidentToAdjacentStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "RepeatUnrollStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "PathRetractionStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "EarlyLimitStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[[PropertiesStep([uid],value)]])"
+                  ],
+                  "strategy": "AdjacentToIncidentStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "ByModulatorOptimizationStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "GraphStep(vertex,[])",
+                    "HasStep([~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "LazyBarrierStrategy",
+                  "category": "OptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "HugeGraphStepStrategy",
+                  "category": "ProviderOptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([VertexStep(OUT,[GSP_SC_HIGH],vertex), HasStep([mark.eq(false)])])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "HugeCountStepStrategy",
+                  "category": "ProviderOptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "HugeVertexStepStrategy",
+                  "category": "ProviderOptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "HugePrimaryKeyStrategy",
+                  "category": "ProviderOptimizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "ProfileStrategy",
+                  "category": "FinalizationStrategy"
+                },
+                {
+                  "traversal": [
+                    "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                    "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                    "ProjectStep([uid],[value(uid)])"
+                  ],
+                  "strategy": "StandardVerificationStrategy",
+                  "category": "VerificationStrategy"
+                }
+              ],
+              "final": [
+                "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                "ProjectStep([uid],[value(uid)])"
+              ]
+            }
+          ]
+        },
+        "profile_work": {
+          "format": "ApacheHugeGraph_gremlin_graphson",
+          "analyze": true,
+          "plan": [
+            {
+              "dur": 0.213542,
+              "metrics": [
+                {
+                  "dur": 0.171333,
+                  "counts": {},
+                  "name": "HugeGraphStep(Vertex,[~label.eq(ScorRoot), id.eq(1), id.eq(0)])",
+                  "annotations": {
+                    "percentDur": 80.2338650007961
+                  },
+                  "id": "8.0.0()"
+                },
+                {
+                  "dur": 0.006709,
+                  "counts": {},
+                  "name": "TraversalFilterStep([HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])])",
+                  "annotations": {
+                    "percentDur": 3.141770705528655
+                  },
+                  "id": "2.0.0()",
+                  "metrics": [
+                    {
+                      "dur": 0.0,
+                      "counts": {},
+                      "name": "HugeVertexStep(OUT,[GSP_SC_HIGH],Vertex,[mark.eq(false)])",
+                      "id": "0.1.0(2.0.0())"
+                    }
+                  ]
+                },
+                {
+                  "dur": 0.0355,
+                  "counts": {},
+                  "name": "ProjectStep([uid],[value(uid)])",
+                  "annotations": {
+                    "percentDur": 16.62436429367525
+                  },
+                  "id": "4.0.0()"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

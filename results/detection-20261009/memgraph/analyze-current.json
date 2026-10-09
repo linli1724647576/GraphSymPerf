@@ -1,0 +1,17 @@
+{
+  "rows": [
+    {
+      "label": "GspLow",
+      "property": [
+        "id"
+      ],
+      "num estimation nodes": 1,
+      "num groups": 1,
+      "avg group size": 1.0,
+      "chi-squared value": 0.0,
+      "avg degree": 0.0
+    }
+  ],
+  "complete": true,
+  "elapsed_ms": 25.24483297020197
+}

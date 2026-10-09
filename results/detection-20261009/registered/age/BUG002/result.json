@@ -1,0 +1,143 @@
+{
+  "format_version": "native-evidence-summary-v1",
+  "kind": "native_optimization_rule",
+  "note": "Metadata for statistical summary only; not IR and not main.py --replay input. Reproduce with the archived native probe script and the referenced original probe recipe.",
+  "native_input": {
+    "dbms": "age",
+    "language": "cypher",
+    "queries": {
+      "a": "MATCH (n:ProbeNode) WHERE coalesce(n.id,null)=1 RETURN n.uid AS uid",
+      "b": "MATCH (n:ProbeNode {id:1}) RETURN n.uid AS uid"
+    },
+    "actual_setup": [
+      "LOAD 'age'",
+      "SET search_path = ag_catalog, \"$user\", public",
+      "DEALLOCATE ALL",
+      "SELECT set_config('statement_timeout', '60000', false)",
+      "SELECT ag_catalog.drop_graph('gsp_cases',true)",
+      "SELECT ag_catalog.create_graph('gsp_cases')",
+      "SELECT ag_catalog.create_vlabel('gsp_cases','ProbeNode')",
+      "INSERT INTO \"gsp_cases\".\"ProbeNode\" (properties) SELECT (jsonb_build_object('uid',i,'id',i)::text)::ag_catalog.agtype FROM generate_series(1,2000000) AS s(i)",
+      "CREATE INDEX \"probe_cost_lookup\" ON \"gsp_cases\".\"ProbeNode\" USING gin (properties)",
+      "CREATE INDEX \"probe_cost_lookup_scalar\" ON \"gsp_cases\".\"ProbeNode\" ((ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties,'\"id\"'::ag_catalog.agtype])))",
+      "VACUUM (ANALYZE) \"gsp_cases\".\"ProbeNode\"",
+      "DISCARD PLANS"
+    ],
+    "recipe": {
+      "mechanism": "property-index",
+      "scale": 2000000,
+      "roots": null,
+      "labels": [
+        "ProbeNode"
+      ],
+      "indexes": [
+        {
+          "label": "ProbeNode",
+          "property": "id",
+          "name": "probe_cost_lookup"
+        }
+      ],
+      "queries": {
+        "a": "MATCH (n:ProbeNode) WHERE coalesce(n.id,null)=1 RETURN n.uid AS uid",
+        "b": "MATCH (n:ProbeNode {id:1}) RETURN n.uid AS uid"
+      },
+      "columns": [
+        "uid"
+      ],
+      "expected_rows": [
+        {
+          "uid": 1
+        }
+      ],
+      "equivalence": "COALESCE(property,NULL) preserves the property value. The state uses integer id properties and both queries select id=1.",
+      "work_obligation": "Simplify the redundant COALESCE wrapper so the existing property index can be used, as the same property-map predicate does.",
+      "novelty": "Separate no-op wrapper probe; do not assume it is the same root cause as the previously reported direct-WHERE issue."
+    },
+    "graph_spec": null,
+    "native_schema": null,
+    "native_schema_mapping": null,
+    "parameters": {}
+  },
+  "case": {
+    "pattern": "native:property-index",
+    "language": "cypher",
+    "mechanism": "property-index",
+    "expected_rows": [
+      {
+        "uid": 1
+      }
+    ]
+  },
+  "result": {
+    "status": "timing_observation",
+    "reason": "native_rule_evidence_manually_reviewed",
+    "dbms": "age",
+    "language": "cypher",
+    "database_version": "Apache AGE/1.7.0 PostgreSQL/18.1 (Debian 18.1-1.pgdg13+2)",
+    "source_status": "native_probe_signal_requires_plan_review",
+    "summary": {
+      "slow_side": "a",
+      "median_ratio": 299.59111195603066,
+      "median_delta_ms": 145.46410355251282,
+      "direction_consistency": 1.0,
+      "ratio_ci_low": 273.8623634823133,
+      "ratio_ci_high": 337.3298695711609,
+      "noise_p99_ms": 11.755946390330791
+    }
+  },
+  "input_hash": "986519cd6402aca0a4ed1bc80c09792e89ccadd8393fe6dcb34705a6817c4843",
+  "dbms": "age",
+  "language": "cypher",
+  "replayable": false,
+  "provenance": {
+    "report": "BUG list/Apache AGE/Native/property-index/BUG002.md",
+    "evidence": "results/detection-20261009/age/native-20261009T141420Z-97ad59/property-index/probe.json",
+    "source_kind": "native_probe",
+    "selected_comparison": "native_ab",
+    "q1_sample_side": "a",
+    "q2_sample_side": "b",
+    "manual_review": "Selected local issue letter after complete-result and native-work review.",
+    "developer_confirmed": false,
+    "submitted": false,
+    "reproducer": "results/detection-20261009/registered/reproducers/age_coalesce_index.py",
+    "reproducer_hashes": {
+      "original_path": "/private/tmp/gsp-detection-20261009/age_coalesce_index.py",
+      "original_sha256": "05ceaf53fcd5aa294c4dc3986f07eea5b2895cbdedc2bfbcdc8608c13486b424",
+      "archived_sha256": "05ceaf53fcd5aa294c4dc3986f07eea5b2895cbdedc2bfbcdc8608c13486b424",
+      "changes": "Unmodified wrapper."
+    },
+    "reproducer_dependencies": {
+      "age_native_probe.py": {
+        "original_path": "/private/tmp/gsp-detection-20261009/age_native_probe.py",
+        "original_sha256": "5928d0ae9b40abe4e09c6095a62f8534110bcdde584bd9a16a1daa88a69cab19",
+        "archived_sha256": "873d05699573d3a92344d377105960f95e5bc4b5e436c2976bc519add886234b",
+        "changes": "Only WORKSPACE locates Src through __file__ ancestors."
+      }
+    }
+  },
+  "verified_report_statistics": {
+    "dbms": "age",
+    "report": "BUG list/Apache AGE/Native/property-index/BUG002.md",
+    "pattern_or_mechanism": "native:property-index",
+    "language": "cypher",
+    "database_version": "Apache AGE/1.7.0 PostgreSQL/18.1 (Debian 18.1-1.pgdg13+2)",
+    "source_kind": "native_probe",
+    "source_comparison": "native_ab",
+    "q1_sample_side": "a",
+    "q2_sample_side": "b",
+    "median_q1_ms": 145.96841658931226,
+    "median_q2_ms": 0.5047089653089643,
+    "ratio_direction": "q1/q2",
+    "median_paired_ratio": 299.59111195603066,
+    "median_paired_delta_ms": 145.46410355251282,
+    "delta_over_100_ms": true,
+    "ratio_ci_low": 273.8623634823133,
+    "ratio_ci_high": 337.3298695711609,
+    "source_ratio_ci_low": 273.8623634823133,
+    "source_ratio_ci_high": 337.3298695711609,
+    "noise_p99_ms": 11.755946390330791,
+    "pairs": 40,
+    "source": "results/detection-20261009/age/native-20261009T141420Z-97ad59/property-index/probe.json",
+    "source_input_hash": ""
+  }
+}

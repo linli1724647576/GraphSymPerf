@@ -19,6 +19,7 @@ DEFAULT_MEASUREMENT = {
     "discovery_warmups": 3, "discovery_pairs": 6, "screen_ratio": 2.0,
     "confirmation_sessions": 2, "confirmation_warmups": 5,
     "confirmation_pairs": 20, "control_pairs": 10, "ratio": 3.0,
+    "min_delta_ms": 0.0,
     "ci_low": 2.0, "direction_consistency": 0.75, "bootstrap_samples": 10_000,
     "timeout_seconds": 10.0, "max_rows": 100_000,
     "collect_plans": False,
@@ -334,6 +335,12 @@ class Memgraph(Neo4j):
             self.execute(query, {}, timeout)
         # Memgraph creates these indexes synchronously; check_case inspects the
         # actual label-property entry before measuring any query.
+        # Analyze after loading so the planner sees current cardinalities and
+        # invalidates plans cached for a previous graph, outside query timers.
+        statistics = self._execute("ANALYZE GRAPH", {}, timeout)
+        if not statistics["complete"]:
+            raise CaseFailure("environment_error", "statistics_preparation_incomplete", stop_target=True)
+        self.statistics_evidence = statistics["rows"]
 
 
 class FalkorDB:
@@ -612,6 +619,9 @@ def measurement_settings(measurement):
         value = settings[key]
         if type(value) not in (float, int) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"invalid {key}")
+    delta = settings["min_delta_ms"]
+    if type(delta) not in (float, int) or not math.isfinite(delta) or delta < 0:
+        raise ValueError("min_delta_ms must be finite and nonnegative")
     if not 0.5 < settings["direction_consistency"] <= 1 or settings["ci_low"] <= 1 or settings["ratio"] <= 1 or settings["screen_ratio"] <= 1:
         raise ValueError("ratio gates must exceed 1; direction_consistency must be in (0.5, 1]")
     return settings
@@ -649,6 +659,7 @@ def _passed(summary, sessions, settings):
                  session["summary"]["median_delta_ms"] > 0 for session in sessions)
     return (stable and summary["median_ratio"] >= settings["ratio"] and
             summary["ratio_ci_low"] >= settings["ci_low"] and
+            summary["median_delta_ms"] > settings["min_delta_ms"] and
             summary["median_delta_ms"] > summary["noise_p99_ms"])
 
 
@@ -779,6 +790,8 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 raise
         report["state_reused"] = _restore_state(db, case, fingerprint, state_cache)
         baseline, report["result_rows"] = check_case(db, case, settings)
+        if hasattr(db, "statistics_evidence"):
+            report.setdefault("statistics_evidence", []).append({"phase": phase, "rows": db.statistics_evidence})
         if hasattr(db, "_state_evidence"):
             report["state_evidence"] = db._state_evidence
         if hasattr(db, "query_engine"):
@@ -827,6 +840,8 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
             fresh_baseline, _ = check_case(db, case, settings)
             if fresh_baseline != baseline:
                 raise CaseFailure("result_mismatch", "result_changed_after_state_restore")
+            if hasattr(db, "statistics_evidence"):
+                report.setdefault("statistics_evidence", []).append({"phase": phase, "rows": db.statistics_evidence})
             _remember_state(db, fingerprint, state_cache)
             phase = f"confirmation_{number + 1}"
             rng = random.Random(seed + 104729 * (number + 1))

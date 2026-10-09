@@ -1,0 +1,4 @@
+{
+  "include_in_analysis": false,
+  "reason": "Exploratory preparation before post-load ANALYZE GRAPH; replaced by the selected post-statistics confirmation."
+}

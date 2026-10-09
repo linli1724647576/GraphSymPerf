@@ -1,0 +1,464 @@
+{
+  "dbms": "age",
+  "language": "cypher",
+  "mechanism": "property-index",
+  "status": "no_screen_signal",
+  "attribution": "native_optimizer_rule_probe",
+  "pattern_id": null,
+  "recipe": {
+    "mechanism": "property-index",
+    "scale": 500000,
+    "roots": null,
+    "labels": [
+      "ProbeNode"
+    ],
+    "indexes": [
+      {
+        "label": "ProbeNode",
+        "property": "id",
+        "name": "probe_cost_lookup"
+      }
+    ],
+    "queries": {
+      "a": "MATCH (n:ProbeNode) WHERE coalesce(n.id,null)=1 RETURN n.uid AS uid",
+      "b": "MATCH (n:ProbeNode {id:1}) RETURN n.uid AS uid"
+    },
+    "columns": [
+      "uid"
+    ],
+    "expected_rows": [
+      {
+        "uid": 1
+      }
+    ],
+    "equivalence": "COALESCE(property,NULL) preserves the property value. The state uses integer id properties and both queries select id=1.",
+    "work_obligation": "Simplify the redundant COALESCE wrapper so the existing property index can be used, as the same property-map predicate does.",
+    "novelty": "Separate no-op wrapper probe; do not assume it is the same root cause as the previously reported direct-WHERE issue."
+  },
+  "settings": {
+    "discovery_warmups": 3,
+    "discovery_pairs": 6,
+    "screen_ratio": 2.0,
+    "confirmation_sessions": 2,
+    "confirmation_warmups": 5,
+    "confirmation_pairs": 20,
+    "control_pairs": 10,
+    "ratio": 5.0,
+    "min_delta_ms": 100.0,
+    "ci_low": 5.0,
+    "direction_consistency": 0.95,
+    "bootstrap_samples": 10000,
+    "timeout_seconds": 60,
+    "max_rows": 10000,
+    "collect_plans": true
+  },
+  "sources": {
+    "property_constraint_lowering": "https://raw.githubusercontent.com/apache/age/806fa2ebdb300b3e76ef30cdba61803babbf2683/src/backend/parser/cypher_clause.c",
+    "scalar_sublink_lowering": "https://raw.githubusercontent.com/apache/age/806fa2ebdb300b3e76ef30cdba61803babbf2683/src/backend/parser/cypher_expr.c",
+    "containment_setting": "https://raw.githubusercontent.com/apache/age/806fa2ebdb300b3e76ef30cdba61803babbf2683/src/backend/utils/ag_guc.c",
+    "native_label_id_defaults": "https://raw.githubusercontent.com/apache/age/806fa2ebdb300b3e76ef30cdba61803babbf2683/src/backend/commands/label_commands.c",
+    "known_property_index_report": "https://github.com/apache/age/issues/2348"
+  },
+  "confirmation_sessions": [],
+  "database_version": "Apache AGE/1.7.0 PostgreSQL/18.1 (Debian 18.1-1.pgdg13+2)",
+  "state_evidence": {
+    "indexes": [
+      {
+        "label": "ProbeNode",
+        "property": "id",
+        "name": "probe_cost_lookup",
+        "kind": "GIN_property_map",
+        "valid": true,
+        "ready": true,
+        "definition": "CREATE INDEX probe_cost_lookup ON gsp_cases.\"ProbeNode\" USING gin (properties)"
+      },
+      {
+        "label": "ProbeNode",
+        "property": "id",
+        "name": "probe_cost_lookup_scalar",
+        "kind": "BTREE_property_expression",
+        "valid": true,
+        "ready": true,
+        "definition": "CREATE INDEX probe_cost_lookup_scalar ON gsp_cases.\"ProbeNode\" USING btree (agtype_access_operator(VARIADIC ARRAY[properties, '\"id\"'::agtype]))"
+      }
+    ],
+    "counts": {
+      "ProbeNode": 500000
+    },
+    "table_statistics": {
+      "ProbeNode": [
+        [
+          500000.0,
+          5682
+        ]
+      ]
+    },
+    "setup_sql": [
+      "LOAD 'age'",
+      "SET search_path = ag_catalog, \"$user\", public",
+      "DEALLOCATE ALL",
+      "SELECT set_config('statement_timeout', '60000', false)",
+      "SELECT ag_catalog.drop_graph('gsp_cases',true)",
+      "SELECT ag_catalog.create_graph('gsp_cases')",
+      "SELECT ag_catalog.create_vlabel('gsp_cases','ProbeNode')",
+      "INSERT INTO \"gsp_cases\".\"ProbeNode\" (properties) SELECT (jsonb_build_object('uid',i,'id',i)::text)::ag_catalog.agtype FROM generate_series(1,500000) AS s(i)",
+      "CREATE INDEX \"probe_cost_lookup\" ON \"gsp_cases\".\"ProbeNode\" USING gin (properties)",
+      "CREATE INDEX \"probe_cost_lookup_scalar\" ON \"gsp_cases\".\"ProbeNode\" ((ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties,'\"id\"'::ag_catalog.agtype])))",
+      "VACUUM (ANALYZE) \"gsp_cases\".\"ProbeNode\"",
+      "DISCARD PLANS"
+    ],
+    "preparation": "fresh_graph_native_bulk_insert_vacuum_analyze_discard_plans",
+    "cypher_checks": {
+      "point_matches": {
+        "query": "MATCH(n:ProbeNode {id:1}) RETURN count(n) AS value",
+        "expected": 1,
+        "actual": {
+          "rows": [
+            {
+              "value": 1
+            }
+          ],
+          "complete": true,
+          "elapsed_ms": 0.7529589347541332
+        }
+      }
+    },
+    "containment_setting": [
+      [
+        "on"
+      ]
+    ]
+  },
+  "discovery": {
+    "warmups": [
+      {
+        "order": "AB",
+        "a_ms": 37.61879098601639,
+        "b_ms": 0.588791910558939,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 38.20049995556474,
+        "b_ms": 0.41020894423127174,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "BA",
+        "a_ms": 37.87175007164478,
+        "b_ms": 0.32270816154778004,
+        "a_status": "ok",
+        "b_status": "ok"
+      }
+    ],
+    "samples": [
+      {
+        "order": "BA",
+        "a_ms": 36.51995910331607,
+        "b_ms": 0.4597501829266548,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "BA",
+        "a_ms": 36.986124934628606,
+        "b_ms": 0.45404210686683655,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "BA",
+        "a_ms": 37.00004192069173,
+        "b_ms": 0.3767090383917093,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 39.54674978740513,
+        "b_ms": 0.6631249561905861,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 37.49604104086757,
+        "b_ms": 0.4801249597221613,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 36.482667084783316,
+        "b_ms": 0.355791999027133,
+        "a_status": "ok",
+        "b_status": "ok"
+      }
+    ],
+    "logical_rows": {
+      "a": [
+        {
+          "uid": 1
+        }
+      ],
+      "b": [
+        {
+          "uid": 1
+        }
+      ]
+    },
+    "summary": {
+      "slow_side": "a",
+      "median_ratio": 80.4470175725222,
+      "median_delta_ms": 36.577707855030894,
+      "direction_consistency": 1.0
+    },
+    "native_diagnostics": {
+      "a": {
+        "query": "MATCH (n:ProbeNode) WHERE coalesce(n.id,null)=1 RETURN n.uid AS uid",
+        "explain": {
+          "format": "postgresql_json",
+          "analyze": false,
+          "plan": [
+            {
+              "Plan": {
+                "Node Type": "Gather",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Startup Cost": 1000.0,
+                "Total Cost": 10064.82,
+                "Plan Rows": 2500,
+                "Plan Width": 32,
+                "Disabled": false,
+                "Workers Planned": 2,
+                "Single Copy": false,
+                "Plans": [
+                  {
+                    "Node Type": "Seq Scan",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": true,
+                    "Async Capable": false,
+                    "Relation Name": "ProbeNode",
+                    "Alias": "n",
+                    "Startup Cost": 0.0,
+                    "Total Cost": 8814.82,
+                    "Plan Rows": 1042,
+                    "Plan Width": 32,
+                    "Disabled": false,
+                    "Filter": "(COALESCE(agtype_access_operator(VARIADIC ARRAY[properties, '\"id\"'::agtype])) = '1'::agtype)"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "profile": {
+          "format": "postgresql_json",
+          "analyze": true,
+          "plan": [
+            {
+              "Plan": {
+                "Node Type": "Gather",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Startup Cost": 1000.0,
+                "Total Cost": 10064.82,
+                "Plan Rows": 2500,
+                "Plan Width": 32,
+                "Actual Startup Time": 0.079,
+                "Actual Total Time": 37.053,
+                "Actual Rows": 1.0,
+                "Actual Loops": 1,
+                "Disabled": false,
+                "Workers Planned": 2,
+                "Workers Launched": 2,
+                "Single Copy": false,
+                "Shared Hit Blocks": 5682,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0,
+                "Plans": [
+                  {
+                    "Node Type": "Seq Scan",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": true,
+                    "Async Capable": false,
+                    "Relation Name": "ProbeNode",
+                    "Alias": "n",
+                    "Startup Cost": 0.0,
+                    "Total Cost": 8814.82,
+                    "Plan Rows": 1042,
+                    "Plan Width": 32,
+                    "Actual Startup Time": 23.233,
+                    "Actual Total Time": 35.175,
+                    "Actual Rows": 0.33,
+                    "Actual Loops": 3,
+                    "Disabled": false,
+                    "Filter": "(COALESCE(agtype_access_operator(VARIADIC ARRAY[properties, '\"id\"'::agtype])) = '1'::agtype)",
+                    "Rows Removed by Filter": 166666,
+                    "Shared Hit Blocks": 5682,
+                    "Shared Read Blocks": 0,
+                    "Shared Dirtied Blocks": 0,
+                    "Shared Written Blocks": 0,
+                    "Local Hit Blocks": 0,
+                    "Local Read Blocks": 0,
+                    "Local Dirtied Blocks": 0,
+                    "Local Written Blocks": 0,
+                    "Temp Read Blocks": 0,
+                    "Temp Written Blocks": 0,
+                    "Workers": []
+                  }
+                ]
+              },
+              "Planning": {
+                "Shared Hit Blocks": 0,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              },
+              "Planning Time": 0.017,
+              "Triggers": [],
+              "Execution Time": 37.058
+            }
+          ]
+        }
+      },
+      "b": {
+        "query": "MATCH (n:ProbeNode {id:1}) RETURN n.uid AS uid",
+        "explain": {
+          "format": "postgresql_json",
+          "analyze": false,
+          "plan": [
+            {
+              "Plan": {
+                "Node Type": "Bitmap Heap Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "ProbeNode",
+                "Alias": "n",
+                "Startup Cost": 30.33,
+                "Total Cost": 217.26,
+                "Plan Rows": 50,
+                "Plan Width": 32,
+                "Disabled": false,
+                "Recheck Cond": "(properties @> '{\"id\": 1}'::agtype)",
+                "Plans": [
+                  {
+                    "Node Type": "Bitmap Index Scan",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Index Name": "probe_cost_lookup",
+                    "Startup Cost": 0.0,
+                    "Total Cost": 30.32,
+                    "Plan Rows": 50,
+                    "Plan Width": 0,
+                    "Disabled": false,
+                    "Index Cond": "(properties @> '{\"id\": 1}'::agtype)"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "profile": {
+          "format": "postgresql_json",
+          "analyze": true,
+          "plan": [
+            {
+              "Plan": {
+                "Node Type": "Bitmap Heap Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "ProbeNode",
+                "Alias": "n",
+                "Startup Cost": 30.33,
+                "Total Cost": 217.26,
+                "Plan Rows": 50,
+                "Plan Width": 32,
+                "Actual Startup Time": 0.018,
+                "Actual Total Time": 0.018,
+                "Actual Rows": 1.0,
+                "Actual Loops": 1,
+                "Disabled": false,
+                "Recheck Cond": "(properties @> '{\"id\": 1}'::agtype)",
+                "Rows Removed by Index Recheck": 0,
+                "Exact Heap Blocks": 1,
+                "Lossy Heap Blocks": 0,
+                "Shared Hit Blocks": 10,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0,
+                "Plans": [
+                  {
+                    "Node Type": "Bitmap Index Scan",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Index Name": "probe_cost_lookup",
+                    "Startup Cost": 0.0,
+                    "Total Cost": 30.32,
+                    "Plan Rows": 50,
+                    "Plan Width": 0,
+                    "Actual Startup Time": 0.014,
+                    "Actual Total Time": 0.014,
+                    "Actual Rows": 1.0,
+                    "Actual Loops": 1,
+                    "Disabled": false,
+                    "Index Cond": "(properties @> '{\"id\": 1}'::agtype)",
+                    "Index Searches": 1,
+                    "Shared Hit Blocks": 9,
+                    "Shared Read Blocks": 0,
+                    "Shared Dirtied Blocks": 0,
+                    "Shared Written Blocks": 0,
+                    "Local Hit Blocks": 0,
+                    "Local Read Blocks": 0,
+                    "Local Dirtied Blocks": 0,
+                    "Local Written Blocks": 0,
+                    "Temp Read Blocks": 0,
+                    "Temp Written Blocks": 0
+                  }
+                ]
+              },
+              "Planning": {
+                "Shared Hit Blocks": 1,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              },
+              "Planning Time": 0.025,
+              "Triggers": [],
+              "Execution Time": 0.021
+            }
+          ]
+        }
+      }
+    }
+  }
+}

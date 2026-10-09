@@ -1,0 +1,1 @@
+MATCH (u:ProbeRoot {uid:1})-[:ProbeA]->(m:ProbeMid) WHERE u.keep=true AND m.keep=true MATCH (m)-[:ProbeB]->(h:ProbeHub) WHERE h.keep=true MATCH (h)-[:ProbeC]->(v:ProbeLeaf) WHERE v.keep=true RETURN u.uid AS root_uid, v.uid AS leaf_uid, 3 AS hops;

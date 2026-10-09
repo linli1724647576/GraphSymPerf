@@ -1,0 +1,1928 @@
+{
+  "format_version": 2,
+  "input_hash": "f9f594c12ee1fa294cb9e0fccf5f9fb4ac97a81da5922b271b11a1987559ba24",
+  "has_reference": false,
+  "case": {
+    "pattern": "P11",
+    "scale": 50000,
+    "seed": 738919972,
+    "parameters": {},
+    "checks": [
+      {
+        "query": "SHOW INDEXES YIELD name, state, labelsOrTypes, properties WHERE name = 'gsp_cost_lookup' RETURN name, state, labelsOrTypes, properties",
+        "expected_rows": [
+          {
+            "name": "gsp_cost_lookup",
+            "state": "ONLINE",
+            "labelsOrTypes": [
+              "GspAnchor"
+            ],
+            "properties": [
+              "uid"
+            ]
+          }
+        ]
+      },
+      {
+        "query": "MATCH (u:GspAnchor {uid: 1}) RETURN count(u) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count",
+        "expected_rows": [
+          {
+            "count": 8
+          }
+        ]
+      },
+      {
+        "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_HIGH]->(w:GspHigh) RETURN count(w) AS count",
+        "expected_rows": [
+          {
+            "count": 200001
+          }
+        ]
+      },
+      {
+        "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_HIGH]->(w:GspHigh) WHERE w.keep = true RETURN count(w) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "MATCH (v:GspLow) RETURN count(DISTINCT v.uid) AS count",
+        "expected_rows": [
+          {
+            "count": 8
+          }
+        ]
+      }
+    ],
+    "expected_rows": [
+      {
+        "u.uid": 1,
+        "v.uid": 2,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -1,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -2,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -3,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -4,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -5,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -6,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -7,
+        "w.uid": 3
+      }
+    ],
+    "bindings": {
+      "shared_anchor": "u",
+      "low_candidates": 8,
+      "high_candidates": 200001,
+      "state_variant": "multi_low",
+      "low_branch_multiplicity": 8,
+      "multiplicity_anchor_uid": 1,
+      "root_high_candidates": 200001,
+      "cost_kind": "repeated_branch_work",
+      "high_matches": 1,
+      "total_low_matches": 8,
+      "anchor_candidates": 1,
+      "variant": {
+        "state_variant": "multi_low",
+        "high_predicate": 1,
+        "branch_order": 1,
+        "complexity": 2
+      },
+      "role_choices": {
+        "state_variant": "multi_low",
+        "high_predicate": "(NOT (w.keep = false))",
+        "branch_order": "high_first"
+      }
+    },
+    "skeleton": "MATCH $lowCostNode(u) MATCH $lowCostPattern(u,v) MATCH $highCostPattern(u,w) RETURN u.uid, v.uid, w.uid",
+    "placeholders": [
+      {
+        "name": "lowCostNode",
+        "kind": "node_pattern",
+        "role": "low",
+        "variables": [
+          "u"
+        ]
+      },
+      {
+        "name": "lowCostPattern",
+        "kind": "graph_pattern",
+        "role": "low",
+        "variables": [
+          "u",
+          "v"
+        ]
+      },
+      {
+        "name": "highCostPattern",
+        "kind": "graph_pattern",
+        "role": "high",
+        "variables": [
+          "u",
+          "w"
+        ]
+      }
+    ],
+    "source": {
+      "generator": "builtin_template",
+      "builtin_pattern": "P11",
+      "raw_query": null,
+      "derivation_preserves_original_result": false,
+      "seed_syntax_enriched": false,
+      "enrichment_origin": "builtin_template",
+      "derivation_steps": [
+        "instantiate_builtin_pattern",
+        "populate_cost_roles"
+      ],
+      "generation_mode": "builtin_template",
+      "population_seed": 738919972,
+      "data_seed": 0,
+      "state_variant": "multi_low",
+      "populated_query_sha256": "6f22343467c8faf59e40ba79aa36f9e1eba78266f974cd7621e0853f0c9990d4",
+      "template_id": "P11-7018a6dcc6",
+      "variant": {
+        "state_variant": "multi_low",
+        "high_predicate": 1,
+        "branch_order": 1,
+        "complexity": 2
+      },
+      "role_choices": {
+        "state_variant": "multi_low",
+        "high_predicate": "(NOT (w.keep = false))",
+        "branch_order": "high_first"
+      },
+      "complexity": 2,
+      "role_sampling": "independent_seeded_random"
+    },
+    "data_seed": 0,
+    "state_variant": "multi_low",
+    "complexity": 2,
+    "variant": {
+      "state_variant": "multi_low",
+      "high_predicate": 1,
+      "branch_order": 1,
+      "complexity": 2
+    },
+    "role_choices": {
+      "state_variant": "multi_low",
+      "high_predicate": "(NOT (w.keep = false))",
+      "branch_order": "high_first"
+    },
+    "template_id": "P11-7018a6dcc6"
+  },
+  "measurement": {
+    "discovery_warmups": 3,
+    "discovery_pairs": 6,
+    "screen_ratio": 2.0,
+    "confirmation_sessions": 2,
+    "confirmation_warmups": 5,
+    "confirmation_pairs": 20,
+    "control_pairs": 10,
+    "ratio": 5,
+    "min_delta_ms": 100,
+    "ci_low": 5,
+    "direction_consistency": 0.95,
+    "bootstrap_samples": 10000,
+    "timeout_seconds": 60,
+    "max_rows": 10000,
+    "collect_plans": true
+  },
+  "result": {
+    "status": "candidate",
+    "reason": "performance_difference_confirmed",
+    "stop_target": false,
+    "dbms": "memgraph",
+    "language": "cypher",
+    "discovery": {
+      "warmups": [
+        {
+          "order": "AB",
+          "a_ms": 31.12033405341208,
+          "b_ms": 170.37729104049504,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 29.897707980126143,
+          "b_ms": 186.39379111118615,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 29.48862500488758,
+          "b_ms": 172.89912491105497,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "samples": [
+        {
+          "order": "AB",
+          "a_ms": 30.758541077375412,
+          "b_ms": 173.40354179032147,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 30.4472919087857,
+          "b_ms": 170.49200017936528,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 29.643791960552335,
+          "b_ms": 171.99066700413823,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 38.28937513753772,
+          "b_ms": 187.6498330384493,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 30.902125174179673,
+          "b_ms": 173.59954211860895,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 30.680124880746007,
+          "b_ms": 175.15858309343457,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "summary": {
+        "slow_side": "b",
+        "median_ratio": 5.627647740637977,
+        "median_delta_ms": 142.67120882868767,
+        "direction_consistency": 1.0
+      }
+    },
+    "confirmation_sessions": [
+      {
+        "session": 1,
+        "warmups": [
+          {
+            "order": "AB",
+            "a_ms": 31.100000021979213,
+            "b_ms": 175.8317919448018,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 33.92204106785357,
+            "b_ms": 173.9131659269333,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 35.85974988527596,
+            "b_ms": 180.8763339649886,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 39.35462492518127,
+            "b_ms": 175.76154181733727,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 33.50083390250802,
+            "b_ms": 178.83137497119606,
+            "a_status": "ok",
+            "b_status": "ok"
+          }
+        ],
+        "samples": [
+          {
+            "order": "BA",
+            "a_ms": 38.397207856178284,
+            "b_ms": 182.8412499744445,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.25154220126569,
+            "b_ms": 175.90841697528958,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.9564170204103,
+            "b_ms": 171.4564999565482,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.67195890657604,
+            "b_ms": 180.34795788116753,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.960916938260198,
+            "b_ms": 173.1055409181863,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.51791698858142,
+            "b_ms": 181.1650418676436,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 30.484374845400453,
+            "b_ms": 172.94791690073907,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.435250002890825,
+            "b_ms": 181.1976251192391,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.44883387722075,
+            "b_ms": 177.0096670370549,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.30233397334814,
+            "b_ms": 174.538167193532,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.118292059749365,
+            "b_ms": 179.0678750257939,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 31.69183386489749,
+            "b_ms": 173.62104216590524,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 31.173249939456582,
+            "b_ms": 177.72683291696012,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 33.469083020463586,
+            "b_ms": 176.05483415536582,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 31.747750006616116,
+            "b_ms": 193.78304108977318,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 31.09816601499915,
+            "b_ms": 174.602041952312,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.613999977707863,
+            "b_ms": 174.68320787884295,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 30.9964579064399,
+            "b_ms": 172.92791698127985,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.134125078096986,
+            "b_ms": 175.62954197637737,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 30.902709113433957,
+            "b_ms": 174.224958056584,
+            "a_status": "ok",
+            "b_status": "ok"
+          }
+        ],
+        "control_a": [
+          {
+            "order": "BA",
+            "a_ms": 31.42408304847777,
+            "b_ms": 30.869875103235245,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 30.541040934622288,
+            "b_ms": 31.201875070109963,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.35995799675584,
+            "b_ms": 31.505791004747152,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 31.47349995560944,
+            "b_ms": 30.843916814774275,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.50137490592897,
+            "b_ms": 31.98595903813839,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.545791076496243,
+            "b_ms": 31.891916878521442,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.982290955260396,
+            "b_ms": 31.827084021642804,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.87533298134804,
+            "b_ms": 31.86500002630055,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 30.71645786985755,
+            "b_ms": 31.53604199178517,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 31.237500021234155,
+            "b_ms": 32.99729200080037,
+            "a_status": "ok",
+            "b_status": "ok"
+          }
+        ],
+        "control_b": [
+          {
+            "order": "AB",
+            "a_ms": 176.0136669036001,
+            "b_ms": 188.85470810346305,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 186.04016583412886,
+            "b_ms": 175.15554185956717,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 171.6462499462068,
+            "b_ms": 175.84116710349917,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 178.9393329527229,
+            "b_ms": 181.33445922285318,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 177.9481670819223,
+            "b_ms": 176.46929109469056,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 177.6929588522762,
+            "b_ms": 173.91845909878612,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 178.0099580064416,
+            "b_ms": 189.70416695810854,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 178.0116248410195,
+            "b_ms": 177.05183406360447,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 178.34791704081,
+            "b_ms": 175.6862080655992,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 194.1606670152396,
+            "b_ms": 186.12349987961352,
+            "a_status": "ok",
+            "b_status": "ok"
+          }
+        ],
+        "summary": {
+          "slow_side": "b",
+          "median_ratio": 5.573249517707996,
+          "median_delta_ms": 143.58037535566837,
+          "direction_consistency": 1.0
+        },
+        "noise_p99_ms": 12.737826297525316
+      },
+      {
+        "session": 2,
+        "warmups": [
+          {
+            "order": "AB",
+            "a_ms": 32.68916718661785,
+            "b_ms": 201.1653329245746,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 37.90095797739923,
+            "b_ms": 197.02045898884535,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 37.66679111868143,
+            "b_ms": 177.60433303192258,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.659166026860476,
+            "b_ms": 181.99304095469415,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 33.20070798508823,
+            "b_ms": 182.3041660245508,
+            "a_status": "ok",
+            "b_status": "ok"
+          }
+        ],
+        "samples": [
+          {
+            "order": "AB",
+            "a_ms": 34.917958080768585,
+            "b_ms": 198.71966587379575,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 33.03300007246435,
+            "b_ms": 191.69412506744266,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.77866682037711,
+            "b_ms": 178.55583294294775,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.38220908679068,
+            "b_ms": 194.0281658899039,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 33.48150011152029,
+            "b_ms": 176.80770787410438,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.226125011220574,
+            "b_ms": 193.95816721953452,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 85.63079219311476,
+            "b_ms": 213.11062504537404,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.98100014217198,
+            "b_ms": 182.23033286631107,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 33.078167121857405,
+            "b_ms": 178.10312495566905,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.92175009846687,
+            "b_ms": 175.87266699410975,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.63929206877947,
+            "b_ms": 180.1624170038849,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 35.56083398871124,
+            "b_ms": 196.82870898395777,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 31.988041941076517,
+            "b_ms": 195.07537502795458,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.27970818988979,
+            "b_ms": 177.7573749423027,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 34.88174988888204,
+            "b_ms": 185.4237080551684,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 33.97420793771744,
+            "b_ms": 185.1552079897374,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.9072920139879,
+            "b_ms": 183.89800004661083,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.43583394214511,
+            "b_ms": 195.98395796492696,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.8421660233289,
+            "b_ms": 180.40633294731379,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 33.10224995948374,
+            "b_ms": 175.503334030509,
+            "a_status": "ok",
+            "b_status": "ok"
+          }
+        ],
+        "control_a": [
+          {
+            "order": "AB",
+            "a_ms": 32.71012497134507,
+            "b_ms": 32.474624924361706,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.254917081445456,
+            "b_ms": 32.42241591215134,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.45779103599489,
+            "b_ms": 32.23454090766609,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.67395805940032,
+            "b_ms": 33.59787492081523,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.393916975706816,
+            "b_ms": 32.53087494522333,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 31.921624904498458,
+            "b_ms": 33.11262489296496,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 32.018749974668026,
+            "b_ms": 32.36508392728865,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.471542013809085,
+            "b_ms": 31.97608282789588,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.58150001056492,
+            "b_ms": 34.24091706983745,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 32.90595789439976,
+            "b_ms": 32.88958384655416,
+            "a_status": "ok",
+            "b_status": "ok"
+          }
+        ],
+        "control_b": [
+          {
+            "order": "BA",
+            "a_ms": 177.20129108056426,
+            "b_ms": 178.66137507371604,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 177.69833304919302,
+            "b_ms": 185.03699987195432,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 175.9812079835683,
+            "b_ms": 195.46316703781486,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 185.0382920820266,
+            "b_ms": 194.35933302156627,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 193.69058310985565,
+            "b_ms": 177.77637485414743,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 176.9022080115974,
+            "b_ms": 178.3954577986151,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 181.03225016966462,
+            "b_ms": 182.82087496481836,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "BA",
+            "a_ms": 185.7122501824051,
+            "b_ms": 251.30725000053644,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 195.61924994923174,
+            "b_ms": 162.33149985782802,
+            "a_status": "ok",
+            "b_status": "ok"
+          },
+          {
+            "order": "AB",
+            "a_ms": 168.73504198156297,
+            "b_ms": 164.88162497989833,
+            "a_status": "ok",
+            "b_status": "ok"
+          }
+        ],
+        "summary": {
+          "slow_side": "b",
+          "median_ratio": 5.513292719031065,
+          "median_delta_ms": 149.89564544521272,
+          "direction_consistency": 1.0
+        },
+        "noise_p99_ms": 62.68734734272584
+      }
+    ],
+    "summary": {
+      "slow_side": "b",
+      "median_ratio": 5.525407064493634,
+      "median_delta_ms": 145.6689996412024,
+      "direction_consistency": 1.0,
+      "ratio_ci_low": 5.466339747612591,
+      "ratio_ci_high": 5.587403850602078,
+      "noise_p99_ms": 62.68734734272584
+    },
+    "reference_comparisons": {},
+    "comparisons": {
+      "ab": {
+        "pair_kind": "symmetry",
+        "status": "candidate",
+        "discovery": {
+          "warmups": [
+            {
+              "order": "AB",
+              "a_ms": 31.12033405341208,
+              "b_ms": 170.37729104049504,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 29.897707980126143,
+              "b_ms": 186.39379111118615,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 29.48862500488758,
+              "b_ms": 172.89912491105497,
+              "a_status": "ok",
+              "b_status": "ok"
+            }
+          ],
+          "samples": [
+            {
+              "order": "AB",
+              "a_ms": 30.758541077375412,
+              "b_ms": 173.40354179032147,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 30.4472919087857,
+              "b_ms": 170.49200017936528,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 29.643791960552335,
+              "b_ms": 171.99066700413823,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 38.28937513753772,
+              "b_ms": 187.6498330384493,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 30.902125174179673,
+              "b_ms": 173.59954211860895,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 30.680124880746007,
+              "b_ms": 175.15858309343457,
+              "a_status": "ok",
+              "b_status": "ok"
+            }
+          ],
+          "summary": {
+            "slow_side": "b",
+            "median_ratio": 5.627647740637977,
+            "median_delta_ms": 142.67120882868767,
+            "direction_consistency": 1.0
+          }
+        },
+        "confirmation_sessions": [
+          {
+            "session": 1,
+            "warmups": [
+              {
+                "order": "AB",
+                "a_ms": 31.100000021979213,
+                "b_ms": 175.8317919448018,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 33.92204106785357,
+                "b_ms": 173.9131659269333,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 35.85974988527596,
+                "b_ms": 180.8763339649886,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 39.35462492518127,
+                "b_ms": 175.76154181733727,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 33.50083390250802,
+                "b_ms": 178.83137497119606,
+                "a_status": "ok",
+                "b_status": "ok"
+              }
+            ],
+            "samples": [
+              {
+                "order": "BA",
+                "a_ms": 38.397207856178284,
+                "b_ms": 182.8412499744445,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.25154220126569,
+                "b_ms": 175.90841697528958,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.9564170204103,
+                "b_ms": 171.4564999565482,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.67195890657604,
+                "b_ms": 180.34795788116753,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.960916938260198,
+                "b_ms": 173.1055409181863,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.51791698858142,
+                "b_ms": 181.1650418676436,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 30.484374845400453,
+                "b_ms": 172.94791690073907,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.435250002890825,
+                "b_ms": 181.1976251192391,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.44883387722075,
+                "b_ms": 177.0096670370549,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.30233397334814,
+                "b_ms": 174.538167193532,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.118292059749365,
+                "b_ms": 179.0678750257939,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 31.69183386489749,
+                "b_ms": 173.62104216590524,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 31.173249939456582,
+                "b_ms": 177.72683291696012,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 33.469083020463586,
+                "b_ms": 176.05483415536582,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 31.747750006616116,
+                "b_ms": 193.78304108977318,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 31.09816601499915,
+                "b_ms": 174.602041952312,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.613999977707863,
+                "b_ms": 174.68320787884295,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 30.9964579064399,
+                "b_ms": 172.92791698127985,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.134125078096986,
+                "b_ms": 175.62954197637737,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 30.902709113433957,
+                "b_ms": 174.224958056584,
+                "a_status": "ok",
+                "b_status": "ok"
+              }
+            ],
+            "control_a": [
+              {
+                "order": "BA",
+                "a_ms": 31.42408304847777,
+                "b_ms": 30.869875103235245,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 30.541040934622288,
+                "b_ms": 31.201875070109963,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.35995799675584,
+                "b_ms": 31.505791004747152,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 31.47349995560944,
+                "b_ms": 30.843916814774275,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.50137490592897,
+                "b_ms": 31.98595903813839,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.545791076496243,
+                "b_ms": 31.891916878521442,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.982290955260396,
+                "b_ms": 31.827084021642804,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.87533298134804,
+                "b_ms": 31.86500002630055,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 30.71645786985755,
+                "b_ms": 31.53604199178517,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 31.237500021234155,
+                "b_ms": 32.99729200080037,
+                "a_status": "ok",
+                "b_status": "ok"
+              }
+            ],
+            "control_b": [
+              {
+                "order": "AB",
+                "a_ms": 176.0136669036001,
+                "b_ms": 188.85470810346305,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 186.04016583412886,
+                "b_ms": 175.15554185956717,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 171.6462499462068,
+                "b_ms": 175.84116710349917,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 178.9393329527229,
+                "b_ms": 181.33445922285318,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 177.9481670819223,
+                "b_ms": 176.46929109469056,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 177.6929588522762,
+                "b_ms": 173.91845909878612,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 178.0099580064416,
+                "b_ms": 189.70416695810854,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 178.0116248410195,
+                "b_ms": 177.05183406360447,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 178.34791704081,
+                "b_ms": 175.6862080655992,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 194.1606670152396,
+                "b_ms": 186.12349987961352,
+                "a_status": "ok",
+                "b_status": "ok"
+              }
+            ],
+            "summary": {
+              "slow_side": "b",
+              "median_ratio": 5.573249517707996,
+              "median_delta_ms": 143.58037535566837,
+              "direction_consistency": 1.0
+            },
+            "noise_p99_ms": 12.737826297525316
+          },
+          {
+            "session": 2,
+            "warmups": [
+              {
+                "order": "AB",
+                "a_ms": 32.68916718661785,
+                "b_ms": 201.1653329245746,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 37.90095797739923,
+                "b_ms": 197.02045898884535,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 37.66679111868143,
+                "b_ms": 177.60433303192258,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.659166026860476,
+                "b_ms": 181.99304095469415,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 33.20070798508823,
+                "b_ms": 182.3041660245508,
+                "a_status": "ok",
+                "b_status": "ok"
+              }
+            ],
+            "samples": [
+              {
+                "order": "AB",
+                "a_ms": 34.917958080768585,
+                "b_ms": 198.71966587379575,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 33.03300007246435,
+                "b_ms": 191.69412506744266,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.77866682037711,
+                "b_ms": 178.55583294294775,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.38220908679068,
+                "b_ms": 194.0281658899039,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 33.48150011152029,
+                "b_ms": 176.80770787410438,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.226125011220574,
+                "b_ms": 193.95816721953452,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 85.63079219311476,
+                "b_ms": 213.11062504537404,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.98100014217198,
+                "b_ms": 182.23033286631107,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 33.078167121857405,
+                "b_ms": 178.10312495566905,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.92175009846687,
+                "b_ms": 175.87266699410975,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.63929206877947,
+                "b_ms": 180.1624170038849,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 35.56083398871124,
+                "b_ms": 196.82870898395777,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 31.988041941076517,
+                "b_ms": 195.07537502795458,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.27970818988979,
+                "b_ms": 177.7573749423027,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 34.88174988888204,
+                "b_ms": 185.4237080551684,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 33.97420793771744,
+                "b_ms": 185.1552079897374,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.9072920139879,
+                "b_ms": 183.89800004661083,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.43583394214511,
+                "b_ms": 195.98395796492696,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.8421660233289,
+                "b_ms": 180.40633294731379,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 33.10224995948374,
+                "b_ms": 175.503334030509,
+                "a_status": "ok",
+                "b_status": "ok"
+              }
+            ],
+            "control_a": [
+              {
+                "order": "AB",
+                "a_ms": 32.71012497134507,
+                "b_ms": 32.474624924361706,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.254917081445456,
+                "b_ms": 32.42241591215134,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.45779103599489,
+                "b_ms": 32.23454090766609,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.67395805940032,
+                "b_ms": 33.59787492081523,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.393916975706816,
+                "b_ms": 32.53087494522333,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 31.921624904498458,
+                "b_ms": 33.11262489296496,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 32.018749974668026,
+                "b_ms": 32.36508392728865,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.471542013809085,
+                "b_ms": 31.97608282789588,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.58150001056492,
+                "b_ms": 34.24091706983745,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 32.90595789439976,
+                "b_ms": 32.88958384655416,
+                "a_status": "ok",
+                "b_status": "ok"
+              }
+            ],
+            "control_b": [
+              {
+                "order": "BA",
+                "a_ms": 177.20129108056426,
+                "b_ms": 178.66137507371604,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 177.69833304919302,
+                "b_ms": 185.03699987195432,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 175.9812079835683,
+                "b_ms": 195.46316703781486,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 185.0382920820266,
+                "b_ms": 194.35933302156627,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 193.69058310985565,
+                "b_ms": 177.77637485414743,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 176.9022080115974,
+                "b_ms": 178.3954577986151,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 181.03225016966462,
+                "b_ms": 182.82087496481836,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "BA",
+                "a_ms": 185.7122501824051,
+                "b_ms": 251.30725000053644,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 195.61924994923174,
+                "b_ms": 162.33149985782802,
+                "a_status": "ok",
+                "b_status": "ok"
+              },
+              {
+                "order": "AB",
+                "a_ms": 168.73504198156297,
+                "b_ms": 164.88162497989833,
+                "a_status": "ok",
+                "b_status": "ok"
+              }
+            ],
+            "summary": {
+              "slow_side": "b",
+              "median_ratio": 5.513292719031065,
+              "median_delta_ms": 149.89564544521272,
+              "direction_consistency": 1.0
+            },
+            "noise_p99_ms": 62.68734734272584
+          }
+        ],
+        "summary": {
+          "slow_side": "b",
+          "median_ratio": 5.525407064493634,
+          "median_delta_ms": 145.6689996412024,
+          "direction_consistency": 1.0,
+          "ratio_ci_low": 5.466339747612591,
+          "ratio_ci_high": 5.587403850602078,
+          "noise_p99_ms": 62.68734734272584
+        }
+      }
+    },
+    "pair_kind": "symmetry",
+    "measurement": {
+      "discovery_warmups": 3,
+      "discovery_pairs": 6,
+      "screen_ratio": 2.0,
+      "confirmation_sessions": 2,
+      "confirmation_warmups": 5,
+      "confirmation_pairs": 20,
+      "control_pairs": 10,
+      "ratio": 5,
+      "min_delta_ms": 100,
+      "ci_low": 5,
+      "direction_consistency": 0.95,
+      "bootstrap_samples": 10000,
+      "timeout_seconds": 60,
+      "max_rows": 10000,
+      "collect_plans": true
+    },
+    "database_version": "Memgraph/3.10.1",
+    "state_reused": false,
+    "result_rows": 8,
+    "statistics_evidence": [
+      {
+        "phase": "discovery_setup",
+        "rows": [
+          {
+            "label": "GspAnchor",
+            "property": [
+              "uid"
+            ],
+            "num estimation nodes": 1,
+            "num groups": 1,
+            "avg group size": 1.0,
+            "chi-squared value": 0.0,
+            "avg degree": 200009.0
+          }
+        ]
+      },
+      {
+        "phase": "confirmation_1_setup",
+        "rows": [
+          {
+            "label": "GspAnchor",
+            "property": [
+              "uid"
+            ],
+            "num estimation nodes": 1,
+            "num groups": 1,
+            "avg group size": 1.0,
+            "chi-squared value": 0.0,
+            "avg degree": 200009.0
+          }
+        ]
+      },
+      {
+        "phase": "confirmation_2_setup",
+        "rows": [
+          {
+            "label": "GspAnchor",
+            "property": [
+              "uid"
+            ],
+            "num estimation nodes": 1,
+            "num groups": 1,
+            "avg group size": 1.0,
+            "chi-squared value": 0.0,
+            "avg degree": 200009.0
+          }
+        ]
+      }
+    ],
+    "candidate_comparison": "ab",
+    "plans": {
+      "a": {
+        "format": "native",
+        "analyze": true,
+        "plan": "{\"absolute_time\":0.018087456907818104,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.004709406982911165,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.2805222867431421,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.0013753135436820217,\"actual_hits\":2,\"children\":[{\"absolute_time\":0.005376225670756994,\"actual_hits\":2,\"children\":[{\"absolute_time\":20.844460448884675,\"actual_hits\":2,\"children\":[{\"absolute_time\":4.069844508931035,\"actual_hits\":200011,\"children\":[{\"absolute_time\":8.335233598072859e-05,\"actual_hits\":2,\"children\":[],\"name\":\"Once\",\"relative_time\":3.304425120900654e-06}],\"name\":\"ScanAll (w)\",\"relative_time\":0.16134516537821625}],\"name\":\"Filter (w :GspHigh), Generic {w}\",\"relative_time\":0.8263590687469125}],\"name\":\"Expand (w)<-[anon2:GSP_HIGH]-(u)\",\"relative_time\":0.00021313542029809219}],\"name\":\"Filter (u :GspAnchor), {u.uid}\",\"relative_time\":5.452301449486079e-05}],\"name\":\"Expand (u)-[anon4:GSP_LOW]->(v)\",\"relative_time\":0.011121042744391152}],\"name\":\"Filter (v :GspLow)\",\"relative_time\":0.00018670001933088695}],\"name\":\"Produce {u.uid, v.uid, w.uid}\",\"relative_time\":0.0007170602512354419}",
+        "rows": [
+          {
+            "OPERATOR": "* Produce {u.uid, v.uid, w.uid}",
+            "ACTUAL HITS": 9,
+            "RELATIVE TIME": "  0.071706 %",
+            "ABSOLUTE TIME": "  0.018087 ms"
+          },
+          {
+            "OPERATOR": "* Filter (v :GspLow)",
+            "ACTUAL HITS": 9,
+            "RELATIVE TIME": "  0.018670 %",
+            "ABSOLUTE TIME": "  0.004709 ms"
+          },
+          {
+            "OPERATOR": "* Expand (u)-[anon4:GSP_LOW]->(v)",
+            "ACTUAL HITS": 9,
+            "RELATIVE TIME": "  1.112104 %",
+            "ABSOLUTE TIME": "  0.280522 ms"
+          },
+          {
+            "OPERATOR": "* Filter (u :GspAnchor), {u.uid}",
+            "ACTUAL HITS": 2,
+            "RELATIVE TIME": "  0.005452 %",
+            "ABSOLUTE TIME": "  0.001375 ms"
+          },
+          {
+            "OPERATOR": "* Expand (w)<-[anon2:GSP_HIGH]-(u)",
+            "ACTUAL HITS": 2,
+            "RELATIVE TIME": "  0.021314 %",
+            "ABSOLUTE TIME": "  0.005376 ms"
+          },
+          {
+            "OPERATOR": "* Filter (w :GspHigh), Generic {w}",
+            "ACTUAL HITS": 2,
+            "RELATIVE TIME": " 82.635907 %",
+            "ABSOLUTE TIME": " 20.844460 ms"
+          },
+          {
+            "OPERATOR": "* ScanAll (w)",
+            "ACTUAL HITS": 200011,
+            "RELATIVE TIME": " 16.134517 %",
+            "ABSOLUTE TIME": "  4.069845 ms"
+          },
+          {
+            "OPERATOR": "* Once",
+            "ACTUAL HITS": 2,
+            "RELATIVE TIME": "  0.000330 %",
+            "ABSOLUTE TIME": "  0.000083 ms"
+          }
+        ]
+      },
+      "b": {
+        "format": "native",
+        "analyze": true,
+        "plan": "{\"absolute_time\":0.01733475526256899,\"actual_hits\":9,\"children\":[{\"absolute_time\":138.41131188796612,\"actual_hits\":9,\"children\":[{\"absolute_time\":35.571376169724,\"actual_hits\":1600009,\"children\":[{\"absolute_time\":0.00787564602073447,\"actual_hits\":9,\"children\":[{\"absolute_time\":0.021501763739148076,\"actual_hits\":9,\"children\":[{\"absolute_time\":2.73859964089254,\"actual_hits\":9,\"children\":[{\"absolute_time\":2.549584136394913,\"actual_hits\":200011,\"children\":[{\"absolute_time\":0.0,\"actual_hits\":2,\"children\":[],\"name\":\"Once\",\"relative_time\":0.0}],\"name\":\"ScanAll (v)\",\"relative_time\":0.014218260582826684}],\"name\":\"Filter (v :GspLow)\",\"relative_time\":0.015272342956017855}],\"name\":\"Expand (v)<-[anon2:GSP_LOW]-(u)\",\"relative_time\":0.00011990884139476291}],\"name\":\"Filter (u :GspAnchor), {u.uid}\",\"relative_time\":4.392009888296548e-05}],\"name\":\"Expand (u)-[anon4:GSP_HIGH]->(w)\",\"relative_time\":0.19837081995106512}],\"name\":\"Filter (w :GspHigh), Generic {w}\",\"relative_time\":0.771878076875975}],\"name\":\"Produce {u.uid, v.uid, w.uid}\",\"relative_time\":9.667069383763831e-05}",
+        "rows": [
+          {
+            "OPERATOR": "* Produce {u.uid, v.uid, w.uid}",
+            "ACTUAL HITS": 9,
+            "RELATIVE TIME": "  0.009667 %",
+            "ABSOLUTE TIME": "  0.017335 ms"
+          },
+          {
+            "OPERATOR": "* Filter (w :GspHigh), Generic {w}",
+            "ACTUAL HITS": 9,
+            "RELATIVE TIME": " 77.187808 %",
+            "ABSOLUTE TIME": " 138.411312 ms"
+          },
+          {
+            "OPERATOR": "* Expand (u)-[anon4:GSP_HIGH]->(w)",
+            "ACTUAL HITS": 1600009,
+            "RELATIVE TIME": " 19.837082 %",
+            "ABSOLUTE TIME": " 35.571376 ms"
+          },
+          {
+            "OPERATOR": "* Filter (u :GspAnchor), {u.uid}",
+            "ACTUAL HITS": 9,
+            "RELATIVE TIME": "  0.004392 %",
+            "ABSOLUTE TIME": "  0.007876 ms"
+          },
+          {
+            "OPERATOR": "* Expand (v)<-[anon2:GSP_LOW]-(u)",
+            "ACTUAL HITS": 9,
+            "RELATIVE TIME": "  0.011991 %",
+            "ABSOLUTE TIME": "  0.021502 ms"
+          },
+          {
+            "OPERATOR": "* Filter (v :GspLow)",
+            "ACTUAL HITS": 9,
+            "RELATIVE TIME": "  1.527234 %",
+            "ABSOLUTE TIME": "  2.738600 ms"
+          },
+          {
+            "OPERATOR": "* ScanAll (v)",
+            "ACTUAL HITS": 200011,
+            "RELATIVE TIME": "  1.421826 %",
+            "ABSOLUTE TIME": "  2.549584 ms"
+          },
+          {
+            "OPERATOR": "* Once",
+            "ACTUAL HITS": 2,
+            "RELATIVE TIME": "  0.000000 %",
+            "ABSOLUTE TIME": "  0.000000 ms"
+          }
+        ]
+      }
+    }
+  }
+}

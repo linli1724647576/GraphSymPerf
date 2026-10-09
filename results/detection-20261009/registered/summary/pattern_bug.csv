@@ -1,0 +1,15 @@
+dbms,bug_id,status,issue_url,P4,P10,P11,P13,S7,native:coalesce-count,native:correlated-count,native:count-nonnull,native:filter-wrapper,native:path-pruning,native:property-index,native:unique-singleton
+age,BUG001,reproduced,,0,0,0,0,0,0,1,0,0,0,0,0
+age,BUG002,reproduced,,0,0,0,0,0,0,0,0,0,0,1,0
+arcadedb,BUG001,reproduced,,1,0,0,0,0,0,0,0,0,0,0,0
+arcadedb,BUG002,reproduced,,0,0,0,0,1,0,0,0,0,0,0,0
+falkordb,BUG001,reproduced,,0,0,0,1,0,0,0,0,0,0,0,0
+falkordb,BUG002,reproduced,,0,1,0,0,0,0,0,0,0,0,0,0
+hugegraph,BUG001,reproduced,,0,0,0,0,0,0,0,0,1,0,0,0
+hugegraph,BUG002,reproduced,,0,0,0,0,0,0,0,1,0,0,0,0
+janusgraph,BUG001,reproduced,,0,0,0,0,0,0,0,0,1,0,0,0
+janusgraph,BUG002,reproduced,,0,0,0,0,0,0,0,0,0,0,0,1
+ladybug,BUG001,reproduced,,0,0,0,0,0,1,0,0,0,0,0,0
+ladybug,BUG002,reproduced,,0,0,0,0,0,0,0,0,0,1,0,0
+memgraph,BUG001,reproduced,,0,0,1,0,0,0,0,0,0,0,0,0
+memgraph,BUG002,reproduced,,0,1,0,0,0,0,0,0,0,0,0,0

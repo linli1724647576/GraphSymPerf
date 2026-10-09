@@ -1,0 +1,3142 @@
+{
+  "dbms": "age",
+  "language": "cypher",
+  "mechanism": "correlated-count",
+  "status": "native_probe_signal_requires_plan_review",
+  "attribution": "native_optimizer_rule_probe",
+  "pattern_id": null,
+  "recipe": {
+    "mechanism": "correlated-count",
+    "scale": 100000,
+    "roots": 16,
+    "labels": [
+      "ProbeRoot",
+      "ProbeLeaf"
+    ],
+    "indexes": [
+      {
+        "label": "ProbeRoot",
+        "property": "uid",
+        "name": "probe_cost_lookup"
+      }
+    ],
+    "queries": {
+      "a": "MATCH (u:ProbeRoot) RETURN u.uid AS uid, COUNT { MATCH (x:ProbeLeaf) WHERE x.key=u.key AND x.mark=true } AS value",
+      "b": "MATCH (u:ProbeRoot) OPTIONAL MATCH (x:ProbeLeaf) WHERE x.key=u.key AND x.mark=true WITH u,count(x) AS value RETURN u.uid AS uid,value"
+    },
+    "columns": [
+      "uid",
+      "value"
+    ],
+    "expected_rows": [
+      {
+        "uid": 1,
+        "value": 1
+      },
+      {
+        "uid": 2,
+        "value": 1
+      },
+      {
+        "uid": 3,
+        "value": 1
+      },
+      {
+        "uid": 4,
+        "value": 1
+      },
+      {
+        "uid": 5,
+        "value": 1
+      },
+      {
+        "uid": 6,
+        "value": 1
+      },
+      {
+        "uid": 7,
+        "value": 1
+      },
+      {
+        "uid": 8,
+        "value": 1
+      },
+      {
+        "uid": 9,
+        "value": 1
+      },
+      {
+        "uid": 10,
+        "value": 1
+      },
+      {
+        "uid": 11,
+        "value": 1
+      },
+      {
+        "uid": 12,
+        "value": 1
+      },
+      {
+        "uid": 13,
+        "value": 1
+      },
+      {
+        "uid": 14,
+        "value": 1
+      },
+      {
+        "uid": 15,
+        "value": 1
+      },
+      {
+        "uid": 16,
+        "value": 1
+      }
+    ],
+    "equivalence": "COUNT of matched x equals OPTIONAL MATCH plus count(x), which ignores the NULL fallback. WITH groups by node u before projecting uid, preserving distinct roots even if their uid properties coincide. All roots have key=1 and one matching leaf.",
+    "work_obligation": "Avoid re-scanning the same leaf table for each root with the same correlation key; compare scalar SubPlan loops with one filtered leaf scan and a LEFT join/aggregation.",
+    "novelty": "Unverified native scalar-subquery decorrelation probe; do not label a missed optimization without actual work and ordinary-runtime evidence."
+  },
+  "settings": {
+    "discovery_warmups": 3,
+    "discovery_pairs": 6,
+    "screen_ratio": 2.0,
+    "confirmation_sessions": 2,
+    "confirmation_warmups": 5,
+    "confirmation_pairs": 20,
+    "control_pairs": 10,
+    "ratio": 5.0,
+    "min_delta_ms": 100.0,
+    "ci_low": 5.0,
+    "direction_consistency": 0.95,
+    "bootstrap_samples": 10000,
+    "timeout_seconds": 60,
+    "max_rows": 10000,
+    "collect_plans": true
+  },
+  "sources": {
+    "property_constraint_lowering": "https://raw.githubusercontent.com/apache/age/806fa2ebdb300b3e76ef30cdba61803babbf2683/src/backend/parser/cypher_clause.c",
+    "scalar_sublink_lowering": "https://raw.githubusercontent.com/apache/age/806fa2ebdb300b3e76ef30cdba61803babbf2683/src/backend/parser/cypher_expr.c",
+    "containment_setting": "https://raw.githubusercontent.com/apache/age/806fa2ebdb300b3e76ef30cdba61803babbf2683/src/backend/utils/ag_guc.c",
+    "native_label_id_defaults": "https://raw.githubusercontent.com/apache/age/806fa2ebdb300b3e76ef30cdba61803babbf2683/src/backend/commands/label_commands.c",
+    "known_property_index_report": "https://github.com/apache/age/issues/2348"
+  },
+  "confirmation_sessions": [
+    {
+      "number": 1,
+      "state_evidence": {
+        "indexes": [
+          {
+            "label": "ProbeRoot",
+            "property": "uid",
+            "name": "probe_cost_lookup",
+            "kind": "GIN_property_map",
+            "valid": true,
+            "ready": true,
+            "definition": "CREATE INDEX probe_cost_lookup ON gsp_cases.\"ProbeRoot\" USING gin (properties)"
+          },
+          {
+            "label": "ProbeRoot",
+            "property": "uid",
+            "name": "probe_cost_lookup_scalar",
+            "kind": "BTREE_property_expression",
+            "valid": true,
+            "ready": true,
+            "definition": "CREATE INDEX probe_cost_lookup_scalar ON gsp_cases.\"ProbeRoot\" USING btree (agtype_access_operator(VARIADIC ARRAY[properties, '\"uid\"'::agtype]))"
+          }
+        ],
+        "counts": {
+          "ProbeRoot": 16,
+          "ProbeLeaf": 100001
+        },
+        "table_statistics": {
+          "ProbeRoot": [
+            [
+              16.0,
+              1
+            ]
+          ],
+          "ProbeLeaf": [
+            [
+              100001.0,
+              1334
+            ]
+          ]
+        },
+        "setup_sql": [
+          "LOAD 'age'",
+          "SET search_path = ag_catalog, \"$user\", public",
+          "DEALLOCATE ALL",
+          "SELECT set_config('statement_timeout', '60000', false)",
+          "SELECT ag_catalog.drop_graph('gsp_cases',true)",
+          "SELECT ag_catalog.create_graph('gsp_cases')",
+          "SELECT ag_catalog.create_vlabel('gsp_cases','ProbeRoot')",
+          "SELECT ag_catalog.create_vlabel('gsp_cases','ProbeLeaf')",
+          "INSERT INTO \"gsp_cases\".\"ProbeRoot\" (properties) SELECT (jsonb_build_object('uid',i,'key',1)::text)::ag_catalog.agtype FROM generate_series(1,16) AS s(i)",
+          "INSERT INTO \"gsp_cases\".\"ProbeLeaf\" (properties) SELECT (jsonb_build_object('uid',i,'key',1,'mark',false)::text)::ag_catalog.agtype FROM generate_series(1,100000) AS s(i)",
+          "INSERT INTO \"gsp_cases\".\"ProbeLeaf\" (properties) VALUES ((jsonb_build_object('uid',100001,'key',1,'mark',true)::text)::ag_catalog.agtype)",
+          "CREATE INDEX \"probe_cost_lookup\" ON \"gsp_cases\".\"ProbeRoot\" USING gin (properties)",
+          "CREATE INDEX \"probe_cost_lookup_scalar\" ON \"gsp_cases\".\"ProbeRoot\" ((ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties,'\"uid\"'::ag_catalog.agtype])))",
+          "VACUUM (ANALYZE) \"gsp_cases\".\"ProbeRoot\"",
+          "VACUUM (ANALYZE) \"gsp_cases\".\"ProbeLeaf\"",
+          "DISCARD PLANS"
+        ],
+        "preparation": "fresh_graph_native_bulk_insert_vacuum_analyze_discard_plans",
+        "cypher_checks": {
+          "same_key_roots": {
+            "query": "MATCH(n:ProbeRoot) WHERE n.key=1 RETURN count(n) AS value",
+            "expected": 16,
+            "actual": {
+              "rows": [
+                {
+                  "value": 16
+                }
+              ],
+              "complete": true,
+              "elapsed_ms": 0.45900000259280205
+            }
+          },
+          "noise_leafs": {
+            "query": "MATCH(n:ProbeLeaf) WHERE n.key=1 AND n.mark=false RETURN count(n) AS value",
+            "expected": 100000,
+            "actual": {
+              "rows": [
+                {
+                  "value": 100000
+                }
+              ],
+              "complete": true,
+              "elapsed_ms": 55.35270902328193
+            }
+          },
+          "witness_leafs": {
+            "query": "MATCH(n:ProbeLeaf) WHERE n.key=1 AND n.mark=true RETURN count(n) AS value",
+            "expected": 1,
+            "actual": {
+              "rows": [
+                {
+                  "value": 1
+                }
+              ],
+              "complete": true,
+              "elapsed_ms": 38.63404202274978
+            }
+          }
+        },
+        "containment_setting": [
+          [
+            "on"
+          ]
+        ]
+      },
+      "warmups": [
+        {
+          "order": "AB",
+          "a_ms": 281.62074997089803,
+          "b_ms": 17.967791063711047,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 307.56049999035895,
+          "b_ms": 18.822041805833578,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 306.05708388611674,
+          "b_ms": 20.617624977603555,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 294.1619581542909,
+          "b_ms": 18.615582957863808,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 283.30824989825487,
+          "b_ms": 20.277042174711823,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "samples": [
+        {
+          "order": "BA",
+          "a_ms": 315.86704100482166,
+          "b_ms": 18.760541919618845,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 316.0309169907123,
+          "b_ms": 18.76691705547273,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 286.62266698665917,
+          "b_ms": 17.894749995321035,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 288.27237500809133,
+          "b_ms": 20.202042069286108,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 292.8116249386221,
+          "b_ms": 20.473957993090153,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 290.91066704131663,
+          "b_ms": 17.92399981059134,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 315.62533299438655,
+          "b_ms": 20.30925010330975,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 306.36854097247124,
+          "b_ms": 18.36733310483396,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 316.5902921464294,
+          "b_ms": 26.098000118508935,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 282.3678751010448,
+          "b_ms": 18.67220806889236,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 304.88733295351267,
+          "b_ms": 20.573499845340848,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 298.7718330696225,
+          "b_ms": 19.72766686230898,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 312.83270893618464,
+          "b_ms": 20.570915890857577,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 295.7792088855058,
+          "b_ms": 20.498041063547134,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 289.4505828153342,
+          "b_ms": 21.683582803234458,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 285.7160840649158,
+          "b_ms": 19.66462517157197,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 282.51395910046995,
+          "b_ms": 19.55312490463257,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 316.69054203666747,
+          "b_ms": 21.280875196680427,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 315.29283290728927,
+          "b_ms": 18.204792169854045,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 282.48441708274186,
+          "b_ms": 18.504250096157193,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "control_a": [
+        {
+          "order": "BA",
+          "a_ms": 281.3790829386562,
+          "b_ms": 314.2816668841988,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 299.0347498562187,
+          "b_ms": 304.84329210594296,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 315.3114998713136,
+          "b_ms": 281.4097919035703,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 289.25779089331627,
+          "b_ms": 294.92708295583725,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 286.176374880597,
+          "b_ms": 313.8045419473201,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 311.5472081117332,
+          "b_ms": 282.1589580271393,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 299.7429999522865,
+          "b_ms": 282.3447079863399,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 312.53320816904306,
+          "b_ms": 292.2610000241548,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 311.01637496612966,
+          "b_ms": 281.24920814298093,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 305.6104590650648,
+          "b_ms": 316.31595781072974,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "control_b": [
+        {
+          "order": "AB",
+          "a_ms": 18.890124978497624,
+          "b_ms": 20.561583107337356,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 18.68541701696813,
+          "b_ms": 18.749292008578777,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 19.003333058208227,
+          "b_ms": 20.23758296854794,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 18.93158396705985,
+          "b_ms": 19.184540957212448,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 23.65304180420935,
+          "b_ms": 20.813749870285392,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 21.324750036001205,
+          "b_ms": 22.743208101019263,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 22.758208215236664,
+          "b_ms": 23.530583130195737,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 21.2763340678066,
+          "b_ms": 19.97633301652968,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 21.087000146508217,
+          "b_ms": 20.635124994441867,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 20.72887495160103,
+          "b_ms": 19.12524993531406,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "logical_rows": {
+        "a": [
+          {
+            "uid": 1,
+            "value": 1
+          },
+          {
+            "uid": 2,
+            "value": 1
+          },
+          {
+            "uid": 3,
+            "value": 1
+          },
+          {
+            "uid": 4,
+            "value": 1
+          },
+          {
+            "uid": 5,
+            "value": 1
+          },
+          {
+            "uid": 6,
+            "value": 1
+          },
+          {
+            "uid": 7,
+            "value": 1
+          },
+          {
+            "uid": 8,
+            "value": 1
+          },
+          {
+            "uid": 9,
+            "value": 1
+          },
+          {
+            "uid": 10,
+            "value": 1
+          },
+          {
+            "uid": 11,
+            "value": 1
+          },
+          {
+            "uid": 12,
+            "value": 1
+          },
+          {
+            "uid": 13,
+            "value": 1
+          },
+          {
+            "uid": 14,
+            "value": 1
+          },
+          {
+            "uid": 15,
+            "value": 1
+          },
+          {
+            "uid": 16,
+            "value": 1
+          }
+        ],
+        "b": [
+          {
+            "uid": 1,
+            "value": 1
+          },
+          {
+            "uid": 2,
+            "value": 1
+          },
+          {
+            "uid": 3,
+            "value": 1
+          },
+          {
+            "uid": 4,
+            "value": 1
+          },
+          {
+            "uid": 5,
+            "value": 1
+          },
+          {
+            "uid": 6,
+            "value": 1
+          },
+          {
+            "uid": 7,
+            "value": 1
+          },
+          {
+            "uid": 8,
+            "value": 1
+          },
+          {
+            "uid": 9,
+            "value": 1
+          },
+          {
+            "uid": 10,
+            "value": 1
+          },
+          {
+            "uid": 11,
+            "value": 1
+          },
+          {
+            "uid": 12,
+            "value": 1
+          },
+          {
+            "uid": 13,
+            "value": 1
+          },
+          {
+            "uid": 14,
+            "value": 1
+          },
+          {
+            "uid": 15,
+            "value": 1
+          },
+          {
+            "uid": 16,
+            "value": 1
+          }
+        ]
+      },
+      "summary": {
+        "slow_side": "a",
+        "median_ratio": 15.133587297977785,
+        "median_delta_ms": 277.1626670146361,
+        "direction_consistency": 1.0,
+        "ratio_ci_low": 14.488988562337449,
+        "ratio_ci_high": 15.779050835832932
+      },
+      "noise_p99_ms": 33.811786805745214,
+      "native_diagnostics": {
+        "a": {
+          "query": "MATCH (u:ProbeRoot) RETURN u.uid AS uid, COUNT { MATCH (x:ProbeLeaf) WHERE x.key=u.key AND x.mark=true } AS value",
+          "explain": {
+            "format": "postgresql_json",
+            "analyze": false,
+            "plan": [
+              {
+                "Plan": {
+                  "Node Type": "Seq Scan",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "ProbeRoot",
+                  "Alias": "u",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 65346.04,
+                  "Plan Rows": 16,
+                  "Plan Width": 64,
+                  "Disabled": false,
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Plain",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "SubPlan",
+                      "Subplan Name": "SubPlan 1",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 4084.04,
+                      "Total Cost": 4084.05,
+                      "Plan Rows": 1,
+                      "Plan Width": 32,
+                      "Disabled": false,
+                      "Plans": [
+                        {
+                          "Node Type": "Seq Scan",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Relation Name": "ProbeLeaf",
+                          "Alias": "x",
+                          "Startup Cost": 0.0,
+                          "Total Cost": 4084.03,
+                          "Plan Rows": 3,
+                          "Plan Width": 0,
+                          "Disabled": false,
+                          "Filter": "((agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype) AND (agtype_access_operator(VARIADIC ARRAY[properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17104'::oid, u.id), u.properties), '\"key\"'::agtype])))"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "profile": {
+            "format": "postgresql_json",
+            "analyze": true,
+            "plan": [
+              {
+                "Plan": {
+                  "Node Type": "Seq Scan",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "ProbeRoot",
+                  "Alias": "u",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 65346.04,
+                  "Plan Rows": 16,
+                  "Plan Width": 64,
+                  "Actual Startup Time": 22.449,
+                  "Actual Total Time": 290.388,
+                  "Actual Rows": 16.0,
+                  "Actual Loops": 1,
+                  "Disabled": false,
+                  "Shared Hit Blocks": 21345,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Plain",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "SubPlan",
+                      "Subplan Name": "SubPlan 1",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 4084.04,
+                      "Total Cost": 4084.05,
+                      "Plan Rows": 1,
+                      "Plan Width": 32,
+                      "Actual Startup Time": 18.148,
+                      "Actual Total Time": 18.148,
+                      "Actual Rows": 1.0,
+                      "Actual Loops": 16,
+                      "Disabled": false,
+                      "Shared Hit Blocks": 21344,
+                      "Shared Read Blocks": 0,
+                      "Shared Dirtied Blocks": 0,
+                      "Shared Written Blocks": 0,
+                      "Local Hit Blocks": 0,
+                      "Local Read Blocks": 0,
+                      "Local Dirtied Blocks": 0,
+                      "Local Written Blocks": 0,
+                      "Temp Read Blocks": 0,
+                      "Temp Written Blocks": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Seq Scan",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Relation Name": "ProbeLeaf",
+                          "Alias": "x",
+                          "Startup Cost": 0.0,
+                          "Total Cost": 4084.03,
+                          "Plan Rows": 3,
+                          "Plan Width": 0,
+                          "Actual Startup Time": 18.146,
+                          "Actual Total Time": 18.146,
+                          "Actual Rows": 1.0,
+                          "Actual Loops": 16,
+                          "Disabled": false,
+                          "Filter": "((agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype) AND (agtype_access_operator(VARIADIC ARRAY[properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17104'::oid, u.id), u.properties), '\"key\"'::agtype])))",
+                          "Rows Removed by Filter": 100000,
+                          "Shared Hit Blocks": 21344,
+                          "Shared Read Blocks": 0,
+                          "Shared Dirtied Blocks": 0,
+                          "Shared Written Blocks": 0,
+                          "Local Hit Blocks": 0,
+                          "Local Read Blocks": 0,
+                          "Local Dirtied Blocks": 0,
+                          "Local Written Blocks": 0,
+                          "Temp Read Blocks": 0,
+                          "Temp Written Blocks": 0
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "Planning": {
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0
+                },
+                "Planning Time": 0.053,
+                "Triggers": [],
+                "Execution Time": 290.398
+              }
+            ]
+          }
+        },
+        "b": {
+          "query": "MATCH (u:ProbeRoot) OPTIONAL MATCH (x:ProbeLeaf) WHERE x.key=u.key AND x.mark=true WITH u,count(x) AS value RETURN u.uid AS uid,value",
+          "explain": {
+            "format": "postgresql_json",
+            "analyze": false,
+            "plan": [
+              {
+                "Plan": {
+                  "Node Type": "Subquery Scan",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Alias": "_age_default_alias_previous_cypher_clause",
+                  "Startup Cost": 2843.91,
+                  "Total Cost": 2844.53,
+                  "Plan Rows": 16,
+                  "Plan Width": 64,
+                  "Disabled": false,
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Sorted",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "Subquery",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 2843.91,
+                      "Total Cost": 2844.49,
+                      "Plan Rows": 16,
+                      "Plan Width": 64,
+                      "Disabled": false,
+                      "Group Key": [
+                        "(_agtype_build_vertex(u.id, _label_name('17104'::oid, u.id), u.properties))"
+                      ],
+                      "Plans": [
+                        {
+                          "Node Type": "Sort",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Startup Cost": 2843.91,
+                          "Total Cost": 2844.01,
+                          "Plan Rows": 40,
+                          "Plan Width": 64,
+                          "Disabled": false,
+                          "Sort Key": [
+                            "(_agtype_build_vertex(u.id, _label_name('17104'::oid, u.id), u.properties))"
+                          ],
+                          "Plans": [
+                            {
+                              "Node Type": "Hash Join",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Join Type": "Right",
+                              "Startup Cost": 1.36,
+                              "Total Cost": 2842.85,
+                              "Plan Rows": 40,
+                              "Plan Width": 64,
+                              "Disabled": false,
+                              "Inner Unique": false,
+                              "Hash Cond": "(agtype_access_operator(VARIADIC ARRAY[x.properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17104'::oid, u.id), u.properties), '\"key\"'::agtype]))",
+                              "Plans": [
+                                {
+                                  "Node Type": "Seq Scan",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Relation Name": "ProbeLeaf",
+                                  "Alias": "x",
+                                  "Startup Cost": 0.0,
+                                  "Total Cost": 2836.51,
+                                  "Plan Rows": 500,
+                                  "Plan Width": 97,
+                                  "Disabled": false,
+                                  "Filter": "(agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype)"
+                                },
+                                {
+                                  "Node Type": "Hash",
+                                  "Parent Relationship": "Inner",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Startup Cost": 1.16,
+                                  "Total Cost": 1.16,
+                                  "Plan Rows": 16,
+                                  "Plan Width": 61,
+                                  "Disabled": false,
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Seq Scan",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Relation Name": "ProbeRoot",
+                                      "Alias": "u",
+                                      "Startup Cost": 0.0,
+                                      "Total Cost": 1.16,
+                                      "Plan Rows": 16,
+                                      "Plan Width": 61,
+                                      "Disabled": false
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "profile": {
+            "format": "postgresql_json",
+            "analyze": true,
+            "plan": [
+              {
+                "Plan": {
+                  "Node Type": "Subquery Scan",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Alias": "_age_default_alias_previous_cypher_clause",
+                  "Startup Cost": 2843.91,
+                  "Total Cost": 2844.53,
+                  "Plan Rows": 16,
+                  "Plan Width": 64,
+                  "Actual Startup Time": 19.248,
+                  "Actual Total Time": 19.265,
+                  "Actual Rows": 16.0,
+                  "Actual Loops": 1,
+                  "Disabled": false,
+                  "Shared Hit Blocks": 1335,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Sorted",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "Subquery",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 2843.91,
+                      "Total Cost": 2844.49,
+                      "Plan Rows": 16,
+                      "Plan Width": 64,
+                      "Actual Startup Time": 19.247,
+                      "Actual Total Time": 19.258,
+                      "Actual Rows": 16.0,
+                      "Actual Loops": 1,
+                      "Disabled": false,
+                      "Group Key": [
+                        "(_agtype_build_vertex(u.id, _label_name('17104'::oid, u.id), u.properties))"
+                      ],
+                      "Shared Hit Blocks": 1335,
+                      "Shared Read Blocks": 0,
+                      "Shared Dirtied Blocks": 0,
+                      "Shared Written Blocks": 0,
+                      "Local Hit Blocks": 0,
+                      "Local Read Blocks": 0,
+                      "Local Dirtied Blocks": 0,
+                      "Local Written Blocks": 0,
+                      "Temp Read Blocks": 0,
+                      "Temp Written Blocks": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Sort",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Startup Cost": 2843.91,
+                          "Total Cost": 2844.01,
+                          "Plan Rows": 40,
+                          "Plan Width": 64,
+                          "Actual Startup Time": 19.244,
+                          "Actual Total Time": 19.245,
+                          "Actual Rows": 16.0,
+                          "Actual Loops": 1,
+                          "Disabled": false,
+                          "Sort Key": [
+                            "(_agtype_build_vertex(u.id, _label_name('17104'::oid, u.id), u.properties))"
+                          ],
+                          "Sort Method": "quicksort",
+                          "Sort Space Used": 30,
+                          "Sort Space Type": "Memory",
+                          "Shared Hit Blocks": 1335,
+                          "Shared Read Blocks": 0,
+                          "Shared Dirtied Blocks": 0,
+                          "Shared Written Blocks": 0,
+                          "Local Hit Blocks": 0,
+                          "Local Read Blocks": 0,
+                          "Local Dirtied Blocks": 0,
+                          "Local Written Blocks": 0,
+                          "Temp Read Blocks": 0,
+                          "Temp Written Blocks": 0,
+                          "Plans": [
+                            {
+                              "Node Type": "Hash Join",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Join Type": "Right",
+                              "Startup Cost": 1.36,
+                              "Total Cost": 2842.85,
+                              "Plan Rows": 40,
+                              "Plan Width": 64,
+                              "Actual Startup Time": 19.201,
+                              "Actual Total Time": 19.217,
+                              "Actual Rows": 16.0,
+                              "Actual Loops": 1,
+                              "Disabled": false,
+                              "Inner Unique": false,
+                              "Hash Cond": "(agtype_access_operator(VARIADIC ARRAY[x.properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17104'::oid, u.id), u.properties), '\"key\"'::agtype]))",
+                              "Shared Hit Blocks": 1335,
+                              "Shared Read Blocks": 0,
+                              "Shared Dirtied Blocks": 0,
+                              "Shared Written Blocks": 0,
+                              "Local Hit Blocks": 0,
+                              "Local Read Blocks": 0,
+                              "Local Dirtied Blocks": 0,
+                              "Local Written Blocks": 0,
+                              "Temp Read Blocks": 0,
+                              "Temp Written Blocks": 0,
+                              "Plans": [
+                                {
+                                  "Node Type": "Seq Scan",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Relation Name": "ProbeLeaf",
+                                  "Alias": "x",
+                                  "Startup Cost": 0.0,
+                                  "Total Cost": 2836.51,
+                                  "Plan Rows": 500,
+                                  "Plan Width": 97,
+                                  "Actual Startup Time": 19.181,
+                                  "Actual Total Time": 19.182,
+                                  "Actual Rows": 1.0,
+                                  "Actual Loops": 1,
+                                  "Disabled": false,
+                                  "Filter": "(agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype)",
+                                  "Rows Removed by Filter": 100000,
+                                  "Shared Hit Blocks": 1334,
+                                  "Shared Read Blocks": 0,
+                                  "Shared Dirtied Blocks": 0,
+                                  "Shared Written Blocks": 0,
+                                  "Local Hit Blocks": 0,
+                                  "Local Read Blocks": 0,
+                                  "Local Dirtied Blocks": 0,
+                                  "Local Written Blocks": 0,
+                                  "Temp Read Blocks": 0,
+                                  "Temp Written Blocks": 0
+                                },
+                                {
+                                  "Node Type": "Hash",
+                                  "Parent Relationship": "Inner",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Startup Cost": 1.16,
+                                  "Total Cost": 1.16,
+                                  "Plan Rows": 16,
+                                  "Plan Width": 61,
+                                  "Actual Startup Time": 0.016,
+                                  "Actual Total Time": 0.016,
+                                  "Actual Rows": 16.0,
+                                  "Actual Loops": 1,
+                                  "Disabled": false,
+                                  "Hash Buckets": 1024,
+                                  "Original Hash Buckets": 1024,
+                                  "Hash Batches": 1,
+                                  "Original Hash Batches": 1,
+                                  "Peak Memory Usage": 10,
+                                  "Shared Hit Blocks": 1,
+                                  "Shared Read Blocks": 0,
+                                  "Shared Dirtied Blocks": 0,
+                                  "Shared Written Blocks": 0,
+                                  "Local Hit Blocks": 0,
+                                  "Local Read Blocks": 0,
+                                  "Local Dirtied Blocks": 0,
+                                  "Local Written Blocks": 0,
+                                  "Temp Read Blocks": 0,
+                                  "Temp Written Blocks": 0,
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Seq Scan",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Relation Name": "ProbeRoot",
+                                      "Alias": "u",
+                                      "Startup Cost": 0.0,
+                                      "Total Cost": 1.16,
+                                      "Plan Rows": 16,
+                                      "Plan Width": 61,
+                                      "Actual Startup Time": 0.002,
+                                      "Actual Total Time": 0.003,
+                                      "Actual Rows": 16.0,
+                                      "Actual Loops": 1,
+                                      "Disabled": false,
+                                      "Shared Hit Blocks": 1,
+                                      "Shared Read Blocks": 0,
+                                      "Shared Dirtied Blocks": 0,
+                                      "Shared Written Blocks": 0,
+                                      "Local Hit Blocks": 0,
+                                      "Local Read Blocks": 0,
+                                      "Local Dirtied Blocks": 0,
+                                      "Local Written Blocks": 0,
+                                      "Temp Read Blocks": 0,
+                                      "Temp Written Blocks": 0
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "Planning": {
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0
+                },
+                "Planning Time": 0.054,
+                "Triggers": [],
+                "Execution Time": 19.274
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "number": 2,
+      "state_evidence": {
+        "indexes": [
+          {
+            "label": "ProbeRoot",
+            "property": "uid",
+            "name": "probe_cost_lookup",
+            "kind": "GIN_property_map",
+            "valid": true,
+            "ready": true,
+            "definition": "CREATE INDEX probe_cost_lookup ON gsp_cases.\"ProbeRoot\" USING gin (properties)"
+          },
+          {
+            "label": "ProbeRoot",
+            "property": "uid",
+            "name": "probe_cost_lookup_scalar",
+            "kind": "BTREE_property_expression",
+            "valid": true,
+            "ready": true,
+            "definition": "CREATE INDEX probe_cost_lookup_scalar ON gsp_cases.\"ProbeRoot\" USING btree (agtype_access_operator(VARIADIC ARRAY[properties, '\"uid\"'::agtype]))"
+          }
+        ],
+        "counts": {
+          "ProbeRoot": 16,
+          "ProbeLeaf": 100001
+        },
+        "table_statistics": {
+          "ProbeRoot": [
+            [
+              16.0,
+              1
+            ]
+          ],
+          "ProbeLeaf": [
+            [
+              100001.0,
+              1334
+            ]
+          ]
+        },
+        "setup_sql": [
+          "LOAD 'age'",
+          "SET search_path = ag_catalog, \"$user\", public",
+          "DEALLOCATE ALL",
+          "SELECT set_config('statement_timeout', '60000', false)",
+          "SELECT ag_catalog.drop_graph('gsp_cases',true)",
+          "SELECT ag_catalog.create_graph('gsp_cases')",
+          "SELECT ag_catalog.create_vlabel('gsp_cases','ProbeRoot')",
+          "SELECT ag_catalog.create_vlabel('gsp_cases','ProbeLeaf')",
+          "INSERT INTO \"gsp_cases\".\"ProbeRoot\" (properties) SELECT (jsonb_build_object('uid',i,'key',1)::text)::ag_catalog.agtype FROM generate_series(1,16) AS s(i)",
+          "INSERT INTO \"gsp_cases\".\"ProbeLeaf\" (properties) SELECT (jsonb_build_object('uid',i,'key',1,'mark',false)::text)::ag_catalog.agtype FROM generate_series(1,100000) AS s(i)",
+          "INSERT INTO \"gsp_cases\".\"ProbeLeaf\" (properties) VALUES ((jsonb_build_object('uid',100001,'key',1,'mark',true)::text)::ag_catalog.agtype)",
+          "CREATE INDEX \"probe_cost_lookup\" ON \"gsp_cases\".\"ProbeRoot\" USING gin (properties)",
+          "CREATE INDEX \"probe_cost_lookup_scalar\" ON \"gsp_cases\".\"ProbeRoot\" ((ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties,'\"uid\"'::ag_catalog.agtype])))",
+          "VACUUM (ANALYZE) \"gsp_cases\".\"ProbeRoot\"",
+          "VACUUM (ANALYZE) \"gsp_cases\".\"ProbeLeaf\"",
+          "DISCARD PLANS"
+        ],
+        "preparation": "fresh_graph_native_bulk_insert_vacuum_analyze_discard_plans",
+        "cypher_checks": {
+          "same_key_roots": {
+            "query": "MATCH(n:ProbeRoot) WHERE n.key=1 RETURN count(n) AS value",
+            "expected": 16,
+            "actual": {
+              "rows": [
+                {
+                  "value": 16
+                }
+              ],
+              "complete": true,
+              "elapsed_ms": 0.6425841711461544
+            }
+          },
+          "noise_leafs": {
+            "query": "MATCH(n:ProbeLeaf) WHERE n.key=1 AND n.mark=false RETURN count(n) AS value",
+            "expected": 100000,
+            "actual": {
+              "rows": [
+                {
+                  "value": 100000
+                }
+              ],
+              "complete": true,
+              "elapsed_ms": 55.73358293622732
+            }
+          },
+          "witness_leafs": {
+            "query": "MATCH(n:ProbeLeaf) WHERE n.key=1 AND n.mark=true RETURN count(n) AS value",
+            "expected": 1,
+            "actual": {
+              "rows": [
+                {
+                  "value": 1
+                }
+              ],
+              "complete": true,
+              "elapsed_ms": 37.84441598691046
+            }
+          }
+        },
+        "containment_setting": [
+          [
+            "on"
+          ]
+        ]
+      },
+      "warmups": [
+        {
+          "order": "BA",
+          "a_ms": 332.0737089961767,
+          "b_ms": 20.329208113253117,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 311.329249991104,
+          "b_ms": 21.920833038166165,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 321.019166149199,
+          "b_ms": 19.1960830707103,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 297.51125001348555,
+          "b_ms": 19.022125052288175,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 281.6997501067817,
+          "b_ms": 19.396540941670537,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "samples": [
+        {
+          "order": "BA",
+          "a_ms": 311.9732919149101,
+          "b_ms": 19.391125068068504,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 282.7326669357717,
+          "b_ms": 19.283375004306436,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 313.9337501488626,
+          "b_ms": 19.07012495212257,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 313.30591696314514,
+          "b_ms": 18.767709145322442,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 296.9270411413163,
+          "b_ms": 21.743540884926915,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 292.41749993525445,
+          "b_ms": 19.1147499717772,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 286.20191593654454,
+          "b_ms": 20.374291110783815,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 303.8242910988629,
+          "b_ms": 20.90429188683629,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 278.87849998660386,
+          "b_ms": 19.221500027924776,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 315.30045811086893,
+          "b_ms": 19.139958079904318,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 310.1225409191102,
+          "b_ms": 19.10916599445045,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 289.01712503284216,
+          "b_ms": 18.424666952341795,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 284.1512500308454,
+          "b_ms": 18.505541840568185,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 316.1196250002831,
+          "b_ms": 19.199208822101355,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 293.036833871156,
+          "b_ms": 19.543458009138703,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 279.86212517134845,
+          "b_ms": 19.23400000669062,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 313.8059580232948,
+          "b_ms": 18.933000043034554,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 284.41641689278185,
+          "b_ms": 21.16512507200241,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 318.6132498085499,
+          "b_ms": 21.11441595479846,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 314.81820810586214,
+          "b_ms": 21.234124898910522,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "control_a": [
+        {
+          "order": "BA",
+          "a_ms": 297.0775000285357,
+          "b_ms": 279.12683389149606,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 311.43837491981685,
+          "b_ms": 296.8066670000553,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 308.33699996583164,
+          "b_ms": 281.4669581130147,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 317.80795799568295,
+          "b_ms": 317.3221671022475,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 309.79966605082154,
+          "b_ms": 308.9824579656124,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 282.15079102665186,
+          "b_ms": 303.42849995940924,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 284.04645808041096,
+          "b_ms": 307.1598340757191,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 296.1484999395907,
+          "b_ms": 316.0873327869922,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 281.10441705211997,
+          "b_ms": 312.9886251408607,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 282.57808298803866,
+          "b_ms": 282.03124995343387,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "control_b": [
+        {
+          "order": "AB",
+          "a_ms": 19.41149984486401,
+          "b_ms": 21.028958959504962,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 18.638750072568655,
+          "b_ms": 20.743874832987785,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 20.423082867637277,
+          "b_ms": 18.710499862208962,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 20.799290854483843,
+          "b_ms": 20.790083101019263,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 19.11483402363956,
+          "b_ms": 20.641082897782326,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 18.52504094131291,
+          "b_ms": 20.428374875336885,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 18.760334001854062,
+          "b_ms": 20.48754203133285,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 20.805499982088804,
+          "b_ms": 20.605499856173992,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 20.750542171299458,
+          "b_ms": 20.805667154490948,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 18.415208905935287,
+          "b_ms": 20.533167058601975,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "logical_rows": {
+        "a": [
+          {
+            "uid": 1,
+            "value": 1
+          },
+          {
+            "uid": 2,
+            "value": 1
+          },
+          {
+            "uid": 3,
+            "value": 1
+          },
+          {
+            "uid": 4,
+            "value": 1
+          },
+          {
+            "uid": 5,
+            "value": 1
+          },
+          {
+            "uid": 6,
+            "value": 1
+          },
+          {
+            "uid": 7,
+            "value": 1
+          },
+          {
+            "uid": 8,
+            "value": 1
+          },
+          {
+            "uid": 9,
+            "value": 1
+          },
+          {
+            "uid": 10,
+            "value": 1
+          },
+          {
+            "uid": 11,
+            "value": 1
+          },
+          {
+            "uid": 12,
+            "value": 1
+          },
+          {
+            "uid": 13,
+            "value": 1
+          },
+          {
+            "uid": 14,
+            "value": 1
+          },
+          {
+            "uid": 15,
+            "value": 1
+          },
+          {
+            "uid": 16,
+            "value": 1
+          }
+        ],
+        "b": [
+          {
+            "uid": 1,
+            "value": 1
+          },
+          {
+            "uid": 2,
+            "value": 1
+          },
+          {
+            "uid": 3,
+            "value": 1
+          },
+          {
+            "uid": 4,
+            "value": 1
+          },
+          {
+            "uid": 5,
+            "value": 1
+          },
+          {
+            "uid": 6,
+            "value": 1
+          },
+          {
+            "uid": 7,
+            "value": 1
+          },
+          {
+            "uid": 8,
+            "value": 1
+          },
+          {
+            "uid": 9,
+            "value": 1
+          },
+          {
+            "uid": 10,
+            "value": 1
+          },
+          {
+            "uid": 11,
+            "value": 1
+          },
+          {
+            "uid": 12,
+            "value": 1
+          },
+          {
+            "uid": 13,
+            "value": 1
+          },
+          {
+            "uid": 14,
+            "value": 1
+          },
+          {
+            "uid": 15,
+            "value": 1
+          },
+          {
+            "uid": 16,
+            "value": 1
+          }
+        ]
+      },
+      "summary": {
+        "slow_side": "a",
+        "median_ratio": 15.19392359858509,
+        "median_delta_ms": 279.051749734208,
+        "direction_consistency": 1.0,
+        "ratio_ci_low": 14.60618842026625,
+        "ratio_ci_high": 16.158725776813
+      },
+      "noise_p99_ms": 31.432933127507567,
+      "native_diagnostics": {
+        "a": {
+          "query": "MATCH (u:ProbeRoot) RETURN u.uid AS uid, COUNT { MATCH (x:ProbeLeaf) WHERE x.key=u.key AND x.mark=true } AS value",
+          "explain": {
+            "format": "postgresql_json",
+            "analyze": false,
+            "plan": [
+              {
+                "Plan": {
+                  "Node Type": "Seq Scan",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "ProbeRoot",
+                  "Alias": "u",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 65346.04,
+                  "Plan Rows": 16,
+                  "Plan Width": 64,
+                  "Disabled": false,
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Plain",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "SubPlan",
+                      "Subplan Name": "SubPlan 1",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 4084.04,
+                      "Total Cost": 4084.05,
+                      "Plan Rows": 1,
+                      "Plan Width": 32,
+                      "Disabled": false,
+                      "Plans": [
+                        {
+                          "Node Type": "Seq Scan",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Relation Name": "ProbeLeaf",
+                          "Alias": "x",
+                          "Startup Cost": 0.0,
+                          "Total Cost": 4084.03,
+                          "Plan Rows": 3,
+                          "Plan Width": 0,
+                          "Disabled": false,
+                          "Filter": "((agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype) AND (agtype_access_operator(VARIADIC ARRAY[properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17162'::oid, u.id), u.properties), '\"key\"'::agtype])))"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "profile": {
+            "format": "postgresql_json",
+            "analyze": true,
+            "plan": [
+              {
+                "Plan": {
+                  "Node Type": "Seq Scan",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Relation Name": "ProbeRoot",
+                  "Alias": "u",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 65346.04,
+                  "Plan Rows": 16,
+                  "Plan Width": 64,
+                  "Actual Startup Time": 22.841,
+                  "Actual Total Time": 318.367,
+                  "Actual Rows": 16.0,
+                  "Actual Loops": 1,
+                  "Disabled": false,
+                  "Shared Hit Blocks": 21345,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Plain",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "SubPlan",
+                      "Subplan Name": "SubPlan 1",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 4084.04,
+                      "Total Cost": 4084.05,
+                      "Plan Rows": 1,
+                      "Plan Width": 32,
+                      "Actual Startup Time": 19.896,
+                      "Actual Total Time": 19.896,
+                      "Actual Rows": 1.0,
+                      "Actual Loops": 16,
+                      "Disabled": false,
+                      "Shared Hit Blocks": 21344,
+                      "Shared Read Blocks": 0,
+                      "Shared Dirtied Blocks": 0,
+                      "Shared Written Blocks": 0,
+                      "Local Hit Blocks": 0,
+                      "Local Read Blocks": 0,
+                      "Local Dirtied Blocks": 0,
+                      "Local Written Blocks": 0,
+                      "Temp Read Blocks": 0,
+                      "Temp Written Blocks": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Seq Scan",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Relation Name": "ProbeLeaf",
+                          "Alias": "x",
+                          "Startup Cost": 0.0,
+                          "Total Cost": 4084.03,
+                          "Plan Rows": 3,
+                          "Plan Width": 0,
+                          "Actual Startup Time": 19.895,
+                          "Actual Total Time": 19.895,
+                          "Actual Rows": 1.0,
+                          "Actual Loops": 16,
+                          "Disabled": false,
+                          "Filter": "((agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype) AND (agtype_access_operator(VARIADIC ARRAY[properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17162'::oid, u.id), u.properties), '\"key\"'::agtype])))",
+                          "Rows Removed by Filter": 100000,
+                          "Shared Hit Blocks": 21344,
+                          "Shared Read Blocks": 0,
+                          "Shared Dirtied Blocks": 0,
+                          "Shared Written Blocks": 0,
+                          "Local Hit Blocks": 0,
+                          "Local Read Blocks": 0,
+                          "Local Dirtied Blocks": 0,
+                          "Local Written Blocks": 0,
+                          "Temp Read Blocks": 0,
+                          "Temp Written Blocks": 0
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "Planning": {
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0
+                },
+                "Planning Time": 0.058,
+                "Triggers": [],
+                "Execution Time": 318.377
+              }
+            ]
+          }
+        },
+        "b": {
+          "query": "MATCH (u:ProbeRoot) OPTIONAL MATCH (x:ProbeLeaf) WHERE x.key=u.key AND x.mark=true WITH u,count(x) AS value RETURN u.uid AS uid,value",
+          "explain": {
+            "format": "postgresql_json",
+            "analyze": false,
+            "plan": [
+              {
+                "Plan": {
+                  "Node Type": "Subquery Scan",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Alias": "_age_default_alias_previous_cypher_clause",
+                  "Startup Cost": 2843.91,
+                  "Total Cost": 2844.53,
+                  "Plan Rows": 16,
+                  "Plan Width": 64,
+                  "Disabled": false,
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Sorted",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "Subquery",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 2843.91,
+                      "Total Cost": 2844.49,
+                      "Plan Rows": 16,
+                      "Plan Width": 64,
+                      "Disabled": false,
+                      "Group Key": [
+                        "(_agtype_build_vertex(u.id, _label_name('17162'::oid, u.id), u.properties))"
+                      ],
+                      "Plans": [
+                        {
+                          "Node Type": "Sort",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Startup Cost": 2843.91,
+                          "Total Cost": 2844.01,
+                          "Plan Rows": 40,
+                          "Plan Width": 64,
+                          "Disabled": false,
+                          "Sort Key": [
+                            "(_agtype_build_vertex(u.id, _label_name('17162'::oid, u.id), u.properties))"
+                          ],
+                          "Plans": [
+                            {
+                              "Node Type": "Hash Join",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Join Type": "Right",
+                              "Startup Cost": 1.36,
+                              "Total Cost": 2842.85,
+                              "Plan Rows": 40,
+                              "Plan Width": 64,
+                              "Disabled": false,
+                              "Inner Unique": false,
+                              "Hash Cond": "(agtype_access_operator(VARIADIC ARRAY[x.properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17162'::oid, u.id), u.properties), '\"key\"'::agtype]))",
+                              "Plans": [
+                                {
+                                  "Node Type": "Seq Scan",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Relation Name": "ProbeLeaf",
+                                  "Alias": "x",
+                                  "Startup Cost": 0.0,
+                                  "Total Cost": 2836.51,
+                                  "Plan Rows": 500,
+                                  "Plan Width": 97,
+                                  "Disabled": false,
+                                  "Filter": "(agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype)"
+                                },
+                                {
+                                  "Node Type": "Hash",
+                                  "Parent Relationship": "Inner",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Startup Cost": 1.16,
+                                  "Total Cost": 1.16,
+                                  "Plan Rows": 16,
+                                  "Plan Width": 61,
+                                  "Disabled": false,
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Seq Scan",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Relation Name": "ProbeRoot",
+                                      "Alias": "u",
+                                      "Startup Cost": 0.0,
+                                      "Total Cost": 1.16,
+                                      "Plan Rows": 16,
+                                      "Plan Width": 61,
+                                      "Disabled": false
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "profile": {
+            "format": "postgresql_json",
+            "analyze": true,
+            "plan": [
+              {
+                "Plan": {
+                  "Node Type": "Subquery Scan",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Alias": "_age_default_alias_previous_cypher_clause",
+                  "Startup Cost": 2843.91,
+                  "Total Cost": 2844.53,
+                  "Plan Rows": 16,
+                  "Plan Width": 64,
+                  "Actual Startup Time": 17.239,
+                  "Actual Total Time": 17.256,
+                  "Actual Rows": 16.0,
+                  "Actual Loops": 1,
+                  "Disabled": false,
+                  "Shared Hit Blocks": 1335,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0,
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Sorted",
+                      "Partial Mode": "Simple",
+                      "Parent Relationship": "Subquery",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 2843.91,
+                      "Total Cost": 2844.49,
+                      "Plan Rows": 16,
+                      "Plan Width": 64,
+                      "Actual Startup Time": 17.238,
+                      "Actual Total Time": 17.249,
+                      "Actual Rows": 16.0,
+                      "Actual Loops": 1,
+                      "Disabled": false,
+                      "Group Key": [
+                        "(_agtype_build_vertex(u.id, _label_name('17162'::oid, u.id), u.properties))"
+                      ],
+                      "Shared Hit Blocks": 1335,
+                      "Shared Read Blocks": 0,
+                      "Shared Dirtied Blocks": 0,
+                      "Shared Written Blocks": 0,
+                      "Local Hit Blocks": 0,
+                      "Local Read Blocks": 0,
+                      "Local Dirtied Blocks": 0,
+                      "Local Written Blocks": 0,
+                      "Temp Read Blocks": 0,
+                      "Temp Written Blocks": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Sort",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Startup Cost": 2843.91,
+                          "Total Cost": 2844.01,
+                          "Plan Rows": 40,
+                          "Plan Width": 64,
+                          "Actual Startup Time": 17.236,
+                          "Actual Total Time": 17.236,
+                          "Actual Rows": 16.0,
+                          "Actual Loops": 1,
+                          "Disabled": false,
+                          "Sort Key": [
+                            "(_agtype_build_vertex(u.id, _label_name('17162'::oid, u.id), u.properties))"
+                          ],
+                          "Sort Method": "quicksort",
+                          "Sort Space Used": 30,
+                          "Sort Space Type": "Memory",
+                          "Shared Hit Blocks": 1335,
+                          "Shared Read Blocks": 0,
+                          "Shared Dirtied Blocks": 0,
+                          "Shared Written Blocks": 0,
+                          "Local Hit Blocks": 0,
+                          "Local Read Blocks": 0,
+                          "Local Dirtied Blocks": 0,
+                          "Local Written Blocks": 0,
+                          "Temp Read Blocks": 0,
+                          "Temp Written Blocks": 0,
+                          "Plans": [
+                            {
+                              "Node Type": "Hash Join",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Join Type": "Right",
+                              "Startup Cost": 1.36,
+                              "Total Cost": 2842.85,
+                              "Plan Rows": 40,
+                              "Plan Width": 64,
+                              "Actual Startup Time": 17.194,
+                              "Actual Total Time": 17.209,
+                              "Actual Rows": 16.0,
+                              "Actual Loops": 1,
+                              "Disabled": false,
+                              "Inner Unique": false,
+                              "Hash Cond": "(agtype_access_operator(VARIADIC ARRAY[x.properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17162'::oid, u.id), u.properties), '\"key\"'::agtype]))",
+                              "Shared Hit Blocks": 1335,
+                              "Shared Read Blocks": 0,
+                              "Shared Dirtied Blocks": 0,
+                              "Shared Written Blocks": 0,
+                              "Local Hit Blocks": 0,
+                              "Local Read Blocks": 0,
+                              "Local Dirtied Blocks": 0,
+                              "Local Written Blocks": 0,
+                              "Temp Read Blocks": 0,
+                              "Temp Written Blocks": 0,
+                              "Plans": [
+                                {
+                                  "Node Type": "Seq Scan",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Relation Name": "ProbeLeaf",
+                                  "Alias": "x",
+                                  "Startup Cost": 0.0,
+                                  "Total Cost": 2836.51,
+                                  "Plan Rows": 500,
+                                  "Plan Width": 97,
+                                  "Actual Startup Time": 17.175,
+                                  "Actual Total Time": 17.175,
+                                  "Actual Rows": 1.0,
+                                  "Actual Loops": 1,
+                                  "Disabled": false,
+                                  "Filter": "(agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype)",
+                                  "Rows Removed by Filter": 100000,
+                                  "Shared Hit Blocks": 1334,
+                                  "Shared Read Blocks": 0,
+                                  "Shared Dirtied Blocks": 0,
+                                  "Shared Written Blocks": 0,
+                                  "Local Hit Blocks": 0,
+                                  "Local Read Blocks": 0,
+                                  "Local Dirtied Blocks": 0,
+                                  "Local Written Blocks": 0,
+                                  "Temp Read Blocks": 0,
+                                  "Temp Written Blocks": 0
+                                },
+                                {
+                                  "Node Type": "Hash",
+                                  "Parent Relationship": "Inner",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Startup Cost": 1.16,
+                                  "Total Cost": 1.16,
+                                  "Plan Rows": 16,
+                                  "Plan Width": 61,
+                                  "Actual Startup Time": 0.015,
+                                  "Actual Total Time": 0.015,
+                                  "Actual Rows": 16.0,
+                                  "Actual Loops": 1,
+                                  "Disabled": false,
+                                  "Hash Buckets": 1024,
+                                  "Original Hash Buckets": 1024,
+                                  "Hash Batches": 1,
+                                  "Original Hash Batches": 1,
+                                  "Peak Memory Usage": 10,
+                                  "Shared Hit Blocks": 1,
+                                  "Shared Read Blocks": 0,
+                                  "Shared Dirtied Blocks": 0,
+                                  "Shared Written Blocks": 0,
+                                  "Local Hit Blocks": 0,
+                                  "Local Read Blocks": 0,
+                                  "Local Dirtied Blocks": 0,
+                                  "Local Written Blocks": 0,
+                                  "Temp Read Blocks": 0,
+                                  "Temp Written Blocks": 0,
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Seq Scan",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Relation Name": "ProbeRoot",
+                                      "Alias": "u",
+                                      "Startup Cost": 0.0,
+                                      "Total Cost": 1.16,
+                                      "Plan Rows": 16,
+                                      "Plan Width": 61,
+                                      "Actual Startup Time": 0.002,
+                                      "Actual Total Time": 0.003,
+                                      "Actual Rows": 16.0,
+                                      "Actual Loops": 1,
+                                      "Disabled": false,
+                                      "Shared Hit Blocks": 1,
+                                      "Shared Read Blocks": 0,
+                                      "Shared Dirtied Blocks": 0,
+                                      "Shared Written Blocks": 0,
+                                      "Local Hit Blocks": 0,
+                                      "Local Read Blocks": 0,
+                                      "Local Dirtied Blocks": 0,
+                                      "Local Written Blocks": 0,
+                                      "Temp Read Blocks": 0,
+                                      "Temp Written Blocks": 0
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "Planning": {
+                  "Shared Hit Blocks": 0,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0
+                },
+                "Planning Time": 0.04,
+                "Triggers": [],
+                "Execution Time": 17.264
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "database_version": "Apache AGE/1.7.0 PostgreSQL/18.1 (Debian 18.1-1.pgdg13+2)",
+  "state_evidence": {
+    "indexes": [
+      {
+        "label": "ProbeRoot",
+        "property": "uid",
+        "name": "probe_cost_lookup",
+        "kind": "GIN_property_map",
+        "valid": true,
+        "ready": true,
+        "definition": "CREATE INDEX probe_cost_lookup ON gsp_cases.\"ProbeRoot\" USING gin (properties)"
+      },
+      {
+        "label": "ProbeRoot",
+        "property": "uid",
+        "name": "probe_cost_lookup_scalar",
+        "kind": "BTREE_property_expression",
+        "valid": true,
+        "ready": true,
+        "definition": "CREATE INDEX probe_cost_lookup_scalar ON gsp_cases.\"ProbeRoot\" USING btree (agtype_access_operator(VARIADIC ARRAY[properties, '\"uid\"'::agtype]))"
+      }
+    ],
+    "counts": {
+      "ProbeRoot": 16,
+      "ProbeLeaf": 100001
+    },
+    "table_statistics": {
+      "ProbeRoot": [
+        [
+          16.0,
+          1
+        ]
+      ],
+      "ProbeLeaf": [
+        [
+          100001.0,
+          1334
+        ]
+      ]
+    },
+    "setup_sql": [
+      "LOAD 'age'",
+      "SET search_path = ag_catalog, \"$user\", public",
+      "DEALLOCATE ALL",
+      "SELECT set_config('statement_timeout', '60000', false)",
+      "SELECT ag_catalog.drop_graph('gsp_cases',true)",
+      "SELECT ag_catalog.create_graph('gsp_cases')",
+      "SELECT ag_catalog.create_vlabel('gsp_cases','ProbeRoot')",
+      "SELECT ag_catalog.create_vlabel('gsp_cases','ProbeLeaf')",
+      "INSERT INTO \"gsp_cases\".\"ProbeRoot\" (properties) SELECT (jsonb_build_object('uid',i,'key',1)::text)::ag_catalog.agtype FROM generate_series(1,16) AS s(i)",
+      "INSERT INTO \"gsp_cases\".\"ProbeLeaf\" (properties) SELECT (jsonb_build_object('uid',i,'key',1,'mark',false)::text)::ag_catalog.agtype FROM generate_series(1,100000) AS s(i)",
+      "INSERT INTO \"gsp_cases\".\"ProbeLeaf\" (properties) VALUES ((jsonb_build_object('uid',100001,'key',1,'mark',true)::text)::ag_catalog.agtype)",
+      "CREATE INDEX \"probe_cost_lookup\" ON \"gsp_cases\".\"ProbeRoot\" USING gin (properties)",
+      "CREATE INDEX \"probe_cost_lookup_scalar\" ON \"gsp_cases\".\"ProbeRoot\" ((ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties,'\"uid\"'::ag_catalog.agtype])))",
+      "VACUUM (ANALYZE) \"gsp_cases\".\"ProbeRoot\"",
+      "VACUUM (ANALYZE) \"gsp_cases\".\"ProbeLeaf\"",
+      "DISCARD PLANS"
+    ],
+    "preparation": "fresh_graph_native_bulk_insert_vacuum_analyze_discard_plans",
+    "cypher_checks": {
+      "same_key_roots": {
+        "query": "MATCH(n:ProbeRoot) WHERE n.key=1 RETURN count(n) AS value",
+        "expected": 16,
+        "actual": {
+          "rows": [
+            {
+              "value": 16
+            }
+          ],
+          "complete": true,
+          "elapsed_ms": 0.7599159143865108
+        }
+      },
+      "noise_leafs": {
+        "query": "MATCH(n:ProbeLeaf) WHERE n.key=1 AND n.mark=false RETURN count(n) AS value",
+        "expected": 100000,
+        "actual": {
+          "rows": [
+            {
+              "value": 100000
+            }
+          ],
+          "complete": true,
+          "elapsed_ms": 52.6274589356035
+        }
+      },
+      "witness_leafs": {
+        "query": "MATCH(n:ProbeLeaf) WHERE n.key=1 AND n.mark=true RETURN count(n) AS value",
+        "expected": 1,
+        "actual": {
+          "rows": [
+            {
+              "value": 1
+            }
+          ],
+          "complete": true,
+          "elapsed_ms": 35.67491704598069
+        }
+      }
+    },
+    "containment_setting": [
+      [
+        "on"
+      ]
+    ]
+  },
+  "discovery": {
+    "warmups": [
+      {
+        "order": "AB",
+        "a_ms": 310.23129099048674,
+        "b_ms": 18.153708893805742,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 310.38358295336366,
+        "b_ms": 18.520166166126728,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "BA",
+        "a_ms": 294.72337500192225,
+        "b_ms": 19.07904213294387,
+        "a_status": "ok",
+        "b_status": "ok"
+      }
+    ],
+    "samples": [
+      {
+        "order": "BA",
+        "a_ms": 276.025083148852,
+        "b_ms": 18.848415929824114,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "BA",
+        "a_ms": 286.0295418649912,
+        "b_ms": 18.524250015616417,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "BA",
+        "a_ms": 310.1587500423193,
+        "b_ms": 18.59241700731218,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 307.57887521758676,
+        "b_ms": 18.06649984791875,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 275.4813749343157,
+        "b_ms": 19.637875026091933,
+        "a_status": "ok",
+        "b_status": "ok"
+      },
+      {
+        "order": "AB",
+        "a_ms": 299.5554581284523,
+        "b_ms": 18.58187490142882,
+        "a_status": "ok",
+        "b_status": "ok"
+      }
+    ],
+    "logical_rows": {
+      "a": [
+        {
+          "uid": 1,
+          "value": 1
+        },
+        {
+          "uid": 2,
+          "value": 1
+        },
+        {
+          "uid": 3,
+          "value": 1
+        },
+        {
+          "uid": 4,
+          "value": 1
+        },
+        {
+          "uid": 5,
+          "value": 1
+        },
+        {
+          "uid": 6,
+          "value": 1
+        },
+        {
+          "uid": 7,
+          "value": 1
+        },
+        {
+          "uid": 8,
+          "value": 1
+        },
+        {
+          "uid": 9,
+          "value": 1
+        },
+        {
+          "uid": 10,
+          "value": 1
+        },
+        {
+          "uid": 11,
+          "value": 1
+        },
+        {
+          "uid": 12,
+          "value": 1
+        },
+        {
+          "uid": 13,
+          "value": 1
+        },
+        {
+          "uid": 14,
+          "value": 1
+        },
+        {
+          "uid": 15,
+          "value": 1
+        },
+        {
+          "uid": 16,
+          "value": 1
+        }
+      ],
+      "b": [
+        {
+          "uid": 1,
+          "value": 1
+        },
+        {
+          "uid": 2,
+          "value": 1
+        },
+        {
+          "uid": 3,
+          "value": 1
+        },
+        {
+          "uid": 4,
+          "value": 1
+        },
+        {
+          "uid": 5,
+          "value": 1
+        },
+        {
+          "uid": 6,
+          "value": 1
+        },
+        {
+          "uid": 7,
+          "value": 1
+        },
+        {
+          "uid": 8,
+          "value": 1
+        },
+        {
+          "uid": 9,
+          "value": 1
+        },
+        {
+          "uid": 10,
+          "value": 1
+        },
+        {
+          "uid": 11,
+          "value": 1
+        },
+        {
+          "uid": 12,
+          "value": 1
+        },
+        {
+          "uid": 13,
+          "value": 1
+        },
+        {
+          "uid": 14,
+          "value": 1
+        },
+        {
+          "uid": 15,
+          "value": 1
+        },
+        {
+          "uid": 16,
+          "value": 1
+        }
+      ]
+    },
+    "summary": {
+      "slow_side": "a",
+      "median_ratio": 15.78082885557883,
+      "median_delta_ms": 274.2394375381991,
+      "direction_consistency": 1.0
+    },
+    "native_diagnostics": {
+      "a": {
+        "query": "MATCH (u:ProbeRoot) RETURN u.uid AS uid, COUNT { MATCH (x:ProbeLeaf) WHERE x.key=u.key AND x.mark=true } AS value",
+        "explain": {
+          "format": "postgresql_json",
+          "analyze": false,
+          "plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "ProbeRoot",
+                "Alias": "u",
+                "Startup Cost": 0.0,
+                "Total Cost": 65346.04,
+                "Plan Rows": 16,
+                "Plan Width": 64,
+                "Disabled": false,
+                "Plans": [
+                  {
+                    "Node Type": "Aggregate",
+                    "Strategy": "Plain",
+                    "Partial Mode": "Simple",
+                    "Parent Relationship": "SubPlan",
+                    "Subplan Name": "SubPlan 1",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Startup Cost": 4084.04,
+                    "Total Cost": 4084.05,
+                    "Plan Rows": 1,
+                    "Plan Width": 32,
+                    "Disabled": false,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Relation Name": "ProbeLeaf",
+                        "Alias": "x",
+                        "Startup Cost": 0.0,
+                        "Total Cost": 4084.03,
+                        "Plan Rows": 3,
+                        "Plan Width": 0,
+                        "Disabled": false,
+                        "Filter": "((agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype) AND (agtype_access_operator(VARIADIC ARRAY[properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17046'::oid, u.id), u.properties), '\"key\"'::agtype])))"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "profile": {
+          "format": "postgresql_json",
+          "analyze": true,
+          "plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "ProbeRoot",
+                "Alias": "u",
+                "Startup Cost": 0.0,
+                "Total Cost": 65346.04,
+                "Plan Rows": 16,
+                "Plan Width": 64,
+                "Actual Startup Time": 17.253,
+                "Actual Total Time": 283.693,
+                "Actual Rows": 16.0,
+                "Actual Loops": 1,
+                "Disabled": false,
+                "Shared Hit Blocks": 21345,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0,
+                "Plans": [
+                  {
+                    "Node Type": "Aggregate",
+                    "Strategy": "Plain",
+                    "Partial Mode": "Simple",
+                    "Parent Relationship": "SubPlan",
+                    "Subplan Name": "SubPlan 1",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Startup Cost": 4084.04,
+                    "Total Cost": 4084.05,
+                    "Plan Rows": 1,
+                    "Plan Width": 32,
+                    "Actual Startup Time": 17.729,
+                    "Actual Total Time": 17.729,
+                    "Actual Rows": 1.0,
+                    "Actual Loops": 16,
+                    "Disabled": false,
+                    "Shared Hit Blocks": 21344,
+                    "Shared Read Blocks": 0,
+                    "Shared Dirtied Blocks": 0,
+                    "Shared Written Blocks": 0,
+                    "Local Hit Blocks": 0,
+                    "Local Read Blocks": 0,
+                    "Local Dirtied Blocks": 0,
+                    "Local Written Blocks": 0,
+                    "Temp Read Blocks": 0,
+                    "Temp Written Blocks": 0,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Relation Name": "ProbeLeaf",
+                        "Alias": "x",
+                        "Startup Cost": 0.0,
+                        "Total Cost": 4084.03,
+                        "Plan Rows": 3,
+                        "Plan Width": 0,
+                        "Actual Startup Time": 17.728,
+                        "Actual Total Time": 17.728,
+                        "Actual Rows": 1.0,
+                        "Actual Loops": 16,
+                        "Disabled": false,
+                        "Filter": "((agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype) AND (agtype_access_operator(VARIADIC ARRAY[properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17046'::oid, u.id), u.properties), '\"key\"'::agtype])))",
+                        "Rows Removed by Filter": 100000,
+                        "Shared Hit Blocks": 21344,
+                        "Shared Read Blocks": 0,
+                        "Shared Dirtied Blocks": 0,
+                        "Shared Written Blocks": 0,
+                        "Local Hit Blocks": 0,
+                        "Local Read Blocks": 0,
+                        "Local Dirtied Blocks": 0,
+                        "Local Written Blocks": 0,
+                        "Temp Read Blocks": 0,
+                        "Temp Written Blocks": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              "Planning": {
+                "Shared Hit Blocks": 0,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              },
+              "Planning Time": 0.041,
+              "Triggers": [],
+              "Execution Time": 283.7
+            }
+          ]
+        }
+      },
+      "b": {
+        "query": "MATCH (u:ProbeRoot) OPTIONAL MATCH (x:ProbeLeaf) WHERE x.key=u.key AND x.mark=true WITH u,count(x) AS value RETURN u.uid AS uid,value",
+        "explain": {
+          "format": "postgresql_json",
+          "analyze": false,
+          "plan": [
+            {
+              "Plan": {
+                "Node Type": "Subquery Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Alias": "_age_default_alias_previous_cypher_clause",
+                "Startup Cost": 2843.91,
+                "Total Cost": 2844.53,
+                "Plan Rows": 16,
+                "Plan Width": 64,
+                "Disabled": false,
+                "Plans": [
+                  {
+                    "Node Type": "Aggregate",
+                    "Strategy": "Sorted",
+                    "Partial Mode": "Simple",
+                    "Parent Relationship": "Subquery",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Startup Cost": 2843.91,
+                    "Total Cost": 2844.49,
+                    "Plan Rows": 16,
+                    "Plan Width": 64,
+                    "Disabled": false,
+                    "Group Key": [
+                      "(_agtype_build_vertex(u.id, _label_name('17046'::oid, u.id), u.properties))"
+                    ],
+                    "Plans": [
+                      {
+                        "Node Type": "Sort",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Startup Cost": 2843.91,
+                        "Total Cost": 2844.01,
+                        "Plan Rows": 40,
+                        "Plan Width": 64,
+                        "Disabled": false,
+                        "Sort Key": [
+                          "(_agtype_build_vertex(u.id, _label_name('17046'::oid, u.id), u.properties))"
+                        ],
+                        "Plans": [
+                          {
+                            "Node Type": "Hash Join",
+                            "Parent Relationship": "Outer",
+                            "Parallel Aware": false,
+                            "Async Capable": false,
+                            "Join Type": "Right",
+                            "Startup Cost": 1.36,
+                            "Total Cost": 2842.85,
+                            "Plan Rows": 40,
+                            "Plan Width": 64,
+                            "Disabled": false,
+                            "Inner Unique": false,
+                            "Hash Cond": "(agtype_access_operator(VARIADIC ARRAY[x.properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17046'::oid, u.id), u.properties), '\"key\"'::agtype]))",
+                            "Plans": [
+                              {
+                                "Node Type": "Seq Scan",
+                                "Parent Relationship": "Outer",
+                                "Parallel Aware": false,
+                                "Async Capable": false,
+                                "Relation Name": "ProbeLeaf",
+                                "Alias": "x",
+                                "Startup Cost": 0.0,
+                                "Total Cost": 2836.51,
+                                "Plan Rows": 500,
+                                "Plan Width": 97,
+                                "Disabled": false,
+                                "Filter": "(agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype)"
+                              },
+                              {
+                                "Node Type": "Hash",
+                                "Parent Relationship": "Inner",
+                                "Parallel Aware": false,
+                                "Async Capable": false,
+                                "Startup Cost": 1.16,
+                                "Total Cost": 1.16,
+                                "Plan Rows": 16,
+                                "Plan Width": 61,
+                                "Disabled": false,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Seq Scan",
+                                    "Parent Relationship": "Outer",
+                                    "Parallel Aware": false,
+                                    "Async Capable": false,
+                                    "Relation Name": "ProbeRoot",
+                                    "Alias": "u",
+                                    "Startup Cost": 0.0,
+                                    "Total Cost": 1.16,
+                                    "Plan Rows": 16,
+                                    "Plan Width": 61,
+                                    "Disabled": false
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "profile": {
+          "format": "postgresql_json",
+          "analyze": true,
+          "plan": [
+            {
+              "Plan": {
+                "Node Type": "Subquery Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Alias": "_age_default_alias_previous_cypher_clause",
+                "Startup Cost": 2843.91,
+                "Total Cost": 2844.53,
+                "Plan Rows": 16,
+                "Plan Width": 64,
+                "Actual Startup Time": 17.472,
+                "Actual Total Time": 17.489,
+                "Actual Rows": 16.0,
+                "Actual Loops": 1,
+                "Disabled": false,
+                "Shared Hit Blocks": 1335,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0,
+                "Plans": [
+                  {
+                    "Node Type": "Aggregate",
+                    "Strategy": "Sorted",
+                    "Partial Mode": "Simple",
+                    "Parent Relationship": "Subquery",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Startup Cost": 2843.91,
+                    "Total Cost": 2844.49,
+                    "Plan Rows": 16,
+                    "Plan Width": 64,
+                    "Actual Startup Time": 17.471,
+                    "Actual Total Time": 17.482,
+                    "Actual Rows": 16.0,
+                    "Actual Loops": 1,
+                    "Disabled": false,
+                    "Group Key": [
+                      "(_agtype_build_vertex(u.id, _label_name('17046'::oid, u.id), u.properties))"
+                    ],
+                    "Shared Hit Blocks": 1335,
+                    "Shared Read Blocks": 0,
+                    "Shared Dirtied Blocks": 0,
+                    "Shared Written Blocks": 0,
+                    "Local Hit Blocks": 0,
+                    "Local Read Blocks": 0,
+                    "Local Dirtied Blocks": 0,
+                    "Local Written Blocks": 0,
+                    "Temp Read Blocks": 0,
+                    "Temp Written Blocks": 0,
+                    "Plans": [
+                      {
+                        "Node Type": "Sort",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Startup Cost": 2843.91,
+                        "Total Cost": 2844.01,
+                        "Plan Rows": 40,
+                        "Plan Width": 64,
+                        "Actual Startup Time": 17.468,
+                        "Actual Total Time": 17.469,
+                        "Actual Rows": 16.0,
+                        "Actual Loops": 1,
+                        "Disabled": false,
+                        "Sort Key": [
+                          "(_agtype_build_vertex(u.id, _label_name('17046'::oid, u.id), u.properties))"
+                        ],
+                        "Sort Method": "quicksort",
+                        "Sort Space Used": 30,
+                        "Sort Space Type": "Memory",
+                        "Shared Hit Blocks": 1335,
+                        "Shared Read Blocks": 0,
+                        "Shared Dirtied Blocks": 0,
+                        "Shared Written Blocks": 0,
+                        "Local Hit Blocks": 0,
+                        "Local Read Blocks": 0,
+                        "Local Dirtied Blocks": 0,
+                        "Local Written Blocks": 0,
+                        "Temp Read Blocks": 0,
+                        "Temp Written Blocks": 0,
+                        "Plans": [
+                          {
+                            "Node Type": "Hash Join",
+                            "Parent Relationship": "Outer",
+                            "Parallel Aware": false,
+                            "Async Capable": false,
+                            "Join Type": "Right",
+                            "Startup Cost": 1.36,
+                            "Total Cost": 2842.85,
+                            "Plan Rows": 40,
+                            "Plan Width": 64,
+                            "Actual Startup Time": 17.424,
+                            "Actual Total Time": 17.44,
+                            "Actual Rows": 16.0,
+                            "Actual Loops": 1,
+                            "Disabled": false,
+                            "Inner Unique": false,
+                            "Hash Cond": "(agtype_access_operator(VARIADIC ARRAY[x.properties, '\"key\"'::agtype]) = agtype_access_operator(VARIADIC ARRAY[_agtype_build_vertex(u.id, _label_name('17046'::oid, u.id), u.properties), '\"key\"'::agtype]))",
+                            "Shared Hit Blocks": 1335,
+                            "Shared Read Blocks": 0,
+                            "Shared Dirtied Blocks": 0,
+                            "Shared Written Blocks": 0,
+                            "Local Hit Blocks": 0,
+                            "Local Read Blocks": 0,
+                            "Local Dirtied Blocks": 0,
+                            "Local Written Blocks": 0,
+                            "Temp Read Blocks": 0,
+                            "Temp Written Blocks": 0,
+                            "Plans": [
+                              {
+                                "Node Type": "Seq Scan",
+                                "Parent Relationship": "Outer",
+                                "Parallel Aware": false,
+                                "Async Capable": false,
+                                "Relation Name": "ProbeLeaf",
+                                "Alias": "x",
+                                "Startup Cost": 0.0,
+                                "Total Cost": 2836.51,
+                                "Plan Rows": 500,
+                                "Plan Width": 97,
+                                "Actual Startup Time": 17.407,
+                                "Actual Total Time": 17.407,
+                                "Actual Rows": 1.0,
+                                "Actual Loops": 1,
+                                "Disabled": false,
+                                "Filter": "(agtype_access_operator(VARIADIC ARRAY[properties, '\"mark\"'::agtype]) = 'true'::agtype)",
+                                "Rows Removed by Filter": 100000,
+                                "Shared Hit Blocks": 1334,
+                                "Shared Read Blocks": 0,
+                                "Shared Dirtied Blocks": 0,
+                                "Shared Written Blocks": 0,
+                                "Local Hit Blocks": 0,
+                                "Local Read Blocks": 0,
+                                "Local Dirtied Blocks": 0,
+                                "Local Written Blocks": 0,
+                                "Temp Read Blocks": 0,
+                                "Temp Written Blocks": 0
+                              },
+                              {
+                                "Node Type": "Hash",
+                                "Parent Relationship": "Inner",
+                                "Parallel Aware": false,
+                                "Async Capable": false,
+                                "Startup Cost": 1.16,
+                                "Total Cost": 1.16,
+                                "Plan Rows": 16,
+                                "Plan Width": 61,
+                                "Actual Startup Time": 0.013,
+                                "Actual Total Time": 0.013,
+                                "Actual Rows": 16.0,
+                                "Actual Loops": 1,
+                                "Disabled": false,
+                                "Hash Buckets": 1024,
+                                "Original Hash Buckets": 1024,
+                                "Hash Batches": 1,
+                                "Original Hash Batches": 1,
+                                "Peak Memory Usage": 10,
+                                "Shared Hit Blocks": 1,
+                                "Shared Read Blocks": 0,
+                                "Shared Dirtied Blocks": 0,
+                                "Shared Written Blocks": 0,
+                                "Local Hit Blocks": 0,
+                                "Local Read Blocks": 0,
+                                "Local Dirtied Blocks": 0,
+                                "Local Written Blocks": 0,
+                                "Temp Read Blocks": 0,
+                                "Temp Written Blocks": 0,
+                                "Plans": [
+                                  {
+                                    "Node Type": "Seq Scan",
+                                    "Parent Relationship": "Outer",
+                                    "Parallel Aware": false,
+                                    "Async Capable": false,
+                                    "Relation Name": "ProbeRoot",
+                                    "Alias": "u",
+                                    "Startup Cost": 0.0,
+                                    "Total Cost": 1.16,
+                                    "Plan Rows": 16,
+                                    "Plan Width": 61,
+                                    "Actual Startup Time": 0.002,
+                                    "Actual Total Time": 0.002,
+                                    "Actual Rows": 16.0,
+                                    "Actual Loops": 1,
+                                    "Disabled": false,
+                                    "Shared Hit Blocks": 1,
+                                    "Shared Read Blocks": 0,
+                                    "Shared Dirtied Blocks": 0,
+                                    "Shared Written Blocks": 0,
+                                    "Local Hit Blocks": 0,
+                                    "Local Read Blocks": 0,
+                                    "Local Dirtied Blocks": 0,
+                                    "Local Written Blocks": 0,
+                                    "Temp Read Blocks": 0,
+                                    "Temp Written Blocks": 0
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "Planning": {
+                "Shared Hit Blocks": 0,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              },
+              "Planning Time": 0.037,
+              "Triggers": [],
+              "Execution Time": 17.495
+            }
+          ]
+        }
+      }
+    }
+  },
+  "summary": {
+    "slow_side": "a",
+    "median_ratio": 15.133587297977785,
+    "median_delta_ms": 277.1626670146361,
+    "direction_consistency": 1.0,
+    "ratio_ci_low": 14.74070534913695,
+    "ratio_ci_high": 15.613693855191233,
+    "noise_p99_ms": 33.811786805745214
+  },
+  "passed_time_gate": true
+}

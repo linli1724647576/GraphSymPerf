@@ -95,6 +95,20 @@ def test_candidate_has_balanced_samples_fresh_sessions_and_controls(fake):
         assert session['noise_p99_ms'] == 0
 
 
+def test_statistics_preparation_evidence_keeps_each_checked_state(fake):
+    restore = fake.restore
+    def prepared_restore(self, case):
+        restore(self, case)
+        self.statistics_evidence = [{'label': 'GspLow', 'property': 'id',
+                                     'num estimation nodes': self.ordinal + 1}]
+    fake.restore = prepared_restore
+    report = run_case(CASE, {}, SETTINGS)
+    assert report['status'] == 'candidate'
+    assert report['statistics_evidence'] == [
+        {'phase': phase, 'rows': [{'label': 'GspLow', 'property': 'id', 'num estimation nodes': ordinal}]}
+        for ordinal, phase in enumerate(('discovery_setup', 'confirmation_1_setup', 'confirmation_2_setup'), 1)]
+
+
 def test_changed_direction_in_one_session_fails_confirmation(fake):
     fake.reverse_session = 2
     report = run_case(CASE, {}, SETTINGS)
@@ -155,6 +169,38 @@ def test_measurement_requires_balance_and_complete_confirmation():
     for settings in ({'confirmation_sessions': 1}, {'discovery_pairs': 3}, {'max_rows': True}, {'ratio': float('nan')}):
         with pytest.raises(ValueError):
             measurement_settings(settings)
+
+
+@pytest.mark.parametrize('value', [True, -1, float('nan'), float('inf'), '100'])
+def test_minimum_runtime_delta_must_be_finite_and_nonnegative(value):
+    with pytest.raises(ValueError):
+        measurement_settings({'min_delta_ms': value})
+
+
+def test_minimum_runtime_delta_defaults_to_zero():
+    assert measurement_settings({})['min_delta_ms'] == 0
+
+
+@pytest.mark.parametrize('ratio,delta,noise,passed', [
+    (5, 100, 0, False),
+    (5, 100.01, 0, True),
+    (4.99, 101, 0, False),
+    (5, 101, 101, False),
+])
+def test_candidate_requires_both_ratio_and_strict_runtime_delta(ratio, delta, noise, passed):
+    settings = measurement_settings({'ratio': 5, 'min_delta_ms': 100})
+    summary = {'median_ratio': ratio, 'ratio_ci_low': 5,
+               'median_delta_ms': delta, 'noise_p99_ms': noise}
+    sessions = [{'summary': {'direction_consistency': 1, 'median_delta_ms': delta}}] * 2
+    assert executor._passed(summary, sessions, settings) is passed
+
+
+@pytest.mark.parametrize('slow_ms,status', [(101, 'not_confirmed'), (101.01, 'candidate')])
+def test_runtime_delta_gate_applies_to_confirmed_measurements(fake, slow_ms, status):
+    fake.duration_b = slow_ms
+    report = run_case(CASE, {}, {**SETTINGS, 'ratio': 5, 'min_delta_ms': 100})
+    assert report['status'] == status
+    assert report['measurement']['min_delta_ms'] == 100
 
 
 def test_driver_consumes_results_before_stopping_clock_and_marks_row_cap(monkeypatch):

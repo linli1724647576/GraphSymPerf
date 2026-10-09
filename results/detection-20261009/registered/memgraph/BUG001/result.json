@@ -1,0 +1,272 @@
+{
+  "format_version": "registered-evidence-summary-v1",
+  "kind": "standard_issue_summary",
+  "source_format_version": 2,
+  "case": {
+    "pattern": "P11",
+    "scale": 50000,
+    "seed": 738919972,
+    "parameters": {},
+    "checks": [
+      {
+        "query": "SHOW INDEXES YIELD name, state, labelsOrTypes, properties WHERE name = 'gsp_cost_lookup' RETURN name, state, labelsOrTypes, properties",
+        "expected_rows": [
+          {
+            "name": "gsp_cost_lookup",
+            "state": "ONLINE",
+            "labelsOrTypes": [
+              "GspAnchor"
+            ],
+            "properties": [
+              "uid"
+            ]
+          }
+        ]
+      },
+      {
+        "query": "MATCH (u:GspAnchor {uid: 1}) RETURN count(u) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count",
+        "expected_rows": [
+          {
+            "count": 8
+          }
+        ]
+      },
+      {
+        "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_HIGH]->(w:GspHigh) RETURN count(w) AS count",
+        "expected_rows": [
+          {
+            "count": 200001
+          }
+        ]
+      },
+      {
+        "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_HIGH]->(w:GspHigh) WHERE w.keep = true RETURN count(w) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "MATCH (v:GspLow) RETURN count(DISTINCT v.uid) AS count",
+        "expected_rows": [
+          {
+            "count": 8
+          }
+        ]
+      }
+    ],
+    "expected_rows": [
+      {
+        "u.uid": 1,
+        "v.uid": 2,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -1,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -2,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -3,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -4,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -5,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -6,
+        "w.uid": 3
+      },
+      {
+        "u.uid": 1,
+        "v.uid": -7,
+        "w.uid": 3
+      }
+    ],
+    "bindings": {
+      "shared_anchor": "u",
+      "low_candidates": 8,
+      "high_candidates": 200001,
+      "state_variant": "multi_low",
+      "low_branch_multiplicity": 8,
+      "multiplicity_anchor_uid": 1,
+      "root_high_candidates": 200001,
+      "cost_kind": "repeated_branch_work",
+      "high_matches": 1,
+      "total_low_matches": 8,
+      "anchor_candidates": 1,
+      "variant": {
+        "state_variant": "multi_low",
+        "high_predicate": 1,
+        "branch_order": 1,
+        "complexity": 2
+      },
+      "role_choices": {
+        "state_variant": "multi_low",
+        "high_predicate": "(NOT (w.keep = false))",
+        "branch_order": "high_first"
+      }
+    },
+    "skeleton": "MATCH $lowCostNode(u) MATCH $lowCostPattern(u,v) MATCH $highCostPattern(u,w) RETURN u.uid, v.uid, w.uid",
+    "placeholders": [
+      {
+        "name": "lowCostNode",
+        "kind": "node_pattern",
+        "role": "low",
+        "variables": [
+          "u"
+        ]
+      },
+      {
+        "name": "lowCostPattern",
+        "kind": "graph_pattern",
+        "role": "low",
+        "variables": [
+          "u",
+          "v"
+        ]
+      },
+      {
+        "name": "highCostPattern",
+        "kind": "graph_pattern",
+        "role": "high",
+        "variables": [
+          "u",
+          "w"
+        ]
+      }
+    ],
+    "source": {
+      "generator": "builtin_template",
+      "builtin_pattern": "P11",
+      "raw_query": null,
+      "derivation_preserves_original_result": false,
+      "seed_syntax_enriched": false,
+      "enrichment_origin": "builtin_template",
+      "derivation_steps": [
+        "instantiate_builtin_pattern",
+        "populate_cost_roles"
+      ],
+      "generation_mode": "builtin_template",
+      "population_seed": 738919972,
+      "data_seed": 0,
+      "state_variant": "multi_low",
+      "populated_query_sha256": "6f22343467c8faf59e40ba79aa36f9e1eba78266f974cd7621e0853f0c9990d4",
+      "template_id": "P11-7018a6dcc6",
+      "variant": {
+        "state_variant": "multi_low",
+        "high_predicate": 1,
+        "branch_order": 1,
+        "complexity": 2
+      },
+      "role_choices": {
+        "state_variant": "multi_low",
+        "high_predicate": "(NOT (w.keep = false))",
+        "branch_order": "high_first"
+      },
+      "complexity": 2,
+      "role_sampling": "independent_seeded_random"
+    },
+    "data_seed": 0,
+    "state_variant": "multi_low",
+    "complexity": 2,
+    "variant": {
+      "state_variant": "multi_low",
+      "high_predicate": 1,
+      "branch_order": 1,
+      "complexity": 2
+    },
+    "role_choices": {
+      "state_variant": "multi_low",
+      "high_predicate": "(NOT (w.keep = false))",
+      "branch_order": "high_first"
+    },
+    "template_id": "P11-7018a6dcc6"
+  },
+  "result": {
+    "status": "candidate",
+    "reason": "performance_difference_confirmed",
+    "dbms": "memgraph",
+    "language": "cypher",
+    "database_version": "Memgraph/3.10.1",
+    "comparisons": {
+      "ab": {
+        "pair_kind": "symmetry",
+        "status": "candidate",
+        "summary": {
+          "slow_side": "b",
+          "median_ratio": 5.525407064493634,
+          "median_delta_ms": 145.6689996412024,
+          "direction_consistency": 1.0,
+          "ratio_ci_low": 5.466339747612591,
+          "ratio_ci_high": 5.587403850602078,
+          "noise_p99_ms": 62.68734734272584
+        }
+      }
+    },
+    "reference_comparisons": {}
+  },
+  "input_hash": "f9f594c12ee1fa294cb9e0fccf5f9fb4ac97a81da5922b271b11a1987559ba24",
+  "dbms": "memgraph",
+  "language": "cypher",
+  "replayable": false,
+  "provenance": {
+    "report": "BUG list/Memgraph/P11/BUG001.md",
+    "evidence": "results/detection-20261009/memgraph/post-statistics/memgraph-recheck/20261009T130912Z-704f78/0001-P11-n50000-f9f594c1/result.json",
+    "source_kind": "standard_result",
+    "selected_comparison": "ab",
+    "q1_sample_side": "a",
+    "q2_sample_side": "b",
+    "manual_review": "Selected local issue letter after complete-result and native-work review.",
+    "developer_confirmed": false,
+    "submitted": false
+  },
+  "verified_report_statistics": {
+    "dbms": "memgraph",
+    "report": "BUG list/Memgraph/P11/BUG001.md",
+    "pattern_or_mechanism": "P11",
+    "language": "cypher",
+    "database_version": "Memgraph/3.10.1",
+    "source_kind": "standard_result",
+    "source_comparison": "ab",
+    "q1_sample_side": "a",
+    "q2_sample_side": "b",
+    "median_q1_ms": 32.43554197251797,
+    "median_q2_ms": 178.81185398437083,
+    "ratio_direction": "q2/q1",
+    "median_paired_ratio": 5.525407064493634,
+    "median_paired_delta_ms": 145.6689996412024,
+    "delta_over_100_ms": true,
+    "ratio_ci_low": 5.466339747612591,
+    "ratio_ci_high": 5.587403850602078,
+    "source_ratio_ci_low": 5.466339747612591,
+    "source_ratio_ci_high": 5.587403850602078,
+    "noise_p99_ms": 62.68734734272584,
+    "pairs": 40,
+    "source": "results/detection-20261009/memgraph/post-statistics/memgraph-recheck/20261009T130912Z-704f78/0001-P11-n50000-f9f594c1/result.json",
+    "source_input_hash": "f9f594c12ee1fa294cb9e0fccf5f9fb4ac97a81da5922b271b11a1987559ba24"
+  }
+}

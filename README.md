@@ -17,7 +17,7 @@ Src/
   executor.py    八种数据库执行、原生计划与重复测量
   summarize.py   独立 BUG 与 pattern 贡献汇总
 config.yaml      单个测试目标和实验参数
-bugs.csv         人工核查后的 BUG 对应表，初始为空
+bugs.csv         人工核查后的 BUG 对应表
 tests/          离线测试与显式启用的数据库集成测试
 ```
 
@@ -98,6 +98,8 @@ S 模式以小参考区域替换高成本关系引用；LIMIT 和 EXISTS 保留�
 
 普通查询计时包含提交到完整消费结果，连接建立不计入查询耗时。初筛后使用两次重建状态的重复确认、平衡 AB/BA 顺序和 A/A、B/B 噪声对照。`candidate` 仅表示稳定性能差异；仍需核查执行计划、可避免工作、缩减案例和根因，才能登记为 BUG。
 
+`measurement.min_delta_ms` 设置配对时间差的下限，默认 0 保持旧实验兼容；确认时要求中位时间差严格大于该值。本轮 issue 实验使用 `ratio: 5`、`ci_low: 5`、`min_delta_ms: 100`，同时保留完整结果和同查询噪声检查。Memgraph 每次装载后执行 `ANALYZE GRAPH`，保存其统计结果并清理旧计划缓存，再开始预热和测量。
+
 `measurement.collect_plans: true` 在计时结束后保存原生 PROFILE；性能候选默认采集计划。计划失败会单独记录，不能代替结果与性能检查。各引擎的 DB Hits、算子输出数量、loops 和缓冲区统计保留原名，不转换成一个虚假的统一工作量指标。
 
 每个比较独立保存 `pair_kind`、`status` 和测量摘要：`comparisons.ab` 保存原始 A/B 证据；`reference_comparisons` 保存 A/reference、B/reference 样本。顶层 `candidate_comparison` 仅标出差异最大的已通过比较，不能用它判断 A/B 是否命中。SCor 的 HIGH/REF 属于参考比较。P16 把失败元素从列表头移到尾，普通顺序 ALL 求值会增加谓词检查次数；这种预期工作差异不能直接登记为遗漏优化。
@@ -120,7 +122,7 @@ python Src/main.py --config config.yaml --replay results/<运行>/<案例>
 
 ## BUG 与 pattern 贡献
 
-`bugs.csv` 初始只有表头，不预填历史或假定 BUG：
+`bugs.csv` 使用以下六列，只登记已经核查的案例：
 
 ```text
 case_id,dbms,bug_id,status,issue_url,database_version
@@ -141,6 +143,12 @@ python Src/summarize.py --results results --bugs bugs.csv --output results/summa
 新增可重复的 `--language` 过滤，旧记录默认 `cypher`。`summary.csv` 按数据库 × 语言 × Pattern 分组；`exclusive_bugs` 表示该语言内所选 Pattern 的独占命中。`pattern_bug.csv` 仍按 `(dbms, bug_id)` 跨语言去重，`bugs.csv` 保持六列；未经核验的语言案例不能借用其他语言的确认。
 
 汇总读取所选目录内 `EXCLUDED.json` 的显式标记：`include_in_analysis: false` 排除对应范围的结果及运行清单。无效清单报错，不根据目录名猜测。语义冒烟测试、受干扰的轮次及不同计时口径的旧结果应单独保存并标记，不能混进正式贡献统计。
+
+本轮真实实验及报告见 [2026-10-09 实验记录](docs/detection-20261009.md) 和 [BUG list](<BUG list/README.md>)。本轮筛选后的元数据、原始配对样本、原生计划与复现输入保存在 `results/detection-20261009/`。其中 `registered/` 用于复核登记数量；原生机制使用 `native:<mechanism>` 分类，不能算成 P1–P16 的命中，也不能用于比较各 Pattern 的发现率。
+
+```bash
+python Src/summarize.py --results results/detection-20261009/registered --bugs bugs.csv --output results/detection-20261009/registered/summary
+```
 
 ## 测试
 

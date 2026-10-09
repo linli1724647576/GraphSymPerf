@@ -1,0 +1,4 @@
+{
+  "include_in_analysis": false,
+  "reason": "Supporting boolean-order variant of the reported P4 manifestation; not a second independently registered issue."
+}

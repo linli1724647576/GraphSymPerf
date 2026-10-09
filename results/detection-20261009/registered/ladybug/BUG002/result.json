@@ -1,0 +1,185 @@
+{
+  "format_version": "native-evidence-summary-v1",
+  "kind": "native_optimization_rule",
+  "note": "Metadata for statistical summary only; not IR and not main.py --replay input. Reproduce with the archived native probe script and the referenced original probe recipe.",
+  "native_input": {
+    "dbms": "ladybug",
+    "language": "cypher",
+    "queries": {
+      "a": "MATCH p=(u:ProbeRoot {uid:1})-[:ProbeA|ProbeB|ProbeC* TRAIL 3..3]->(v:ProbeLeaf) WHERE all(n IN nodes(p) WHERE n.keep=true) RETURN u.uid AS root_uid, v.uid AS leaf_uid, length(p) AS hops",
+      "b": "MATCH p=(u:ProbeRoot {uid:1})-[:ProbeA|ProbeB|ProbeC* TRAIL 3..3 (e,n | WHERE n.keep=true)]->(v:ProbeLeaf) WHERE u.keep=true RETURN u.uid AS root_uid, v.uid AS leaf_uid, length(p) AS hops"
+    },
+    "actual_setup": [
+      "CREATE NODE TABLE ProbeRoot(uid INT64 PRIMARY KEY, keep BOOLEAN)",
+      "CREATE NODE TABLE ProbeMid(uid INT64 PRIMARY KEY, keep BOOLEAN)",
+      "CREATE NODE TABLE ProbeHub(uid INT64 PRIMARY KEY, keep BOOLEAN)",
+      "CREATE NODE TABLE ProbeLeaf(uid INT64 PRIMARY KEY, keep BOOLEAN)",
+      "CREATE REL TABLE ProbeA(FROM ProbeRoot TO ProbeMid)",
+      "CREATE REL TABLE ProbeB(FROM ProbeMid TO ProbeHub)",
+      "CREATE REL TABLE ProbeC(FROM ProbeHub TO ProbeLeaf)",
+      "CREATE (:ProbeRoot {uid:1,keep:true}), (:ProbeHub {uid:1,keep:false})",
+      "MATCH (u:ProbeRoot {uid:1}), (h:ProbeHub {uid:1}) UNWIND range(1,1000) AS i CREATE (u)-[:ProbeA]->(m:ProbeMid {uid:i,keep:true})-[:ProbeB]->(h)",
+      "MATCH (h:ProbeHub {uid:1}) UNWIND range(1,1000) AS i CREATE (h)-[:ProbeC]->(:ProbeLeaf {uid:1000000+i,keep:true})"
+    ],
+    "recipe": {
+      "setup": [
+        "CREATE NODE TABLE ProbeRoot(uid INT64 PRIMARY KEY, keep BOOLEAN)",
+        "CREATE NODE TABLE ProbeMid(uid INT64 PRIMARY KEY, keep BOOLEAN)",
+        "CREATE NODE TABLE ProbeHub(uid INT64 PRIMARY KEY, keep BOOLEAN)",
+        "CREATE NODE TABLE ProbeLeaf(uid INT64 PRIMARY KEY, keep BOOLEAN)",
+        "CREATE REL TABLE ProbeA(FROM ProbeRoot TO ProbeMid)",
+        "CREATE REL TABLE ProbeB(FROM ProbeMid TO ProbeHub)",
+        "CREATE REL TABLE ProbeC(FROM ProbeHub TO ProbeLeaf)",
+        "CREATE (:ProbeRoot {uid:1,keep:true}), (:ProbeHub {uid:1,keep:false})",
+        "MATCH (u:ProbeRoot {uid:1}), (h:ProbeHub {uid:1}) UNWIND range(1,1000) AS i CREATE (u)-[:ProbeA]->(m:ProbeMid {uid:i,keep:true})-[:ProbeB]->(h)",
+        "MATCH (h:ProbeHub {uid:1}) UNWIND range(1,1000) AS i CREATE (h)-[:ProbeC]->(:ProbeLeaf {uid:1000000+i,keep:true})"
+      ],
+      "counts": {
+        "root_nodes": [
+          "MATCH (n:ProbeRoot) RETURN count(n) AS value",
+          1
+        ],
+        "mid_nodes": [
+          "MATCH (n:ProbeMid) RETURN count(n) AS value",
+          1000
+        ],
+        "hub_nodes": [
+          "MATCH (n:ProbeHub) RETURN count(n) AS value",
+          1
+        ],
+        "leaf_nodes": [
+          "MATCH (n:ProbeLeaf) RETURN count(n) AS value",
+          1000
+        ],
+        "A_edges": [
+          "MATCH (:ProbeRoot)-[r:ProbeA]->(:ProbeMid) RETURN count(r) AS value",
+          1000
+        ],
+        "B_edges": [
+          "MATCH (:ProbeMid)-[r:ProbeB]->(:ProbeHub) RETURN count(r) AS value",
+          1000
+        ],
+        "C_edges": [
+          "MATCH (:ProbeHub)-[r:ProbeC]->(:ProbeLeaf) RETURN count(r) AS value",
+          1000
+        ],
+        "root_true": [
+          "MATCH (n:ProbeRoot) WHERE n.keep=true RETURN count(n) AS value",
+          1
+        ],
+        "mid_true": [
+          "MATCH (n:ProbeMid) WHERE n.keep=true RETURN count(n) AS value",
+          1000
+        ],
+        "leaf_true": [
+          "MATCH (n:ProbeLeaf) WHERE n.keep=true RETURN count(n) AS value",
+          1000
+        ],
+        "hub_true": [
+          "MATCH (n:ProbeHub) WHERE n.keep=true RETURN count(n) AS value",
+          0
+        ]
+      },
+      "queries": {
+        "a": "MATCH p=(u:ProbeRoot {uid:1})-[:ProbeA|ProbeB|ProbeC* TRAIL 3..3]->(v:ProbeLeaf) WHERE all(n IN nodes(p) WHERE n.keep=true) RETURN u.uid AS root_uid, v.uid AS leaf_uid, length(p) AS hops",
+        "b": "MATCH p=(u:ProbeRoot {uid:1})-[:ProbeA|ProbeB|ProbeC* TRAIL 3..3 (e,n | WHERE n.keep=true)]->(v:ProbeLeaf) WHERE u.keep=true RETURN u.uid AS root_uid, v.uid AS leaf_uid, length(p) AS hops"
+      },
+      "controls": {
+        "recursive_inline_filter": {
+          "query": "MATCH p=(u:ProbeRoot {uid:1})-[:ProbeA|ProbeB|ProbeC* TRAIL 3..3 (e,n | WHERE n.keep=true)]->(v:ProbeLeaf) WHERE u.keep=true RETURN u.uid AS root_uid, v.uid AS leaf_uid, length(p) AS hops",
+          "expected_rows": []
+        }
+      },
+      "expected_rows": [],
+      "equivalence": "Both use the same three-hop TRAIL. ALL over all path nodes is the root keep condition plus the same node predicate at every recursive hop. Positive and NULL controls preserve duplicate paths.",
+      "work_obligation": "Push the pure ALL node predicate into the same recursive operator, rather than enumerate paths that already contain the false Hub.",
+      "scale": 1000,
+      "nodes": 2002,
+      "edges": 3000,
+      "three_hop_paths": 1000000,
+      "hub_keep": false
+    },
+    "graph_spec": null,
+    "native_schema": null,
+    "native_schema_mapping": null,
+    "parameters": {}
+  },
+  "case": {
+    "pattern": "native:path-pruning",
+    "language": "cypher",
+    "mechanism": "path-pruning",
+    "expected_rows": []
+  },
+  "result": {
+    "status": "timing_observation",
+    "reason": "native_rule_evidence_manually_reviewed",
+    "dbms": "ladybug",
+    "language": "cypher",
+    "database_version": "LadybugDB/0.21.2",
+    "source_status": "native_probe_signal_requires_plan_review",
+    "summary": {
+      "slow_side": "a",
+      "median_ratio": 307.98993348394526,
+      "median_delta_ms": 605.5263959569857,
+      "direction_consistency": 1.0,
+      "ratio_ci_low": 299.53022542305564,
+      "ratio_ci_high": 312.29942548285686,
+      "noise_p99_ms": 19.802847136743367
+    }
+  },
+  "input_hash": "742450cd664da0ce4008364b5df9bfd4f43697e1c821b44f4603c2859bb92748",
+  "dbms": "ladybug",
+  "language": "cypher",
+  "replayable": false,
+  "provenance": {
+    "report": "BUG list/LadybugDB/Native/path-pruning/BUG002.md",
+    "evidence": "results/detection-20261009/ladybug/native-20261009T145558Z-93748b/path-pruning/probe.json",
+    "source_kind": "native_probe",
+    "selected_comparison": "native_ab",
+    "q1_sample_side": "a",
+    "q2_sample_side": "b",
+    "manual_review": "Selected local issue letter after complete-result and native-work review.",
+    "developer_confirmed": false,
+    "submitted": false,
+    "reproducer": "results/detection-20261009/registered/reproducers/ladybug_inline_probe.py",
+    "reproducer_hashes": {
+      "original_path": "/private/tmp/gsp-detection-20261009/ladybug_inline_probe.py",
+      "original_sha256": "20d497d62f890ced9289b925a3471f4d702ae56a85c8cd4cbf74eb04182725bf",
+      "archived_sha256": "20d497d62f890ced9289b925a3471f4d702ae56a85c8cd4cbf74eb04182725bf",
+      "changes": "Unmodified wrapper."
+    },
+    "reproducer_dependencies": {
+      "ladybug_native_probe.py": {
+        "original_path": "/private/tmp/gsp-detection-20261009/ladybug_native_probe.py",
+        "original_sha256": "fc574a8f33a09a626737db4be65b84e1b6eb8ff5d9c882946f6be4fa95ed4cf2",
+        "archived_sha256": "ff70b86389069187666518774f7888af5d8f722f6acaa6d11cafe0dd279e6a4b",
+        "changes": "Only WORKSPACE locates Src through __file__ ancestors."
+      }
+    }
+  },
+  "verified_report_statistics": {
+    "dbms": "ladybug",
+    "report": "BUG list/LadybugDB/Native/path-pruning/BUG002.md",
+    "pattern_or_mechanism": "native:path-pruning",
+    "language": "cypher",
+    "database_version": "LadybugDB/0.21.2",
+    "source_kind": "native_probe",
+    "source_comparison": "native_ab",
+    "q1_sample_side": "a",
+    "q2_sample_side": "b",
+    "median_q1_ms": 607.4288960080594,
+    "median_q2_ms": 1.966479467228055,
+    "ratio_direction": "q1/q2",
+    "median_paired_ratio": 307.98993348394526,
+    "median_paired_delta_ms": 605.5263959569857,
+    "delta_over_100_ms": true,
+    "ratio_ci_low": 299.53022542305564,
+    "ratio_ci_high": 312.29942548285686,
+    "source_ratio_ci_low": 299.53022542305564,
+    "source_ratio_ci_high": 312.29942548285686,
+    "noise_p99_ms": 19.802847136743367,
+    "pairs": 40,
+    "source": "results/detection-20261009/ladybug/native-20261009T145558Z-93748b/path-pruning/probe.json",
+    "source_input_hash": ""
+  }
+}
