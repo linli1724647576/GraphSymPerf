@@ -1,2 +1,0 @@
-Results | Records produced: 1, Execution time: 0.000209 ms
-    Project | Records produced: 1, Execution time: 0.001000 ms
