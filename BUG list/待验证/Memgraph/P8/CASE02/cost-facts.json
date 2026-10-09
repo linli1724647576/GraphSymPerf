@@ -1,0 +1,49 @@
+[
+  {
+    "query": "SHOW INDEXES YIELD name, state, labelsOrTypes, properties WHERE name = 'gsp_cost_lookup' RETURN name, state, labelsOrTypes, properties",
+    "expected_rows": [
+      {
+        "name": "gsp_cost_lookup",
+        "state": "ONLINE",
+        "labelsOrTypes": [
+          "GspAnchor"
+        ],
+        "properties": [
+          "uid"
+        ]
+      }
+    ]
+  },
+  {
+    "query": "MATCH (u:GspAnchor {uid: 1}) RETURN count(u) AS count",
+    "expected_rows": [
+      {
+        "count": 1
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 1})-[r:GSP_LOW]->() RETURN count(r) AS count",
+    "expected_rows": [
+      {
+        "count": 1
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 1})-[r:GSP_HIGH]->() RETURN count(r) AS count",
+    "expected_rows": [
+      {
+        "count": 40000
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_HIGH]->(v) WHERE v.keep = true RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 0
+      }
+    ]
+  }
+]

@@ -1,0 +1,40 @@
+{
+  "format_version": 1,
+  "pattern": "P12",
+  "case_number": 2,
+  "dbms": "memgraph",
+  "classification": "negative",
+  "requested_classification": "negative",
+  "status": "no_candidate_this_round",
+  "issue_url": null,
+  "issue_group": "memgraph-P12",
+  "input_hash": "adf3e18aa5f1442f1b820203967481ef9acaf43ea955e746235586b485ca8635",
+  "pair_kind": "symmetry",
+  "comparison_status": "no_candidate",
+  "comparison_summary": {
+    "slow_side": "b",
+    "median_ratio": 1.0202262587919444,
+    "median_delta_ms": 0.008708331733942032,
+    "direction_consistency": 0.6
+  },
+  "database_version": "Memgraph/3.10.1",
+  "index_spec": [
+    "GspLow",
+    "id"
+  ],
+  "missing_evidence": [],
+  "reason": "The complete typed result multisets and checked construction facts agree; this tested input did not produce a confirmed performance candidate under the recorded gates.",
+  "source_file_sha256": {
+    "result.json": "11721f5fd37457e138fa0ea1f6f5152773b1208113d092c217312fd567c9d887",
+    "setup.cypher": "7a6c6ab0968be78ad8efe3ae88c8849bec6aede7099648ac34b3bcf056240680",
+    "query_a.cypher": "4f80b76413b07c4e5a3b2590e488ee3ebd02a21f51efee73243a720254ad9702",
+    "query_b.cypher": "a58534f20e5bdd2271b4abf949c24086ab93e812c71b130623a211d1952596d5",
+    "profile.json": "709b6bf49d9473743ccb990d34450c500f60a72e3048a2e066b0c9a689475441",
+    "graph-counts.json": "313298983a74a3399c6e2557dc5350e0d8e24a45f2bf80f60ab03e4365957407",
+    "environment.json": "16dfcdc4535072e5819474c4a4e7bde96c4edabc6207d53a2293bc0b915ef346"
+  },
+  "profile_provenance": {
+    "a": "Table rendered from recorded Memgraph PROFILE rows; not captured console stdout.",
+    "b": "Table rendered from recorded Memgraph PROFILE rows; not captured console stdout."
+  }
+}

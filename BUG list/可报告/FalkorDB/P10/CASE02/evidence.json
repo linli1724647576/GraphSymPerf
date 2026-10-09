@@ -1,0 +1,43 @@
+{
+  "format_version": 1,
+  "pattern": "P10",
+  "case_number": 2,
+  "dbms": "falkordb",
+  "classification": "ready_issue",
+  "requested_classification": "ready_issue",
+  "status": "locally_reproduced_performance_candidate",
+  "issue_url": null,
+  "issue_group": "falkordb-P10",
+  "input_hash": "1b7a07330bed1b9f8ad17ea6199f60fe3b6b62768b4e4ed9f1525b8e51cd1e6d",
+  "pair_kind": "symmetry",
+  "comparison_status": "candidate",
+  "comparison_summary": {
+    "slow_side": "b",
+    "median_ratio": 21.499675746547723,
+    "median_delta_ms": 8.406937355175614,
+    "direction_consistency": 1.0,
+    "ratio_ci_low": 17.88737188699048,
+    "ratio_ci_high": 21.98479926305086,
+    "noise_p99_ms": 4.081659992225465
+  },
+  "database_version": "FalkorDB/module_version=41808",
+  "index_spec": [
+    "GspLow",
+    "id"
+  ],
+  "missing_evidence": [],
+  "reason": "Swapping two independent MATCH clauses preserves an empty complete result, but one order scans the large high branch before the indexed low branch is found empty.",
+  "source_file_sha256": {
+    "result.json": "81f754c01960d0b939833178f5e842f83d4a114af218b7d16b190358105c335b",
+    "setup.cypher": "0c48050ebd8fb22df9b6aea8e97200a7c99234d39c7dbaa94579d687f990e5ea",
+    "query_a.cypher": "809ef7f56126ee856a7fe5aeae2547cf52571d3974460e0466980bd81dcfb692",
+    "query_b.cypher": "9b58adfad4d03dd7c01e56724e527abb75863dec6f5ecb4d2baaa8464daab3f5",
+    "profile.json": "1a2c5effbab682f62a407ec62d601e928f6af2dab04ea25320adc837778e51f3",
+    "graph-counts.json": "dbf870f5ea15c50d7eb9f61c716fd7bd59a1db16eb1a8db002581f31b1d82039",
+    "environment.json": "16dfcdc4535072e5819474c4a4e7bde96c4edabc6207d53a2293bc0b915ef346"
+  },
+  "profile_provenance": {
+    "a": "Server-returned GRAPH.PROFILE operator lines, preserved verbatim.",
+    "b": "Server-returned GRAPH.PROFILE operator lines, preserved verbatim."
+  }
+}

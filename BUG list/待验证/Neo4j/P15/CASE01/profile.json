@@ -1,0 +1,162 @@
+{
+  "a": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 64,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+------------------+----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| Operator         | Id | Details                                                                                              | Estimated Rows | Rows | DB Hits | Memory (Bytes) | Page Cache Hits/Misses |\n+------------------+----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +ProduceResults  |  0 | `u.uid`, value                                                                                       |             10 |    3 |       0 |              0 |                    0/0 |\n| |                +----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +Projection      |  1 | cache[u.uid] AS `u.uid`,                                                                             |             10 |    3 |      12 |                |                    0/0 |\n| |                |    | CASE                                                                                                 |                |      |         |                |                        |\n| |                |    |   WHEN coalesce(NOT cache[u.uid] = cache[u.uid] OR u.keep = true, NULL) THEN true                    |                |      |         |                |                        |\n| |                |    |   ELSE EXISTS {   MATCH (u)-[`anon_0`:GSP_EXPAND]->(x)     WHERE x:GspLeaf AND (NOT x.mark IN [false |                |      |         |                |                        |\n| |                |    | ] OR NOT u.uid = u.uid) }                                                                            |                |      |         |                |                        |\n| |                |    | END AS value                                                                                         |                |      |         |                |                        |\n| |                +----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +NodeByLabelScan |  5 | u:GspAnchor                                                                                          |             10 |    3 |       4 |                |                    0/0 |\n+------------------+----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n\nTotal database accesses: 16, total allocated memory: 64\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "`u.uid`, value",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 10.0,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 3,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "cache[u.uid] AS `u.uid`, CASE\n  WHEN coalesce(NOT cache[u.uid] = cache[u.uid] OR u.keep = true, NULL) THEN true\n  ELSE EXISTS {   MATCH (u)-[`anon_0`:GSP_EXPAND]->(x)     WHERE x:GspLeaf AND (NOT x.mark IN [false] OR NOT u.uid = u.uid) }\nEND AS value",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 10.0,
+            "DbHits": 12,
+            "Rows": 3,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "children": [
+            {
+              "args": {
+                "Details": "u:GspAnchor",
+                "Id": 5,
+                "PageCacheMisses": 0,
+                "EstimatedRows": 10.0,
+                "DbHits": 4,
+                "Rows": 3,
+                "PageCacheHits": 0
+              },
+              "pageCacheMisses": 0,
+              "dbHits": 4,
+              "identifiers": [
+                "u"
+              ],
+              "operatorType": "NodeByLabelScan@neo4j",
+              "rows": 3,
+              "pageCacheHitRatio": 0.0,
+              "pageCacheHits": 0
+            }
+          ],
+          "dbHits": 12,
+          "identifiers": [
+            "u",
+            "`u.uid`",
+            "value"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 3,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "u",
+        "`u.uid`",
+        "value"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 3,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  },
+  "b": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 64,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+------------------+----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| Operator         | Id | Details                                                                                              | Estimated Rows | Rows | DB Hits | Memory (Bytes) | Page Cache Hits/Misses |\n+------------------+----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +ProduceResults  |  0 | `u.uid`, value                                                                                       |             10 |    3 |       0 |              0 |                    0/0 |\n| |                +----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +Projection      |  1 | cache[u.uid] AS `u.uid`,                                                                             |             10 |    3 |      12 |                |                    0/0 |\n| |                |    | CASE                                                                                                 |                |      |         |                |                        |\n| |                |    |   WHEN NOT coalesce(coalesce(NOT cache[u.uid] = cache[u.uid] OR u.keep = true, NULL), false) THEN EX |                |      |         |                |                        |\n| |                |    | ISTS {   MATCH (u)-[`anon_0`:GSP_EXPAND]->(x)     WHERE x:GspLeaf AND (NOT x.mark IN [false] OR NOT  |                |      |         |                |                        |\n| |                |    | u.uid = u.uid) }                                                                                     |                |      |         |                |                        |\n| |                |    |   ELSE true                                                                                          |                |      |         |                |                        |\n| |                |    | END AS value                                                                                         |                |      |         |                |                        |\n| |                +----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +NodeByLabelScan |  5 | u:GspAnchor                                                                                          |             10 |    3 |       4 |                |                    0/0 |\n+------------------+----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n\nTotal database accesses: 16, total allocated memory: 64\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "`u.uid`, value",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 10.0,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 3,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "cache[u.uid] AS `u.uid`, CASE\n  WHEN NOT coalesce(coalesce(NOT cache[u.uid] = cache[u.uid] OR u.keep = true, NULL), false) THEN EXISTS {   MATCH (u)-[`anon_0`:GSP_EXPAND]->(x)     WHERE x:GspLeaf AND (NOT x.mark IN [false] OR NOT u.uid = u.uid) }\n  ELSE true\nEND AS value",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 10.0,
+            "DbHits": 12,
+            "Rows": 3,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "children": [
+            {
+              "args": {
+                "Details": "u:GspAnchor",
+                "Id": 5,
+                "PageCacheMisses": 0,
+                "EstimatedRows": 10.0,
+                "DbHits": 4,
+                "Rows": 3,
+                "PageCacheHits": 0
+              },
+              "pageCacheMisses": 0,
+              "dbHits": 4,
+              "identifiers": [
+                "u"
+              ],
+              "operatorType": "NodeByLabelScan@neo4j",
+              "rows": 3,
+              "pageCacheHitRatio": 0.0,
+              "pageCacheHits": 0
+            }
+          ],
+          "dbHits": 12,
+          "identifiers": [
+            "u",
+            "`u.uid`",
+            "value"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 3,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "u",
+        "`u.uid`",
+        "value"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 3,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  }
+}

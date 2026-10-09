@@ -1,0 +1,130 @@
+{
+  "a": {
+    "operators": [
+      {
+        "OPERATOR": "* Union {uid : uid}",
+        "ACTUAL HITS": 3,
+        "RELATIVE TIME": "  0.064955 %",
+        "ABSOLUTE TIME": "  0.004588 ms"
+      },
+      {
+        "OPERATOR": "|\\",
+        "ACTUAL HITS": "",
+        "RELATIVE TIME": "",
+        "ABSOLUTE TIME": ""
+      },
+      {
+        "OPERATOR": "| * Produce {uid}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.112194 %",
+        "ABSOLUTE TIME": "  0.007925 ms"
+      },
+      {
+        "OPERATOR": "| * Filter (b :GspHigh), Generic {b}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 47.419825 %",
+        "ABSOLUTE TIME": "  3.349440 ms"
+      },
+      {
+        "OPERATOR": "| * ScanAll (b)",
+        "ACTUAL HITS": 40003,
+        "RELATIVE TIME": " 21.740311 %",
+        "ABSOLUTE TIME": "  1.535600 ms"
+      },
+      {
+        "OPERATOR": "| * Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.001771 %",
+        "ABSOLUTE TIME": "  0.000125 ms"
+      },
+      {
+        "OPERATOR": "* Produce {uid}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.206083 %",
+        "ABSOLUTE TIME": "  0.014556 ms"
+      },
+      {
+        "OPERATOR": "* Filter (a :GspLow)",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  7.678817 %",
+        "ABSOLUTE TIME": "  0.542384 ms"
+      },
+      {
+        "OPERATOR": "* ScanAll (a)",
+        "ACTUAL HITS": 40003,
+        "RELATIVE TIME": " 22.775452 %",
+        "ABSOLUTE TIME": "  1.608716 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.000590 %",
+        "ABSOLUTE TIME": "  0.000042 ms"
+      }
+    ]
+  },
+  "b": {
+    "operators": [
+      {
+        "OPERATOR": "* Union {uid : uid}",
+        "ACTUAL HITS": 3,
+        "RELATIVE TIME": "  0.129885 %",
+        "ABSOLUTE TIME": "  0.009128 ms"
+      },
+      {
+        "OPERATOR": "|\\",
+        "ACTUAL HITS": "",
+        "RELATIVE TIME": "",
+        "ABSOLUTE TIME": ""
+      },
+      {
+        "OPERATOR": "| * Produce {uid}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.021351 %",
+        "ABSOLUTE TIME": "  0.001500 ms"
+      },
+      {
+        "OPERATOR": "| * Filter (a :GspLow)",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  8.082509 %",
+        "ABSOLUTE TIME": "  0.568022 ms"
+      },
+      {
+        "OPERATOR": "| * ScanAll (a)",
+        "ACTUAL HITS": 40003,
+        "RELATIVE TIME": " 20.354544 %",
+        "ABSOLUTE TIME": "  1.430475 ms"
+      },
+      {
+        "OPERATOR": "| * Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.000000 %",
+        "ABSOLUTE TIME": "  0.000000 ms"
+      },
+      {
+        "OPERATOR": "* Produce {uid}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.046853 %",
+        "ABSOLUTE TIME": "  0.003293 ms"
+      },
+      {
+        "OPERATOR": "* Filter (b :GspHigh), Generic {b}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 48.775584 %",
+        "ABSOLUTE TIME": "  3.427847 ms"
+      },
+      {
+        "OPERATOR": "* ScanAll (b)",
+        "ACTUAL HITS": 40003,
+        "RELATIVE TIME": " 22.587494 %",
+        "ABSOLUTE TIME": "  1.587402 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.001779 %",
+        "ABSOLUTE TIME": "  0.000125 ms"
+      }
+    ]
+  }
+}

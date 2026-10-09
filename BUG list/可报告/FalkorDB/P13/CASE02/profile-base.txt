@@ -1,0 +1,9 @@
+Results | Records produced: 10, Execution time: 0.001041 ms
+    Project | Records produced: 10, Execution time: 0.004624 ms
+        Apply | Records produced: 10, Execution time: 0.016001 ms
+            Optional Conditional Traverse | (u)->(v:GspLow) | Records produced: 10, Execution time: 0.041789 ms
+                Node By Label Scan | (u:GspAnchor) | Records produced: 3, Execution time: 0.000459 ms
+            Optional | Records produced: 10, Execution time: 0.001503 ms
+                Filter | Records produced: 9, Execution time: 94.868922 ms
+                    Conditional Traverse | (u)->(w:GspHigh) | Records produced: 1600009, Execution time: 64.960411 ms
+                        Argument | Records produced: 10, Execution time: 0.000832 ms

@@ -1,0 +1,43 @@
+{
+  "format_version": 1,
+  "pattern": "P13",
+  "case_number": 2,
+  "dbms": "falkordb",
+  "classification": "ready_issue",
+  "requested_classification": "ready_issue",
+  "status": "locally_reproduced_performance_candidate",
+  "issue_url": null,
+  "issue_group": "falkordb-P13",
+  "input_hash": "df7938f00a3ea32a45477d45c7c54188fcdbd402d3178de434a7509e38bbe621",
+  "pair_kind": "symmetry",
+  "comparison_status": "candidate",
+  "comparison_summary": {
+    "slow_side": "a",
+    "median_ratio": 7.591141543866003,
+    "median_delta_ms": 94.49993749149144,
+    "direction_consistency": 1.0,
+    "ratio_ci_low": 7.539128716481269,
+    "ratio_ci_high": 7.668947767217917,
+    "noise_p99_ms": 8.502259082160885
+  },
+  "database_version": "FalkorDB/module_version=41808",
+  "index_spec": [
+    "GspAnchor",
+    "uid"
+  ],
+  "missing_evidence": [],
+  "reason": "Reordering two independent OPTIONAL branches preserves all ten rows, including the two NULL-extended rows, but one order recomputes the expensive high branch for the eight low matches of the same anchor.",
+  "source_file_sha256": {
+    "result.json": "fe2543574cb08e940bf3f05fb0fd9fa1ebeb92681176227823cd9e15dcf2823d",
+    "setup.cypher": "6f53616043063910341d213f6882bba9e5785bf9d2bdbec658fe05603f5677a1",
+    "query_a.cypher": "db499b86bd38003a8bceba72b21256fdcac443da8d2afa1cc28c28c72fb77c69",
+    "query_b.cypher": "aeaee8865d2215a991f6b569841f733ddf8e5a3c171bf0df1920c11eabc6169e",
+    "profile.json": "875b21f44f44cdafe3aea08ffb580e04c5d4b48f4bf747e2202c6ba36e7270e5",
+    "graph-counts.json": "8f22ad99c766582c19995cd64697a09c27d03fe37ba057b6a1875ccc9e8b8b91",
+    "environment.json": "16dfcdc4535072e5819474c4a4e7bde96c4edabc6207d53a2293bc0b915ef346"
+  },
+  "profile_provenance": {
+    "a": "Server-returned GRAPH.PROFILE operator lines, preserved verbatim.",
+    "b": "Server-returned GRAPH.PROFILE operator lines, preserved verbatim."
+  }
+}

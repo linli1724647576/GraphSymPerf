@@ -1,0 +1,41 @@
+[
+  {
+    "query": "SHOW INDEXES YIELD name, state, labelsOrTypes, properties WHERE name = 'gsp_cost_lookup' RETURN name, state, labelsOrTypes, properties",
+    "expected_rows": [
+      {
+        "name": "gsp_cost_lookup",
+        "state": "ONLINE",
+        "labelsOrTypes": [
+          "GspRare"
+        ],
+        "properties": [
+          "uid"
+        ]
+      }
+    ]
+  },
+  {
+    "query": "MATCH (u:GspRare) RETURN count(u) AS count",
+    "expected_rows": [
+      {
+        "count": 1
+      }
+    ]
+  },
+  {
+    "query": "MATCH (u:GspCommon) RETURN count(u) AS count",
+    "expected_rows": [
+      {
+        "count": 10001
+      }
+    ]
+  },
+  {
+    "query": "MATCH (u:GspRare:GspCommon) RETURN count(u) AS count",
+    "expected_rows": [
+      {
+        "count": 1
+      }
+    ]
+  }
+]

@@ -1,0 +1,110 @@
+{
+  "a": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 64,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+-----------------+----+-----------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| Operator        | Id | Details                                                                     | Estimated Rows | Rows | DB Hits | Memory (Bytes) | Page Cache Hits/Misses |\n+-----------------+----+-----------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +ProduceResults |  0 | ok                                                                          |              1 |    1 |       0 |              0 |                    0/0 |\n| |               +----+-----------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +Projection     |  1 | all(x IN $autolist_1 + range($autoint_2, $autoint_3, $autoint_4) WHERE CASE |              1 |    1 |       0 |                |                    0/0 |\n|                 |    |   WHEN x = x THEN coalesce(NOT x = $autoint_0, NULL)                        |                |      |         |                |                        |\n|                 |    |   ELSE NULL                                                                 |                |      |         |                |                        |\n|                 |    | END) AS ok                                                                  |                |      |         |                |                        |\n+-----------------+----+-----------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n\nTotal database accesses: 0, total allocated memory: 64\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "ok",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 1.0,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 1,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "all(x IN $autolist_1 + range($autoint_2, $autoint_3, $autoint_4) WHERE CASE\n  WHEN x = x THEN coalesce(NOT x = $autoint_0, NULL)\n  ELSE NULL\nEND) AS ok",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 1.0,
+            "DbHits": 0,
+            "Rows": 1,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "dbHits": 0,
+          "identifiers": [
+            "ok"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 1,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "ok"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 1,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  },
+  "b": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 64,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+-----------------+----+-----------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| Operator        | Id | Details                                                                     | Estimated Rows | Rows | DB Hits | Memory (Bytes) | Page Cache Hits/Misses |\n+-----------------+----+-----------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +ProduceResults |  0 | ok                                                                          |              1 |    1 |       0 |              0 |                    0/0 |\n| |               +----+-----------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +Projection     |  1 | all(x IN range($autoint_1, $autoint_2, $autoint_3) + $autolist_4 WHERE CASE |              1 |    1 |       0 |                |                    0/0 |\n|                 |    |   WHEN x = x THEN coalesce(NOT x = $autoint_0, NULL)                        |                |      |         |                |                        |\n|                 |    |   ELSE NULL                                                                 |                |      |         |                |                        |\n|                 |    | END) AS ok                                                                  |                |      |         |                |                        |\n+-----------------+----+-----------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n\nTotal database accesses: 0, total allocated memory: 64\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "ok",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 1.0,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 1,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "all(x IN range($autoint_1, $autoint_2, $autoint_3) + $autolist_4 WHERE CASE\n  WHEN x = x THEN coalesce(NOT x = $autoint_0, NULL)\n  ELSE NULL\nEND) AS ok",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 1.0,
+            "DbHits": 0,
+            "Rows": 1,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "dbHits": 0,
+          "identifiers": [
+            "ok"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 1,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "ok"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 1,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  }
+}

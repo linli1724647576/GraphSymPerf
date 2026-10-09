@@ -1,0 +1,70 @@
+{
+  "a": {
+    "operators": [
+      {
+        "OPERATOR": "* Produce {u.uid, v.uid}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.070920 %",
+        "ABSOLUTE TIME": "  0.003293 ms"
+      },
+      {
+        "OPERATOR": "* Filter (v :GspTarget), {v.keep}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 80.234844 %",
+        "ABSOLUTE TIME": "  3.725438 ms"
+      },
+      {
+        "OPERATOR": "* Expand (u)-[anon1:GSP_LOW|:GSP_HIGH]->(v)",
+        "ACTUAL HITS": 40002,
+        "RELATIVE TIME": " 19.621520 %",
+        "ABSOLUTE TIME": "  0.911060 ms"
+      },
+      {
+        "OPERATOR": "* ScanAllByLabelProperties (u :GspAnchor {uid})",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.072716 %",
+        "ABSOLUTE TIME": "  0.003376 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.000000 %",
+        "ABSOLUTE TIME": "  0.000000 ms"
+      }
+    ]
+  },
+  "b": {
+    "operators": [
+      {
+        "OPERATOR": "* Produce {u.uid, v.uid}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.081867 %",
+        "ABSOLUTE TIME": "  0.003584 ms"
+      },
+      {
+        "OPERATOR": "* Filter (v :GspTarget), {v.keep}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 81.423730 %",
+        "ABSOLUTE TIME": "  3.564968 ms"
+      },
+      {
+        "OPERATOR": "* Expand (u)-[anon1:GSP_HIGH|:GSP_LOW]->(v)",
+        "ACTUAL HITS": 40002,
+        "RELATIVE TIME": " 18.409679 %",
+        "ABSOLUTE TIME": "  0.806029 ms"
+      },
+      {
+        "OPERATOR": "* ScanAllByLabelProperties (u :GspAnchor {uid})",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.082819 %",
+        "ABSOLUTE TIME": "  0.003626 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.001904 %",
+        "ABSOLUTE TIME": "  0.000083 ms"
+      }
+    ]
+  }
+}

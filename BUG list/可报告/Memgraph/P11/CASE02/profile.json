@@ -1,0 +1,94 @@
+{
+  "a": {
+    "operators": [
+      {
+        "OPERATOR": "* Produce {u.uid, v.uid, w.uid}",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.089037 %",
+        "ABSOLUTE TIME": "  0.008462 ms"
+      },
+      {
+        "OPERATOR": "* Filter (v :GspLow)",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.010527 %",
+        "ABSOLUTE TIME": "  0.001000 ms"
+      },
+      {
+        "OPERATOR": "* Expand (u)-[anon4:GSP_LOW]->(v)",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.844759 %",
+        "ABSOLUTE TIME": "  0.080282 ms"
+      },
+      {
+        "OPERATOR": "* Filter (w :GspHigh), Generic {w}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 79.985877 %",
+        "ABSOLUTE TIME": "  7.601491 ms"
+      },
+      {
+        "OPERATOR": "* Expand (u)-[anon2:GSP_HIGH]->(w)",
+        "ACTUAL HITS": 80002,
+        "RELATIVE TIME": " 19.037782 %",
+        "ABSOLUTE TIME": "  1.809264 ms"
+      },
+      {
+        "OPERATOR": "* ScanAllByLabelProperties (u :GspAnchor {uid})",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.031141 %",
+        "ABSOLUTE TIME": "  0.002960 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.000877 %",
+        "ABSOLUTE TIME": "  0.000083 ms"
+      }
+    ]
+  },
+  "b": {
+    "operators": [
+      {
+        "OPERATOR": "* Produce {u.uid, v.uid, w.uid}",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  2.491103 %",
+        "ABSOLUTE TIME": "  0.002055 ms"
+      },
+      {
+        "OPERATOR": "* Filter (w :GspHigh), Generic {w}",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  1.067616 %",
+        "ABSOLUTE TIME": "  0.000881 ms"
+      },
+      {
+        "OPERATOR": "* Expand (u)-[anon4:GSP_HIGH]->(w)",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.762583 %",
+        "ABSOLUTE TIME": "  0.000629 ms"
+      },
+      {
+        "OPERATOR": "* Filter (v :GspLow)",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.355872 %",
+        "ABSOLUTE TIME": "  0.000294 ms"
+      },
+      {
+        "OPERATOR": "* Expand (u)-[anon2:GSP_LOW]->(v)",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": " 93.594306 %",
+        "ABSOLUTE TIME": "  0.077215 ms"
+      },
+      {
+        "OPERATOR": "* ScanAllByLabelProperties (u :GspAnchor {uid})",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  1.677682 %",
+        "ABSOLUTE TIME": "  0.001384 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.050839 %",
+        "ABSOLUTE TIME": "  0.000042 ms"
+      }
+    ]
+  }
+}

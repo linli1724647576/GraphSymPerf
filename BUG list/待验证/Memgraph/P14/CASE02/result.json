@@ -1,0 +1,486 @@
+{
+  "format_version": 2,
+  "input_hash": "f2d9646b572e277ef896e9373d535ee2b2fc4f616d37014f387d96a3cd4f7f43",
+  "has_reference": false,
+  "case": {
+    "pattern": "P14",
+    "scale": 10000,
+    "seed": 194747940,
+    "parameters": {},
+    "checks": [
+      {
+        "query": "SHOW INDEXES YIELD name, state, labelsOrTypes, properties WHERE name = 'gsp_cost_lookup' RETURN name, state, labelsOrTypes, properties",
+        "expected_rows": [
+          {
+            "name": "gsp_cost_lookup",
+            "state": "ONLINE",
+            "labelsOrTypes": [
+              "GspLow"
+            ],
+            "properties": [
+              "uid"
+            ]
+          }
+        ]
+      },
+      {
+        "query": "MATCH (a:GspLow) RETURN count(a) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "MATCH (b:GspHigh) RETURN count(b) AS count",
+        "expected_rows": [
+          {
+            "count": 40001
+          }
+        ]
+      },
+      {
+        "query": "MATCH (b:GspHigh) WHERE b.keep = true RETURN count(b) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "expected_rows": [
+      {
+        "uid": 1
+      },
+      {
+        "uid": 2
+      }
+    ],
+    "bindings": {
+      "union_mode": "all",
+      "projection_aliases": [
+        "uid"
+      ],
+      "high_candidates": 40001,
+      "variant": {
+        "high_predicate": 1,
+        "branch_order": 0,
+        "complexity": 2
+      },
+      "role_choices": {
+        "high_predicate": "(NOT (b.keep = false))",
+        "branch_order": "low_first"
+      }
+    },
+    "skeleton": "$lowCostQuery UNION ALL $highCostQuery",
+    "placeholders": [
+      {
+        "name": "lowCostQuery",
+        "kind": "query",
+        "role": "low",
+        "variables": []
+      },
+      {
+        "name": "highCostQuery",
+        "kind": "query",
+        "role": "high",
+        "variables": []
+      }
+    ],
+    "source": {
+      "generator": "builtin_template",
+      "builtin_pattern": "P14",
+      "raw_query": null,
+      "derivation_preserves_original_result": false,
+      "seed_syntax_enriched": false,
+      "enrichment_origin": "builtin_template",
+      "derivation_steps": [
+        "instantiate_builtin_pattern",
+        "populate_cost_roles"
+      ],
+      "generation_mode": "builtin_template",
+      "population_seed": 194747940,
+      "data_seed": 0,
+      "populated_query_sha256": "c7340b1d6b513c5764e5eaeb87b9ce07f2cc459ffd0cd70c27577931298ca80f",
+      "template_id": "P14-abf611b45c",
+      "variant": {
+        "high_predicate": 1,
+        "branch_order": 0,
+        "complexity": 2
+      },
+      "role_choices": {
+        "high_predicate": "(NOT (b.keep = false))",
+        "branch_order": "low_first"
+      },
+      "complexity": 2,
+      "role_sampling": "independent_seeded_random"
+    },
+    "data_seed": 0,
+    "complexity": 2,
+    "variant": {
+      "high_predicate": 1,
+      "branch_order": 0,
+      "complexity": 2
+    },
+    "role_choices": {
+      "high_predicate": "(NOT (b.keep = false))",
+      "branch_order": "low_first"
+    },
+    "template_id": "P14-abf611b45c"
+  },
+  "measurement": {
+    "discovery_warmups": 10,
+    "discovery_pairs": 10,
+    "screen_ratio": 2.0,
+    "confirmation_sessions": 2,
+    "confirmation_warmups": 10,
+    "confirmation_pairs": 20,
+    "control_pairs": 20,
+    "ratio": 3.0,
+    "ci_low": 2.0,
+    "direction_consistency": 0.9,
+    "bootstrap_samples": 10000,
+    "timeout_seconds": 15,
+    "max_rows": 100000
+  },
+  "result": {
+    "status": "no_candidate",
+    "reason": "discovery_gate_not_met",
+    "stop_target": false,
+    "dbms": "memgraph",
+    "discovery": {
+      "warmups": [
+        {
+          "order": "BA",
+          "a_ms": 7.266584085300565,
+          "b_ms": 7.529499940574169,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 7.558166980743408,
+          "b_ms": 7.104916963726282,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 7.818415993824601,
+          "b_ms": 8.020874811336398,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 7.35345808789134,
+          "b_ms": 7.710292004048824,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 7.238459074869752,
+          "b_ms": 7.057457929477096,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 7.35729094594717,
+          "b_ms": 7.3337501380592585,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 7.28495791554451,
+          "b_ms": 7.149915909394622,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 7.190458010882139,
+          "b_ms": 7.544707972556353,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 7.09204189479351,
+          "b_ms": 7.0332910399883986,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 7.143292110413313,
+          "b_ms": 7.140166824683547,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "samples": [
+        {
+          "order": "BA",
+          "a_ms": 7.2569160256534815,
+          "b_ms": 7.240124978125095,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 7.261707913130522,
+          "b_ms": 7.626540958881378,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 7.070125080645084,
+          "b_ms": 7.269666064530611,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 6.920000072568655,
+          "b_ms": 7.51016684807837,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 7.165832910686731,
+          "b_ms": 7.104292046278715,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 7.098290836438537,
+          "b_ms": 7.167083211243153,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 7.036917144432664,
+          "b_ms": 7.883457932621241,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 7.2162088472396135,
+          "b_ms": 7.768457988277078,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 8.015291998162866,
+          "b_ms": 7.413499988615513,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 7.409334182739258,
+          "b_ms": 7.292916998267174,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "summary": {
+        "slow_side": "b",
+        "median_ratio": 1.0189572595980145,
+        "median_delta_ms": 0.13416667934507132,
+        "direction_consistency": 0.6
+      }
+    },
+    "confirmation_sessions": [],
+    "summary": null,
+    "reference_comparisons": {},
+    "comparisons": {
+      "ab": {
+        "pair_kind": "symmetry",
+        "status": "no_candidate",
+        "discovery": {
+          "warmups": [
+            {
+              "order": "BA",
+              "a_ms": 7.266584085300565,
+              "b_ms": 7.529499940574169,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 7.558166980743408,
+              "b_ms": 7.104916963726282,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 7.818415993824601,
+              "b_ms": 8.020874811336398,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 7.35345808789134,
+              "b_ms": 7.710292004048824,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 7.238459074869752,
+              "b_ms": 7.057457929477096,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 7.35729094594717,
+              "b_ms": 7.3337501380592585,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 7.28495791554451,
+              "b_ms": 7.149915909394622,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 7.190458010882139,
+              "b_ms": 7.544707972556353,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 7.09204189479351,
+              "b_ms": 7.0332910399883986,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 7.143292110413313,
+              "b_ms": 7.140166824683547,
+              "a_status": "ok",
+              "b_status": "ok"
+            }
+          ],
+          "samples": [
+            {
+              "order": "BA",
+              "a_ms": 7.2569160256534815,
+              "b_ms": 7.240124978125095,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 7.261707913130522,
+              "b_ms": 7.626540958881378,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 7.070125080645084,
+              "b_ms": 7.269666064530611,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 6.920000072568655,
+              "b_ms": 7.51016684807837,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 7.165832910686731,
+              "b_ms": 7.104292046278715,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 7.098290836438537,
+              "b_ms": 7.167083211243153,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 7.036917144432664,
+              "b_ms": 7.883457932621241,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 7.2162088472396135,
+              "b_ms": 7.768457988277078,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 8.015291998162866,
+              "b_ms": 7.413499988615513,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 7.409334182739258,
+              "b_ms": 7.292916998267174,
+              "a_status": "ok",
+              "b_status": "ok"
+            }
+          ],
+          "summary": {
+            "slow_side": "b",
+            "median_ratio": 1.0189572595980145,
+            "median_delta_ms": 0.13416667934507132,
+            "direction_consistency": 0.6
+          }
+        },
+        "confirmation_sessions": [],
+        "summary": null
+      }
+    },
+    "pair_kind": "symmetry",
+    "measurement": {
+      "discovery_warmups": 10,
+      "discovery_pairs": 10,
+      "screen_ratio": 2.0,
+      "confirmation_sessions": 2,
+      "confirmation_warmups": 10,
+      "confirmation_pairs": 20,
+      "control_pairs": 20,
+      "ratio": 3.0,
+      "ci_low": 2.0,
+      "direction_consistency": 0.9,
+      "bootstrap_samples": 10000,
+      "timeout_seconds": 15,
+      "max_rows": 100000
+    },
+    "database_version": "Memgraph/3.10.1",
+    "state_reused": false,
+    "result_rows": 2
+  }
+}

@@ -1,0 +1,7 @@
+Results | Records produced: 0, Execution time: 0.000084 ms
+    Project | Records produced: 0, Execution time: 0.000083 ms
+        Cartesian Product | Records produced: 0, Execution time: 0.000499 ms
+            Conditional Traverse | (b)->(b) | Records produced: 1, Execution time: 0.026834 ms
+                Filter | Records produced: 1, Execution time: 11.974188 ms
+                    Node By Label Scan | (c:GspTarget) | Records produced: 200001, Execution time: 7.304270 ms
+            Node By Index Scan | (a:GspLow) | Records produced: 0, Execution time: 0.002209 ms

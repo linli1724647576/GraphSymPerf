@@ -1,0 +1,81 @@
+[
+  {
+    "query": "SHOW INDEXES YIELD name, state, labelsOrTypes, properties WHERE name = 'gsp_cost_lookup' RETURN name, state, labelsOrTypes, properties",
+    "expected_rows": [
+      {
+        "name": "gsp_cost_lookup",
+        "state": "ONLINE",
+        "labelsOrTypes": [
+          "GspAnchor"
+        ],
+        "properties": [
+          "uid"
+        ]
+      }
+    ]
+  },
+  {
+    "query": "MATCH (u:GspAnchor) RETURN count(u) AS count",
+    "expected_rows": [
+      {
+        "count": 2
+      }
+    ]
+  },
+  {
+    "query": "MATCH (u:GspAnchor {uid: 1}) RETURN u.keep AS low_value",
+    "expected_rows": [
+      {
+        "low_value": false
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_EXPAND]->(v:GspLeaf) RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 400000
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_EXPAND]->(v:GspLeaf) WHERE v.mark = true RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 0
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 2})-[:GSP_EXPAND]->(v:GspLeaf) WHERE v.mark = true RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 1
+      }
+    ]
+  },
+  {
+    "query": "MATCH ()-[r:GSP_REFERENCE]->() RETURN count(r) AS count",
+    "expected_rows": [
+      {
+        "count": 1
+      }
+    ]
+  },
+  {
+    "query": "MATCH (u:GspAnchor) WHERE coalesce(u.keep, false) = true MATCH (u)-[:GSP_EXPAND]->(v:GspLeaf) RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 1
+      }
+    ]
+  },
+  {
+    "query": "MATCH (u:GspAnchor)-[:GSP_REFERENCE]->(v:GspLeaf) WHERE NOT EXISTS { MATCH (u)-[:GSP_EXPAND]->(v) } RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 0
+      }
+    ]
+  }
+]

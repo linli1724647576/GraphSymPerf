@@ -1,0 +1,108 @@
+{
+  "date": "2026-10-09",
+  "host_memory_bytes": 17179869184,
+  "docker_memory_bytes": 8217448448,
+  "host_architecture": "arm64",
+  "experiments_run_sequentially": true,
+  "containers": [
+    {
+      "name": "gsp-issues-20261009-neo4j",
+      "dbms": "neo4j",
+      "version": "2026.09.0",
+      "image": "neo4j@sha256:91fb0bf237c41b7b3dcbe84703aa0b82e0d7d067b16e1c8ab21f03fc679edf4e",
+      "arch": "arm64",
+      "memory_mib": 4096,
+      "cpu_limit": 2,
+      "uri": "bolt://127.0.0.1:37687",
+      "database": "neo4j",
+      "heap_initial_mib": 1024,
+      "heap_max_mib": 2048,
+      "pagecache_mib": 256,
+      "os": "Debian GNU/Linux 13 (trixie), DEBIAN_VERSION_FULL=13.7",
+      "linux_kernel": "6.12.54-linuxkit"
+    },
+    {
+      "name": "gsp-issues-20261009-memgraph",
+      "dbms": "memgraph",
+      "version": "3.10.1",
+      "version_source": "/usr/lib/memgraph/memgraph --version",
+      "compatibility_components_version": "5.9.0",
+      "image": "memgraph/memgraph@sha256:042c8642954a7bde971a9c7683c8b1360e7fcf129a5fae36d63f12449e7154aa",
+      "arch": "arm64",
+      "memory_mib": 1536,
+      "cpu_limit": 2,
+      "uri": "bolt://127.0.0.1:37688",
+      "database": "memgraph",
+      "engine_memory_limit_mib": 1024,
+      "os": "Ubuntu 24.04.4 LTS (Noble Numbat)",
+      "linux_kernel": "6.12.54-linuxkit"
+    },
+    {
+      "name": "gsp-issues-20261009-falkordb",
+      "dbms": "falkordb",
+      "version": "4.18.8",
+      "image": "falkordb/falkordb-server@sha256:d1c8bbc77bc36d5912f726801dad3753f1a0957b4f1d4f7625ae87faedd49918",
+      "arch": "arm64",
+      "memory_mib": 1536,
+      "cpu_limit": 2,
+      "uri": "redis://127.0.0.1:36379",
+      "database": "gsp_issues_20261009",
+      "module_args": [
+        "MAX_QUEUED_QUERIES",
+        "25",
+        "TIMEOUT",
+        "30000",
+        "RESULTSET_SIZE",
+        "-1",
+        "THREAD_COUNT",
+        "2",
+        "OMP_THREAD_COUNT",
+        "2"
+      ],
+      "runtime_config": {
+        "TIMEOUT": 30000,
+        "RESULTSET_SIZE": -1
+      },
+      "os": "Debian GNU/Linux 13 (trixie), DEBIAN_VERSION_FULL=13.5",
+      "linux_kernel": "6.12.54-linuxkit"
+    }
+  ],
+  "experiment": "Independent verification and PROFILE for Issue candidate material",
+  "prepared_at_utc": "2026-10-09T04:13:54.422881+00:00",
+  "host": {
+    "os": "macOS",
+    "version": "27.0",
+    "build": "26A5421a",
+    "kernel": "Darwin 27.0.0",
+    "architecture": "arm64",
+    "memory_bytes": 17179869184
+  },
+  "docker": {
+    "server_version": "29.1.2",
+    "os": "Docker Desktop",
+    "linux_kernel": "6.12.54-linuxkit",
+    "architecture": "aarch64",
+    "cpus": 10,
+    "memory_bytes": 8217448448
+  },
+  "python_runtime": {
+    "executable": "/Users/sakuraq/Documents/科研实习/GraphSymPerf/.venv/bin/python",
+    "version": "3.12.7",
+    "packages": {
+      "neo4j": "5.28.4",
+      "redis": "8.1.0",
+      "falkordb": "1.7.1",
+      "PyYAML": "6.0.3",
+      "pytest": "9.1.1"
+    }
+  },
+  "runtime_version_sources": {
+    "host_os": "sw_vers and uname -sr",
+    "docker": "docker info",
+    "container_os": "container /etc/os-release and uname -sr",
+    "driver_versions": "repository .venv importlib.metadata",
+    "neo4j": "CALL dbms.components()",
+    "memgraph": "memgraph --version; dbms.components() provides compatibility version",
+    "falkordb": "Redis MODULE LIST graph ver=41808"
+  }
+}

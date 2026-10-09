@@ -1,0 +1,5 @@
+CREATE INDEX ON :GspLow(id);
+
+CREATE (:GspLow {uid: 1, id: 1})-[:GSP_LINK]->(:GspHigh {uid: 2});
+
+UNWIND range(1, 10000) AS i CREATE (:GspLow {uid: 895440+2*i, id: 895440+i})-[:GSP_LINK]->(:GspHigh {uid: 895440+2*i+1});

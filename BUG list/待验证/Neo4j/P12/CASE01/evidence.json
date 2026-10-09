@@ -1,0 +1,40 @@
+{
+  "format_version": 1,
+  "pattern": "P12",
+  "case_number": 1,
+  "dbms": "neo4j",
+  "classification": "negative",
+  "requested_classification": "negative",
+  "status": "no_candidate_this_round",
+  "issue_url": null,
+  "issue_group": "neo4j-P12",
+  "input_hash": "adf3e18aa5f1442f1b820203967481ef9acaf43ea955e746235586b485ca8635",
+  "pair_kind": "symmetry",
+  "comparison_status": "no_candidate",
+  "comparison_summary": {
+    "slow_side": "a",
+    "median_ratio": 1.0523051252611038,
+    "median_delta_ms": 0.02975005190819502,
+    "direction_consistency": 0.7
+  },
+  "database_version": "Neo4j/2026.09.0",
+  "index_spec": [
+    "GspLow",
+    "id"
+  ],
+  "missing_evidence": [],
+  "reason": "The complete typed result multisets and checked construction facts agree; this tested input did not produce a confirmed performance candidate under the recorded gates.",
+  "source_file_sha256": {
+    "result.json": "61ffb7fc2c28d65bd30e8c94123c791b7d23f2ecff6a0fc1ec828ede90506fb4",
+    "setup.cypher": "7a6c6ab0968be78ad8efe3ae88c8849bec6aede7099648ac34b3bcf056240680",
+    "query_a.cypher": "4f80b76413b07c4e5a3b2590e488ee3ebd02a21f51efee73243a720254ad9702",
+    "query_b.cypher": "a58534f20e5bdd2271b4abf949c24086ab93e812c71b130623a211d1952596d5",
+    "profile.json": "094639ee4e62f2fed3ba90e2e8b143d54c98c985b0067f938d81b9562868af6b",
+    "graph-counts.json": "313298983a74a3399c6e2557dc5350e0d8e24a45f2bf80f60ab03e4365957407",
+    "environment.json": "16dfcdc4535072e5819474c4a4e7bde96c4edabc6207d53a2293bc0b915ef346"
+  },
+  "profile_provenance": {
+    "a": "Server-supplied Neo4j PROFILE string-representation, preserved verbatim.",
+    "b": "Server-supplied Neo4j PROFILE string-representation, preserved verbatim."
+  }
+}

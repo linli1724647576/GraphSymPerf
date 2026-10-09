@@ -1,0 +1,52 @@
+[
+  {
+    "u.uid": 1,
+    "v.uid": 10,
+    "w.uid": 20
+  },
+  {
+    "u.uid": 1,
+    "v.uid": -1,
+    "w.uid": 20
+  },
+  {
+    "u.uid": 1,
+    "v.uid": -2,
+    "w.uid": 20
+  },
+  {
+    "u.uid": 1,
+    "v.uid": -3,
+    "w.uid": 20
+  },
+  {
+    "u.uid": 1,
+    "v.uid": -4,
+    "w.uid": 20
+  },
+  {
+    "u.uid": 1,
+    "v.uid": -5,
+    "w.uid": 20
+  },
+  {
+    "u.uid": 1,
+    "v.uid": -6,
+    "w.uid": 20
+  },
+  {
+    "u.uid": 1,
+    "v.uid": -7,
+    "w.uid": 20
+  },
+  {
+    "u.uid": 2,
+    "v.uid": 11,
+    "w.uid": null
+  },
+  {
+    "u.uid": 3,
+    "v.uid": null,
+    "w.uid": 21
+  }
+]

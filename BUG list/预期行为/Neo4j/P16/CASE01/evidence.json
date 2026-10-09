@@ -1,0 +1,40 @@
+{
+  "format_version": 1,
+  "pattern": "P16",
+  "case_number": 1,
+  "dbms": "neo4j",
+  "classification": "expected_behavior",
+  "requested_classification": "expected_behavior",
+  "status": "expected_behavior",
+  "issue_url": null,
+  "issue_group": "neo4j-P16",
+  "input_hash": "9f9d9885f1a1f8aec5accbb640db8159c6b040a5514e796c17cbc16768af53f0",
+  "pair_kind": "symmetry",
+  "comparison_status": "not_confirmed",
+  "comparison_summary": {
+    "slow_side": "b",
+    "median_ratio": 4.194013832321808,
+    "median_delta_ms": 2.0518958335742354,
+    "direction_consistency": 1.0,
+    "ratio_ci_low": 3.9456768881237188,
+    "ratio_ci_high": 4.6368927268119275,
+    "noise_p99_ms": 2.8098864620551436
+  },
+  "database_version": "Neo4j/2026.09.0",
+  "index_spec": null,
+  "missing_evidence": [],
+  "reason": "The explicit zero makes ALL false in both list-group orders. Ordinary sequential quantifier evaluation can stop early when the zero is first but performs more predicate checks when it is last; the short reference also changes list-construction work. This construction is excluded from missed-optimization claims.",
+  "source_file_sha256": {
+    "result.json": "d9bfbe82484d8d56180a0b2b93ec93d1c85fd36548e15f5cc9a64cd0ff8ec705",
+    "setup.cypher": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "query_a.cypher": "caafb5ec7b586c2be1148727d3ebecf16d6da563d1983ff2d5f7e7ca75284053",
+    "query_b.cypher": "9449d3af36f4b12760845602772145a7a8d196c059c1b2b148ac2701e13ee203",
+    "profile.json": "10757fa3e217fd9148a4287b6c81707ab06485817a461f46b7b262b4c62683fc",
+    "graph-counts.json": "85f1ea4ae06b41f9b355f515c0203eec836a74cb4556ad0d97f002cb64e8d4a9",
+    "environment.json": "16dfcdc4535072e5819474c4a4e7bde96c4edabc6207d53a2293bc0b915ef346"
+  },
+  "profile_provenance": {
+    "a": "Server-supplied Neo4j PROFILE string-representation, preserved verbatim.",
+    "b": "Server-supplied Neo4j PROFILE string-representation, preserved verbatim."
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "format_version": 1,
+  "pattern": "P3",
+  "case_number": 2,
+  "dbms": "neo4j",
+  "classification": "ready_issue",
+  "requested_classification": "ready_issue",
+  "status": "locally_reproduced_performance_candidate",
+  "issue_url": null,
+  "issue_group": "neo4j-P3-mirrored-path-pruning",
+  "input_hash": "1606b43c8afb7ce2ee8631e8e119b27b00fdcc4faea9b826163b068db0b530d7",
+  "pair_kind": "symmetry",
+  "comparison_status": "candidate",
+  "comparison_summary": {
+    "slow_side": "b",
+    "median_ratio": 13.184999679501367,
+    "median_delta_ms": 10.339499451220036,
+    "direction_consistency": 1.0,
+    "ratio_ci_low": 11.921362856102302,
+    "ratio_ci_high": 13.791651486816516,
+    "noise_p99_ms": 7.543867679778481
+  },
+  "database_version": "Neo4j/2026.09.0",
+  "index_spec": [
+    "GspLow",
+    "id"
+  ],
+  "missing_evidence": [],
+  "reason": "Reversing a bounded undirected path keeps the endpoint/length result unchanged but moves the node-local ALL predicate out of VarLengthExpand and into a later Filter, increasing traversal work.",
+  "source_file_sha256": {
+    "result.json": "d1ff5473e5378f0505f929427819528b05db82cc8d8acfdd3ba0f052fa14829c",
+    "setup.cypher": "22ae0c13ddcdfb7ce348c6d7f6482e8dfaf29fd5e07682142e6a9bae044a5020",
+    "query_a.cypher": "f392ba4430cdf4310b9bd2fed0e3752d6fdf4e45e43945ea3a111318d5a5122e",
+    "query_b.cypher": "148c1d6828c4f0f4422dfbec9eecd2d5ae1dff55b54ab404ea59cd05621e637c",
+    "profile.json": "442f8dbf358f7c15431da85bc95cb01b9e6ac2808e0c4dd192675ce3585d09dd",
+    "graph-counts.json": "e9134db05f30848ab53a34da9b479d0442f5d26085ab98adab03cc169e726e46",
+    "environment.json": "16dfcdc4535072e5819474c4a4e7bde96c4edabc6207d53a2293bc0b915ef346"
+  },
+  "profile_provenance": {
+    "a": "Server-supplied Neo4j PROFILE string-representation, preserved verbatim.",
+    "b": "Server-supplied Neo4j PROFILE string-representation, preserved verbatim."
+  }
+}

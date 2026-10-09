@@ -1,0 +1,1 @@
+MATCH (u:GspAnchor) WHERE ((coalesce((coalesce(u.keep, false) = true), null) AND (u.uid = u.uid)) OR EXISTS { MATCH (u)-[:GSP_EXPAND]->(gsp_leaf:GspLeaf) WHERE ((NOT (NOT (coalesce(gsp_leaf.mark, false) = true))) AND (u.uid = u.uid)) }) RETURN u.uid;

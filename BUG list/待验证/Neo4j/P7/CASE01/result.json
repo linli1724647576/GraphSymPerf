@@ -1,0 +1,489 @@
+{
+  "format_version": 2,
+  "input_hash": "8558835e289c8abcc20db97c3428f1bbd8dbb04fe7e2520e2060e091e8fafc30",
+  "has_reference": false,
+  "case": {
+    "pattern": "P7",
+    "scale": 10000,
+    "seed": 194747940,
+    "parameters": {},
+    "checks": [
+      {
+        "query": "SHOW INDEXES YIELD name, state, labelsOrTypes, properties WHERE name = 'gsp_cost_lookup' RETURN name, state, labelsOrTypes, properties",
+        "expected_rows": [
+          {
+            "name": "gsp_cost_lookup",
+            "state": "ONLINE",
+            "labelsOrTypes": [
+              "GspRare"
+            ],
+            "properties": [
+              "uid"
+            ]
+          }
+        ]
+      },
+      {
+        "query": "MATCH (u:GspRare) RETURN count(u) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "MATCH (u:GspCommon) RETURN count(u) AS count",
+        "expected_rows": [
+          {
+            "count": 10001
+          }
+        ]
+      },
+      {
+        "query": "MATCH (u:GspRare:GspCommon) RETURN count(u) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "expected_rows": [
+      {
+        "u.uid": 1,
+        "v.uid": 2
+      }
+    ],
+    "bindings": {
+      "low_label": "GspRare",
+      "high_label": "GspCommon",
+      "low_candidates": 1,
+      "high_candidates": 10001,
+      "variant": {
+        "anchor_filter": 0,
+        "label_order": 1,
+        "complexity": 2
+      },
+      "role_choices": {
+        "anchor_filter": "label_only",
+        "label_order": "common_first"
+      }
+    },
+    "skeleton": "MATCH (u:$lowCostLabel:$highCostLabel)-[:$R]->(v) RETURN u.uid, v.uid",
+    "placeholders": [
+      {
+        "name": "lowCostLabel",
+        "kind": "label",
+        "role": "low",
+        "variables": []
+      },
+      {
+        "name": "highCostLabel",
+        "kind": "label",
+        "role": "high",
+        "variables": []
+      },
+      {
+        "name": "R",
+        "kind": "structural",
+        "role": "structural",
+        "variables": []
+      }
+    ],
+    "source": {
+      "generator": "builtin_template",
+      "builtin_pattern": "P7",
+      "raw_query": null,
+      "derivation_preserves_original_result": false,
+      "seed_syntax_enriched": false,
+      "enrichment_origin": "builtin_template",
+      "derivation_steps": [
+        "instantiate_builtin_pattern",
+        "populate_cost_roles"
+      ],
+      "generation_mode": "builtin_template",
+      "population_seed": 194747940,
+      "data_seed": 0,
+      "populated_query_sha256": "0843694606be8a94f3c635eadf1ef572f7a33cfef3c3793b773bf8da312cbf5e",
+      "template_id": "P7-33fe03ad71",
+      "variant": {
+        "anchor_filter": 0,
+        "label_order": 1,
+        "complexity": 2
+      },
+      "role_choices": {
+        "anchor_filter": "label_only",
+        "label_order": "common_first"
+      },
+      "complexity": 2,
+      "role_sampling": "independent_seeded_random"
+    },
+    "data_seed": 0,
+    "complexity": 2,
+    "variant": {
+      "anchor_filter": 0,
+      "label_order": 1,
+      "complexity": 2
+    },
+    "role_choices": {
+      "anchor_filter": "label_only",
+      "label_order": "common_first"
+    },
+    "template_id": "P7-33fe03ad71"
+  },
+  "measurement": {
+    "discovery_warmups": 10,
+    "discovery_pairs": 10,
+    "screen_ratio": 2.0,
+    "confirmation_sessions": 2,
+    "confirmation_warmups": 10,
+    "confirmation_pairs": 20,
+    "control_pairs": 20,
+    "ratio": 3.0,
+    "ci_low": 2.0,
+    "direction_consistency": 0.9,
+    "bootstrap_samples": 10000,
+    "timeout_seconds": 15,
+    "max_rows": 100000
+  },
+  "result": {
+    "status": "no_candidate",
+    "reason": "discovery_gate_not_met",
+    "stop_target": false,
+    "dbms": "neo4j",
+    "discovery": {
+      "warmups": [
+        {
+          "order": "BA",
+          "a_ms": 0.9352080523967743,
+          "b_ms": 1.2471249792724848,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 0.5781250074505806,
+          "b_ms": 0.6682500243186951,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 0.5945831071585417,
+          "b_ms": 0.599999912083149,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 0.5709170363843441,
+          "b_ms": 0.5667079240083694,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 0.6361671257764101,
+          "b_ms": 0.5364168900996447,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 0.5338748451322317,
+          "b_ms": 0.5513329524546862,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 0.5528749898076057,
+          "b_ms": 0.5797501653432846,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 0.5272920243442059,
+          "b_ms": 0.5424169357866049,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 0.607708003371954,
+          "b_ms": 0.5454581696540117,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 1.0280001442879438,
+          "b_ms": 1.8952081445604563,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "samples": [
+        {
+          "order": "BA",
+          "a_ms": 0.691374996677041,
+          "b_ms": 0.5715419538319111,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 0.5803329404443502,
+          "b_ms": 0.5767080001533031,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 0.6349170580506325,
+          "b_ms": 0.6009589415043592,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 0.5098329856991768,
+          "b_ms": 0.5292498972266912,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 0.5837089847773314,
+          "b_ms": 0.5593330133706331,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 0.5502079147845507,
+          "b_ms": 0.5329169798642397,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 0.8750420529395342,
+          "b_ms": 0.5435841158032417,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 2.3050839081406593,
+          "b_ms": 3.402500180527568,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 4.225375130772591,
+          "b_ms": 1.674917060881853,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 0.9489580988883972,
+          "b_ms": 2.251541940495372,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "summary": {
+        "slow_side": "a",
+        "median_ratio": 1.0380131294790194,
+        "median_delta_ms": 0.0208334531635046,
+        "direction_consistency": 0.7
+      }
+    },
+    "confirmation_sessions": [],
+    "summary": null,
+    "reference_comparisons": {},
+    "comparisons": {
+      "ab": {
+        "pair_kind": "symmetry",
+        "status": "no_candidate",
+        "discovery": {
+          "warmups": [
+            {
+              "order": "BA",
+              "a_ms": 0.9352080523967743,
+              "b_ms": 1.2471249792724848,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 0.5781250074505806,
+              "b_ms": 0.6682500243186951,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 0.5945831071585417,
+              "b_ms": 0.599999912083149,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 0.5709170363843441,
+              "b_ms": 0.5667079240083694,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 0.6361671257764101,
+              "b_ms": 0.5364168900996447,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 0.5338748451322317,
+              "b_ms": 0.5513329524546862,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 0.5528749898076057,
+              "b_ms": 0.5797501653432846,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 0.5272920243442059,
+              "b_ms": 0.5424169357866049,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 0.607708003371954,
+              "b_ms": 0.5454581696540117,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 1.0280001442879438,
+              "b_ms": 1.8952081445604563,
+              "a_status": "ok",
+              "b_status": "ok"
+            }
+          ],
+          "samples": [
+            {
+              "order": "BA",
+              "a_ms": 0.691374996677041,
+              "b_ms": 0.5715419538319111,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 0.5803329404443502,
+              "b_ms": 0.5767080001533031,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 0.6349170580506325,
+              "b_ms": 0.6009589415043592,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 0.5098329856991768,
+              "b_ms": 0.5292498972266912,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 0.5837089847773314,
+              "b_ms": 0.5593330133706331,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 0.5502079147845507,
+              "b_ms": 0.5329169798642397,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 0.8750420529395342,
+              "b_ms": 0.5435841158032417,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 2.3050839081406593,
+              "b_ms": 3.402500180527568,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 4.225375130772591,
+              "b_ms": 1.674917060881853,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 0.9489580988883972,
+              "b_ms": 2.251541940495372,
+              "a_status": "ok",
+              "b_status": "ok"
+            }
+          ],
+          "summary": {
+            "slow_side": "a",
+            "median_ratio": 1.0380131294790194,
+            "median_delta_ms": 0.0208334531635046,
+            "direction_consistency": 0.7
+          }
+        },
+        "confirmation_sessions": [],
+        "summary": null
+      }
+    },
+    "pair_kind": "symmetry",
+    "measurement": {
+      "discovery_warmups": 10,
+      "discovery_pairs": 10,
+      "screen_ratio": 2.0,
+      "confirmation_sessions": 2,
+      "confirmation_warmups": 10,
+      "confirmation_pairs": 20,
+      "control_pairs": 20,
+      "ratio": 3.0,
+      "ci_low": 2.0,
+      "direction_consistency": 0.9,
+      "bootstrap_samples": 10000,
+      "timeout_seconds": 15,
+      "max_rows": 100000
+    },
+    "database_version": "Neo4j/2026.09.0",
+    "state_reused": false,
+    "result_rows": 1
+  }
+}

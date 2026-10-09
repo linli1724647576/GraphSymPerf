@@ -1,0 +1,14 @@
+[
+  {
+    "u.uid": 1,
+    "value": true
+  },
+  {
+    "u.uid": 2,
+    "value": true
+  },
+  {
+    "u.uid": 3,
+    "value": false
+  }
+]

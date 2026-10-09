@@ -1,0 +1,154 @@
+{
+  "a": {
+    "operators": [
+      {
+        "OPERATOR": "* Produce {u.uid}",
+        "ACTUAL HITS": 3,
+        "RELATIVE TIME": "  0.441777 %",
+        "ABSOLUTE TIME": "  0.015339 ms"
+      },
+      {
+        "OPERATOR": "* Filter (u :GspAnchor), Generic {u}",
+        "ACTUAL HITS": 3,
+        "RELATIVE TIME": " 33.252101 %",
+        "ABSOLUTE TIME": "  1.154582 ms"
+      },
+      {
+        "OPERATOR": "|\\",
+        "ACTUAL HITS": "",
+        "RELATIVE TIME": "",
+        "ABSOLUTE TIME": ""
+      },
+      {
+        "OPERATOR": "| * EvaluatePatternFilter",
+        "ACTUAL HITS": 40003,
+        "RELATIVE TIME": " 32.516206 %",
+        "ABSOLUTE TIME": "  1.129031 ms"
+      },
+      {
+        "OPERATOR": "|\\",
+        "ACTUAL HITS": "",
+        "RELATIVE TIME": "",
+        "ABSOLUTE TIME": ""
+      },
+      {
+        "OPERATOR": "| * Limit",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.039616 %",
+        "ABSOLUTE TIME": "  0.001376 ms"
+      },
+      {
+        "OPERATOR": "| * Filter (gsp_leaf :GspLeaf), Generic {gsp_leaf}",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.048019 %",
+        "ABSOLUTE TIME": "  0.001667 ms"
+      },
+      {
+        "OPERATOR": "| * Expand (u)-[anon1:GSP_EXPAND]->(gsp_leaf)",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.058824 %",
+        "ABSOLUTE TIME": "  0.002042 ms"
+      },
+      {
+        "OPERATOR": "| * Filter {u.uid}",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.010804 %",
+        "ABSOLUTE TIME": "  0.000375 ms"
+      },
+      {
+        "OPERATOR": "| * Once",
+        "ACTUAL HITS": 1,
+        "RELATIVE TIME": "  0.000000 %",
+        "ABSOLUTE TIME": "  0.000000 ms"
+      },
+      {
+        "OPERATOR": "* ScanAll (u)",
+        "ACTUAL HITS": 40004,
+        "RELATIVE TIME": " 33.631453 %",
+        "ABSOLUTE TIME": "  1.167754 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.001200 %",
+        "ABSOLUTE TIME": "  0.000042 ms"
+      }
+    ]
+  },
+  "b": {
+    "operators": [
+      {
+        "OPERATOR": "* Produce {u.uid}",
+        "ACTUAL HITS": 3,
+        "RELATIVE TIME": "  0.031793 %",
+        "ABSOLUTE TIME": "  0.002625 ms"
+      },
+      {
+        "OPERATOR": "* Filter (u :GspAnchor), Generic {u}",
+        "ACTUAL HITS": 3,
+        "RELATIVE TIME": " 11.715012 %",
+        "ABSOLUTE TIME": "  0.967392 ms"
+      },
+      {
+        "OPERATOR": "|\\",
+        "ACTUAL HITS": "",
+        "RELATIVE TIME": "",
+        "ABSOLUTE TIME": ""
+      },
+      {
+        "OPERATOR": "| * EvaluatePatternFilter",
+        "ACTUAL HITS": 40003,
+        "RELATIVE TIME": " 11.153334 %",
+        "ABSOLUTE TIME": "  0.921010 ms"
+      },
+      {
+        "OPERATOR": "|\\",
+        "ACTUAL HITS": "",
+        "RELATIVE TIME": "",
+        "ABSOLUTE TIME": ""
+      },
+      {
+        "OPERATOR": "| * Limit",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.052989 %",
+        "ABSOLUTE TIME": "  0.004376 ms"
+      },
+      {
+        "OPERATOR": "| * Filter (gsp_leaf :GspLeaf), Generic {gsp_leaf}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 51.490240 %",
+        "ABSOLUTE TIME": "  4.251914 ms"
+      },
+      {
+        "OPERATOR": "| * Expand (u)-[anon1:GSP_EXPAND]->(gsp_leaf)",
+        "ACTUAL HITS": 40002,
+        "RELATIVE TIME": " 11.324916 %",
+        "ABSOLUTE TIME": "  0.935178 ms"
+      },
+      {
+        "OPERATOR": "| * Filter {u.uid}",
+        "ACTUAL HITS": 3,
+        "RELATIVE TIME": "  0.022205 %",
+        "ABSOLUTE TIME": "  0.001834 ms"
+      },
+      {
+        "OPERATOR": "| * Once",
+        "ACTUAL HITS": 3,
+        "RELATIVE TIME": "  0.000000 %",
+        "ABSOLUTE TIME": "  0.000000 ms"
+      },
+      {
+        "OPERATOR": "* ScanAll (u)",
+        "ACTUAL HITS": 40004,
+        "RELATIVE TIME": " 14.209512 %",
+        "ABSOLUTE TIME": "  1.173380 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.000000 %",
+        "ABSOLUTE TIME": "  0.000000 ms"
+      }
+    ]
+  }
+}

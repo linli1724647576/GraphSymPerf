@@ -1,0 +1,260 @@
+{
+  "a": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 64,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+-----------------+----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| Operator        | Id | Details                                        | Estimated Rows | Rows | DB Hits | Memory (Bytes) | Page Cache Hits/Misses | Indexes Used       |\n+-----------------+----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +ProduceResults |  0 | `u.uid`, `v.uid`                               |              1 |    1 |       0 |              0 |                    0/0 |                    |\n| |               +----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +Projection     |  1 | u.uid AS `u.uid`, v.uid AS `v.uid`             |              1 |    1 |       2 |                |                    0/0 |                    |\n| |               +----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +Filter         |  2 | v:GspHigh                                      |              1 |    1 |       1 |                |                    0/0 |                    |\n| |               +----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +Expand(All)    |  3 | (u)-[:GSP_LINK]->(v)                           |              1 |    1 |       2 |                |                    0/0 |                    |\n| |               +----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +NodeIndexSeek  |  4 | RANGE INDEX u:GspLow(id) WHERE id = $autoint_0 |              1 |    1 |       2 |                |                    0/0 | gsp_cost_lookup: 1 |\n+-----------------+----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n\nTotal database accesses: 7, total allocated memory: 64\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "`u.uid`, `v.uid`",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 1.0,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 1,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "u.uid AS `u.uid`, v.uid AS `v.uid`",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 1.0,
+            "DbHits": 2,
+            "Rows": 1,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "children": [
+            {
+              "args": {
+                "Details": "v:GspHigh",
+                "Id": 2,
+                "PageCacheMisses": 0,
+                "EstimatedRows": 1.0,
+                "DbHits": 1,
+                "Rows": 1,
+                "PageCacheHits": 0
+              },
+              "pageCacheMisses": 0,
+              "children": [
+                {
+                  "args": {
+                    "Details": "(u)-[:GSP_LINK]->(v)",
+                    "Id": 3,
+                    "PageCacheMisses": 0,
+                    "EstimatedRows": 1.0,
+                    "DbHits": 2,
+                    "Rows": 1,
+                    "PageCacheHits": 0
+                  },
+                  "pageCacheMisses": 0,
+                  "children": [
+                    {
+                      "args": {
+                        "Details": "RANGE INDEX u:GspLow(id) WHERE id = $autoint_0",
+                        "Id": 4,
+                        "UsedIndexes": "gsp_cost_lookup: 1",
+                        "PageCacheMisses": 0,
+                        "EstimatedRows": 1.0,
+                        "DbHits": 2,
+                        "Rows": 1,
+                        "PageCacheHits": 0
+                      },
+                      "pageCacheMisses": 0,
+                      "dbHits": 2,
+                      "identifiers": [
+                        "u"
+                      ],
+                      "operatorType": "NodeIndexSeek@neo4j",
+                      "rows": 1,
+                      "pageCacheHitRatio": 0.0,
+                      "pageCacheHits": 0
+                    }
+                  ],
+                  "dbHits": 2,
+                  "identifiers": [
+                    "u",
+                    "v"
+                  ],
+                  "operatorType": "Expand(All)@neo4j",
+                  "rows": 1,
+                  "pageCacheHitRatio": 0.0,
+                  "pageCacheHits": 0
+                }
+              ],
+              "dbHits": 1,
+              "identifiers": [
+                "u",
+                "v"
+              ],
+              "operatorType": "Filter@neo4j",
+              "rows": 1,
+              "pageCacheHitRatio": 0.0,
+              "pageCacheHits": 0
+            }
+          ],
+          "dbHits": 2,
+          "identifiers": [
+            "u",
+            "v",
+            "`u.uid`",
+            "`v.uid`"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 1,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "u",
+        "v",
+        "`u.uid`",
+        "`v.uid`"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 1,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  },
+  "b": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 64,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+-----------------+----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| Operator        | Id | Details                                        | Estimated Rows | Rows | DB Hits | Memory (Bytes) | Page Cache Hits/Misses | Indexes Used       |\n+-----------------+----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +ProduceResults |  0 | `u.uid`, `v.uid`                               |              1 |    1 |       0 |              0 |                    0/0 |                    |\n| |               +----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +Projection     |  1 | u.uid AS `u.uid`, v.uid AS `v.uid`             |              1 |    1 |       2 |                |                    0/0 |                    |\n| |               +----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +Filter         |  2 | v:GspHigh                                      |              1 |    1 |       1 |                |                    0/0 |                    |\n| |               +----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +Expand(All)    |  3 | (u)-[:GSP_LINK]->(v)                           |              1 |    1 |       2 |                |                    0/0 |                    |\n| |               +----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +NodeIndexSeek  |  4 | RANGE INDEX u:GspLow(id) WHERE id = $autoint_0 |              1 |    1 |       2 |                |                    0/0 | gsp_cost_lookup: 1 |\n+-----------------+----+------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n\nTotal database accesses: 7, total allocated memory: 64\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "`u.uid`, `v.uid`",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 1.0,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 1,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "u.uid AS `u.uid`, v.uid AS `v.uid`",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 1.0,
+            "DbHits": 2,
+            "Rows": 1,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "children": [
+            {
+              "args": {
+                "Details": "v:GspHigh",
+                "Id": 2,
+                "PageCacheMisses": 0,
+                "EstimatedRows": 1.0,
+                "DbHits": 1,
+                "Rows": 1,
+                "PageCacheHits": 0
+              },
+              "pageCacheMisses": 0,
+              "children": [
+                {
+                  "args": {
+                    "Details": "(u)-[:GSP_LINK]->(v)",
+                    "Id": 3,
+                    "PageCacheMisses": 0,
+                    "EstimatedRows": 1.0,
+                    "DbHits": 2,
+                    "Rows": 1,
+                    "PageCacheHits": 0
+                  },
+                  "pageCacheMisses": 0,
+                  "children": [
+                    {
+                      "args": {
+                        "Details": "RANGE INDEX u:GspLow(id) WHERE id = $autoint_0",
+                        "Id": 4,
+                        "UsedIndexes": "gsp_cost_lookup: 1",
+                        "PageCacheMisses": 0,
+                        "EstimatedRows": 1.0,
+                        "DbHits": 2,
+                        "Rows": 1,
+                        "PageCacheHits": 0
+                      },
+                      "pageCacheMisses": 0,
+                      "dbHits": 2,
+                      "identifiers": [
+                        "u"
+                      ],
+                      "operatorType": "NodeIndexSeek@neo4j",
+                      "rows": 1,
+                      "pageCacheHitRatio": 0.0,
+                      "pageCacheHits": 0
+                    }
+                  ],
+                  "dbHits": 2,
+                  "identifiers": [
+                    "u",
+                    "v"
+                  ],
+                  "operatorType": "Expand(All)@neo4j",
+                  "rows": 1,
+                  "pageCacheHitRatio": 0.0,
+                  "pageCacheHits": 0
+                }
+              ],
+              "dbHits": 1,
+              "identifiers": [
+                "u",
+                "v"
+              ],
+              "operatorType": "Filter@neo4j",
+              "rows": 1,
+              "pageCacheHitRatio": 0.0,
+              "pageCacheHits": 0
+            }
+          ],
+          "dbHits": 2,
+          "identifiers": [
+            "u",
+            "v",
+            "`u.uid`",
+            "`v.uid`"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 1,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "u",
+        "v",
+        "`u.uid`",
+        "`v.uid`"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 1,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  }
+}

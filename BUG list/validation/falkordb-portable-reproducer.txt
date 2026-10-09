@@ -1,0 +1,16 @@
+Native setup completed; indexes ready.
+[{"nodes": 250003}]
+[{"relationships": 200001}]
+{
+  "query": "base.cypher",
+  "client_elapsed_ms": 0.9630417916923761,
+  "rows": [],
+  "matches_constructed_expectation": true
+}
+{
+  "query": "transformed.cypher",
+  "client_elapsed_ms": 49.35649991966784,
+  "rows": [],
+  "matches_constructed_expectation": true
+}
+Complete typed A/B result multisets match; bool and int remain distinct.

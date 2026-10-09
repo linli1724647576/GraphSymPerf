@@ -1,0 +1,318 @@
+{
+  "a": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 120,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+-----------------------+----+--------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| Operator              | Id | Details                                                                        | Estimated Rows | Rows | DB Hits | Memory (Bytes) | Page Cache Hits/Misses | Indexes Used       |\n+-----------------------+----+--------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +ProduceResults       |  0 | `u.uid`, `v.uid`, hops                                                         |              1 |    1 |       0 |              0 |                    0/0 |                    |\n| |                     +----+--------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +Projection           |  1 | cache[u.uid] AS `u.uid`, v.uid AS `v.uid`, length((u)-[anon_0*]-(v)) AS hops   |              1 |    1 |       1 |                |                    0/0 |                    |\n| |                     +----+--------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +Filter               |  2 | v:GspHigh                                                                      |              1 |    1 |       2 |                |                    0/0 |                    |\n| |                     +----+--------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +VarLengthExpand(All) |  3 | p = (u)-[anon_0:GSP_LINK*..3]-(v) WHERE all(x IN nodes(p) WHERE x.keep = true) |              3 |    2 |      12 |             56 |                    0/0 |                    |\n| |                     +----+--------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +CacheProperties      |  4 | cache[u.uid]                                                                   |              1 |    1 |       1 |                |                    0/0 |                    |\n| |                     +----+--------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n| +NodeIndexSeek        |  5 | RANGE INDEX u:GspLow(id) WHERE id = $autoint_0                                 |              1 |    1 |       2 |                |                    0/0 | gsp_cost_lookup: 1 |\n+-----------------------+----+--------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+--------------------+\n\nTotal database accesses: 18, total allocated memory: 120\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "`u.uid`, `v.uid`, hops",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 1.1094065579815342,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 1,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "cache[u.uid] AS `u.uid`, v.uid AS `v.uid`, length((u)-[anon_0*]-(v)) AS hops",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 1.1094065579815342,
+            "DbHits": 1,
+            "Rows": 1,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "children": [
+            {
+              "args": {
+                "Details": "v:GspHigh",
+                "Id": 2,
+                "PageCacheMisses": 0,
+                "EstimatedRows": 1.1094065579815342,
+                "DbHits": 2,
+                "Rows": 1,
+                "PageCacheHits": 0
+              },
+              "pageCacheMisses": 0,
+              "children": [
+                {
+                  "args": {
+                    "Details": "p = (u)-[anon_0:GSP_LINK*..3]-(v) WHERE all(x IN nodes(p) WHERE x.keep = true)",
+                    "Memory": 56,
+                    "Id": 3,
+                    "EstimatedRows": 3.0874943611642007,
+                    "PageCacheMisses": 0,
+                    "DbHits": 12,
+                    "Rows": 2,
+                    "PageCacheHits": 0
+                  },
+                  "pageCacheMisses": 0,
+                  "children": [
+                    {
+                      "args": {
+                        "Details": "cache[u.uid]",
+                        "Id": 4,
+                        "PageCacheMisses": 0,
+                        "EstimatedRows": 1.0,
+                        "DbHits": 1,
+                        "Rows": 1,
+                        "PageCacheHits": 0
+                      },
+                      "pageCacheMisses": 0,
+                      "children": [
+                        {
+                          "args": {
+                            "Details": "RANGE INDEX u:GspLow(id) WHERE id = $autoint_0",
+                            "Id": 5,
+                            "UsedIndexes": "gsp_cost_lookup: 1",
+                            "PageCacheMisses": 0,
+                            "EstimatedRows": 1.0,
+                            "DbHits": 2,
+                            "Rows": 1,
+                            "PageCacheHits": 0
+                          },
+                          "pageCacheMisses": 0,
+                          "dbHits": 2,
+                          "identifiers": [
+                            "u"
+                          ],
+                          "operatorType": "NodeIndexSeek@neo4j",
+                          "rows": 1,
+                          "pageCacheHitRatio": 0.0,
+                          "pageCacheHits": 0
+                        }
+                      ],
+                      "dbHits": 1,
+                      "identifiers": [
+                        "u"
+                      ],
+                      "operatorType": "CacheProperties@neo4j",
+                      "rows": 1,
+                      "pageCacheHitRatio": 0.0,
+                      "pageCacheHits": 0
+                    }
+                  ],
+                  "dbHits": 12,
+                  "identifiers": [
+                    "u",
+                    "anon_0",
+                    "v"
+                  ],
+                  "operatorType": "VarLengthExpand(All)@neo4j",
+                  "rows": 2,
+                  "pageCacheHitRatio": 0.0,
+                  "pageCacheHits": 0
+                }
+              ],
+              "dbHits": 2,
+              "identifiers": [
+                "u",
+                "anon_0",
+                "v"
+              ],
+              "operatorType": "Filter@neo4j",
+              "rows": 1,
+              "pageCacheHitRatio": 0.0,
+              "pageCacheHits": 0
+            }
+          ],
+          "dbHits": 1,
+          "identifiers": [
+            "u",
+            "`v.uid`",
+            "anon_0",
+            "v",
+            "hops",
+            "`u.uid`"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 1,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "u",
+        "`v.uid`",
+        "anon_0",
+        "v",
+        "hops",
+        "`u.uid`"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 1,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  },
+  "b": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 1600128,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+-----------------------+----+------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| Operator              | Id | Details                                                                      | Estimated Rows | Rows   | DB Hits | Memory (Bytes) | Page Cache Hits/Misses | Indexes Used       |\n+-----------------------+----+------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +ProduceResults       |  0 | `u.uid`, `v.uid`, hops                                                       |              1 |      1 |       0 |              0 |                    0/0 |                    |\n| |                     +----+------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +Projection           |  1 | cache[u.uid] AS `u.uid`, v.uid AS `v.uid`, length((v)-[anon_0*]-(u)) AS hops |              1 |      1 |       1 |                |                    0/0 |                    |\n| |                     +----+------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +Filter               |  2 | v:GspHigh AND all(x IN nodes((v)-[anon_0*]-(u)) WHERE x.keep = true)         |              1 |      1 |  250006 |                |                    0/0 |                    |\n| |                     +----+------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +VarLengthExpand(All) |  3 | (u)-[anon_0:GSP_LINK*..3]-(v)                                                |              4 | 100003 |  200010 |        1600064 |                    0/0 |                    |\n| |                     +----+------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +CacheProperties      |  4 | cache[u.uid]                                                                 |              1 |      1 |       1 |                |                    0/0 |                    |\n| |                     +----+------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +NodeIndexSeek        |  5 | RANGE INDEX u:GspLow(id) WHERE id = $autoint_0                               |              1 |      1 |       2 |                |                    0/0 | gsp_cost_lookup: 1 |\n+-----------------------+----+------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n\nTotal database accesses: 450020, total allocated memory: 1600128\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "`u.uid`, `v.uid`, hops",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 1.1094065579815342,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 1,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "cache[u.uid] AS `u.uid`, v.uid AS `v.uid`, length((v)-[anon_0*]-(u)) AS hops",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 1.1094065579815342,
+            "DbHits": 1,
+            "Rows": 1,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "children": [
+            {
+              "args": {
+                "Details": "v:GspHigh AND all(x IN nodes((v)-[anon_0*]-(u)) WHERE x.keep = true)",
+                "Id": 2,
+                "PageCacheMisses": 0,
+                "EstimatedRows": 1.1094065579815342,
+                "DbHits": 250006,
+                "Rows": 1,
+                "PageCacheHits": 0
+              },
+              "pageCacheMisses": 0,
+              "children": [
+                {
+                  "args": {
+                    "Details": "(u)-[anon_0:GSP_LINK*..3]-(v)",
+                    "Memory": 1600064,
+                    "Id": 3,
+                    "EstimatedRows": 4.116659148218934,
+                    "PageCacheMisses": 0,
+                    "DbHits": 200010,
+                    "Rows": 100003,
+                    "PageCacheHits": 0
+                  },
+                  "pageCacheMisses": 0,
+                  "children": [
+                    {
+                      "args": {
+                        "Details": "cache[u.uid]",
+                        "Id": 4,
+                        "PageCacheMisses": 0,
+                        "EstimatedRows": 1.0,
+                        "DbHits": 1,
+                        "Rows": 1,
+                        "PageCacheHits": 0
+                      },
+                      "pageCacheMisses": 0,
+                      "children": [
+                        {
+                          "args": {
+                            "Details": "RANGE INDEX u:GspLow(id) WHERE id = $autoint_0",
+                            "Id": 5,
+                            "UsedIndexes": "gsp_cost_lookup: 1",
+                            "PageCacheMisses": 0,
+                            "EstimatedRows": 1.0,
+                            "DbHits": 2,
+                            "Rows": 1,
+                            "PageCacheHits": 0
+                          },
+                          "pageCacheMisses": 0,
+                          "dbHits": 2,
+                          "identifiers": [
+                            "u"
+                          ],
+                          "operatorType": "NodeIndexSeek@neo4j",
+                          "rows": 1,
+                          "pageCacheHitRatio": 0.0,
+                          "pageCacheHits": 0
+                        }
+                      ],
+                      "dbHits": 1,
+                      "identifiers": [
+                        "u"
+                      ],
+                      "operatorType": "CacheProperties@neo4j",
+                      "rows": 1,
+                      "pageCacheHitRatio": 0.0,
+                      "pageCacheHits": 0
+                    }
+                  ],
+                  "dbHits": 200010,
+                  "identifiers": [
+                    "u",
+                    "anon_0",
+                    "v"
+                  ],
+                  "operatorType": "VarLengthExpand(All)@neo4j",
+                  "rows": 100003,
+                  "pageCacheHitRatio": 0.0,
+                  "pageCacheHits": 0
+                }
+              ],
+              "dbHits": 250006,
+              "identifiers": [
+                "u",
+                "anon_0",
+                "v"
+              ],
+              "operatorType": "Filter@neo4j",
+              "rows": 1,
+              "pageCacheHitRatio": 0.0,
+              "pageCacheHits": 0
+            }
+          ],
+          "dbHits": 1,
+          "identifiers": [
+            "u",
+            "`v.uid`",
+            "anon_0",
+            "v",
+            "hops",
+            "`u.uid`"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 1,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "u",
+        "`v.uid`",
+        "anon_0",
+        "v",
+        "hops",
+        "`u.uid`"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 1,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  }
+}

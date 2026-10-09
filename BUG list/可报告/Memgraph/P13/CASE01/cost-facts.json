@@ -1,0 +1,97 @@
+[
+  {
+    "query": "SHOW INDEXES YIELD name, state, labelsOrTypes, properties WHERE name = 'gsp_cost_lookup' RETURN name, state, labelsOrTypes, properties",
+    "expected_rows": [
+      {
+        "name": "gsp_cost_lookup",
+        "state": "ONLINE",
+        "labelsOrTypes": [
+          "GspAnchor"
+        ],
+        "properties": [
+          "uid"
+        ]
+      }
+    ]
+  },
+  {
+    "query": "MATCH (u:GspAnchor) RETURN count(u) AS count",
+    "expected_rows": [
+      {
+        "count": 3
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor)-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 9
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor)-[:GSP_HIGH]->(w:GspHigh) RETURN count(w) AS count",
+    "expected_rows": [
+      {
+        "count": 200002
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor)-[:GSP_HIGH]->(w:GspHigh) WHERE w.keep = true RETURN count(w) AS count",
+    "expected_rows": [
+      {
+        "count": 2
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 1})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 8
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 2})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 1
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 3})-[:GSP_LOW]->(v:GspLow) RETURN count(v) AS count",
+    "expected_rows": [
+      {
+        "count": 0
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 2})-[:GSP_HIGH]->(w:GspHigh) WHERE w.keep = true RETURN count(w) AS count",
+    "expected_rows": [
+      {
+        "count": 0
+      }
+    ]
+  },
+  {
+    "query": "MATCH (:GspAnchor {uid: 3})-[:GSP_HIGH]->(w:GspHigh) WHERE w.keep = true RETURN count(w) AS count",
+    "expected_rows": [
+      {
+        "count": 1
+      }
+    ]
+  },
+  {
+    "query": "MATCH (v:GspLow) RETURN count(DISTINCT v.uid) AS count",
+    "expected_rows": [
+      {
+        "count": 9
+      }
+    ]
+  }
+]

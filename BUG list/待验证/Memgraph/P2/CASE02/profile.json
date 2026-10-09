@@ -1,0 +1,70 @@
+{
+  "a": {
+    "operators": [
+      {
+        "OPERATOR": "* Produce {u.uid, v.uid}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 88.424908 %",
+        "ABSOLUTE TIME": "  0.053091 ms"
+      },
+      {
+        "OPERATOR": "* Filter (v :GspHigh)",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  2.783883 %",
+        "ABSOLUTE TIME": "  0.001671 ms"
+      },
+      {
+        "OPERATOR": "* Expand (u)-[anon1:GSP_FORWARD]->(v)",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  4.249084 %",
+        "ABSOLUTE TIME": "  0.002551 ms"
+      },
+      {
+        "OPERATOR": "* ScanAllByLabelProperties (u :GspLow {id})",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  4.542125 %",
+        "ABSOLUTE TIME": "  0.002727 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  0.000000 %",
+        "ABSOLUTE TIME": "  0.000000 ms"
+      }
+    ]
+  },
+  "b": {
+    "operators": [
+      {
+        "OPERATOR": "* Produce {u.uid, v.uid}",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 25.842697 %",
+        "ABSOLUTE TIME": "  0.001098 ms"
+      },
+      {
+        "OPERATOR": "* Filter (v :GspHigh)",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 16.853933 %",
+        "ABSOLUTE TIME": "  0.000716 ms"
+      },
+      {
+        "OPERATOR": "* Expand (u)<-[anon1:GSP_REVERSE]-(v)",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 24.719101 %",
+        "ABSOLUTE TIME": "  0.001051 ms"
+      },
+      {
+        "OPERATOR": "* ScanAllByLabelProperties (u :GspLow {id})",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": " 31.460674 %",
+        "ABSOLUTE TIME": "  0.001337 ms"
+      },
+      {
+        "OPERATOR": "* Once",
+        "ACTUAL HITS": 2,
+        "RELATIVE TIME": "  1.123596 %",
+        "ABSOLUTE TIME": "  0.000048 ms"
+      }
+    ]
+  }
+}

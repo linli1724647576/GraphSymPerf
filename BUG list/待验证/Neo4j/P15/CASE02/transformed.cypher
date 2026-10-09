@@ -1,0 +1,1 @@
+MATCH (u:GspAnchor) RETURN u.uid, CASE WHEN (NOT coalesce((((u.keep = true) AND (u.uid = u.uid)) AND (u.uid = u.uid)), false)) THEN (COUNT { MATCH (u)-[:GSP_EXPAND]->(x:GspLeaf) WHERE coalesce(((NOT (x.mark = false)) OR (NOT (u.uid = u.uid))), null) } > 0) ELSE true END AS value;

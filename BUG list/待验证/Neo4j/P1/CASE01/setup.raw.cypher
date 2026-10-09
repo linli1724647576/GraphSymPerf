@@ -1,0 +1,5 @@
+CREATE INDEX gsp_cost_lookup IF NOT EXISTS FOR (n:GspLow) ON (n.id);
+
+CREATE (u:GspLow {id: 1, uid: 1})-[:GSP_LINK]->(v:GspHigh {uid: 2});
+
+UNWIND range(1, 10000) AS i CREATE (v:GspHigh {uid: 895440 + 5 * i}) WITH v, i UNWIND range(1, 4) AS j CREATE (u:GspLow {id: 895440 + 5 * i + j, uid: 895440 + 5 * i + j})-[:GSP_LINK]->(v);

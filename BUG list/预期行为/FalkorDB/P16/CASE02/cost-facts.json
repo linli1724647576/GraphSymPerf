@@ -1,0 +1,18 @@
+[
+  {
+    "query": "RETURN size(range(1, 40000)) AS count",
+    "expected_rows": [
+      {
+        "count": 40000
+      }
+    ]
+  },
+  {
+    "query": "RETURN all(x IN [0] WHERE x > 0) AS ok",
+    "expected_rows": [
+      {
+        "ok": false
+      }
+    ]
+  }
+]

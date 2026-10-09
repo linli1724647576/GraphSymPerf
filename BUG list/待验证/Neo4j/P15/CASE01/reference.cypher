@@ -1,0 +1,1 @@
+MATCH (u:GspAnchor) RETURN u.uid, CASE WHEN coalesce(((u.keep = true) OR (NOT (u.uid = u.uid))), null) THEN true ELSE EXISTS { MATCH (u)-[:GSP_REFERENCE]->(x:GspLeaf) WHERE (((NOT (x.mark = false)) OR (NOT (u.uid = u.uid))) OR (NOT (u.uid = u.uid))) } END AS value;

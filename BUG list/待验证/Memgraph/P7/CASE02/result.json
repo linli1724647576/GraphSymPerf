@@ -1,0 +1,489 @@
+{
+  "format_version": 2,
+  "input_hash": "8558835e289c8abcc20db97c3428f1bbd8dbb04fe7e2520e2060e091e8fafc30",
+  "has_reference": false,
+  "case": {
+    "pattern": "P7",
+    "scale": 10000,
+    "seed": 194747940,
+    "parameters": {},
+    "checks": [
+      {
+        "query": "SHOW INDEXES YIELD name, state, labelsOrTypes, properties WHERE name = 'gsp_cost_lookup' RETURN name, state, labelsOrTypes, properties",
+        "expected_rows": [
+          {
+            "name": "gsp_cost_lookup",
+            "state": "ONLINE",
+            "labelsOrTypes": [
+              "GspRare"
+            ],
+            "properties": [
+              "uid"
+            ]
+          }
+        ]
+      },
+      {
+        "query": "MATCH (u:GspRare) RETURN count(u) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      },
+      {
+        "query": "MATCH (u:GspCommon) RETURN count(u) AS count",
+        "expected_rows": [
+          {
+            "count": 10001
+          }
+        ]
+      },
+      {
+        "query": "MATCH (u:GspRare:GspCommon) RETURN count(u) AS count",
+        "expected_rows": [
+          {
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "expected_rows": [
+      {
+        "u.uid": 1,
+        "v.uid": 2
+      }
+    ],
+    "bindings": {
+      "low_label": "GspRare",
+      "high_label": "GspCommon",
+      "low_candidates": 1,
+      "high_candidates": 10001,
+      "variant": {
+        "anchor_filter": 0,
+        "label_order": 1,
+        "complexity": 2
+      },
+      "role_choices": {
+        "anchor_filter": "label_only",
+        "label_order": "common_first"
+      }
+    },
+    "skeleton": "MATCH (u:$lowCostLabel:$highCostLabel)-[:$R]->(v) RETURN u.uid, v.uid",
+    "placeholders": [
+      {
+        "name": "lowCostLabel",
+        "kind": "label",
+        "role": "low",
+        "variables": []
+      },
+      {
+        "name": "highCostLabel",
+        "kind": "label",
+        "role": "high",
+        "variables": []
+      },
+      {
+        "name": "R",
+        "kind": "structural",
+        "role": "structural",
+        "variables": []
+      }
+    ],
+    "source": {
+      "generator": "builtin_template",
+      "builtin_pattern": "P7",
+      "raw_query": null,
+      "derivation_preserves_original_result": false,
+      "seed_syntax_enriched": false,
+      "enrichment_origin": "builtin_template",
+      "derivation_steps": [
+        "instantiate_builtin_pattern",
+        "populate_cost_roles"
+      ],
+      "generation_mode": "builtin_template",
+      "population_seed": 194747940,
+      "data_seed": 0,
+      "populated_query_sha256": "0843694606be8a94f3c635eadf1ef572f7a33cfef3c3793b773bf8da312cbf5e",
+      "template_id": "P7-33fe03ad71",
+      "variant": {
+        "anchor_filter": 0,
+        "label_order": 1,
+        "complexity": 2
+      },
+      "role_choices": {
+        "anchor_filter": "label_only",
+        "label_order": "common_first"
+      },
+      "complexity": 2,
+      "role_sampling": "independent_seeded_random"
+    },
+    "data_seed": 0,
+    "complexity": 2,
+    "variant": {
+      "anchor_filter": 0,
+      "label_order": 1,
+      "complexity": 2
+    },
+    "role_choices": {
+      "anchor_filter": "label_only",
+      "label_order": "common_first"
+    },
+    "template_id": "P7-33fe03ad71"
+  },
+  "measurement": {
+    "discovery_warmups": 10,
+    "discovery_pairs": 10,
+    "screen_ratio": 2.0,
+    "confirmation_sessions": 2,
+    "confirmation_warmups": 10,
+    "confirmation_pairs": 20,
+    "control_pairs": 20,
+    "ratio": 3.0,
+    "ci_low": 2.0,
+    "direction_consistency": 0.9,
+    "bootstrap_samples": 10000,
+    "timeout_seconds": 15,
+    "max_rows": 100000
+  },
+  "result": {
+    "status": "no_candidate",
+    "reason": "discovery_gate_not_met",
+    "stop_target": false,
+    "dbms": "memgraph",
+    "discovery": {
+      "warmups": [
+        {
+          "order": "BA",
+          "a_ms": 2.016125014051795,
+          "b_ms": 2.0591248758137226,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 2.1382500417530537,
+          "b_ms": 2.0231669768691063,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 2.387374872341752,
+          "b_ms": 2.1443748846650124,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 2.21716589294374,
+          "b_ms": 1.8677918706089258,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 2.1122079342603683,
+          "b_ms": 1.9809158984571695,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 2.0851250737905502,
+          "b_ms": 1.9005418289452791,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 1.9708340987563133,
+          "b_ms": 1.9489580299705267,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 1.9579168874770403,
+          "b_ms": 1.9053330179303885,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 1.9556249026209116,
+          "b_ms": 2.242875052616,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 1.9137500785291195,
+          "b_ms": 1.873499946668744,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "samples": [
+        {
+          "order": "BA",
+          "a_ms": 1.9640838727355003,
+          "b_ms": 1.887666992843151,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 1.894292188808322,
+          "b_ms": 1.8659171182662249,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 2.030458068475127,
+          "b_ms": 1.8764168489724398,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 2.7118329890072346,
+          "b_ms": 2.124000107869506,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 1.7986248712986708,
+          "b_ms": 1.8108747899532318,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 2.075750147923827,
+          "b_ms": 2.0274159032851458,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 2.674458082765341,
+          "b_ms": 2.058125101029873,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 2.04754201695323,
+          "b_ms": 1.8766659777611494,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "AB",
+          "a_ms": 1.8363329581916332,
+          "b_ms": 1.963375136256218,
+          "a_status": "ok",
+          "b_status": "ok"
+        },
+        {
+          "order": "BA",
+          "a_ms": 1.9508330151438713,
+          "b_ms": 1.9760830327868462,
+          "a_status": "ok",
+          "b_status": "ok"
+        }
+      ],
+      "summary": {
+        "slow_side": "a",
+        "median_ratio": 1.0321612514803675,
+        "median_delta_ms": 0.06237556226551533,
+        "direction_consistency": 0.7
+      }
+    },
+    "confirmation_sessions": [],
+    "summary": null,
+    "reference_comparisons": {},
+    "comparisons": {
+      "ab": {
+        "pair_kind": "symmetry",
+        "status": "no_candidate",
+        "discovery": {
+          "warmups": [
+            {
+              "order": "BA",
+              "a_ms": 2.016125014051795,
+              "b_ms": 2.0591248758137226,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 2.1382500417530537,
+              "b_ms": 2.0231669768691063,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 2.387374872341752,
+              "b_ms": 2.1443748846650124,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 2.21716589294374,
+              "b_ms": 1.8677918706089258,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 2.1122079342603683,
+              "b_ms": 1.9809158984571695,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 2.0851250737905502,
+              "b_ms": 1.9005418289452791,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 1.9708340987563133,
+              "b_ms": 1.9489580299705267,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 1.9579168874770403,
+              "b_ms": 1.9053330179303885,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 1.9556249026209116,
+              "b_ms": 2.242875052616,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 1.9137500785291195,
+              "b_ms": 1.873499946668744,
+              "a_status": "ok",
+              "b_status": "ok"
+            }
+          ],
+          "samples": [
+            {
+              "order": "BA",
+              "a_ms": 1.9640838727355003,
+              "b_ms": 1.887666992843151,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 1.894292188808322,
+              "b_ms": 1.8659171182662249,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 2.030458068475127,
+              "b_ms": 1.8764168489724398,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 2.7118329890072346,
+              "b_ms": 2.124000107869506,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 1.7986248712986708,
+              "b_ms": 1.8108747899532318,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 2.075750147923827,
+              "b_ms": 2.0274159032851458,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 2.674458082765341,
+              "b_ms": 2.058125101029873,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 2.04754201695323,
+              "b_ms": 1.8766659777611494,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "AB",
+              "a_ms": 1.8363329581916332,
+              "b_ms": 1.963375136256218,
+              "a_status": "ok",
+              "b_status": "ok"
+            },
+            {
+              "order": "BA",
+              "a_ms": 1.9508330151438713,
+              "b_ms": 1.9760830327868462,
+              "a_status": "ok",
+              "b_status": "ok"
+            }
+          ],
+          "summary": {
+            "slow_side": "a",
+            "median_ratio": 1.0321612514803675,
+            "median_delta_ms": 0.06237556226551533,
+            "direction_consistency": 0.7
+          }
+        },
+        "confirmation_sessions": [],
+        "summary": null
+      }
+    },
+    "pair_kind": "symmetry",
+    "measurement": {
+      "discovery_warmups": 10,
+      "discovery_pairs": 10,
+      "screen_ratio": 2.0,
+      "confirmation_sessions": 2,
+      "confirmation_warmups": 10,
+      "confirmation_pairs": 20,
+      "control_pairs": 20,
+      "ratio": 3.0,
+      "ci_low": 2.0,
+      "direction_consistency": 0.9,
+      "bootstrap_samples": 10000,
+      "timeout_seconds": 15,
+      "max_rows": 100000
+    },
+    "database_version": "Memgraph/3.10.1",
+    "state_reused": false,
+    "result_rows": 1
+  }
+}

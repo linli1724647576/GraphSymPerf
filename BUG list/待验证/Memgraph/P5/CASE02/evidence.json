@@ -1,0 +1,43 @@
+{
+  "format_version": 1,
+  "pattern": "P5",
+  "case_number": 2,
+  "dbms": "memgraph",
+  "classification": "needs_review",
+  "requested_classification": "needs_review",
+  "status": "needs_review",
+  "issue_url": null,
+  "issue_group": "memgraph-P5",
+  "input_hash": "2c7b964b98451249548bf77677f2dffaae9b140776bdc8e187f5f58b9fcf8ae1",
+  "pair_kind": "symmetry",
+  "comparison_status": "not_confirmed",
+  "comparison_summary": {
+    "slow_side": "b",
+    "median_ratio": 2.352384496314894,
+    "median_delta_ms": 4.0915419813245535,
+    "direction_consistency": 1.0,
+    "ratio_ci_low": 2.286137363501982,
+    "ratio_ci_high": 2.379063022473013,
+    "noise_p99_ms": 2.057612466160207
+  },
+  "database_version": "Memgraph/3.10.1",
+  "index_spec": [
+    "GspAnchor",
+    "uid"
+  ],
+  "missing_evidence": [],
+  "reason": "The recheck shows an independent A/B median ratio of about 2.35, below the configured 3.0 candidate threshold. PROFILE shows different expansion work, but this case requires further assessment of evaluation-order expectations and optimizer opportunity before it is reported as a bug.",
+  "source_file_sha256": {
+    "result.json": "92bef248ec57d397498b99f0d1ca6bd4f6d48b044cb29e46c0c4e45832d9f8fc",
+    "setup.cypher": "90413a8df0ca773724bb764a97cd455a8889840ea487331b49c440ef0aeeee29",
+    "query_a.cypher": "883eb55f68d201caad13974869ce28e3c40e4b77cda26dd72f26e346e3d9eb6b",
+    "query_b.cypher": "d5c13abb462256d1e80d0619a384e420d03a85bdcea80bd3f04b3e3ff37bec96",
+    "profile.json": "e83c69a90e92433dbaa5ee38eefd6eeb858525af3a0954d82362b1da26121723",
+    "graph-counts.json": "f0d373bec8168cbdee2fcfd846346ec54aee18dd094718be61ba5904ebdb830c",
+    "environment.json": "16dfcdc4535072e5819474c4a4e7bde96c4edabc6207d53a2293bc0b915ef346"
+  },
+  "profile_provenance": {
+    "a": "Table rendered from recorded Memgraph PROFILE rows; not captured console stdout.",
+    "b": "Table rendered from recorded Memgraph PROFILE rows; not captured console stdout."
+  }
+}

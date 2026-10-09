@@ -1,0 +1,118 @@
+Native setup completed; indexes ready.
+[{"nodes": 200014}]
+[{"relationships": 200011}]
+{
+  "query": "base.cypher",
+  "client_elapsed_ms": 36.32299997843802,
+  "rows": [
+    {
+      "u.uid": 1,
+      "v.uid": 10,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -1,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -2,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -3,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -4,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -5,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -6,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -7,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 2,
+      "v.uid": 11,
+      "w.uid": null
+    },
+    {
+      "u.uid": 3,
+      "v.uid": null,
+      "w.uid": 21
+    }
+  ],
+  "matches_constructed_expectation": true
+}
+{
+  "query": "transformed.cypher",
+  "client_elapsed_ms": 170.58741697110236,
+  "rows": [
+    {
+      "u.uid": 1,
+      "v.uid": 10,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -1,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -2,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -3,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -4,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -5,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -6,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 1,
+      "v.uid": -7,
+      "w.uid": 20
+    },
+    {
+      "u.uid": 2,
+      "v.uid": 11,
+      "w.uid": null
+    },
+    {
+      "u.uid": 3,
+      "v.uid": null,
+      "w.uid": 21
+    }
+  ],
+  "matches_constructed_expectation": true
+}
+Complete typed A/B result multisets match; bool and int remain distinct.

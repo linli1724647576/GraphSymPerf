@@ -1,0 +1,5 @@
+CREATE INDEX ON :GspAnchor(uid);
+
+CREATE (:GspAnchor {uid: 1})-[:GSP_LOW]->(:GspTarget {uid: 2, keep: true});
+
+MATCH (u:GspAnchor {uid: 1}) UNWIND range(1, 40000) AS i CREATE (u)-[:GSP_HIGH]->(:GspTarget {uid: 895440+i, keep: false});

@@ -1,0 +1,490 @@
+{
+  "a": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 384,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+------------------+----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| Operator         | Id | Details                                                                       | Estimated Rows | Rows   | DB Hits | Memory (Bytes) | Page Cache Hits/Misses | Indexes Used       |\n+------------------+----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +ProduceResults  |  0 | `u.uid`                                                                       |              0 |      1 |       0 |              0 |                    0/0 |                    |\n| |                +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +Projection      |  1 | cache[u.uid] AS `u.uid`                                                       |              0 |      1 |       0 |                |                    0/0 |                    |\n| |                +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +Filter          |  2 | (NOT cache[u.uid] = cache[u.uid] OR u.keep = true)                            |              0 |      1 |       1 |                |                    0/0 |                    |\n| |                +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +Distinct        |  3 | u                                                                             |              2 |      1 |       0 |            320 |                    0/0 |                    |\n| |                +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +Union           |  4 |                                                                               |              2 |      1 |       0 |                |                    0/0 |                    |\n| |\\               +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| | +SemiApply     |  5 |                                                                               |              1 |      0 |       0 |                |                    0/0 |                    |\n| | |\\             +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| | | +Filter      |  6 | CoerceToPredicate(coalesce(CASE                                               |              1 |      0 |       0 |                |                    0/0 |                    |\n| | | |            |    |   WHEN cache[u.uid] = cache[u.uid] THEN coalesce(gsp_leaf.mark, false) = true |                |        |         |                |                        |                    |\n| | | |            |    |   ELSE NULL                                                                   |                |        |         |                |                        |                    |\n| | | |            |    | END, NULL)) AND gsp_leaf:GspLeaf                                              |                |        |         |                |                        |                    |\n| | | |            +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| | | +Expand(All) |  7 | (u)-[anon_0:GSP_EXPAND]->(gsp_leaf)                                           |              1 |      0 |       0 |                |                    0/0 |                    |\n| | | |            +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| | | +Argument    |  8 | u                                                                             |              1 |      0 |       0 |                |                    0/0 |                    |\n| | |              +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| | +Filter        |  9 | NOT cache[u.uid] = cache[u.uid]                                               |              1 |      0 |       0 |                |                    0/0 |                    |\n| | |              +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| | +NodeIndexScan | 10 | RANGE INDEX u:GspAnchor(uid) WHERE uid IS NOT NULL, cache[u.uid]              |              1 |      2 |       3 |                |                    0/0 | gsp_cost_lookup: 1 |\n| |                +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +Filter          | 11 | cache[u.uid] = cache[u.uid]                                                   |              1 |      1 |       0 |                |                    0/0 |                    |\n| |                +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +SemiApply       | 12 |                                                                               |              1 |      1 |       0 |                |                    0/0 |                    |\n| |\\               +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| | +Filter        | 13 | CoerceToPredicate(coalesce(CASE                                               |              1 |      0 |  400002 |                |                    0/0 |                    |\n| | |              |    |   WHEN cache[u.uid] = cache[u.uid] THEN coalesce(gsp_leaf.mark, false) = true |                |        |         |                |                        |                    |\n| | |              |    |   ELSE NULL                                                                   |                |        |         |                |                        |                    |\n| | |              |    | END, NULL)) AND gsp_leaf:GspLeaf                                              |                |        |         |                |                        |                    |\n| | |              +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| | +Expand(All)   | 14 | (u)-[anon_0:GSP_EXPAND]->(gsp_leaf)                                           |              1 | 400001 |  400005 |                |                    0/0 |                    |\n| | |              +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| | +Argument      | 15 | u                                                                             |              1 |      2 |       0 |                |                    0/0 |                    |\n| |                +----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n| +NodeIndexScan   | 16 | RANGE INDEX u:GspAnchor(uid) WHERE uid IS NOT NULL, cache[u.uid]              |              1 |      2 |       3 |                |                    0/0 | gsp_cost_lookup: 1 |\n+------------------+----+-------------------------------------------------------------------------------+----------------+--------+---------+----------------+------------------------+--------------------+\n\nTotal database accesses: 800014, total allocated memory: 384\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "`u.uid`",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 0.245254968811046,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 1,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "cache[u.uid] AS `u.uid`",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 0.245254968811046,
+            "DbHits": 0,
+            "Rows": 1,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "children": [
+            {
+              "args": {
+                "Details": "(NOT cache[u.uid] = cache[u.uid] OR u.keep = true)",
+                "Id": 2,
+                "PageCacheMisses": 0,
+                "EstimatedRows": 0.245254968811046,
+                "DbHits": 1,
+                "Rows": 1,
+                "PageCacheHits": 0
+              },
+              "pageCacheMisses": 0,
+              "children": [
+                {
+                  "args": {
+                    "Details": "u",
+                    "Memory": 320,
+                    "Id": 3,
+                    "EstimatedRows": 1.8099997698232173,
+                    "PageCacheMisses": 0,
+                    "DbHits": 0,
+                    "Rows": 1,
+                    "PageCacheHits": 0
+                  },
+                  "pageCacheMisses": 0,
+                  "children": [
+                    {
+                      "args": {
+                        "Id": 4,
+                        "PageCacheMisses": 0,
+                        "EstimatedRows": 1.8999997583779633,
+                        "DbHits": 0,
+                        "Rows": 1,
+                        "PageCacheHits": 0
+                      },
+                      "pageCacheMisses": 0,
+                      "children": [
+                        {
+                          "args": {
+                            "Details": "cache[u.uid] = cache[u.uid]",
+                            "Id": 11,
+                            "PageCacheMisses": 0,
+                            "EstimatedRows": 0.999999872830507,
+                            "DbHits": 0,
+                            "Rows": 1,
+                            "PageCacheHits": 0
+                          },
+                          "pageCacheMisses": 0,
+                          "children": [
+                            {
+                              "args": {
+                                "Id": 12,
+                                "PageCacheMisses": 0,
+                                "EstimatedRows": 0.999999872830507,
+                                "DbHits": 0,
+                                "Rows": 1,
+                                "PageCacheHits": 0
+                              },
+                              "pageCacheMisses": 0,
+                              "children": [
+                                {
+                                  "args": {
+                                    "Details": "RANGE INDEX u:GspAnchor(uid) WHERE uid IS NOT NULL, cache[u.uid]",
+                                    "Id": 16,
+                                    "UsedIndexes": "gsp_cost_lookup: 1",
+                                    "PageCacheMisses": 0,
+                                    "EstimatedRows": 1.0,
+                                    "DbHits": 3,
+                                    "Rows": 2,
+                                    "PageCacheHits": 0
+                                  },
+                                  "pageCacheMisses": 0,
+                                  "dbHits": 3,
+                                  "identifiers": [
+                                    "u"
+                                  ],
+                                  "operatorType": "NodeIndexScan@neo4j",
+                                  "rows": 2,
+                                  "pageCacheHitRatio": 0.0,
+                                  "pageCacheHits": 0
+                                },
+                                {
+                                  "args": {
+                                    "Details": "CoerceToPredicate(coalesce(CASE\n  WHEN cache[u.uid] = cache[u.uid] THEN coalesce(gsp_leaf.mark, false) = true\n  ELSE NULL\nEND, NULL)) AND gsp_leaf:GspLeaf",
+                                    "Id": 13,
+                                    "PageCacheMisses": 0,
+                                    "EstimatedRows": 1.0,
+                                    "DbHits": 400002,
+                                    "Rows": 0,
+                                    "PageCacheHits": 0
+                                  },
+                                  "pageCacheMisses": 0,
+                                  "children": [
+                                    {
+                                      "args": {
+                                        "Details": "(u)-[anon_0:GSP_EXPAND]->(gsp_leaf)",
+                                        "Id": 14,
+                                        "PageCacheMisses": 0,
+                                        "EstimatedRows": 1.3333333333333333,
+                                        "DbHits": 400005,
+                                        "Rows": 400001,
+                                        "PageCacheHits": 0
+                                      },
+                                      "pageCacheMisses": 0,
+                                      "children": [
+                                        {
+                                          "args": {
+                                            "Details": "u",
+                                            "Id": 15,
+                                            "PageCacheMisses": 0,
+                                            "EstimatedRows": 1.0,
+                                            "DbHits": 0,
+                                            "Rows": 2,
+                                            "PageCacheHits": 0
+                                          },
+                                          "pageCacheMisses": 0,
+                                          "dbHits": 0,
+                                          "identifiers": [
+                                            "u"
+                                          ],
+                                          "operatorType": "Argument@neo4j",
+                                          "rows": 2,
+                                          "pageCacheHitRatio": 0.0,
+                                          "pageCacheHits": 0
+                                        }
+                                      ],
+                                      "dbHits": 400005,
+                                      "identifiers": [
+                                        "u",
+                                        "anon_0",
+                                        "gsp_leaf"
+                                      ],
+                                      "operatorType": "Expand(All)@neo4j",
+                                      "rows": 400001,
+                                      "pageCacheHitRatio": 0.0,
+                                      "pageCacheHits": 0
+                                    }
+                                  ],
+                                  "dbHits": 400002,
+                                  "identifiers": [
+                                    "u",
+                                    "anon_0",
+                                    "gsp_leaf"
+                                  ],
+                                  "operatorType": "Filter@neo4j",
+                                  "rows": 0,
+                                  "pageCacheHitRatio": 0.0,
+                                  "pageCacheHits": 0
+                                }
+                              ],
+                              "dbHits": 0,
+                              "identifiers": [
+                                "u"
+                              ],
+                              "operatorType": "SemiApply@neo4j",
+                              "rows": 1,
+                              "pageCacheHitRatio": 0.0,
+                              "pageCacheHits": 0
+                            }
+                          ],
+                          "dbHits": 0,
+                          "identifiers": [
+                            "u"
+                          ],
+                          "operatorType": "Filter@neo4j",
+                          "rows": 1,
+                          "pageCacheHitRatio": 0.0,
+                          "pageCacheHits": 0
+                        },
+                        {
+                          "args": {
+                            "Id": 5,
+                            "PageCacheMisses": 0,
+                            "EstimatedRows": 0.8999998855474562,
+                            "DbHits": 0,
+                            "Rows": 0,
+                            "PageCacheHits": 0
+                          },
+                          "pageCacheMisses": 0,
+                          "children": [
+                            {
+                              "args": {
+                                "Details": "NOT cache[u.uid] = cache[u.uid]",
+                                "Id": 9,
+                                "PageCacheMisses": 0,
+                                "EstimatedRows": 0.9000000000000001,
+                                "DbHits": 0,
+                                "Rows": 0,
+                                "PageCacheHits": 0
+                              },
+                              "pageCacheMisses": 0,
+                              "children": [
+                                {
+                                  "args": {
+                                    "Details": "RANGE INDEX u:GspAnchor(uid) WHERE uid IS NOT NULL, cache[u.uid]",
+                                    "Id": 10,
+                                    "UsedIndexes": "gsp_cost_lookup: 1",
+                                    "PageCacheMisses": 0,
+                                    "EstimatedRows": 1.0,
+                                    "DbHits": 3,
+                                    "Rows": 2,
+                                    "PageCacheHits": 0
+                                  },
+                                  "pageCacheMisses": 0,
+                                  "dbHits": 3,
+                                  "identifiers": [
+                                    "u"
+                                  ],
+                                  "operatorType": "NodeIndexScan@neo4j",
+                                  "rows": 2,
+                                  "pageCacheHitRatio": 0.0,
+                                  "pageCacheHits": 0
+                                }
+                              ],
+                              "dbHits": 0,
+                              "identifiers": [
+                                "u"
+                              ],
+                              "operatorType": "Filter@neo4j",
+                              "rows": 0,
+                              "pageCacheHitRatio": 0.0,
+                              "pageCacheHits": 0
+                            },
+                            {
+                              "args": {
+                                "Details": "CoerceToPredicate(coalesce(CASE\n  WHEN cache[u.uid] = cache[u.uid] THEN coalesce(gsp_leaf.mark, false) = true\n  ELSE NULL\nEND, NULL)) AND gsp_leaf:GspLeaf",
+                                "Id": 6,
+                                "PageCacheMisses": 0,
+                                "EstimatedRows": 0.9000000000000001,
+                                "DbHits": 0,
+                                "Rows": 0,
+                                "PageCacheHits": 0
+                              },
+                              "pageCacheMisses": 0,
+                              "children": [
+                                {
+                                  "args": {
+                                    "Details": "(u)-[anon_0:GSP_EXPAND]->(gsp_leaf)",
+                                    "Id": 7,
+                                    "PageCacheMisses": 0,
+                                    "EstimatedRows": 1.2000000000000002,
+                                    "DbHits": 0,
+                                    "Rows": 0,
+                                    "PageCacheHits": 0
+                                  },
+                                  "pageCacheMisses": 0,
+                                  "children": [
+                                    {
+                                      "args": {
+                                        "Details": "u",
+                                        "Id": 8,
+                                        "PageCacheMisses": 0,
+                                        "EstimatedRows": 0.9000000000000001,
+                                        "DbHits": 0,
+                                        "Rows": 0,
+                                        "PageCacheHits": 0
+                                      },
+                                      "pageCacheMisses": 0,
+                                      "dbHits": 0,
+                                      "identifiers": [
+                                        "u"
+                                      ],
+                                      "operatorType": "Argument@neo4j",
+                                      "rows": 0,
+                                      "pageCacheHitRatio": 0.0,
+                                      "pageCacheHits": 0
+                                    }
+                                  ],
+                                  "dbHits": 0,
+                                  "identifiers": [
+                                    "u",
+                                    "anon_0",
+                                    "gsp_leaf"
+                                  ],
+                                  "operatorType": "Expand(All)@neo4j",
+                                  "rows": 0,
+                                  "pageCacheHitRatio": 0.0,
+                                  "pageCacheHits": 0
+                                }
+                              ],
+                              "dbHits": 0,
+                              "identifiers": [
+                                "u",
+                                "anon_0",
+                                "gsp_leaf"
+                              ],
+                              "operatorType": "Filter@neo4j",
+                              "rows": 0,
+                              "pageCacheHitRatio": 0.0,
+                              "pageCacheHits": 0
+                            }
+                          ],
+                          "dbHits": 0,
+                          "identifiers": [
+                            "u"
+                          ],
+                          "operatorType": "SemiApply@neo4j",
+                          "rows": 0,
+                          "pageCacheHitRatio": 0.0,
+                          "pageCacheHits": 0
+                        }
+                      ],
+                      "dbHits": 0,
+                      "identifiers": [
+                        "u"
+                      ],
+                      "operatorType": "Union@neo4j",
+                      "rows": 1,
+                      "pageCacheHitRatio": 0.0,
+                      "pageCacheHits": 0
+                    }
+                  ],
+                  "dbHits": 0,
+                  "identifiers": [
+                    "u"
+                  ],
+                  "operatorType": "Distinct@neo4j",
+                  "rows": 1,
+                  "pageCacheHitRatio": 0.0,
+                  "pageCacheHits": 0
+                }
+              ],
+              "dbHits": 1,
+              "identifiers": [
+                "u"
+              ],
+              "operatorType": "Filter@neo4j",
+              "rows": 1,
+              "pageCacheHitRatio": 0.0,
+              "pageCacheHits": 0
+            }
+          ],
+          "dbHits": 0,
+          "identifiers": [
+            "u",
+            "`u.uid`"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 1,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "u",
+        "`u.uid`"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 1,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  },
+  "b": {
+    "profile": {
+      "args": {
+        "GlobalMemory": 64,
+        "planner-impl": "IDP",
+        "Memory": 0,
+        "string-representation": "Cypher 25\n\nPlanner COST\n\nRuntime SLOTTED\n\nRuntime version 2026.09.0\n\n+------------------+----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| Operator         | Id | Details                                                                                              | Estimated Rows | Rows | DB Hits | Memory (Bytes) | Page Cache Hits/Misses |\n+------------------+----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +ProduceResults  |  0 | `u.uid`                                                                                              |              8 |    1 |       0 |              0 |                    0/0 |\n| |                +----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +Projection      |  1 | cache[u.uid] AS `u.uid`                                                                              |              8 |    1 |       0 |                |                    0/0 |\n| |                +----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +Filter          |  2 | CoerceToPredicate(CASE                                                                               |              8 |    1 |      16 |                |                    0/0 |\n| |                |    |   WHEN ((NOT cache[u.uid] = cache[u.uid] OR u.keep = true) AND (cache[u.uid] = cache[u.uid] OR NOT c |                |      |         |                |                        |\n| |                |    | ache[u.uid] = cache[u.uid])) = false THEN false                                                      |                |      |         |                |                        |\n| |                |    |   ELSE (NOT u.uid = u.uid OR u.keep = true) AND (u.uid = u.uid OR NOT u.uid = u.uid) AND EXISTS {    |                |      |         |                |                        |\n| |                |    | MATCH (u)-[`anon_0`:GSP_EXPAND]->(gsp_leaf)     WHERE gsp_leaf:GspLeaf AND coalesce(CASE     WHEN u. |                |      |         |                |                        |\n| |                |    | uid = u.uid THEN coalesce(gsp_leaf.mark, false) IN [true]     ELSE NULL   END, NULL) }               |                |      |         |                |                        |\n| |                |    | END)                                                                                                 |                |      |         |                |                        |\n| |                +----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n| +NodeByLabelScan |  3 | u:GspAnchor                                                                                          |             10 |    2 |       3 |                |                    0/0 |\n+------------------+----+------------------------------------------------------------------------------------------------------+----------------+------+---------+----------------+------------------------+\n\nTotal database accesses: 19, total allocated memory: 64\n",
+        "runtime": "SLOTTED",
+        "runtime-impl": "SLOTTED",
+        "version": "25",
+        "DbHits": 0,
+        "Details": "`u.uid`",
+        "planner-version": "2026.09.0",
+        "runtime-version": "2026.09.0",
+        "Id": 0,
+        "EstimatedRows": 7.5,
+        "planner": "COST",
+        "PageCacheMisses": 0,
+        "Rows": 1,
+        "PageCacheHits": 0
+      },
+      "pageCacheMisses": 0,
+      "children": [
+        {
+          "args": {
+            "Details": "cache[u.uid] AS `u.uid`",
+            "Id": 1,
+            "PageCacheMisses": 0,
+            "EstimatedRows": 7.5,
+            "DbHits": 0,
+            "Rows": 1,
+            "PageCacheHits": 0
+          },
+          "pageCacheMisses": 0,
+          "children": [
+            {
+              "args": {
+                "Details": "CoerceToPredicate(CASE\n  WHEN ((NOT cache[u.uid] = cache[u.uid] OR u.keep = true) AND (cache[u.uid] = cache[u.uid] OR NOT cache[u.uid] = cache[u.uid])) = false THEN false\n  ELSE (NOT u.uid = u.uid OR u.keep = true) AND (u.uid = u.uid OR NOT u.uid = u.uid) AND EXISTS {   MATCH (u)-[`anon_0`:GSP_EXPAND]->(gsp_leaf)     WHERE gsp_leaf:GspLeaf AND coalesce(CASE     WHEN u.uid = u.uid THEN coalesce(gsp_leaf.mark, false) IN [true]     ELSE NULL   END, NULL) }\nEND)",
+                "Id": 2,
+                "PageCacheMisses": 0,
+                "EstimatedRows": 7.5,
+                "DbHits": 16,
+                "Rows": 1,
+                "PageCacheHits": 0
+              },
+              "pageCacheMisses": 0,
+              "children": [
+                {
+                  "args": {
+                    "Details": "u:GspAnchor",
+                    "Id": 3,
+                    "PageCacheMisses": 0,
+                    "EstimatedRows": 10.0,
+                    "DbHits": 3,
+                    "Rows": 2,
+                    "PageCacheHits": 0
+                  },
+                  "pageCacheMisses": 0,
+                  "dbHits": 3,
+                  "identifiers": [
+                    "u"
+                  ],
+                  "operatorType": "NodeByLabelScan@neo4j",
+                  "rows": 2,
+                  "pageCacheHitRatio": 0.0,
+                  "pageCacheHits": 0
+                }
+              ],
+              "dbHits": 16,
+              "identifiers": [
+                "u"
+              ],
+              "operatorType": "Filter@neo4j",
+              "rows": 1,
+              "pageCacheHitRatio": 0.0,
+              "pageCacheHits": 0
+            }
+          ],
+          "dbHits": 0,
+          "identifiers": [
+            "u",
+            "`u.uid`"
+          ],
+          "operatorType": "Projection@neo4j",
+          "rows": 1,
+          "pageCacheHitRatio": 0.0,
+          "pageCacheHits": 0
+        }
+      ],
+      "dbHits": 0,
+      "identifiers": [
+        "u",
+        "`u.uid`"
+      ],
+      "operatorType": "ProduceResults@neo4j",
+      "rows": 1,
+      "pageCacheHitRatio": 0.0,
+      "pageCacheHits": 0
+    }
+  }
+}

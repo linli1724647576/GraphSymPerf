@@ -1,0 +1,5 @@
+[
+  "CREATE INDEX gsp_cost_lookup IF NOT EXISTS FOR (n:GspLow) ON (n.id)",
+  "CREATE (u:GspLow {uid: 1, id: 1, keep: true})-[:GSP_LINK]->(:GspMiddle {uid: 2, keep: true})-[:GSP_LINK]->(:GspHigh {uid: 3, keep: true}) CREATE (u)-[:GSP_LINK]->(:GspBad {uid: 0, keep: false})",
+  "MATCH (b:GspBad {uid: 0}) UNWIND range(1, 50000) AS i CREATE (b)-[:GSP_LINK]->(:GspMiddle {uid: 895440+2*i, keep: true})-[:GSP_LINK]->(:GspHigh {uid: 895440+2*i+1, keep: true})"
+]

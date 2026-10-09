@@ -1,0 +1,14 @@
+{
+  "a": {
+    "operators": [
+      "Results | Records produced: 1, Execution time: 0.000209 ms",
+      "    Project | Records produced: 1, Execution time: 0.001000 ms"
+    ]
+  },
+  "b": {
+    "operators": [
+      "Results | Records produced: 1, Execution time: 0.000208 ms",
+      "    Project | Records produced: 1, Execution time: 2.658042 ms"
+    ]
+  }
+}
