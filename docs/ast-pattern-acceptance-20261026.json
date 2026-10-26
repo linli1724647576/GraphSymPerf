@@ -1,0 +1,156 @@
+{
+  "baseline_commit": "9898a69",
+  "cli_cases": [
+    {
+      "archive_format": 4,
+      "artifact": "results/ast-pattern-acceptance/20261026T094228Z-c879ca/0001-P3-n7-08861216",
+      "database_version": "Neo4j/2026.09.0",
+      "expected_rows": [
+        {
+          "value": 0
+        }
+      ],
+      "graph_counts": {
+        "edges": 9,
+        "nodes": 12
+      },
+      "input_hash": "088612167ad42d8f8e09357627cc5b8ac7150ddd6d7711e666ec881a68866da8",
+      "method_version": "ast-pattern-v1",
+      "pattern": "P3",
+      "physical_invocations": "unknown",
+      "query_sha256": {
+        "a": "4ba26648a12c2a4b11121f89fb64b4af548b17e88271079a89324f1a933a4ec5",
+        "b": "b8004afa6c0f883642cc3c61a711522b1f400947a26a6b1725e55e87f7916bc5"
+      },
+      "result_check": "passed",
+      "runtime_relation": "proved",
+      "source_version": {
+        "git_revision": "d6b53f6f3f577dd99f8848ef719cba08cd80daa8",
+        "python": "3.12.7",
+        "source_sha256": "a6f8a53a9ff49b76684fca50b1dcfe8c7d257d05df2654b5c72b712fd3e06a22",
+        "working_tree_dirty": true
+      },
+      "stage_digests": {
+        "M1": "772555b88fc789e5e163639b1a62f4ac5d6d783774ced239e000e741d5443b5b",
+        "M2": "58495a9e00a494a9ca46af9e101c8d22456738b872ebb2deb9aec6ca875bdc94",
+        "M3": "8951a2bb1f4116a06dbac42e9e42e1139a32d6384e05d0cf94e3566fd898d0fa",
+        "M4": "5f55507e87d7e1d40fb328563f8e016a06ef9d1fc25752c960480ecbc967003f",
+        "M5": "ba6dede58e68ee33d72544fb3b1d1893037ba376a781b20c99f510fc030cc755",
+        "M6": "6ba6a53324cd2c0c0edd8ced8b58ded953e8bd7e44f5b8ddd045f781997e70de"
+      },
+      "status": "no_candidate",
+      "target_valid": true
+    },
+    {
+      "archive_format": 4,
+      "artifact": "results/ast-pattern-acceptance/20261026T094228Z-c879ca/0002-S7-n7-76dcdacc",
+      "database_version": "Neo4j/2026.09.0",
+      "expected_rows": [
+        {
+          "value": 7
+        }
+      ],
+      "graph_counts": {
+        "edges": 7,
+        "nodes": 8
+      },
+      "input_hash": "76dcdacccff293527f7d72362d27d3aead4dc0343a14ae6883c9fd53594bef37",
+      "method_version": "ast-pattern-v1",
+      "pattern": "S7",
+      "physical_invocations": "unknown",
+      "query_sha256": {
+        "a": "d71aa5392371c401f363fb11bd1e65ca7ef8c8554ff7f504f42a3d50cd435ba2",
+        "b": "79eeea6d2f6cf974a98a05f1e04deacbb767fab4cb0f17dbb06bd813a39209ee"
+      },
+      "result_check": "passed",
+      "runtime_relation": "proved",
+      "source_version": {
+        "git_revision": "17bddfa40e142ded2dd9cf77ac993d30c1d8c739",
+        "python": "3.12.7",
+        "source_sha256": "a6f8a53a9ff49b76684fca50b1dcfe8c7d257d05df2654b5c72b712fd3e06a22",
+        "working_tree_dirty": true
+      },
+      "stage_digests": {
+        "M1": "71e22f3dda7ae849cd6b918357810317f80be36d5e8ba06e418f3f634f7f6f32",
+        "M2": "0b47f2e35191948f0ead23a51c24e1efa78471c155bf0bd5131224d7b5349a1d",
+        "M3": "79bfc492d14425e083bd4281e851410dcb6acd917693aa69decf4b2bcf0c8e9b",
+        "M4": "e81289b2fcc87b5c46b93af38b32fd96f26616cf2f78abf88e01c4505a759797",
+        "M5": "5edb2cf3cd20f38b6f1ac30a5cc63810b2a3d96c6a9af90c6a7da7aa11ced24f",
+        "M6": "d29bb5e1ed981ffb66894f0214970b2d8b111f9888c0a9a0ff46d064a7dbd81c"
+      },
+      "status": "no_candidate",
+      "target_valid": true
+    },
+    {
+      "archive_format": 4,
+      "artifact": "results/ast-pattern-acceptance/20261026T094433Z-0bbcec/replay-P3-08861216",
+      "database_version": "Neo4j/2026.09.0",
+      "expected_rows": [
+        {
+          "value": 0
+        }
+      ],
+      "graph_counts": {
+        "edges": 9,
+        "nodes": 12
+      },
+      "input_hash": "088612167ad42d8f8e09357627cc5b8ac7150ddd6d7711e666ec881a68866da8",
+      "method_version": "ast-pattern-v1",
+      "pattern": "P3",
+      "physical_invocations": "unknown",
+      "query_sha256": {
+        "a": "4ba26648a12c2a4b11121f89fb64b4af548b17e88271079a89324f1a933a4ec5",
+        "b": "b8004afa6c0f883642cc3c61a711522b1f400947a26a6b1725e55e87f7916bc5"
+      },
+      "result_check": "passed",
+      "runtime_relation": "proved",
+      "source_version": {
+        "git_revision": "d6b53f6f3f577dd99f8848ef719cba08cd80daa8",
+        "python": "3.12.7",
+        "source_sha256": "a6f8a53a9ff49b76684fca50b1dcfe8c7d257d05df2654b5c72b712fd3e06a22",
+        "working_tree_dirty": true
+      },
+      "stage_digests": {
+        "M1": "772555b88fc789e5e163639b1a62f4ac5d6d783774ced239e000e741d5443b5b",
+        "M2": "58495a9e00a494a9ca46af9e101c8d22456738b872ebb2deb9aec6ca875bdc94",
+        "M3": "8951a2bb1f4116a06dbac42e9e42e1139a32d6384e05d0cf94e3566fd898d0fa",
+        "M4": "5f55507e87d7e1d40fb328563f8e016a06ef9d1fc25752c960480ecbc967003f",
+        "M5": "ba6dede58e68ee33d72544fb3b1d1893037ba376a781b20c99f510fc030cc755",
+        "M6": "6ba6a53324cd2c0c0edd8ced8b58ded953e8bd7e44f5b8ddd045f781997e70de"
+      },
+      "status": "no_candidate",
+      "target_valid": true
+    }
+  ],
+  "cross_process_generation_replay": {
+    "P3": "passed",
+    "S7": "passed"
+  },
+  "date": "2026-10-26",
+  "interpretation": "Acceptance and replay checks only; no new bug claim. Raw artifacts under results/ are local and Git-ignored.",
+  "method_version": "ast-pattern-v1",
+  "neo4j": {
+    "artifact": "results/ast-pattern-neo4j.xml",
+    "errors": "0",
+    "failures": "0",
+    "sha256": "cd761b9fac4ca87fe870500e09a4424aee8aeb6d4146ff447b7dbaa8cdf8a213",
+    "skipped": "0",
+    "tests": "56",
+    "time": "68.361"
+  },
+  "offline": {
+    "artifact": "results/ast-pattern-offline.xml",
+    "errors": "0",
+    "failures": "0",
+    "sha256": "99f5ea0585fd33795307a302893a804c2dfe7253721d9743ff236b71690167f6",
+    "skipped": "1532",
+    "tests": "4470",
+    "time": "108.120"
+  },
+  "source": {
+    "git_revision": "17bddfa40e142ded2dd9cf77ac993d30c1d8c739",
+    "python": "3.12.7",
+    "source_sha256": "a6f8a53a9ff49b76684fca50b1dcfe8c7d257d05df2654b5c72b712fd3e06a22",
+    "working_tree_dirty": true
+  }
+}

@@ -1,12 +1,12 @@
 # GraphSymPerf：随机 AST 与 Pattern 嵌入的代码技术设计
 
-方法版本：`ast-pattern-v1`；文档修订：`gdsmith-r1`。日期：2026-10-26。配套方法文档：[随机 AST 与 Pattern 嵌入的方法](ast-pattern-method.md)。
+方法版本：`ast-pattern-v1`；文档修订：`implementation-r1`。日期：2026-10-26。配套方法文档：[随机 AST 与 Pattern 嵌入的方法](ast-pattern-method.md)。
 
-本文规定新的实现目标，以及现有代码到该目标的迁移方式。六个阶段统一标识为 M1–M6：随机生成 AST、嵌入模式（Pattern）、构造模式感知图状态（Pattern-aware Graph State）、实例化完整查询、执行局部变异、检查依赖关系。本文中的新接口、目录和记录格式均为**拟议设计（proposed）**；本轮只编写文档，没有执行代码重构或数据库实验。现状表依据 2026-10-26 工作区源码静态核查，不以测试文件的存在推断测试已经通过。
+本文说明当前 `ast-pattern-v1` 实现及其验收合同。六个阶段统一标识为 M1–M6：随机生成 AST、嵌入模式（Pattern）、构造模式感知图状态（Pattern-aware Graph State）、实例化完整查询、执行局部变异、检查依赖关系。`Src/ast_pattern/` 已实现六阶段模块，`main.prepare_case()` 和常规运行配置默认使用新入口。本文将实际接口、压缩图上的证据范围及尚未接入的扩展要求分别注明；冻结版本、测试结果和数据库验收记录见 [实现验收记录](ast-pattern-implementation-status.md)。
 
 ## 1. 实现目标与不可混同的对象
 
-新入口必须先生成与具体 Pattern 无关的抽象语法树（Abstract Syntax Tree，AST），再从树中选择兼容位置嵌入 Pattern。原有“选择 Pattern → 构造内核 → 向外包装”的入口退出新生成路径。现有类型系统、作用域分析、局部变异规则、显式图表示、构造器和执行器可以按接口复用。
+新入口先生成与具体 Pattern 无关的抽象语法树（Abstract Syntax Tree，AST），再从树中选择兼容位置嵌入 Pattern。原有“选择 Pattern → 构造内核 → 向外包装”保留为显式 `symbolic-v1` 兼容路线；有限模板保留为显式 `legacy-v1` 路线。新入口复用已有类型系统、局部规则、需求求解、显式图表示及执行器，不在失败后回退兼容路线。
 
 区分下列对象，避免同一个 `pattern` 字段承担多种职责。
 
@@ -24,46 +24,50 @@
 
 六阶段共享以下约束：完整结构在 M2 结束时确定；M3 联合检查原结构与已声明变异备选；M4 只填充终端；M5 只应用一个登记的变异；M6 分别报告等价性、逻辑需求、调用多重性和物理执行证据。任一阶段失败均产生可回放的失败记录。
 
-## 2. 当前代码的已核查状态
+## 2. 重构前基线与当前入口
 
-### 2.1 实际入口与路线差异
+### 2.1 重构前入口与路线差异
 
-| 当前代码位置 | 已观察行为 | 新路线中的处理 |
+本小节行号对应 Git 检查点 `9898a69`，用于说明迁移来源；当前入口见第2.4节。
+
+以下表格保存实施前的差距审计，行号对应当时的源码，不用于定位当前入口。
+
+| 重构前代码位置 | 当时已观察行为 | 新路线中的处理 |
 |---|---|---|
-| `src/main.py:311`，`prepare_case` | 调用 `instantiate`；缺少 `instantiation_record` 时执行 `mutate`；最后保存 IR 并编译 | 改为 M1–M6 显式编排；不根据某字段是否存在隐式选择路线 |
-| `src/generator.py:1990`，`instantiate` | 接受 Pattern；`:2026` 调用 `abstract_seed`；`:2037` 调用 `_BUILDERS[pattern]` | 保留旧记录回放能力；退出新生成入口 |
-| `src/generator.py:2070`，`_instantiate_composed` | 顺次调用 `build_symbolic_skeleton`、`construct_state`、`instantiate_pair` | 不能直接更名为新六阶段实现 |
-| `src/symbolic.py:263`，`build_symbolic_skeleton` | 按 Pattern 构造局部 kernel；`:386` 才调用 `compose_fragment` 包装外层 | 拆出可复用局部规则；不保留为新宿主生成器 |
-| `src/composition.py:96`，`compose_fragment` | 从已有 kernel 向外添加 `exists/count/with` | 提取算子的输入输出语义；不以该包装顺序实现 M1 |
-| `src/symbolic.py:444`，`construct_state` | 先绑定候选语法，再依据全树与变异备选构造状态 | 复用求解组件，改为 M3 的联合状态与绑定合同 |
-| `src/symbolic.py:572`，`instantiate_pair` | 校验构造记录，实例化 source；`:639` 已调用 `mutate` | 拆成 M4 与 M5，分别保存记录 |
-| `src/dependencies.py:1361`，`propagate_equivalence` | 沿实际祖先传播路径双射、标量相等和结果多重集相等 | 保留为语义证明组件，不能直接充当性能传播检查 |
-| `src/main.py:270`，`compile_case`；`src/executor.py:729`，`run_case` | 目标编译、状态和结果校验、计时及确认流程 | 通过明确适配层接入 M6 的运行时部分 |
+| `Src/main.py:311`，`prepare_case` | 调用 `instantiate`；缺少 `instantiation_record` 时执行 `mutate`；最后保存 IR 并编译 | 改为 M1–M6 显式编排；不根据某字段是否存在隐式选择路线 |
+| `Src/generator.py:1990`，`instantiate` | 接受 Pattern；`:2026` 调用 `abstract_seed`；`:2037` 调用 `_BUILDERS[pattern]` | 保留旧记录回放能力；退出新生成入口 |
+| `Src/generator.py:2070`，`_instantiate_composed` | 顺次调用 `build_symbolic_skeleton`、`construct_state`、`instantiate_pair` | 不能直接更名为新六阶段实现 |
+| `Src/symbolic.py:263`，`build_symbolic_skeleton` | 按 Pattern 构造局部 kernel；`:386` 才调用 `compose_fragment` 包装外层 | 拆出可复用局部规则；不保留为新宿主生成器 |
+| `Src/composition.py:96`，`compose_fragment` | 从已有 kernel 向外添加 `exists/count/with` | 提取算子的输入输出语义；不以该包装顺序实现 M1 |
+| `Src/symbolic.py:444`，`construct_state` | 先绑定候选语法，再依据全树与变异备选构造状态 | 复用求解组件，改为 M3 的联合状态与绑定合同 |
+| `Src/symbolic.py:572`，`instantiate_pair` | 校验构造记录，实例化 source；`:639` 已调用 `mutate` | 拆成 M4 与 M5，分别保存记录 |
+| `Src/dependencies.py:1361`，`propagate_equivalence` | 沿实际祖先传播路径双射、标量相等和结果多重集相等 | 保留为语义证明组件，不能直接充当性能传播检查 |
+| `Src/main.py:270`，`compile_case`；`Src/executor.py:729`，`run_case` | 目标编译、状态和结果校验、计时及确认流程 | 通过明确适配层接入 M6 的运行时部分 |
 
-组合支路对外部种子还在 `src/generator.py:2085` 记录 `provenance_only_not_embedded`，所以不能把现状写成“在任意输入查询 AST 中嵌入 Pattern”。
+组合支路对外部种子还在 `Src/generator.py:2085` 记录 `provenance_only_not_embedded`，所以不能把现状写成“在任意输入查询 AST 中嵌入 Pattern”。
 
-### 2.2 可复用能力与验证边界
+### 2.2 从基线复用的能力与目标边界
 
 | 能力 | 源码证据 | 复用方式与边界 |
 |---|---|---|
-| 有类型 IR 与作用域 | `src/ir.py:23–213`；`row_stream_imports:467`、`row_stream_schema:478`、`validate_query:694` | 复用节点类型和校验器；抽象槽位校验需要补充 |
-| 行流和标量语法 | `src/row_grammar.py:22`；`src/scalar_grammar.py:24` | 提取通用产生式；移除宿主生成对特定 law 的依赖 |
-| 结构位置与词法绑定 | `src/dependencies.py:21`、`:36`、`:106`、`:191`、`:207` | 复用定位、替换、定义—使用与行消费记录 |
-| 显式变异标记 | `src/symbolic.py:119`，`MutationMark` | 扩展为多个登记实例、一个目标实例；位置变化需来源映射 |
-| 显式图表示 | `src/state.py:87`，`GraphSpec`；`:114–125`、`:150–152` | 复用 v2 图组；v1 Pattern 配方仅用于旧回放 |
-| 图需求与求解 | `src/population.py:29–110`、`:367`；`src/requirements.py:1570` | 复用 Match/Path/Value/Binding 等需求，加入端口、规则实例和终端槽位来源 |
-| 局部变异与节点来源 | `src/mutator.py:641`、`:646`、`:661`、`:744` | 将规则派发收敛到 Pattern 注册表，保留语义守卫 |
-| 小图解释器 | `src/population.py:411`，`evaluate_query` | 用于构造检查和反例；实际目标语义仍须数据库核验 |
-| 全图增长观察闭合 | `src/relational_population.py:915–937` | 复用增长图域与读取位置的关系；其结果不是执行时工作量证明 |
-| 结果与计时 | `src/executor.py:538`、`:577`、`:583`、`:729` | 复用完整有类型结果多重集比较、AB/BA 调度和独立确认 |
+| 有类型 IR 与作用域 | `Src/ir.py:23–213`；`row_stream_imports:467`、`row_stream_schema:478`、`validate_query:694` | 复用节点类型和校验器；抽象槽位校验需要补充 |
+| 行流和标量语法 | `Src/row_grammar.py:22`；`Src/scalar_grammar.py:24` | 提取通用产生式；移除宿主生成对特定 law 的依赖 |
+| 结构位置与词法绑定 | `Src/dependencies.py:21`、`:36`、`:106`、`:191`、`:207` | 复用定位、替换、定义—使用与行消费记录 |
+| 显式变异标记 | `Src/symbolic.py`，`MutationMark` | 当前关联一个登记实例与实际位点；多个显式实例仍为扩展 |
+| 显式图表示 | `Src/state.py:87`，`GraphSpec`；`:114–125`、`:150–152` | 复用 v2 图组；v1 Pattern 配方仅用于旧回放 |
+| 图需求与求解 | `Src/population.py:29–110`、`:367`；`Src/requirements.py:1570` | 复用 Match/Path/Value/Binding 等需求，加入端口、规则实例和终端槽位来源 |
+| 局部变异与节点来源 | `Src/mutator.py:641`、`:646`、`:661`、`:744` | 将规则派发收敛到 Pattern 注册表，保留语义守卫 |
+| 小图解释器 | `Src/population.py:411`，`evaluate_query` | 用于构造检查和反例；实际目标语义仍须数据库核验 |
+| 全图增长观察闭合 | `Src/relational_population.py:915–937` | 复用增长图域与读取位置的关系；其结果不是执行时工作量证明 |
+| 结果与计时 | `Src/executor.py:538`、`:577`、`:583`、`:729` | 复用完整有类型结果多重集比较、AB/BA 调度和独立确认 |
 
-当前 `src/main.py:282–285` 与 `src/executor.py:765–766` 对 GraphSpec v2 的非 Neo4j 加载明确返回不支持。新路线应先贯通 Neo4j；其他目标必须分别完成语法、图加载、语义及计划证据适配后才能声明支持。旧后端支持列表不自动成为新路线的支持列表。
+当前 `main.compile_case()` 与执行器继续对 GraphSpec v2 的非 Neo4j 加载返回不支持。新路线的真实图加载验收以 Neo4j 为目标；其他目标仍须分别完成加载、语义和证据适配。回放可以保留目标不支持或编译失败状态，但这不表示对应后端已完成新路线验收。
 
 ### 2.3 GDsmith 的采用机制与落点
 
 本次借鉴依据为 Ziyue Hua、Wei Lin、Luyao Ren、Zongyang Li、Lu Zhang、Wenpin Jiao、Tao Xie，2023，*GDsmith: Detecting Bugs in Cypher Graph Database Engines*，ISSTA 2023，pp. 163–174，[DOI](https://doi.org/10.1145/3597926.3598046)。[正式论文 §3.2.1–3.2.3、Table 1、Algorithms 2–3](https://taoxiease.github.io/publications/issta23-gdsmith.pdf) 将子句骨架、图引导的匹配结构和数据引导的表达式生成分开组织。本文选择采用子句骨架、有类型递归展开、变量生命周期与需求分解机制；GDsmith 先有图再生成匹配与条件的次序不移入 GraphSymPerf 的 M1。
 
-源码核查固定在公开提交 [`cce9c4bc8bda155a6c39bbd3ef2ceebf2c9ee217`](https://github.com/ddaa2000/GDsmith/commit/cce9c4bc8bda155a6c39bbd3ef2ceebf2c9ee217)。下表源码路径均位于该提交的 `src/main/java/org/example/gdsmith/cypher/` 下；它们是设计来源，不是本仓库已引入的依赖。
+源码核查固定在公开提交 [`cce9c4bc8bda155a6c39bbd3ef2ceebf2c9ee217`](https://github.com/ddaa2000/GDsmith/commit/cce9c4bc8bda155a6c39bbd3ef2ceebf2c9ee217)。下表源码路径均位于该提交的 `Src/main/java/org/example/gdsmith/cypher/` 下；它们是设计来源，不是本仓库已引入的依赖。
 
 | GDsmith 来源 | 已核查机制 | GraphSymPerf 采用位置与调整 |
 |---|---|---|
@@ -76,12 +80,28 @@
 
 GDsmith 的 GenExpr 同时选择结构并满足值约束。本系统将两项职责分到 M1 与 M3，分别冻结结构和求解图/终端绑定。M4 只物化已接受终端；GDsmith 的“完成骨架”不能直接对应本系统的“实例化查询”。
 
-## 3. 拟议模块划分与依赖方向
+### 2.4 当前实现入口索引
 
-下列路径是拟新增模块，不表示文件已经存在。设计优先复用现有 IR，不另建一套含义不同的查询语言。
+| 阶段或职责 | 当前源码与入口 | 已实现行为 |
+|---|---|---|
+| M1 | `Src/ast_pattern/host_generator.py::generate_random_ast` | 子句骨架与有类型展开，返回一个显式端口及符号终端 |
+| M2 | `Src/ast_pattern/embedding.py::embed_patterns`；`pattern_registry.py` | 23 个论文规则、P10 形式选择、局部结构固定、捕获规避及端口外结构校验 |
+| M3 | `Src/ast_pattern/state_builder.py::construct_graph_state` | 有限联合终端赋值、既有需求与图求解、GraphSpec v2、绑定与证书冻结 |
+| M4 | `Src/ast_pattern/instantiation.py::instantiate_query` | 校验构造合同，实例化源查询及声明备选，不调用变异器 |
+| M5 | `Src/ast_pattern/mutation.py::mutate_target` | 再校验 M4 检查点，应用指定单点变异，保留验证查询和关系证据 |
+| M6 | `Src/ast_pattern/dependency_check.py::check_dependencies` | 根部结果关系、实际逻辑输入、需求、外层已存在 Pattern 与共享读取分析 |
+| 运行证据 | `Src/ast_pattern/evidence_adapter.py`；`Src/executor.py` | 执行前验证阶段与编译合同，按 side roles 筛选，将运行报告绑定到图和查询摘要 |
+| 编排与再现 | `Src/ast_pattern/pipeline.py` | 有限重试、失败轨迹、M1–M6 摘要链、源码指纹及 `reproduce_generation` |
+| 公共入口与归档 | `Src/main.py::prepare_case/run/save_case/read_case` | 默认新方法，兼容方法显式选择，格式 4 阶段文件与输入校验 |
+
+`PatternSpec.build_local()` 调用从原 `symbolic.py` 提取的 `build_local_pattern()`，仅产生局部规则结构。新入口不调用旧 `build_symbolic_skeleton()`，M3/M4/M5 则使用明确的语义适配与 `prepare_instantiation()` / `finish_mutation()` 两个检查点。原有 `instantiate_pair()` 仅保留组合这两个检查点的兼容行为。
+
+## 3. 当前模块划分与依赖方向
+
+下列模块已位于 `Src/ast_pattern/`，使用现有 IR 表示查询。模块职责对应六阶段，动态执行与静态分析通过证据适配器连接。
 
 ```text
-src/ast_pattern/
+Src/ast_pattern/
     contracts.py           # 六阶段记录、失败类型、稳定标识
     host_generator.py      # M1：子句骨架，再有类型递归展开宿主结构
     pattern_registry.py    # PatternSpec 注册、版本、局部合同
@@ -96,82 +116,83 @@ src/ast_pattern/
 
 依赖方向为 `pipeline → 六阶段模块 → contracts/现有 IR 与语义组件`。`host_generator` 不导入 `pattern_registry`，不读取 PatternSpec、Pattern 清单、GraphManager、具体 Graph State 或运行时值表 Vals，不调用 `_BUILDERS` 或 `build_symbolic_skeleton`。它只读取语法、抽象类型约束、目标语言能力和预算。Pattern 模块可以调用通用局部产生式，但不能调用完整宿主生成器。数据库适配器不能反向修改 AST、绑定或 Graph State。
 
-实现时可以先将适配器置于现有目录，不要求一次性搬迁文件；必须先形成上述接口边界和测试，再移动代码。禁止仅将现有条件分支搬到新文件后宣称消除硬编码。
+`pyproject.toml` 已将 `ast_pattern` 包与原有模块一起纳入安装。通用构图器仍消费实际 AST 推导的需求，规则专有代码集中于局部语法与语义合同；阶段测试检查新入口不会调用旧完整骨架或有限模板生成器。
 
 ## 4. 数据合同
 
 ### 4.1 宿主、端口与嵌入记录
 
-| 拟议记录 | 必需字段 | 校验要点 |
+以下为 `contracts.py` 中的实际记录字段；摘要属性由字段计算，并不重复保存为构造参数。
+
+| 记录 | 实际字段或属性 | 合同 |
 |---|---|---|
-| `ClauseSkeleton` | `clauses`（各含 ID、kind、syntax_slots）、`transition_trace`、`skeleton_seed`、`skeleton_digest` | M1 内部产物；记录子句序列与允许的语法位置，不能直接送入 M2 |
-| `ScopeState` | `scope_id`、`parent_scope`、`visible_symbols`、`definitions`、`exports`、`alias_sources`、`nullable_types` | 不包含实体取值；名称、类型与词法身份分别保存 |
-| `ExpansionRequest` | `syntax_category`、`expected_type`、`nullable_allowed`、`scope_id`、`address`、`remaining_budget` | M1 按期望类型展开结构；不接受期望实际图值或 PatternSpec |
-| `HostAst` | `tree`、`node_ids`、`slots`、`ports`、`scope_graph`、`clause_skeleton_digest`、`expansion_trace`、`grammar_version`、`host_seed`、`shape_digest` | 子句、匹配和表达式的算子结构均已展开；只允许声明的图相关终端槽位和 Pattern 结构端口未填 |
-| `TerminalSlot` | `slot_id`、`kind`、`type`、`owner_scope`、`domain`、`shared_with` | 区分标签、类型、属性键、字面量、参数；共享关系由显式 ID 表示 |
-| `EmbeddingPort` | `port_id`、`address`、`input_schema`、`output_schema`、`visible_symbols`、`observation_contract`、`reserved_budget` | 行流、标量、谓词、图匹配项不能混插；输出多重性、可空性及路径观察属于合同 |
-| `PatternInstance` | `instance_id`、`pattern_id`、`form`、`rule_version`、`port_id`、`site_ids`、`imports`、`exports`、`terminal_slots`、`declared_alternative` | 原结构与变异备选在 M2 均已声明；导入绑定使用词法 symbol ID |
-| `EmbeddedAst` | `host_digest`、`tree`、`instances`、`target_id`、`origin_map`、`outside_port_digest` | 端口之外的算子和符号来源保持不变；无剩余结构端口 |
+| `ClauseSkeleton` | `clauses`、`transition_trace`、`skeleton_seed`；属性 `skeleton_digest` | 子句项含 `clause_id/kind/syntax_slots`；M1 内部产物 |
+| `ScopeState` | `scope_id`、`parent_scope`、`visible_symbols`、`definitions`、`exports`、`alias_sources`、`nullable_types` | 可见性、词法身份、别名来源与可空性分开；无实体取值 |
+| `HostAst` | `tree`、`ports`、`slots`、`scope_graph`、`clause_skeleton`、`expansion_trace`、`host_seed`、`grammar_version`、`budget`；属性 `shape_digest/host_digest` | 普通结构展开完毕，只保留图终端和一个显式端口 |
+| `TerminalSlot` | `slot_id`、`kind`、`candidates`、`type`、`owner_scope`、`shared_with` | 有限终端域；不能以终端候选携带 AST 结构 |
+| `Port` | `port_id`、`kind`、`expected_type`、`imports` | 插入前树中的实际占位节点 |
+| `EmbeddingPort` | `port_id`、`address`、`kind`、`visible_symbols`、`input_schema`、`output_schema`、`observation_contract`、`reserved_budget`、`default_subtree` | 地址须指向对应 Port；端口预算限制局部插入 |
+| `PatternInstance` | `instance_id`、`pattern_id`、`form`、`port_id`、`site_address`、`imports`、`exports`、`rule_version` | 当前登记一个目标实例 |
+| `EmbeddedAst` | `host`、`tree`、`skeleton`、`instances`、`target_id`、`origin_map`、`outside_port_digest`；属性 `embedded_digest` | `skeleton` 是现有语义求解器的适配对象，不重新生成外层结构 |
 
-M1 的结构端口是带接口的语法位置，不是“等生成图后再随意长出的空洞”。首版规定宿主只含一个未填结构端口，其余所有子树在 M1 已完成。多端口扩展在 M1 为每个候选端口生成默认完整子树，并将其作为规范基线（canonical baseline）归档；M2 选择的端口被登记实例替换，未选择的端口直接保留默认子树，不再次采样。不得在 M2 以“补全查询”为由修改端口之外的结构，M2 结束后也不再允许新增未声明的算子。
+当前 M1 产生一个显式未填端口，M2 填入一个登记的 Pattern。局部行流可按端口接口原样插入，或经 `COUNT`、`EXISTS` 转成整数、布尔表达式；这些接口提升由 M2 声明并记录。M2 检查将插入区域换回原 Port 后整棵宿主的摘要不变。
 
-对已有完整子树的插入，可以将其标为可替换端口，并在 M1 记录旧子树及接口。M2 只替换该局部区域，且不得丢弃端口外部引用的导出列。支持“空端口填充”还是“完整子树替换”须写入 `embedding_mode`；首版可只启用前者，不能将后者默认为已支持。
+多端口默认子树、任意已有子树替换和同时登记多个嵌套 Pattern 仍是扩展合同。`default_subtree` 及 `instances` 的容器字段为此保留，但不能据字段存在宣称通用多实例嵌入或联合求解已经完成。
 
 ### 4.2 PatternSpec
 
-每条规则至少声明以下内容：
+`pattern_registry.py::PatternSpec` 当前保存：
 
 ```python
-# 拟议协议；不是当前仓库已有 API。
-class PatternSpec:
-    identity: tuple[str, str, str]  # catalogue, pattern_id, form
-    version: str
-    family: str                    # symmetry / short_circuit
-    source_interface: Interface
-    replacement_interface: Interface
-    local_source: AbstractFragment
-    declared_alternative: AbstractFragment | LocalRewrite
-    applicability: tuple[SemanticPremise, ...]
-    state_requirements: tuple[ConstraintTemplate, ...]
-    work_objective: WorkObjective
-    affected_region: RegionSelector
-    local_relation: RelationContract
-    required_features: frozenset[str]
+# 当前数据字段，省略 dataclass 装饰及方法体。
+pattern_id: str
+form: str
+legacy_pattern: str
+family: str
+applicability: tuple
+state_requirements: tuple
+work_objective: str
+local_relation: str
+version: str
+catalogue: str
+interfaces: tuple
+affected_region: str
 ```
 
-`state_requirements` 表达端点唯一性、逆边双射、真假/NULL 条件、逐绑定见证、候选规模等事实，统一降低为求解器需求。规则中允许存在具体数学前提；禁止以规则 ID 直接返回完整 `_build_p3` 式图配方。`work_objective` 描述希望变化的候选、扫描、路径扩展或重复输入规模，不写“必定慢于另一侧”。
+`identity`、`source_interface`、`replacement_interface`、`local_source`、`declared_alternative`、`required_features`、`native_scalar` 为属性；`build_local(options, seed)` 才生成局部抽象结构和备选载荷。`local_source` 与 `declared_alternative` 的序列化值是产生式/变换描述，不是已经构造的完整宿主或图。
 
-### 4.3 GraphState 与 BindingPlan
+`state_requirements` 与适用前提提供可检查的规则声明，局部 AST 中的 intents/goals 再降低为共享求解器需求。规则不返回完整 GraphSpec 配方。`work_objective` 表示希望改变的候选或被屏蔽工作，物理耗时方向由执行证据确认。
 
-| 记录 | 必需字段 |
+### 4.3 GraphState、BindingPlan 与构造记录
+
+| 对象 | 当前字段和证据存放位置 |
 |---|---|
-| `GraphState` | `graph_spec`、`schema`、`indexes`、`role_domains`、`facts`、`checks`、`construction_certificate`、`graph_digest` |
-| `BindingPlan` | `slot_assignments`、`symbol_domains`、`binding_relations`、`occurrence_bindings`、`source_and_alternative_coverage`、`plan_digest` |
-| `ConstructionRecord` | `embedded_digest`、`target_id`、`constraint_digest`、`accepted_plan_digest`、`graph_digest`、`search_trace`、`constraint_provenance`、`remaining_obligations` |
+| `GraphState` | `graph_spec`、`population`、`embedded_digest`、`graph_digest`、`solved`、`facts`；属性 `spec` 返回 GraphSpec |
+| `BindingPlan` | `slot_assignments`、`embedded_digest`、`graph_digest`、`plan_digest` |
+| M3 构造记录 | 字典，继承语义求解器的 `skeleton_digest/assignment_digest/population_digest/site` 等字段，并加入 `method_stage`、`embedded_digest`、`graph_digest_v1`、`binding_plan_digest`、终端尝试次数及固定 AST 需求分解轨迹 |
+| 图事实与验证 | `population.constraints/evidence/checks/expected_rows`，以及 `facts` 中的构造记录、`certificate_digest/facts_digest` |
+| schema 与索引 | GraphSpec 的节点/关系图组、属性及 `index_requirements`；不另存一份可漂移的 schema |
 
-图中实体域与查询终端赋值不是同一对象：例如 `s` 的实际绑定域为唯一 Start 节点，而标签槽位绑定为 `Start`，属性键槽位为 `id`，字面量槽位为整数 `1`。`BindingPlan` 同时覆盖宿主外层、嵌入结构和高成本备选的全部槽位；不能只填 Pattern 内部。
+图实体域与终端赋值分别由求解器证据和 `slot_assignments` 表示。M3 在有限候选域中选择并冻结一个联合赋值，M4 不再独立抽样。GraphState 本身不作为完整可回放对象直接序列化；归档显式保存图、BindingPlan、构造记录及 population 证据。
 
-M3 可以保存尚未枚举的实体域，但必须选择并冻结一个满足全部约束的终端赋值方案。若输出的是有限联合方案集合，必须在 M3 中决定具体方案并记录选择；M4 不再独立抽取各槽位，以免破坏跨槽位约束。构造记录区分 `proved_in_model`、`requires_loaded_state_check` 和 `unknown`，数据库加载前不把待检查事实写成已验证。
+兼容求解器沿用的 `graph_digest` 与新合同中的规范化摘要编码不同；M3 记录用 `graph_digest_v1` 关联新 `GraphState.graph_digest`。阶段间必须比较对应字段，不能把两个编码下的字符串当作同一摘要。
 
-### 4.4 查询对与依赖报告
+### 4.4 实例化、查询对与依赖报告
 
-`QueryPair` 至少保存 `query_a_ir`、`query_b_ir`、`target_id`、`mutation_direction`、`changed_region`、`origin_map`、`graph_digest`、`binding_plan_digest`、`relation_contract`。短路关系另外保存 `envelope_site` 与决定性事实；被替换分支自身不要求相等。
+`InstantiatedQuery` 保存 `source/replacement/bindings/checks/record/prepared/embedded/state/plan`。`prepared` 是源查询检查点，M4 未执行目标变异。
 
-`DependencyReport` 由两个独立字段组成：
+M5 复用 `symbolic.QueryPair`：`query_a/query_b/bindings/mutation_record/instantiation_record/checks`。目标 ID、变异方向、图摘要、联合绑定摘要、嵌入摘要及两侧查询摘要位于 `mutation_record` 和 `bindings` 中。短路替换的完整 envelope、决定性事实及加载检查保留在实际 site 和验证记录中。
 
-- `static`：依赖节点/边、每层传播摘要、前提、跨 Pattern 影响、未知原因、目标暴露状态。
-- `runtime`：未运行/目标不支持/计划无法映射/已取得证据，数据库版本、计划、完整结果比较、重复测量和确认记录。
-
-不得用一个 `passed=true` 同时表示模型等价、数据库等价和存在性能异常。
+`DependencyReport(static, runtime)` 的静态部分包含语义传播、输入域、需求和交互证据。运行时部分初始为 `not_run`，执行器将独立运行报告绑定到同一图、查询和目标；物理计划到 AST 位点的映射、局部物理调用次数当前保留 `unknown`。一个成功状态不能同时表示模型等价、数据库等价和性能异常。
 
 ## 5. 六个接口与实现细节
 
-以下签名均为拟议接口。M1–M6 是方法文档与实现验收共用的阶段标识。
+以下六个公开边界均已有实现。文中单独标注的算法伪代码用于说明顺序，不代替真实函数签名。M1–M6 是方法、阶段记录与测试共用的标识。
 
 ### M1：先随机生成抽象 AST
 
 ```python
-# 拟议公开接口；两个生成层都位于 M1 内。
+# 当前公开接口；两个生成层都位于 M1 内。
 generate_random_ast(grammar, capability_profile, budget, host_seed) -> HostAst
 ```
 
@@ -179,51 +200,38 @@ M1 采用两层生成。第一层依照通用子句语法与合法后继关系�
 
 该分层借鉴 GDsmith 的骨架与类型驱动补全，但没有引入其具体图引导输入。M1 不读取 PatternSpec、GraphManager、GraphState、Vals 或 `varToProperties`；不能先读取某图，再从图中选择匹配路径。M1 可以决定“读取可见节点的一个整数属性”，将属性键保存为整数类型终端槽位；不能在这一阶段选择“恰好等于 7 的图属性”。后一要求由 M3 在固定结构上求解。
 
-以下为拟议内部接口，不新增方法阶段：
+M1 的当前内部入口为：
 
 ```python
-# 拟议接口，均由 generate_random_ast 内部调用。
-sample_clause_skeleton(grammar, capability_profile, clause_budget, seed) \
-    -> ClauseSkeleton
-expand_host_structure(skeleton, grammar, capability_profile, budget, seed) \
-    -> HostAst
-expand_match_shape(request, scope_state, budget, rng) -> AbstractMatch
-expand_expression_shape(request, scope_state, budget, rng) -> AbstractExpression
-advance_scope(clause, incoming_scope) -> ScopeState
+sample_clause_skeleton(grammar=None, capability_profile=None, clause_budget=None, seed=0)
+expand_host_structure(skeleton, grammar=None, capability_profile=None, budget=None, seed=0)
+advance_scope(clause, incoming_scope)
+validate_abstract_types_and_scopes(host)
 ```
 
-子句骨架中的普通语法槽位（例如 WHERE 条件、投影表达式、匹配项）必须在 M1 第二层展开。它们与保留给 M2 的 Pattern 端口不同：前者不能遗留给 M3 或 M4；后者具有完整的输入输出接口和独立标识。首版只保留一个未填 Pattern 端口；多端口模式的未选位置保留 M1 已生成的默认子树。所选端口类别与位置由通用类型语法决定，不以某个 Pattern 能否适配指导生成。
+匹配、表达式和子行流的递归展开分别由内部 `_Builder.match()`、`_Builder.expression()`、`_Builder.rows()` 实现，类型与可空性由 `_symbol_type()` 及 `advance_scope()` 推导。原设计中的 `ExpansionRequest`、`expand_match_shape()`、`expand_expression_shape()` 并未作为独立 API 引入；其参数职责由 builder 的期望类型、scope、深度及预算状态承担。
+
+子句骨架中的普通语法槽位（例如 WHERE 条件、投影表达式、匹配项）必须在 M1 第二层展开。它们与保留给 M2 的 Pattern 端口不同：前者不能遗留给 M3 或 M4；后者具有完整的输入输出接口和独立标识。当前只保留一个未填 Pattern 端口；多端口与默认子树仍为扩展要求。所选端口类别与位置由通用类型语法决定，不以某个 Pattern 能否适配指导生成。
 
 第二层按依赖顺序工作：先为 MATCH 展开匹配形状并登记变量，再生成可引用这些变量的 WHERE；先在输入作用域中生成 WITH 投影表达式与别名，再建立输出作用域并生成本系统支持片段中的 WITH WHERE。子查询递归调用相同产生式，相关导入通过 symbol ID 显式登记。`RETURN COUNT { ROW_HOLE }` 因而可以直接由返回整数的位置展开得到，不需要为它增加起始 MATCH。
 
 ```python
-# 拟议 M1 控制伪代码；这里只采样结构，不求解图值。
-def generate_random_ast(grammar, capabilities, budget, host_seed):
-    skeleton = sample_clause_skeleton(
-        grammar, capabilities, budget.clauses, derive_seed(host_seed, "clauses"))
-    scope = empty_scope()
-    tree, trace = [], []
-    rng = seeded_rng(derive_seed(host_seed, "structure"))
-    port_plan = select_typed_port(skeleton, grammar, budget, rng)
-    for clause_slot in skeleton.clauses:
-        clause = expand_clause_in_dependency_order(
-            clause_slot, scope, port_plan, grammar, capabilities, budget, rng)
-        scope = advance_scope(clause, scope)
-        tree.append(clause)
-        trace.append(record_structure_choices(clause, scope))
-    host = freeze_host(tree, skeleton, trace, port_plan)
-    require_only_graph_terminals_and_declared_ports_unfilled(host)
-    validate_abstract_types_and_scopes(host)
-    return host
+# 与当前公开 M1 一致的调用顺序，省略参数校验。
+limits = _budget(budget)
+skeleton = sample_clause_skeleton(
+    grammar, capability_profile, limits["clauses"], derive_seed(host_seed, "clauses"))
+host = expand_host_structure(
+    skeleton, grammar, capability_profile, limits, derive_seed(host_seed, "structure"))
+return replace(host, host_seed=host_seed)
 ```
 
-`select_typed_port` 只预留类型化位置；若目标位置要等表达式展开后才能定位，则预留产生式路径并在展开时解析为稳定地址。`expand_clause_in_dependency_order` 与其内部递归调用共享预算账本，不能每进入一层子查询就重置预算。选择无参数叶子、类型化常量槽位或合法变量引用时同样记录产生式与作用域；无法收束时返回 `generation_exhausted`。
+`expand_host_structure()` 遍历子句骨架并共享 `_Builder` 预算；返回表达式递归生成时使用 `need_port=True`，只在类型与剩余深度允许的位置放入 Port。结束时要求恰好一个实际 Port，并建立对应地址与可见符号的描述，再验证抽象类型与作用域。两层的派生种子和选择轨迹随 HostAst 一并保存。
 
 | 结构 | M1 的作用域与可空性操作 |
 |---|---|
 | 必选 MATCH | 读取输入绑定，登记新节点/关系变量；同名引用必须指向实际既有 symbol，不能隐式新建同名实体 |
 | OPTIONAL MATCH | 区分既有输入与新导出；新匹配变量标记可能为 NULL，保留未匹配输入的接口；是否存在匹配留给 M3 |
-| WITH | 投影表达式读取输入 scope；输出只包含显式保留变量和新别名；未投影变量对后续子句不可见。当前受支持 IR 的 WITH WHERE 在投影后作用域验证（`src/ir.py:698–730`） |
+| WITH | 投影表达式读取输入 scope；输出只包含显式保留变量和新别名；未投影变量对后续子句不可见。当前受支持 IR 的 WITH WHERE 在投影后作用域验证（`Src/ir.py:698–730`） |
 | 别名 | 保存表达式来源和推导类型；实体透传保留身份和可空性；同层兄弟别名不能未经语义支持相互引用 |
 | COUNT/EXISTS 子查询 | 显式导入所需外层 symbol，局部定义不泄露；Count 返回非 NULL 整数，Exists 返回布尔值；空输入行为由 M3 推导 |
 | CASE/coalesce/布尔式 | 依据操作符签名生成子类型及 nullable 标记；不把“可空”理解为实际值必定 NULL |
@@ -243,7 +251,7 @@ embed_patterns(host, registry, selection_policy, embed_seed, budget) -> Embedded
 
 插入采用捕获规避重命名，绑定通过 symbol ID 接入。规则中需要的外部节点只能从端口可见绑定中选；无法绑定时可以在规则声明的局部区域定义新变量，不能在外层悄悄追加 MATCH。插入后验证端口输出接口与所有外部消费者一致，保存变异目标、合法替换区域、替代结构及来源映射。
 
-首版每个查询对只测试一个目标实例；宿主允许包含其他登记实例。多个实例的重叠需要明确父子关系。一个插入导致另一个实例的规则位置消失、输出接口改变或前提冲突时，拒绝该组合或重新选择端口，不能只保留一个失效标记。
+当前 `embed_patterns()` 要求一个声明端口且树中恰好一个实际 Port，返回一个 `PatternInstance`。按行流观察的规则可经 Count/Exists 提升接入整数或布尔位置。P4/P5/P13/S1/S2/S4/S7/S8 等标量规则直接插入相容的标量或谓词端口，避免把其值投影包入计数后丢弃；S8 的原生结果为 EXISTS 的布尔值。首版原生标量形式将自由 guard、prefix、payload 表示为规则声明的符号字面量，图工作子查询在局部声明自己的锚点；imports 为空，即使宿主存在节点也不会擅自捕获。节点导入型原生 guard 属于后续扩展。宿主中原本存在的 coalesce、布尔吸收或 CASE 等上下文由 M6 识别，不计作第二个显式嵌入实例。多实例重叠、联合前提和身份保持仍需扩展专门的嵌入与求解合同。
 
 ### M3：联合构造 Pattern-aware Graph State
 
@@ -256,9 +264,9 @@ construct_graph_state(embedded, scale_spec, state_seed, solver_budget) \
 
 M3 借鉴 GDsmith GenExpr 的“父需求分解为子需求”，但分析对象是 M2 已固定的 AST。若当前节点是 AND，就只能分解这一个 AND；不能为满足 TRUE 而把它替换成 OR 或常量。结构不可满足时返回冲突或有限搜索失败，由编排层重新开始结构生成。目标值、基数区间及绑定域约束在本阶段共同求解，M1 不读取的图与值信息到这里才参与。
 
-拟新增 `ConstraintTask(address, binding_domain_id, required_observation, quantifier, provenance)`，将需求绑定到实际词法位置和输入域。`quantifier=exists` 可用于“至少存在一个保留行”的目标；`quantifier=forall_reachable` 用于 S7 等规则在每个实际输入绑定上的决定性前提。两类义务不可混用：一个满足 WHERE 的见证可以支持非空目标，不能证明所有 u 的 `answer` 均非 NULL。
+已实现 `ConstraintTask(address, binding_domain_id, required_observation, quantifier, provenance)`，将需求绑定到实际词法位置和输入域。`quantifier=exists` 可用于“至少存在一个保留行”的目标；`quantifier=forall_reachable` 用于 S7 等规则在每个实际输入绑定上的决定性前提。两类义务不可混用：一个满足 WHERE 的见证可以支持非空目标，不能证明所有 u 的 `answer` 均非 NULL。
 
-拟议内部接口为 `decompose_requirement(fixed_node, requirement, binding_domain) -> ConstraintAlternatives`。返回值仅包含对子节点的需求、域约束与冲突信息，不允许返回新的 AST。以下采用 T、F、N 表示 TRUE、FALSE、NULL，星号表示这三个语义值中的任一个；`unknown` 是分析器不知道，既不属于星号也不等于 N。
+当前内部接口为 `decompose_requirement(fixed_node, requirement, binding_domain=None) -> ConstraintAlternatives`。返回值仅包含对子节点的需求、域约束与冲突信息，不允许返回新的 AST。以下采用 T、F、N 表示 TRUE、FALSE、NULL，星号表示这三个语义值中的任一个；`unknown` 是分析器不知道，既不属于星号也不等于 N。
 
 | 固定节点与父需求 | 合法的子需求分解 |
 |---|---|
@@ -277,7 +285,7 @@ M3 借鉴 GDsmith GenExpr 的“父需求分解为子需求”，但分析对象
 
 空输入必须单独表示为绑定域基数 0。不能将“没有输入行”编码为某个表达式的 NULL，也不能利用全称命题的空域真值，把完全不可达的 S7 目标标成已获得有效决定性输入。需要非空输入的目标附加基数下界；S5/S9 所需的零需求或空输入则按各自合同保留。对空直接子查询，COUNT 的值为 0；若中间操作重新产生一行，应逐算子重新计算实际行域。
 
-每个任务再保存 `analysis_status=proved/refuted/unknown`。未知来自未支持函数、无法封闭的共享输入域或预算耗尽时，不能据此选择一个 NULL 值并继续宣称前提已证明。构造可以回溯到其他候选赋值，但接受记录必须覆盖所有声明的实际输入域，或具有覆盖该域的构造证书。
+`ConstraintAlternatives` 保存 `alternatives/analysis_status/reason`，状态包括 `decomposed/proved/refuted/unknown`；局部分解只是后续义务，不代表图见证已经成立。当前 M3 对显式 value goals 作这一步预检并保存轨迹，再调用共享 requirements/population 求解器封闭完整输入域。局部规则未知时不能直接生成成功证书；只有后续共享求解器独立建立要求，整体构造才可接受。超过局部分解分支预算或不支持的函数保持未知；布尔显式枚举当前上限为5个项。
 
 约束分为四组，全部带来源位置：
 
@@ -300,7 +308,7 @@ M3 借鉴 GDsmith GenExpr 的“父需求分解为子需求”，但分析对象
 6. 扫描源树及备选中的全部读取，检查扩张域是否产生额外可观察匹配，并逐消费者验证两侧结果关系。允许同一 N 下两侧结果共同增长；不要求不同 N 之间结果固定。例如 P10 的有效输出多重性可随规模增长，条件是每个规模下两侧一致。
 7. 用小规模完整解释执行核验构造见证；对压缩图族额外验证规模扩展证书。证书无法覆盖的新读取或复杂共享结构返回未知/不支持，不从几个小规模点外推。冻结 Graph State、BindingPlan 及待加载状态检查。
 
-约束降低的首版映射如下；“拟新增”项属于新的记录或校验接口，不代表要引入通用 SMT 求解器。
+当前约束适配如下。原设计中的部分概念由已有需求记录及证据字段承担，没有额外建立同名类。
 
 | 规范化义务 | 当前可复用表示/组件 | 需补充内容 |
 |---|---|---|
@@ -310,11 +318,13 @@ M3 借鉴 GDsmith GenExpr 的“父需求分解为子需求”，但分析对象
 | 输入/输出实体是否为 NULL | `EntityBindingDemand` | OPTIONAL 按输入域的状态分区及每区多重性 |
 | 正逆关系逐边对应 | `InversePair` | 节点/关系身份观察限制与重复边检查 |
 | 原/变异节点域相同或分离 | `BindingRelation` | 对端口导入、共享变量及捕获规避来源的转换 |
-| 全树终端联合绑定 | 拟新增 `TerminalBindingConstraint` | 标签/键/字面量的联合域、接受赋值和覆盖性 |
-| 两侧局部观察关系 | 拟新增 `ObservationRelationConstraint` | scalar/bag/path-bijection/envelope 关系与前提来源 |
-| 外层输入与工作轴 | 复用既有 work-axis 推导，拟新增 `InputDomainConstraint` | m 的真实绑定域、增长影响和未决物理关系 |
+| 全树终端联合绑定 | `TerminalSlot` → `symbolic.Symbol` 适配及 `BindingPlan.slot_assignments` | 有限联合赋值、全部终端覆盖及摘要核验；无独立 `TerminalBindingConstraint` 类 |
+| 两侧局部观察关系 | site guards、M5 `mutation_record`、既有 `propagate_equivalence` | scalar/bag/path-bijection/envelope 关系与前提来源；无独立同名约束类 |
+| 外层输入与工作轴 | 既有 work-axis 推导、population evidence、M6 输入报告 | 真实逻辑绑定域、增长影响和未知物理关系；无独立 `InputDomainConstraint` 类 |
 
 通过后冻结 Graph State 和 BindingPlan。所有数据库状态检查在计时前执行。有限构造组件只能在各自支持的片段内给出见证；不应把上述流程包装成任意 Cypher 的全能求解器。
+
+EXISTS 包含 UNION ALL 时，增长闭包可以使用保留分支的稳定见证。`relational_population._stable_exists_union_witness()` 要求该分支具有实际逐输入的正数量义务，读取与所有增长 family 独立或受到局部排除，并在相关词法输入上确实产生行；它同时保留匹配数量检查用于数据库加载验证。缺少见证、仅覆盖部分输入、或增长区域影响该分支时，不会生成此证书。该规则按运算语义工作，不依据 S8 编号豁免图读取。
 
 ### M4：根据已实现图状态实例化整个查询
 
@@ -322,9 +332,9 @@ M3 借鉴 GDsmith GenExpr 的“父需求分解为子需求”，但分析对象
 instantiate_query(embedded, graph_state, binding_plan) -> InstantiatedQuery
 ```
 
-对完整树递归遍历，将每个终端槽位替换为 M3 接受的标签、类型、属性键、常量或参数。验证全部外层子树和全部局部备选都有绑定覆盖。声明过但未选为变异目标的 Pattern 也必须有完整绑定。
+对完整树递归遍历，将每个终端槽位替换为 M3 接受的标签、类型、属性键或字面量。全部宿主子树和声明备选均使用同一接受赋值。当前 IR 路线不生成外部 Parameter 节点，`parameters` 固定为空映射；编译器为某一目标产生的 per-side bindings 另行纳入执行合同。
 
-该操作是终端物化（materialization），不是 GDsmith QueryFiller 意义上的结构补全。拟议内部函数 `materialize_terminals(tree, accepted_assignments)` 只访问 `TerminalSlot`，不调用 M1 的任何展开器，也不运行 `GenPatterns`、`GenExpr` 或任何根据图重新选择表达式的过程。普通语法槽位若到 M4 仍未展开，应返回 `unexpanded_structure`；不能把它作为图绑定缺失处理后补造子树。
+该操作是终端物化（materialization）。当前通过 `validate_state_and_plan()`、`symbolic.prepare_instantiation()` 和 `_resolve()` 落实已接受赋值；未另建 `materialize_terminals()` API。M3 的 `fixed_skeleton()` 已拒绝残留 Port、结构 Hole 或携带 AST 的终端候选。M4 不调用 M1 的展开器或任何根据图重新选择表达式的生成器。
 
 M4 不改变算子数量、类型、作用域边、投影列数、分支数或路径结构；路径上下界若属于终端槽位，其值必须来自 M3 已冻结的联合方案。缺少绑定时返回 `unbound_slot`；不能在此补默认属性、随机造图或新增长链。
 
@@ -336,13 +346,13 @@ M4 不改变算子数量、类型、作用域边、投影列数、分支数或�
 mutate_target(instantiated, graph_state, target_id) -> QueryPair
 ```
 
-重新验证目标位置与 M2 登记一致，以及 M3 的规则前提仍有效。应用 Pattern 声明的变异，保存移动/保留/新增局部节点的来源映射。结构变异只能发生在声明区域；M4 已实例化的备选被整体放入时，新增节点必须来自 M2 的备选声明，不能临时生成替换查询。
+重新验证目标位置与 M2 登记一致，以及 M3 的规则前提仍有效，再应用 Pattern 声明的变异。局部来源由 M2 的 `origin_map` 保留；共享需求路径的原/变异对应关系位于 M3 的 requirements 证据，M5 不另建一份完整逐节点来源表。结构变异只能发生在声明区域；备选来自 M2 的局部声明和 M4 已接受终端，不能临时生成替换查询。
 
 对称变换使用局部值相等、多重集相等或路径双射关系。短路变异使用决定性上下文的关系：低潜在工作分支 L 被替换为高潜在工作分支 H，整个决定性外壳及完整查询保持语义一致；L 与 H 自身可返回不同值或行数。
 
-归档方向统一明确写为 `symmetry`、`L_to_H` 或旧记录的 `H_to_R`，并额外记录每侧角色，不从文件名或 A/B 顺序推断。当前论文组合支路在 `src/symbolic.py:717` 记录 L→H，`src/generator.py:2091–2094` 将 source、target 分别放入 a、b；而 `src/executor.py:737` 将 S1–S10 视为参考比较，`:845` 要求 a 为较慢侧才进入候选确认。这形成了需要迁移时修正的方向合同不一致：L→H 用例中 b 变慢可能被旧门槛过滤。本轮只确认该源码条件，未作数据库复现。
+归档方向统一明确写为 `symmetry`、`L_to_H` 或旧记录的 `H_to_R`，并额外记录每侧角色，不从文件名或 A/B 顺序推断。新支路将源查询放入 a、变异查询放入 b，并归档 `mutation_direction/side_roles/reference_side`。原先按 S 标识要求 a 为较慢侧的判断已改为根据每侧角色确定参考方向；对应测试覆盖 L→H 的 b 变慢和历史 H→R 的 a 变慢。
 
-执行器应按 `mutation_direction` 与每侧角色确定筛选方向；S 类标识不能代替方向记录。旧 SCor 高成本查询到参考替换的记录仍按 H→R 解码，不能在迁移时静默交换其 a/b。
+执行器按 `mutation_direction` 与每侧角色确定筛选方向，S 类标识不再代替新用例的方向记录。旧 SCor 高成本查询到参考替换的记录仍按 H→R 解码，不能在迁移时静默交换其 a/b。
 
 ### M6：检查依赖关系并收集运行时证据
 
@@ -351,9 +361,9 @@ check_dependencies(pair, embedded, graph_state, evidence_context=None) \
     -> DependencyReport
 ```
 
-首先静态检查；只有语义前提与结果传递关系已证明，才通过现有编译和执行适配器获得动态证据。静态语义被否定或未知时，直接返回对应状态及 `runtime=not_run`。无目标连接时返回静态报告与未运行状态。
+`check_dependencies()` 首先产生静态报告，不连接数据库。`pipeline.generate_case()` 只接受根部结果关系为 `proved` 的报告，并默认要求目标入口有效。随后 `main.prepare_case()` 编译完整查询，`executor.run_case()` 在建立数据库连接前调用 `validate_dependency_case()` 检查阶段链、图/IR/绑定/编译产物及必要状态检查。完整执行后，`attach_runtime_evidence()` 将运行报告与同一图、查询和目标摘要绑定；`evidence_context` 参数也可接收这种已经绑定的独立报告。
 
-静态分析必须沿 AST 祖先、实际定义—使用边和行流生产—消费边共同传播，不能只靠变量名称、树的几何包含关系或 Pattern 编号判断。每个传播步骤记录源位点、消费者、作用域、输入事实、输出摘要及使用的规则版本。
+静态分析沿 AST 祖先、实际定义—使用边和行流生产—消费边传播。报告保留 `analysis/semantic_propagation/ancestor_steps/scope_binding_edges/row_consumption_edges`，并使用逻辑解释器记录消费方式和实际输入。模式注册版本在 M2 的 PatternSpec 与实例中保存；不是每个传播步骤都各存一个独立版本字段。
 
 | 层次 | 需要计算的内容 | 结果类型 |
 |---|---|---|
@@ -362,21 +372,27 @@ check_dependencies(pair, embedded, graph_state, evidence_context=None) \
 | 调用多重性 | 相关输入域和重复输入行如何使局部逻辑求值被请求 | 精确值或上下界、依赖键；物理调用次数另记未知 |
 | 跨 Pattern 影响 | 内层变异是否改变外层规则的前提、见证域、暴露或可观测目标 | 每个实例独立保存 `premise_status=satisfied/refuted/unknown` 与 `exposure_status=exposed/masked/conditional/unreachable/unknown` |
 
-例如 COUNT 通常观察输入行数；EXISTS 只观察空/非空；LIMIT 需要输出顺序或同值投影合同；WITH 必须区分普通投影、过滤、DISTINCT 以及聚合；OPTIONAL 必须逐输入行判断 NULL 扩展。上述内容约束语义和逻辑需求，不意味着物理计划一定按语法顺序求值。
+例如 COUNT 通常观察输入行数；EXISTS 只观察空/非空；LIMIT 需要输出顺序或同值投影合同；WITH 必须区分普通投影、过滤、DISTINCT 以及聚合；OPTIONAL 必须逐输入行判断 NULL 扩展。逻辑 trace 区分 `values/count/exists` 需求模式：无 DISTINCT 的 COUNT 不请求其直接行流的未使用 RETURN 值，EXISTS 也不请求 DISTINCT 投影值；COUNT DISTINCT 保留可能影响行数的值。WITH 从后继匹配、WHERE 和有效返回列逆向追踪活跃别名。未被消费的投影标记为 `unobserved_projection`，整个目标因此受外层屏蔽时 `target_valid=False`；短路内部保护仍单独报告。上述内容约束语义和逻辑需求，不意味着物理计划一定按语法顺序求值。
 
-对于 m 行相关输入，逻辑请求数可能为 m；数据库可能去相关、缓存或物化。只有可映射到目标位置的执行计划/算子证据才能支持物理调用数量。计划没有相应计数时明确记录 `physical_invocations=unknown`，不能从 m 直接填入实际次数。
+对于 m 行相关输入，逻辑请求数可能为 m；数据库可能去相关、缓存或物化。当前 evidence adapter 保留完整运行结果、原始 plans、数据库版本和计时摘要，但尚未实现可靠的计划算子到 AST 位点映射，因此 `physical_plan_mapping/physical_invocations` 均保持 `unknown`。
+
+输入与候选计数明确区分图范围。节点数不超过5000时，M6 在完整 GraphSpec 上解释；更大图必须有增长证书，并使用 `validation_graph_spec`，标记 `input_observation_scope=certified_proof_graph`。压缩模型观察值保存在 `proof_model_input_*`、`proof_model_logical_request_interval`、`proof_model_*_candidates` 等字段中；它们不作为全图输入次数或候选总量。缺少全图数量证书时，全图相关区间为 `[0, None]`。只有常量决定值或 M3 的增长稳定标量证书能够支持全图屏蔽时，逻辑需求才可确定为0。目标入口存在性可由 M3 保留见证支持，`target_valid_scope` 与 `target_entry_evidence` 同时说明其范围，不能据此推出全图精确输入基数。
+
+跨 Pattern 检查区分登记实例与被识别的上下文。`context_patterns` 能识别祖先或别名使用链上的 S7、S1/S2、S3/S4、EXISTS、LIMIT 等消费关系；对应 P4/P5/P13 或 S6/S8 若未重新建立完整规则前提，会保留 `unknown`。`cross_pattern_effects` 中非目标登记实例也保留未知，当前单端口实现不声称完成任意多实例联合验证。
+
+共享读取分析覆盖关系类型、节点域、属性域及实体别名来源。不同标签名本身不证明节点域不相交；可用完整图事实计算交集，不完整读取保留区间与未知物理影响。
 
 语义前提不成立或语义传播为 unknown 时，该用例不能作为已经通过等价性检查的正式性能用例；实际结果恰好相等也不替代缺失的规则依据。逻辑需求、调用规模或物理映射为 unknown，而语义关系已经成立时，可以保留用例并记录其未决维度。
 
 运行时依次执行：加载并检查 G；完整执行两查询并比较有类型结果多重集；取得目标数据库版本与可用计划；按现有测量配置进行预热、成对随机顺序测量和独立确认。图状态检查失败、查询出错、结果不完整或结果不等时，不进入普通性能比较；超时保留独立分类及已有参考验证证据。计划证据与非分析模式计时分开保存。完整查询差异成立但局部算子无法映射时，可以记录完整查询性能候选，局部性能传导仍为 `unknown`。
 
-ValScope 的借鉴边界是“定位修改点 → 沿实际使用依赖逐层传播摘要 → 到达根部”。原论文 §4.4、Algorithm 1（论文页码 394–395）传播的是语义近似关系，不是本系统的性能摘要。来源：[ValScope 原论文](https://www.usenix.org/system/files/osdi26-lin-li.pdf)。本节四层性能检查是待实现的 GraphSymPerf 设计，不能归为 ValScope 已证明的性能定理。
+ValScope 的借鉴边界是“定位修改点 → 沿实际使用依赖逐层传播摘要 → 到达根部”。原论文 §4.4、Algorithm 1（论文页码 394–395）传播的是语义近似关系，不是本系统的性能摘要。来源：[ValScope 原论文](https://www.usenix.org/system/files/osdi26-lin-li.pdf)。本节静态需求与工作检查由 GraphSymPerf 实现，物理局部归因仍待可靠映射能力支持；不能将其归为 ValScope 已证明的性能定理。
 
 ## 6. Pattern 目录、变异与图需求
 
-当前论文目录由 `src/paper_patterns.py:22–45` 定义：P1–P13 和 S1–S10。旧目录由 `src/mutator.py:16–43` 定义：P1–P16 和 S1–S10。新记录保留 `catalogue=paper-v1` 与 `method_version=ast-pattern-v1` 两个独立字段；方法版本不是 Pattern 编号版本。
+当前论文目录由 `Src/paper_patterns.py:22–45` 定义：P1–P13 和 S1–S10。旧目录由 `Src/mutator.py:16–43` 定义：P1–P16 和 S1–S10。新记录保留 `catalogue=paper-v1` 与 `method_version=ast-pattern-v1` 两个独立字段；方法版本不是 Pattern 编号版本。
 
-以下“图需求”是新 PatternSpec 必须声明的最低合同与可选工作量设计，不是声称当前每条规则已经具备通用求解能力。具体规模分配由联合求解器完成，不能据表生成固定完整图模板。
+以下为当前 PatternSpec 的规则合同及对应图需求。全部23个论文标识均进入共享六阶段入口；是否接受某个随机宿主仍取决于具体结构、图约束和预算。具体规模分配由联合求解器完成，不能把某一组通过的样例推广为任意上下文均可求解。
 
 | 论文 ID / form | 旧 ID | 局部变换 | 最低图/语义需求与工作量设计 |
 |---|---|---|---|
@@ -408,7 +424,9 @@ ValScope 的借鉴边界是“定位修改点 → 沿实际使用依赖逐层传
 
 旧 P16 是量词输入组顺序，不在当前论文目录内。迁移时保留历史身份，不将它无说明地塞入论文 P13 或任意 S 模式。
 
-## 7. 两个完整实施样例
+## 7. 语义说明例与阶段映射
+
+以下沿用方法稿的 P3/S7 具体图例，说明阶段之间必须保持的事实与结果关系。真实生成器还会选择其他宿主、局部符号和图域；一次运行的具体 IR、图与检查由格式4归档记录，不把说明图例当作固定整图配方。
 
 ### 7.1 P3：随机 COUNT 宿主中的路径镜像
 
@@ -448,172 +466,146 @@ RETURN COUNT {
 
 ### 7.2 S7：非 NULL 前缀下的低工作分支到高工作分支
 
-M1 已确定外层查询及标量端口，M2 在端口嵌入 S7。M3 构造 m>0 个 Root，每个 Root 有不同的整数 id；对每个实际输入绑定 u 约束 `u.answer=0`，并构造一个 REF 邻居和 N>1 个 HIGH 邻居。两个关系域不通过额外可见读取破坏宿主事实。M4/M5 得到两个完整查询：
+M1 已确定外层查询及整数标量端口，M2 选择 S7 的原生标量形式；其 imports 为空，决定项由符号字面量表达。M3 将决定项绑定为0，构造 m>0 个 Root 和独立的 WorkRoot(id=1)，后者有 N>1 个 HIGH 邻居；工作节点不带 Root 标签。低工作参数是常量0。M4/M5 得到：
 
 ```cypher
 // Q_L
 MATCH (u:Root)
-RETURN u.id AS id,
-       coalesce(u.answer, COUNT { MATCH (u)-[:REF]->(v) }) AS value
+RETURN coalesce(NULL, 0, 0) AS value
 ```
 
 ```cypher
 // Q_H
 MATCH (u:Root)
-RETURN u.id AS id,
-       coalesce(u.answer, COUNT { MATCH (u)-[:HIGH]->(v) }) AS value
+RETURN coalesce(NULL, 0, COUNT {
+  MATCH (r:WorkRoot {id: 1})-[:HIGH]->(v)
+}) AS value
 ```
 
-两式对每个实际 u 均为整数 0；0 是非 NULL 值。被替换子查询的 COUNT 分别为 1 和 N，不要求二者相等。变异方向归档为 `L_to_H`，等价范围从 coalesce 外壳开始向外传播。目标是检查后续高工作分支是否仍导致额外代价；其语义被屏蔽正是 S7 测试的组成部分。
+两侧均返回 m 份整数0，0是非 NULL 值。低工作参数为0，高工作子查询计数为 N；结果关系从 coalesce 外壳开始传播。实际生成还可以加入已声明的等价标量层，但不能在 M4 临时增加结构。本例说明当前没有节点导入的 native guard 变体；宿主 u 不会被工作子查询隐式捕获。
 
-若 u 的输入域包含 `answer=NULL` 的绑定，必须重新求解或拒绝这一决定性前提，不能只检查一个示例 u。若宿主其他子查询也能读到新增 HIGH 边，应联合检查这些读取；不能凭“关系名字不同”假定整个查询不受影响。
+如果将决定项改为 NULL，则两侧可能分别返回0和 N，不能沿用同一短路前提。决定项、查询和图的任何改变都会使已保存的绑定或阶段摘要失效。宿主其他读取若能访问新增 HIGH 节点，M3 必须联合验证，不凭不同变量名推断图域隔离。M6 只把 mN 记录为假定逐输入枚举的潜在规模，不把它写成物理调用量或耗时下界。
 
 ### 7.3 嵌套 Pattern 的两种状态
 
-当 P3 位于 S7 的 fallback 中，M6 分别记录：S7 的决定性前提成立，其短路测试目标有效；P3 的对称关系可能仍成立，但作为独立性能目标被外层非 NULL 前缀屏蔽。保存 S7 的 `premise_status=satisfied`、`target_valid=true`，以及 P3 的 `result_relation=proved`（证明成立时）、`exposure_status=masked`，而不是删除整个用例。
+当登记目标 P3 位于宿主原有 `coalesce` 的 fallback 中，M6 可将该外层识别为 S7 上下文。前缀非 NULL 时，外层记录 `registration=recognized_context/premise_status=satisfied/logical_demand=masked`；P3 的根部结果关系可保持 `proved`，但目标入口被屏蔽，`target_valid=false`。默认编排要求入口有效，会记录失败并尝试其他宿主；显式关闭该要求时可保留分类用例。被识别的外层 S7 不因此变成第二个登记变异目标。
 
-若要研究 P3 的暴露情形，应在另一份完整归档用例中求解允许 fallback 被请求的外层状态，再重新验证所有 Pattern 前提。不得在计时中临时将 `u.answer` 改成 NULL，并仍沿用原用例的 Graph State 摘要或 S7 前提。
+以 S7 为登记目标时，其完整 coalesce envelope 被到达而内部备选工作需求为0，仍是有效短路测试。报告用 `protected_work_masked` 区分这种情形与整个目标入口被外层屏蔽。改变前缀为 NULL 会改变决定性前提，需要重新构图、实例化和检查，不能在同一计时用例中改写原图摘要。
 
 ## 8. 编排、失败与预算
 
-下面的伪代码表示控制边界；其中编译、检查与测量属于 M6 的证据获取，不增加第七个方法阶段。
+`pipeline.generate_case(pattern, scale, seed, data_seed=0, *, options=None)` 为六阶段编排入口。`main.prepare_case(..., method="ast-pattern-v1", ast_options=None)` 默认调用它，再编译目标语言。常规配置的 `generation.method` 默认也是 `ast-pattern-v1`；`legacy-v1`、`symbolic-v1` 只能显式选择，后者要求 `generation.composition`。
 
 ```python
-# 拟议控制流。
-def generate_case(config):
-    for attempt in range(config.generation_budget):
-        host = generate_random_ast(
-            config.grammar, config.capabilities,
-            config.ast_budget, derive_seed(config.seed, "host", attempt))
-        record_stage("M1", host)
+# 当前公共用法；prepare_case 此时只生成与编译，不连接数据库。
+from main import prepare_case
 
-        embedded = embed_patterns(
-            host, registry, config.selection_policy,
-            derive_seed(config.seed, "embedding", attempt), config.embedding_budget)
-        record_stage("M2", embedded)
-
-        state, plan, construction = construct_graph_state(
-            embedded, config.scale_spec,
-            derive_seed(config.seed, "state", attempt), config.solver_budget)
-        record_stage("M3", state, plan, construction)
-
-        source = instantiate_query(embedded, state, plan)
-        record_stage("M4", source)
-
-        pair = mutate_target(source, state, embedded.target_id)
-        record_stage("M5", pair)
-
-        report = check_dependencies(pair, embedded, state, config.evidence_context)
-        record_stage("M6", report)
-        if report.static.result_relation != "proved":
-            record_failure("M6", "semantic_relation_unproved", report)
-            continue
-        if report.runtime.result_relation == "refuted":
-            record_failure("M6", "result_mismatch", report)
-            continue
-        return AcceptedOrClassifiedCase(host, embedded, state, plan, pair, report)
-
-    return Failure(stage="pipeline", code="generation_budget_exhausted")
+case = prepare_case(None, "P3", 100, 0, 3, ast_options={
+    "max_attempts": 64,
+    "solver_budget": {"terminal_assignments": 32, "max_nodes": 200000},
+})
 ```
 
-实际实现应让每个接口返回结构化 `Result`，由编排层决定重试范围；上面为简化省略解包。`AcceptedOrClassifiedCase` 明确区分仅静态有效、已取得执行证据、性能候选和未决性能状态；语义被否定或未证明均不返回正式接受的性能用例。不能用一个大范围 `except ValueError: continue` 丢弃阶段、原因和不支持信息。
+编排按 M1→M2→M3→M4→M5→M6 保存阶段记录，每个记录包含 `stage/version/input_digest/output_digest/data`。新方法不接受旧 GDsmith 具体查询 seed、composition、legacy complexity 或 state_variant 控制；本地规则形状选项使用 `generation.ast.pattern_options`，宿主语法使用 `generation.ast.grammar`。可用配置模板为 `configs/ast-pattern.yaml`。
 
-| 失败代码 | 含义 | 允许动作 |
-|---|---|---|
-| `generation_exhausted` | M1 预算内无法完成合法宿主 | 换宿主种子；计入拒绝分母 |
-| `no_compatible_site` | 无可容纳所选规则的端口 | 换端口/规则或重新生成宿主；保留原失败记录 |
-| `binding_capture` / `interface_mismatch` | 嵌入破坏作用域或输出接口 | M2 拒绝；修正规则或选择其他端口 |
-| `constraint_conflict` | 具体约束分支冲突 | 在 M3 预算内回溯，保存冲突来源 |
-| `unsatisfiable_in_domain` | 有限声明域已穷尽且无解 | 返回有范围的无解结论 |
-| `budget_exhausted` | 未完成穷尽搜索 | 返回未知；不能称无解 |
-| `unsupported_fragment` / `unsupported_target` | 构造器或目标缺能力 | 单列统计，不静默转 legacy |
-| `unbound_slot` / `unexpanded_structure` / `contract_drift` | M4 缺终端绑定、仍有普通结构槽位或输入被改动 | 作为实现错误暴露，禁止自动补默认值或调用结构生成器 |
-| `premise_failed` / `out_of_region_mutation` | M5 前提或变异范围不成立 | 拒绝并保留反例；不进入计时 |
-| `result_mismatch` | 目标数据库上完整结果不一致 | 语义失败；不能作为性能异常 |
-| `semantic_relation_unknown` | 语义前提、输入域覆盖或等价传递依据不足 | 不进入正式性能比较；单列未知及缺失依据 |
-| `work_dependency_unknown` | 语义已证明，但逻辑需求或工作传播缺依据 | 可计时，未知工作关系不能据此作局部归因 |
-| `plan_mapping_unknown` | 语义已证明，但物理计划无法可靠映射目标位点 | 可保留完整查询测量；局部物理传导保持未知 |
+`generation.ast` 当前支持 `grammar/capabilities/ast_budget/embedding_budget/solver_budget/max_attempts/pattern_options/host_seed/embed_seed/require_target_entry`。默认 `max_attempts=64`，`require_target_entry=true`。每次尝试使用独立派生种子；失败保留阶段、代码、原因、证据和已完成阶段记录。根部语义未证明或要求的目标入口不可达时不返回接受用例。搜索预算控制可接受的宿主重采样次数，不放宽类型、结果关系或目标暴露条件。
 
-预算分别限制 AST 节点/深度、嵌入尝试、联合约束分支、图节点/边、执行时长和确认次数；不得用单一规模 N 同时代指所有预算。多 Pattern 组合还需实例数和重叠深度上限。所有随机选择使用派生子种子归档，避免额外重试改变后续无关阶段的随机轨迹。
+| 当前状态或失败出口 | 含义与控制 |
+|---|---|
+| `generation_exhausted` | M1 预算内无法完成合法宿主，有限尝试可换宿主 |
+| `no_compatible_site`、`interface_mismatch`、`embedding_budget_exhausted` | 端口/局部规则不相容或局部节点预算不足，记录后重试 |
+| `constraint_conflict`、`budget_exhausted` | 终端域冲突或有限联合构图搜索未找到状态，不解释为任意图上无解 |
+| `unsupported_fragment` | 支持片段之外的结构，包括多个未填端口；保留拒绝原因 |
+| `invalid_configuration`、`invalid_budget`、`unknown_pattern` | 配置错误立即抛出，不消耗重试伪装成随机失败 |
+| `contract_drift`、`unbound_slot`、`unexpanded_structure`、`out_of_region_mutation` | 实现或阶段输入合同破坏，立即失败，不补默认值或回退旧路线 |
+| `premise_failed` | M5 的适用前提或验证未通过；保留失败并按生成预算重试 |
+| `semantic_relation_unknown`、`target_unreachable` | M6 根部关系或默认入口要求未满足，不进入正式性能比较 |
+| `generation_budget_exhausted` | 全部允许尝试耗尽，返回完整失败轨迹 |
+| 运行时结果不等、出错、未完成或超时 | 由现有执行协议单列；不能当作普通已确认性能差异 |
+| 需求或物理映射未知 | 属于 DependencyReport 的状态字段，当前并无同名 `work_dependency_unknown/plan_mapping_unknown` 异常码 |
+
+M1 预算为 `clauses/nodes/expression_depth/subquery_depth/path_hops/port_nodes`；各递归分支共享账本。M2 可用 `embedding_budget.max_local_nodes` 进一步收紧端口预算。M3 当前接受 `terminal_assignments/max_nodes/max_edges`，其他 solver budget 键被拒绝；共享语义求解器还受既有有限搜索上限约束。`unsatisfiable_in_domain` 是可保留的未来精确出口，当前实现主要返回带原因的有限预算失败，不宣称全域无解。
 
 ## 9. 版本与回放
 
-新运行记录新增 `method_version=ast-pattern-v1`、`grammar_version`、`pattern_catalogue_version`、每条规则版本、语义/构造器版本和目标能力版本。本次文档修订号 `gdsmith-r1` 只记录设计修订，不自动改变方法版本或表示运行结果。M1 另存子句骨架与结构展开的派生种子、摘要和轨迹。保留源代码版本及工作区状态摘要，不能仅凭随机种子要求跨版本逐字再生。
+运行记录使用 `method_version=ast-pattern-v1`、`grammar_version=typed-host-v1`，M2 记录 `paper-v1/local-law-v1` 注册表与规则身份。`source_version()` 保存 Git 提交、工作树状态、全部 Python 源文件指纹及 Python 版本。文档修订号不参与方法运行身份。
 
-每个完整用例至少归档：
+当前新用例使用归档格式4，保存以下实际文件：
 
 ```text
-manifest.json
-M1-clause-skeleton.json
-M1-expansion.json
-M1-host.json
+result.json               # 归档版本、输入/扩展摘要、case、测量配置与结果
+setup.cypher
+query_a.cypher            # 或目标语言对应后缀
+query_b.cypher
+M1-host.json              # 含 clause_skeleton、scope_graph、expansion_trace
 M2-embedding.json
+M3-construction.json      # 阶段数据包含 graph_spec、binding_plan 与构造证书
 M3-state.json
 M3-bindings.json
-M3-construction.json
 M4-instantiation.json
 M5-pair.json
 M6-dependencies.json
 M6-runtime.json
-queries/                  # 已编译查询与参数，作为可检查输出
 ```
 
-这是拟议文件布局；也可在现有归档中存为同名分段，但必须保留全部证据与摘要。每阶段记录输入摘要、输出摘要、阶段版本和失败状态；不得通过删除可选字段绕过合同检查。
+子句骨架与展开轨迹当前内嵌于 M1 文件，并未额外写 `M1-clause-skeleton.json/M1-expansion.json`。`result.json` 承担先前设计中 manifest 的职责，查询文件也未放入独立 `queries/` 子目录。M1–M6 文件保存各自完整阶段记录，M3 state/bindings 与 M6 runtime 额外按实际内容写出；`read_case()` 要求文件存在且与归档内容一致，禁止格式4向旧格式降级。
 
-回放提供两个明确模式：
+回放分为两个已实现入口：
 
-1. **执行回放**：直接加载已归档 IR、参数、Graph State 和检查，重新编译或核对目标后执行；不重新随机生成。
-2. **生成再现**：在完全匹配的版本和种子下重新执行 M1–M5，比对逐阶段摘要；不匹配时报告首次差异，不能覆盖原记录。
+1. **执行回放**：`main.replay()` 直接读取归档 IR、参数、图和检查，必要时按目标与已验证特性重新编译后执行。新用例在重编译、保留不支持状态及跨目标回放时仍保留格式4与完整阶段合同。
+2. **生成再现**：`pipeline.reproduce_generation(case)` 先要求当前 Python 源码指纹与归档匹配，再按归档选项和种子重跑 M1–M6，逐阶段比较摘要；出现变化时报告首次不一致阶段，不覆盖原记录。
 
-旧 `legacy-v1` 及旧 symbolic 三阶段记录继续使用对应解码器。它们不能被标成 `ast-pattern-v1`；缺少 M1 宿主和 M2 插入证据的旧记录无法证明新方法顺序。`paper-v1` 的 P10 三种 form 和旧编号映射显式保留。
+`validate_stage_records()` 检查摘要链、M2 对 M1 的消费、M4 源到 M5 的一致性，以及公共 case 中的图、查询、方向、side roles、构造和依赖报告。执行前还检查必要状态查询未丢失、编译文本和编译器 bindings/列名/特性与 IR 相符。旧格式1–3保留对应解码路径，旧记录不会自动标成新方法。
 
 ## 10. 方法—接口—测试—证据追踪
 
-下表中“新增测试”是待实现验收合同；现有测试只提供可复用断言，没有在本轮执行。
+下表列出当前实现和实际测试入口；冻结执行结果统一登记在 [实现验收记录](ast-pattern-implementation-status.md)，测试文件的存在本身不代表某个任意上下文已受支持。
 
-| 方法 ID | 拟议接口 | 必须验收的性质 | 归档证据 | 可复用现有测试 |
+| 方法 ID | 当前接口/模块 | 已落实的合同 | 归档证据 | 当前测试入口 |
 |---|---|---|---|---|
-| M1 | `generate_random_ast` | 子句骨架与有类型展开均不依赖 Pattern/具体图/值表；类型、作用域、可空性和预算合法 | `M1-clause-skeleton`、`M1-expansion`、`M1-host`、shape digest | `tests/test_composition.py:25,47` 的接口/捕获断言；两层生成与独立性测试待新增 |
-| M2 | `embed_patterns` | 只修改声明端口；捕获规避；完整记录原树与插入位置；多个同形位置只选目标 | `M2-embedding`、outside-port digest、origin map | `tests/test_dependencies.py:36,84,102`；`tests/test_mutation_origins.py:31,61` |
-| M3 | `construct_graph_state` | 固定 AST 上分解需求；两侧共图；真实绑定域与量词明确；三值、数量、空输入及 unknown 不混同 | 图、绑定、ConstraintTask 来源/域/量词、构造/扩展证书 | `tests/test_requirement_domains.py:70,118,132,244,269`；`tests/test_truth_contracts.py:41,115`；新域覆盖合同待测试 |
-| M4 | `instantiate_query` | 整树终端物化，零未绑定终端；无普通结构槽位；不调用生成器、不改图 | `M4-instantiation`、槽位覆盖、各摘要 | `tests/test_symbolic_skeleton.py:50,61,91`；需新增外层覆盖与禁止结构补全测试 |
-| M5 | `mutate_target` | 指定单实例局部变异；完整结果关系与 NULL/多重性/路径前提成立 | `M5-pair`、变异方向、关系和范围 | `tests/test_dependencies.py:483,504,540,751`；`tests/test_paper_rejections.py:27,42,56,78,109` |
-| M6 | `check_dependencies` | 四层摘要分离；屏蔽与短路目标有效性分开；物理未知不冒充逻辑事实 | `M6-dependencies`、版本/计划/运行记录 | `tests/test_dependencies.py:161,178,577` 仅可复用语义传播；性能传播与计划证据测试需新增 |
+| M1 | `host_generator.generate_random_ast` | 两层随机生成独立于 Pattern/图，类型、作用域、可空性、能力与预算校验 | M1 HostAst 内的骨架、scope、trace、shape/host digest | `tests/test_ast_pattern_host.py`；`tests/test_ast_pattern_contracts.py` |
+| M2 | `embedding.embed_patterns` | 一个类型化端口、局部结构固定、alpha rename、端口外结构不变 | M2 EmbeddedAst、origin map、PatternSpec/instance | `tests/test_ast_pattern_embedding.py` |
+| M3 | `state_builder.construct_graph_state` | 固定 AST 的需求分解、有限联合终端赋值、同图及证书冻结 | M3 图、BindingPlan、构造记录、population 约束与证据 | `tests/test_ast_pattern_state.py`；共享 `test_requirement_domains/test_truth_contracts` 回归 |
+| M4 | `instantiation.instantiate_query` | 全树终端填充，不调用变异器或结构生成器，图/计划/证书防漂移 | M4 source/replacement/bindings/checks 摘要 | `tests/test_ast_pattern_state.py`；`tests/test_ast_pattern_contracts.py` |
+| M5 | `mutation.mutate_target` | 指定目标局部变异，保留实际语义与加载检查，角色方向明确 | M5 两侧 IR、mutation_record、必要检查 | `tests/test_ast_pattern_state.py`；`tests/test_ast_pattern_runtime.py`；原规则拒绝与语义回归 |
+| M6 | `dependency_check` 与 `evidence_adapter` | 根部关系、输入范围、需求、上下文、共享读取、未知物理映射分别报告 | M6 static certificate 与 bound runtime report | `tests/test_ast_pattern_dependencies.py`；`tests/test_ast_pattern_runtime.py` |
+| 编排/回放 | `pipeline`、`main.save_case/read_case` | 默认新入口、无隐式回退、阶段摘要链、格式4、源码一致生成再现 | result.json 及 M1–M6 独立文件 | `tests/test_ast_pattern_pipeline.py` |
+| 实际 Neo4j | `tests/test_ast_pattern_neo4j.py` | 加载后状态检查、完整结果、运行证据、归档回放及 N=10000 证书状态 | 独立测试结果与真实用例归档 | 25种规则/形式×2 seed、2项运行回放、3项大状态检查 |
 
-编号兼容参考 `tests/test_paper_catalog.py:9–17,31–39`；旧阶段记录防篡改参考 `tests/test_symbolic_pipeline.py:159–181`。`tests/test_all_paper_patterns.py:62,69` 检查的是当前 symbolic 入口，不能在新验收中更名后继续声称证明 M1/M2。
+旧 `tests/test_symbolic_pipeline.py`、`tests/test_all_paper_patterns.py` 等已经明确调用兼容入口，继续检验历史规则及归档，不计作新 M1/M2 的直接实现证据。新 `test_ast_pattern_pipeline.py` 另行检查默认入口和全部23个论文标识。
 
-### 10.1 必须覆盖的端到端用例
+### 10.1 端到端合同与扩展边界
 
-| 验收用例 | 预期性质，不是实测结果 |
+| 验收用例 | 当前合同或扩展范围 |
 |---|---|
 | 同一宿主、多个兼容 Pattern | M1 归档一致；M2 选择不同局部规则；外部结构保持 |
 | 同一 Pattern、不同宿主和深度 | 不调用完整 Pattern 模板；覆盖行流、谓词、标量等允许接口 |
-| 多个同形候选位置 | 按 instance ID 只改变一个目标；其余位置和绑定保持 |
+| 多个同形局部规则位点 | 局部结构显式 mark 选择目标；多个宿主显式 Port 当前被拒绝 |
 | P3 的 N 参数族 | 模型上 N+4 节点、N+3 边、N+1 候选、1 个通过；两查询 COUNT=1；目标计时另行记录 |
 | P3 的顺序敏感路径消费 | 返回路径节点序列等不满足反转不变的观察时拒绝，不能仅看外层 COUNT |
 | S7 的 answer=0 与 answer=NULL | 0 接受为非 NULL 决定值；NULL 情形不能沿用同一前提 |
 | S6/S8 逐绑定见证不足 | 某输入绑定缺见证时拒绝，不能用总见证数代替每绑定事实 |
 | P11 的四种匹配组合 | both/left-only/right-only/neither 逐输入域保持 NULL 扩展与行多重性 |
 | 冲突外层 COUNT 区间 | 返回有来源的约束冲突/预算未知，不改阈值、不额外加成功行 |
-| 两个 Pattern 共享实体域 | 检查一个实例增加的图域对所有读取的影响；冲突不能被命名隔离掩盖 |
-| S7 内部嵌套 P3 | S7 测试有效；P3 暴露为 masked；结果不压成全局 invalid |
+| 目标与外层读取共享实体域 | 分析节点/关系/属性及别名来源；多个显式登记 Pattern 的通用联合求解仍为扩展 |
+| 外层原有 S7 内嵌 P3 | 区分根部等价、外层前提与 P3 入口屏蔽；默认要求入口有效时重试 |
 | m 行相关输入 | 逻辑输入多重性可核验；无计划证据时物理调用次数保持 unknown |
 | 目标优化器消除两侧差异 | 记录无差异或目标擦除变换；不将生成成功当作漏洞 |
 | 损坏 Graph State/绑定/位点 | 各阶段摘要与前提校验拒绝继续执行 |
 | 旧编号与旧归档回放 | 旧 P11/P13 等身份保持；不会转换成错误论文 Pattern |
 | 短路比较方向 | L→H 的 b 变慢与 H→R 的 a 变慢均按各自角色进入筛选；不能统一要求 a 变慢 |
 
-### 10.2 报告指标
+### 10.2 记录与统计口径
 
-生成阶段分别报告宿主生成数、结构摘要种类数、端口种类/深度分布、嵌入接受率、联合构造接受率和各失败原因。结构多样性统计忽略变量重命名与终端值变化，并分别统计宿主结构和 Pattern 局部结构；不能把改随机变量名当作结构覆盖增长。
+运行记录保留每次失败及阶段轨迹，当前 run.json 记录方法、各 Pattern 的尝试/执行数、停止原因及生成失败。阶段数据可用于离线计算子句/结构种类、端口/深度分布、嵌入与构造接受率；这些派生指标尚未全部成为自动汇总列。结构摘要保留布尔操作符、函数名、方向、path mode、OPTIONAL/DISTINCT 标志及子节点顺序，只忽略终端与重命名；不能用叶子取值变化代替结构增长。
 
-正确性报告槽位覆盖率、局部变异范围违规数、构造检查失败数、目标数据库完整结果不一致数和回放一致率。性能依赖报告静态已解析/未知数量、实例暴露/屏蔽分布、计划可映射比例和具有运行时支持的依赖数量。每个比例注明分母和失败样本的计入方式。
+正确性证据由阶段合同、状态查询、完整结果检查与回放摘要提供。若据此汇总覆盖率、失败率或屏蔽分布，必须保留分母与失败样本口径。当前物理计划映射保持未知，不能汇总成“已证明局部物理传播”的数量。
 
 性能测试复用现有成对测量与确认阈值，并归档实际配置。报告运行时间比、绝对差、方向一致性及确认结果；DB Hits、行数和算子循环数用作机制证据。本文不填写尚未测量的数值，也不将静态预测的工作增长写成运行时间复杂度结论。
 
 ### 10.3 GDsmith 借鉴部分的新增合同测试
 
-以下均为待实现测试，不是本次已执行的测试结果。
+以下为本轮已落实到阶段测试与共享语义回归的合同分组；它们是测试索引，不是额外的10次数据库运行。完整冻结结果见第12.3节和实现验收记录。
 
 | 测试 ID / 阶段 | 输入或扰动 | 验收断言 |
 |---|---|---|
@@ -628,18 +620,15 @@ queries/                  # 已编译查询与参数，作为可检查输出
 | GD9 / M3 | 两个实际 u 中只有一个 answer 非 NULL | 一个满足见证不能证明 S7 的全域前提；应构造覆盖全部绑定的事实或拒绝 |
 | GD10 / M4 | 正常终端赋值、残留普通结构槽位，监测所有结构生成器调用 | 正常物化不增长 AST；残留结构返回 `unexpanded_structure`；不调用 QueryFiller 式结构补全 |
 
-生成统计补充子句骨架种类数、展开后宿主结构种类数、结构展开拒绝率与作用域拒绝原因；它们均不能以变量名/终端变化计数。M3 报告“见证满足”与“实际输入域覆盖已证明”两类数量，避免将单见证非空率当作规则全域有效率。
+GD1–GD5 主要对应 `test_ast_pattern_host/embedding/contracts`；GD6–GD10 对应 `test_ast_pattern_state` 及 `test_truth_contracts/test_requirement_domains` 的共享语义回归。实际输入域验证、NULL 前缀反例和压缩图证据范围另由 `test_ast_pattern_dependencies` 检查。尚未自动汇总的覆盖率按第10.2节口径从实际记录计算。
 
-## 11. 实施顺序与切换条件
+## 11. 默认入口与保留的扩展要求
 
-1. 固定数据合同与新版本，建立 M1/M2 的独立性、作用域和插入范围测试。先让一个兼容 Pattern 完整贯通，但宿主生成器从第一天起不接收该 Pattern 的 ID。
-2. 将现有局部规则整理为 PatternSpec；提取 `GraphSpec` v2、需求求解与解释器适配。用 P3 与 S7 分别贯通对称和短路流程，建立原树—嵌入—构图—填充—变异的逐阶段证据。
-3. 拆分 `instantiate_pair`，补齐外层所有槽位的覆盖测试；将已核查语义边界逐条迁入注册表。按表推进 P1–P13/S1–S10，不以登记条目数量等同于贯通数量。
-4. 实现 M6 四层静态摘要及嵌套 Pattern 分类，再接 Neo4j 的完整结果、计划与计时证据。先保留 unknown，再逐步扩展可证明范围。
-5. 新入口通过各阶段合同及端到端验收后，改 `prepare_case` 的新生成选择；旧入口只接受显式 legacy/replay 模式。禁止新入口失败后回退旧 Pattern 模板。
-6. 逐目标扩展后端验证。完成当前版本的归档回放与统计后，方法文档的实现状态才可更新为已实现；数据库性能结论以实际运行证据为准。
+默认 `prepare_case()` 与 `run()` 已切换到六阶段方法；新路径失败返回结构化原因，显式兼容方法负责历史生成和回放。旧配置若要继续使用 composition 或有限模板，需要明确填写对应 `generation.method`。默认配置不把 GDsmith 具体查询日志当作 M1 输入。
 
-最终切换条件不是“文件已按六步命名”，而是任一用例都能从 M1 原始宿主、M2 指定插入、M3 联合状态、M4 全树终端赋值、M5 单点变异追踪到 M6 依赖与执行证据，且每一步的实现不绕过其输入输出合同。
+本轮实现以一个登记目标、现有有界 IR 与 Neo4j 显式图加载为验收范围。仍需单独扩展的能力包括：多个显式端口/实例的联合构造，任意已有子树替换，更多目标数据库的 v2 状态加载，以及可信的物理计划到 AST 位点映射。扩展这些能力时继续使用局部 Pattern 合同、全树共享需求和阶段证据，不改变六阶段方法顺序。
+
+实现与方法的一致性通过 M1 宿主、M2 插入、M3 联合状态、M4 全树赋值、M5 单点变异、M6 依赖及执行证据逐步检查。字段存在或某个测试通过不代替未接入能力的声明。
 
 ## 12. 文档验证与修订范围
 
@@ -659,6 +648,12 @@ queries/                  # 已编译查询与参数，作为可检查输出
 
 ### 12.2 `gdsmith-r1` 的定向修订
 
-本次重新核对 GDsmith 正式论文及第 2.3 节固定提交的相关源码，更新 M1 两层生成、M3 固定 AST 的需求分解、M4 终端物化边界，以及对应字段、归档和测试合同。M2/M5/M6 的规则与 P3/S7 示例保持原文；六阶段顺序和 `ast-pattern-v1` 方法版本保持。
+`gdsmith-r1` 是本轮实施前的文档修订：当时核对 GDsmith 正式论文及固定提交源码，补充 M1 两层生成、M3 固定 AST 的需求分解和 M4 终端物化边界。该次修订本身没有实现新接口，其历史验证范围与下述本轮实现分开记录。
 
-本次仅更新两份设计文档，没有实施新接口、改变源码或执行第 10.3 节的规划测试。新增设计仍为待实现；初稿语义例子验证与本次文档修订分别记录，既有测试套件未在本次整体重跑。
+### 12.3 `implementation-r1` 的实现验收
+
+2026-10-26 本轮已实现并接入第2.4节所列模块，技术文档同步为当前接口、数据位置、阶段控制、格式4和回放行为。主要新验收入口为8个 `test_ast_pattern_*.py` 文件及 `test_exists_growth_certificate.py`，旧语义与兼容路线继续回归。
+
+最终冻结执行结果为：完整测试 **2938 passed、1532 skipped**；新验收文件中有 **297 项离线测试通过**，既有归档字段回归也覆盖新增元数据。显式临时 **Neo4j 2026.09.0** 上，新集成套件 **56 passed**：25种论文规则/形式×2个查询 seed，共50项加载与完整结果检查；2项真实运行、归档及回放；4项 N=10000 大状态检查（P3/P10/S7/S8）。跳过项不计作通过，集成结果也不表示任意 AST、任意数据库版本或其他后端已经验证。
+
+P3/S7 的实际 CLI 用例、跨进程生成再现、真实 CLI 执行回放及冻结源码/测试产物位置保存在 [实现验收记录](ast-pattern-implementation-status.md)，机器可读摘要见 [验收摘要](ast-pattern-acceptance-20261026.json)。性能 smoke 的 `no_candidate` 表示该配置下未形成性能候选，不是缺陷发现结论。局部物理映射和调用次数继续保持 unknown。
