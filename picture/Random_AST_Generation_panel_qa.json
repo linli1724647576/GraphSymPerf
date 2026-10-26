@@ -1,28 +1,18 @@
 {
-  "panel": "Random_AST_Generation_panel.svg",
+  "date": "2026-10-27",
+  "design": "minimal: dice + one large AST",
   "canvas": [
     330,
     720
   ],
-  "editable_text_elements": 18,
-  "visual_model": [
-    "sample clauses",
-    "typed expansion",
-    "abstract AST with one result-table slot"
-  ],
-  "chosen_clauses": [
+  "visibleLabels": [
+    "Query",
     "MATCH",
-    "RETURN"
+    "RETURN",
+    "α",
+    "COUNT"
   ],
-  "unchosen_clause_example": "WITH",
-  "chosen_integer_expression": "COUNT",
-  "unchosen_integer_expression_examples": [
-    "CASE",
-    "Literal"
-  ],
-  "symbolic_label": "α",
-  "raster_images_in_panel": 0,
-  "visual_review": "panel and full placement preview inspected",
-  "browser_text_bounds": "no out-of-canvas text or overlapping text boxes",
-  "placement_preview": "user screenshot as raster background; new panel is native vector"
+  "operatorNames": 4,
+  "rasterImagesInPanel": 0,
+  "outOfCanvasText": []
 }

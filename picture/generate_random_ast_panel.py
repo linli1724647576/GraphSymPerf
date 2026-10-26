@@ -15,8 +15,6 @@ from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parent
 INK = '#171717'
-GRAY = '#8A8A8A'
-LINE = '#AAAAAA'
 FONT = 'Arial,Helvetica,sans-serif'
 
 
@@ -24,77 +22,54 @@ def draw_panel():
     parts = [
         '<svg xmlns="http://www.w3.org/2000/svg" width="330" height="720" '
         'viewBox="0 0 330 720" role="img" aria-labelledby="panel-title panel-desc">',
-        '<title id="panel-title">Random typed AST generation: clauses, expansion and an abstract query</title>',
-        '<desc id="panel-desc">One example samples MATCH then RETURN, selects COUNT from integer '
-        'productions, and forms a Query AST with an unbound label alpha and exactly one typed '
-        'result-table slot for later Pattern embedding. Gray dashed productions are alternatives.</desc>',
+        '<title id="panel-title">Random AST generation: a random choice and one large query AST</title>',
+        '<desc id="panel-desc">A dice symbol represents random generation. A large query AST '
+        'contains MATCH and RETURN, with COUNT and unbound terminal leaves. No Pattern or '
+        'concrete graph is introduced.</desc>',
         '<defs><marker id="m1-arrow" viewBox="0 0 10 10" refX="9" refY="5" '
-        'markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto">'
-        f'<path d="M0 0L10 5L0 10Z" fill="{INK}"/></marker>'
-        '<marker id="m1-gray-arrow" viewBox="0 0 10 10" refX="9" refY="5" '
-        'markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">'
-        f'<path d="M0 0L10 5L0 10Z" fill="{LINE}"/></marker></defs>',
+        'markerWidth="17" markerHeight="17" markerUnits="userSpaceOnUse" orient="auto">'
+        f'<path d="M0 0L10 5L0 10Z" fill="{INK}"/></marker></defs>',
         '<rect width="330" height="720" fill="white"/>',
         f'<rect x="1.5" y="1.5" width="327" height="717" fill="none" '
         f'stroke="{INK}" stroke-width="1.8" stroke-dasharray="7 6"/>',
     ]
 
-    def text(x, y, value, size=22, color=INK, bold=False, anchor='middle'):
+    def text(x, y, value, size=28):
         parts.append(f'<text x="{x}" y="{y}" font-family="{FONT}" font-size="{size}" '
-                     f'fill="{color}" font-weight="{700 if bold else 400}" '
-                     f'text-anchor="{anchor}">{escape(value)}</text>')
+                     f'fill="{INK}" font-weight="700" text-anchor="middle">{escape(value)}</text>')
 
-    def path(data, *, chosen=True, arrow=False, width=2):
-        parts.append(f'<path d="{data}" fill="none" stroke="{INK if chosen else LINE}" '
-                     f'stroke-width="{width}" stroke-linejoin="round" stroke-linecap="round"'
-                     + ('' if chosen else ' stroke-dasharray="4 4"')
-                     + (f' marker-end="url(#{"m1-arrow" if chosen else "m1-gray-arrow"})"' if arrow else '')
-                     + '/>')
+    def path(data, *, arrow=False, width=3):
+        parts.append(f'<path d="{data}" fill="none" stroke="{INK}" stroke-width="{width}" '
+                     'stroke-linejoin="round" stroke-linecap="round"'
+                     + (' marker-end="url(#m1-arrow)"' if arrow else '') + '/>')
 
-    def box(x, y, width, height, label, *, chosen=True, size=22, bold=False):
+    def box(x, y, width, height, label, size=28):
         parts.append(f'<rect x="{x}" y="{y}" width="{width}" height="{height}" '
-                     f'rx="5" fill="white" stroke="{INK if chosen else LINE}" stroke-width="1.8"'
-                     + ('' if chosen else ' stroke-dasharray="5 4"') + '/>')
-        text(x + width / 2, y + height / 2 + size * .34, label, size,
-             INK if chosen else GRAY, bold)
+                     f'rx="7" fill="white" stroke="{INK}" stroke-width="2.8"/>')
+        text(x + width / 2, y + height / 2 + size * .34, label, size)
 
-    # Selected clause primitives are solid, the unselected WITH is dashed.
-    text(165, 34, 'Sample clauses', 24, bold=True)
-    box(13, 59, 91, 37, 'MATCH', size=20, bold=True)
-    box(121, 59, 75, 37, 'WITH', chosen=False, size=20)
-    box(212, 59, 105, 37, 'RETURN', size=20, bold=True)
-    path('M58 98V112H165V126', arrow=True)
-    path('M264 98V112H165')
-    box(47, 134, 236, 43, 'MATCH → RETURN', size=22, bold=True)
-    path('M165 183V202', arrow=True, width=2.5)
+    # Randomness is a single visual symbol, rather than another text workflow.
+    parts.append(f'<rect x="127" y="24" width="76" height="76" rx="11" '
+                 f'fill="white" stroke="{INK}" stroke-width="3.5"/>')
+    for x, y in ((143, 40), (187, 40), (165, 62), (143, 84), (187, 84)):
+        parts.append(f'<circle cx="{x}" cy="{y}" r="5.7" fill="{INK}"/>')
+    path('M165 119V179', arrow=True, width=4.5)
 
-    # Expected integer type limits the operator alternatives.
-    text(165, 233, 'Typed expansion', 24, bold=True)
-    text(165, 260, 'Type · scope · budget', 18, color='#5B5B5B')
-    box(94, 281, 142, 40, 'Expr : int', size=22)
-    path('M165 323V338H55V350', chosen=False, arrow=True)
-    path('M165 338H277V350', chosen=False, arrow=True)
-    path('M165 323V350', arrow=True, width=3)
-    box(13, 355, 84, 39, 'CASE', chosen=False, size=21)
-    box(112, 355, 106, 39, 'COUNT', size=23, bold=True)
-    box(233, 355, 84, 39, 'Literal', chosen=False, size=20)
-    path('M165 401V426', arrow=True, width=2.5)
-
-    # One complete abstract structure: operators fixed, graph terminals unbound.
-    text(165, 462, 'Abstract AST A₀', 24, bold=True)
-    box(111, 483, 108, 40, 'Query', size=23, bold=True)
-    path('M165 526V537H80V544')
-    path('M165 537H251V544')
-    box(25, 549, 110, 39, 'MATCH', size=22, bold=True)
-    box(195, 549, 112, 39, 'RETURN', size=22, bold=True)
-    path('M80 591V603', arrow=True)
-    path('M251 591V603', arrow=True)
-    box(25, 608, 110, 39, '(n : α)', size=23)
-    box(195, 608, 112, 39, 'COUNT', size=23, bold=True)
-    path('M251 650V669', arrow=True)
-    parts.append(f'<rect x="236" y="675" width="30" height="30" fill="white" '
+    # One large AST occupies the remaining panel. Only operator names remain.
+    box(98, 196, 134, 64, 'Query', 30)
+    path('M165 263V306H79V347')
+    path('M165 306H251V347')
+    box(12, 350, 134, 66, 'MATCH')
+    box(184, 350, 134, 66, 'RETURN')
+    path('M79 419V502')
+    path('M251 419V500')
+    parts.append(f'<circle cx="79" cy="535" r="30" fill="white" '
                  f'stroke="{INK}" stroke-width="2.8"/>')
-    text(222, 697, 'table slot', 19, anchor='end')
+    text(79, 546, 'α', 32)
+    box(194, 503, 114, 64, 'COUNT')
+    path('M251 570V641')
+    parts.append(f'<rect x="223" y="645" width="56" height="56" fill="white" '
+                 f'stroke="{INK}" stroke-width="3.2"/>')
     parts.append('</svg>')
     result = '\n'.join(parts) + '\n'
     ElementTree.fromstring(result)
