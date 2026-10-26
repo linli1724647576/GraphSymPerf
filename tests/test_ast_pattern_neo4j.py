@@ -57,7 +57,7 @@ def test_actual_execution_archive_replay_and_bound_runtime_evidence(tmp_path, pa
 @pytest.mark.parametrize("pattern", ["P3", "P10", "S7", "S8"])
 def test_large_certified_states_preserve_results_in_the_real_database(pattern):
     settings = measurement_settings({"timeout_seconds": 30})
-    grammar = ({"clauses": ["RETURN"], "port_kinds": ["scalar"],
+    grammar = ({"clauses": ["RETURN"], "port_kinds": ["predicate"] if pattern == "S8" else ["scalar"],
                 "return_type": "boolean" if pattern == "S8" else "integer",
                 "expression_operators": ["leaf"]} if pattern in {"S7", "S8"} else
                {"clauses": ["RETURN"], "port_kinds": ["rows"], "expression_operators": ["count"]})
