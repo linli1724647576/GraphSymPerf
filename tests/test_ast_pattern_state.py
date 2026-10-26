@@ -142,16 +142,31 @@ def test_m3_graph_budget_is_enforced_before_accepting_the_state():
 
 @pytest.mark.parametrize("seed", [0, 2, 5, 6])
 def test_random_with_hosts_keep_all_terminal_bindings_and_complete_result_bags(seed):
-    from ast_pattern.host_generator import generate_random_ast
-    host = generate_random_ast({"clauses": ["MATCH", "WITH", "RETURN"],
-                                "expression_operators": ["leaf", "count", "exists"]}, host_seed=seed)
-    item = embed_patterns(host, selection_policy="P3", embed_seed=seed)
-    state, plan, _ = construct_graph_state(item, 7, 3)
+    host, item, state, plan = construct_random_host("P3", seed, {
+        "clauses": ["MATCH", "WITH", "RETURN"],
+        "expression_operators": ["leaf", "count", "exists"]})
     source = instantiate_query(item, state, plan)
     pair = mutate_target(source, state, item.target_id)
     assert all(slot.slot_id in plan.slot_assignments for slot in host.slots)
     assert typed_bag(evaluate_query(pair.query_a, state.spec)) == typed_bag(state.population.expected_rows)
     assert typed_bag(evaluate_query(pair.query_b, state.spec)) == typed_bag(state.population.expected_rows)
+
+
+def construct_random_host(pattern, seed, grammar=None):
+    from ast_pattern.host_generator import generate_random_ast
+    from ast_pattern.contracts import derive_seed
+    # A new grammar version changes the host associated with an old seed;
+    # legal syntax may be unsatisfiable. Exercise the same bounded resampling
+    # contract as the public pipeline instead of assuming every host has a model.
+    for attempt in range(64):
+        try:
+            host = generate_random_ast(grammar, host_seed=derive_seed(seed, "state_fixture", attempt))
+            item = embed_patterns(host, selection_policy=pattern, embed_seed=seed)
+            state, plan, _ = construct_graph_state(item, 7, 3)
+            return host, item, state, plan
+        except StageFailure as error:
+            assert error.code in {"generation_exhausted", "no_compatible_site", "budget_exhausted"}
+    pytest.fail("No constructible host within the fixture's explicit search budget")
 
 
 def test_structural_holes_cannot_be_resolved_during_graph_search():
@@ -165,14 +180,11 @@ def test_structural_holes_cannot_be_resolved_during_graph_search():
 
 @pytest.mark.parametrize("pattern", ["P4", "P10", "S7"])
 def test_goal_checks_close_random_outer_with_bindings_instead_of_only_the_rule_anchor(pattern):
-    from ast_pattern.host_generator import generate_random_ast
     from query import parse_query
     # P4 is a Boolean value law. Use a compatible Boolean port rather than
     # dropping that value through the former COUNT-of-projection adapter.
     grammar = {"port_kinds": ["predicate"]} if pattern == "P4" else None
-    host = generate_random_ast(grammar=grammar, host_seed=3)
-    item = embed_patterns(host, selection_policy=pattern, embed_seed=3)
-    state, plan, _ = construct_graph_state(item, 7, 3)
+    host, item, state, plan = construct_random_host(pattern, 3, grammar)
     source = instantiate_query(item, state, plan)
     pair = mutate_target(source, state, item.target_id)
     assert pair.bindings["goal_checks"]

@@ -1,6 +1,6 @@
 # GraphSymPerf：随机 AST 与 Pattern 嵌入的代码技术设计
 
-方法版本：`ast-pattern-v1`；文档修订：`implementation-r1`。日期：2026-10-26。配套方法文档：[随机 AST 与 Pattern 嵌入的方法](ast-pattern-method.md)。
+方法版本：`ast-pattern-v1`；文档修订：`implementation-r2`。日期：2026-10-26。配套方法文档：[随机 AST 与 Pattern 嵌入的方法](ast-pattern-method.md)。
 
 本文说明当前 `ast-pattern-v1` 实现及其验收合同。六个阶段统一标识为 M1–M6：随机生成 AST、嵌入模式（Pattern）、构造模式感知图状态（Pattern-aware Graph State）、实例化完整查询、执行局部变异、检查依赖关系。`Src/ast_pattern/` 已实现六阶段模块，`main.prepare_case()` 和常规运行配置默认使用新入口。本文将实际接口、压缩图上的证据范围及尚未接入的扩展要求分别注明；冻结版本、测试结果和数据库验收记录见 [实现验收记录](ast-pattern-implementation-status.md)。
 
@@ -198,6 +198,19 @@ generate_random_ast(grammar, capability_profile, budget, host_seed) -> HostAst
 
 M1 采用两层生成。第一层依照通用子句语法与合法后继关系生成 `ClauseSkeleton`，例如 MATCH→WITH→RETURN，也允许没有前置 MATCH 的 RETURN 宿主。第二层依照位置要求的语法类别、期望类型和当前作用域，递归展开宿主的图匹配项、表达式与子查询结构。只有第二层完成后，产物才是供 M2 使用的 `HostAst`。
 
+`typed-host-v2` 的搜索空间按以下维度组合，而非枚举完整查询模板：
+
+| 维度 | 当前候选及组合方式 |
+|---|---|
+| 子句骨架 | `MATCH`、`OPTIONAL MATCH`、`WITH`、`WITH DISTINCT`、`RETURN`、`RETURN DISTINCT`；返回形式只出现在末尾 |
+| 匹配形状 | `node`、`edge`、`chain`、`branch`、`converge`、`cycle`、`disconnected`；后五种由多个 MATCH 共享或分离变量构成 |
+| 匹配约束 | 节点多标签、关系类型备选、节点/关系属性映射、命名关系变量；单边方向可为正向、反向或无向 |
+| 投影 | 中间投影的变量保留与丢弃、标量别名、多列返回、投影/返回去重 |
+| 标量结构 | 比较、空值判断、AND/OR/NOT、CASE、coalesce、COUNT、EXISTS、类型相容的叶子；布尔连接及 coalesce 可有多个操作数 |
+| 子查询行流 | 普通查询、UNION ALL、条件行流；不含目标端口的固定分支还可包含行数截断 |
+
+多 MATCH 的链与闭环不等价于把各边写进同一 MATCH 的多段路径：关系唯一性规则按实际子句边界解释。普通宿主不生成单边自环，也不生成额外裸有界路径。现有路径构图器要求单个有界路径、命名路径和节点局部 ALL 观察；该能力继续用于 P3 局部规则，不能据此宣称普通宿主支持任意数量的变长路径。形状示意见 [外层搜索空间说明](ast-host-search-space.md)。
+
 该分层借鉴 GDsmith 的骨架与类型驱动补全，但没有引入其具体图引导输入。M1 不读取 PatternSpec、GraphManager、GraphState、Vals 或 `varToProperties`；不能先读取某图，再从图中选择匹配路径。M1 可以决定“读取可见节点的一个整数属性”，将属性键保存为整数类型终端槽位；不能在这一阶段选择“恰好等于 7 的图属性”。后一要求由 M3 在固定结构上求解。
 
 M1 的当前内部入口为：
@@ -209,11 +222,13 @@ advance_scope(clause, incoming_scope)
 validate_abstract_types_and_scopes(host)
 ```
 
-匹配、表达式和子行流的递归展开分别由内部 `_Builder.match()`、`_Builder.expression()`、`_Builder.rows()` 实现，类型与可空性由 `_symbol_type()` 及 `advance_scope()` 推导。原设计中的 `ExpansionRequest`、`expand_match_shape()`、`expand_expression_shape()` 并未作为独立 API 引入；其参数职责由 builder 的期望类型、scope、深度及预算状态承担。
+匹配、表达式和子行流的递归展开分别由内部 `_Builder.matches()`、`_Builder.expression()`、`_Builder.rows()` 实现，类型与可空性由 `_symbol_type()` 及 `advance_scope()` 推导。匹配组返回若干独立的 `ir.Match`，每条均推进作用域，并计入所在查询块的子句预算。原设计中的 `ExpansionRequest`、`expand_match_shape()`、`expand_expression_shape()` 并未作为独立 API 引入；其参数职责由 builder 的期望类型、scope、深度及预算状态承担。
 
-子句骨架中的普通语法槽位（例如 WHERE 条件、投影表达式、匹配项）必须在 M1 第二层展开。它们与保留给 M2 的 Pattern 端口不同：前者不能遗留给 M3 或 M4；后者具有完整的输入输出接口和独立标识。当前只保留一个未填 Pattern 端口；多端口与默认子树仍为扩展要求。所选端口类别与位置由通用类型语法决定，不以某个 Pattern 能否适配指导生成。
+子句骨架中的普通语法槽位（例如 WHERE 条件、投影表达式、匹配项）必须在 M1 第二层展开。它们与保留给 M2 的 Pattern 端口不同：前者不能遗留给 M3 或 M4；后者具有完整的输入输出接口和独立标识。当前只保留一个未填 Pattern 端口，位置在最终 RETURN 表达式的子树中；顶层 MATCH/WITH 的 WHERE 与 WITH 投影不直接承载该显式端口，返回表达式内的嵌套查询过滤条件可以承载。多端口、任意已有子树替换与默认子树仍为扩展要求。所选端口类别与位置由通用类型语法决定，不以某个 Pattern 能否适配指导生成。
 
 第二层按依赖顺序工作：先为 MATCH 展开匹配形状并登记变量，再生成可引用这些变量的 WHERE；先在输入作用域中生成 WITH 投影表达式与别名，再建立输出作用域并生成本系统支持片段中的 WITH WHERE。子查询递归调用相同产生式，相关导入通过 symbol ID 显式登记。`RETURN COUNT { ROW_HOLE }` 因而可以直接由返回整数的位置展开得到，不需要为它增加起始 MATCH。
+
+UNION ALL 与条件行流在分支间统一列名、列顺序和类型；UNION ALL 只向一个分支传递 `need_port=True`，条件行流则在守卫及两个分支中选择一个位置，保证全树恰好一个显式端口。普通行流查询还可将该路径置于匹配后的 WHERE。行数截断只在 `need_port=False` 的子树中生成。当前等价传播不接受包含目标的无序 LIMIT，因此不能把目标放进该结构再依赖 M6 偶然接受。
 
 ```python
 # 与当前公开 M1 一致的调用顺序，省略参数校验。
@@ -237,7 +252,21 @@ return replace(host, host_seed=host_seed)
 | CASE/coalesce/布尔式 | 依据操作符签名生成子类型及 nullable 标记；不把“可空”理解为实际值必定 NULL |
 | UNION/条件行流 | 各分支在各自作用域展开，出口按列类型和可空性统一；仅生成目标能力与当前 IR 支持的形式 |
 
-预算至少分为子句数、总 AST 节点数、表达式深度、子查询深度、匹配项/路径上界和端口预留节点预算。一次产生式扩展先预留完成各必要孩子的最低预算；不能靠超深度后填入非法默认节点收束。图节点数与边数不属于 M1 的可读取状态，而在 M3 的图预算中控制。
+宿主配置中的 `grammar` 可限制 `clauses/clause_kinds/port_kinds/return_type/expression_operators`，以及新增的 `match_shapes/match_features/row_operators/comparison_operators`。`capabilities` 对同名候选取交集，`distinct=false` 禁用去重形式；能力限制作用于嵌套查询，不能只过滤顶层骨架。当前有序比较仅接受 IR 可以确认的数值类型，属性类型仍未知时不直接生成属性的 `<`、`<=`、`>`、`>=` 比较；等值比较和空值判断仍可观察属性。
+
+| M1 预算 | 默认值 | 约束对象 |
+|---|---:|---|
+| `clauses` | 4 | 每个查询块展开后的子句数量，包含匹配组产生的各条 MATCH |
+| `nodes` | 180 | 整棵宿主 AST 的共享节点总量 |
+| `expression_depth` | 3 | 标量结构递归深度 |
+| `subquery_depth` | 3 | COUNT/EXISTS 子查询嵌套 |
+| `match_edges` | 3 | 一组匹配形状中的边数量 |
+| `projections` | 2 | 生成投影的宽度上界 |
+| `expression_arity` | 3 | 多元 AND/OR/coalesce 的操作数数量上界 |
+| `path_hops` | 3 | 保留的路径预算字段，不使普通宿主额外获得裸有界路径能力 |
+| `port_nodes` | 128 | M2 可在预留端口中放入的局部 AST 节点数 |
+
+各递归分支共享 AST 节点账本；深度与子句限制按相应语法边界计量。预算不足时只能使用合法的终结形式或返回结构化生成失败。图节点数与边数不属于 M1 的可读取状态，而在 M3 的图预算中控制。候选数量增大不意味着每个组合都可构图：M3 仍联合检查全树与 Pattern 前提，M6 仍检查实际消费者和目标有效性。
 
 验收要求：固定语法、能力、预算和 `host_seed` 后，更换 Pattern 清单、Pattern 选择、GraphState、数据种子或 Vals 均不得改变 `ClauseSkeleton` 与 `HostAst` 的摘要；更直接的接口测试应确认这些对象根本没有传入 M1。Pattern 可影响 M2 的接受率，不能倒推改写归档的 M1 输出。
 
@@ -524,11 +553,11 @@ case = prepare_case(None, "P3", 100, 0, 3, ast_options={
 | 运行时结果不等、出错、未完成或超时 | 由现有执行协议单列；不能当作普通已确认性能差异 |
 | 需求或物理映射未知 | 属于 DependencyReport 的状态字段，当前并无同名 `work_dependency_unknown/plan_mapping_unknown` 异常码 |
 
-M1 预算为 `clauses/nodes/expression_depth/subquery_depth/path_hops/port_nodes`；各递归分支共享账本。M2 可用 `embedding_budget.max_local_nodes` 进一步收紧端口预算。M3 当前接受 `terminal_assignments/max_nodes/max_edges`，其他 solver budget 键被拒绝；共享语义求解器还受既有有限搜索上限约束。`unsatisfiable_in_domain` 是可保留的未来精确出口，当前实现主要返回带原因的有限预算失败，不宣称全域无解。
+M1 预算为 `clauses/nodes/expression_depth/subquery_depth/path_hops/port_nodes/match_edges/projections/expression_arity`；各递归分支共享节点账本。M2 可用 `embedding_budget.max_local_nodes` 进一步收紧端口预算。M3 当前接受 `terminal_assignments/max_nodes/max_edges`，其他 solver budget 键被拒绝；共享语义求解器还受既有有限搜索上限约束。`unsatisfiable_in_domain` 是可保留的未来精确出口，当前实现主要返回带原因的有限预算失败，不宣称全域无解。
 
 ## 9. 版本与回放
 
-运行记录使用 `method_version=ast-pattern-v1`、`grammar_version=typed-host-v1`，M2 记录 `paper-v1/local-law-v1` 注册表与规则身份。`source_version()` 保存 Git 提交、工作树状态、全部 Python 源文件指纹及 Python 版本。文档修订号不参与方法运行身份。
+运行记录使用 `method_version=ast-pattern-v1`、`grammar_version=typed-host-v2`，M2 记录 `paper-v1/local-law-v1` 注册表与规则身份。语法版本区分扩展前后的选择集合、随机轨迹和预算；同一个种子跨语法版本不承诺产生同一宿主。`source_version()` 保存 Git 提交、工作树状态、全部 Python 源文件指纹及 Python 版本。文档修订号不参与方法运行身份。
 
 当前新用例使用归档格式4，保存以下实际文件：
 
@@ -627,6 +656,8 @@ GD1–GD5 主要对应 `test_ast_pattern_host/embedding/contracts`；GD6–GD10 
 默认 `prepare_case()` 与 `run()` 已切换到六阶段方法；新路径失败返回结构化原因，显式兼容方法负责历史生成和回放。旧配置若要继续使用 composition 或有限模板，需要明确填写对应 `generation.method`。默认配置不把 GDsmith 具体查询日志当作 M1 输入。
 
 本轮实现以一个登记目标、现有有界 IR 与 Neo4j 显式图加载为验收范围。仍需单独扩展的能力包括：多个显式端口/实例的联合构造，任意已有子树替换，更多目标数据库的 v2 状态加载，以及可信的物理计划到 AST 位点映射。扩展这些能力时继续使用局部 Pattern 合同、全树共享需求和阶段证据，不改变六阶段方法顺序。
+
+UNWIND、ORDER BY、SKIP 尚未加入普通宿主语法；它们需要查询表示、作用域、解释、图数量约束及依赖传播共同支持。普通宿主中的任意变长路径与单 MATCH 多边路径也不属于本轮扩展。新增候选采用已有可解释的子句和行流组合，不以仅能渲染语法文本代替六阶段支持。
 
 实现与方法的一致性通过 M1 宿主、M2 插入、M3 联合状态、M4 全树赋值、M5 单点变异、M6 依赖及执行证据逐步检查。字段存在或某个测试通过不代替未接入能力的声明。
 

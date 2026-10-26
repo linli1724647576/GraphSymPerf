@@ -164,6 +164,16 @@ class _Relation:
     index: int
 
 
+def _binding_evidence(value):
+    if isinstance(value, _Vertex):
+        return value.uid
+    if isinstance(value, _Relation):
+        # Parallel edges may share endpoints and properties. Their position
+        # in the accompanying validation graph preserves physical identity.
+        return {"kind": "relationship", "index": value.index}
+    return value
+
+
 def _compare(left, operator, right):
     if operator == "IS NULL":
         return left is None
@@ -228,7 +238,7 @@ class _Interpreter:
         if isinstance(value, (Count, Exists)):
             rows = self.run(_subquery(value), env)
             self.subquery_outcomes.append({"operator": type(value).__name__, "rows": len(rows),
-                                           "bindings": {key: item.uid if isinstance(item, _Vertex) else item
+                                           "bindings": {key: _binding_evidence(item)
                                                         for key, item in env.items()
                                                         if not isinstance(item, _Path)}})
             return len(rows) if isinstance(value, Count) else bool(rows)

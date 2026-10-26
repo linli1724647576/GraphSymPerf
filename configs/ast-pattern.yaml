@@ -12,11 +12,19 @@ generation:
   ast:
     max_attempts: 64
     require_target_entry: true
+    grammar:
+      match_shapes: [node, edge, chain, branch, converge, cycle, disconnected]
+      match_features: [multi_label, relationship_alternatives, property_maps, named_relationship]
+      row_operators: [query, union_all, conditional, limit]
+      comparison_operators: ['=', '<>', '<', '<=', '>', '>=']
     ast_budget:
       clauses: 4
       nodes: 180
       expression_depth: 3
       subquery_depth: 3
+      match_edges: 3
+      projections: 2
+      expression_arity: 3
       port_nodes: 128
     solver_budget:
       terminal_assignments: 32

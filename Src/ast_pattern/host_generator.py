@@ -16,10 +16,16 @@ from .contracts import (ClauseSkeleton, EmbeddingPort, HostAst, Port, ScopeState
 
 
 DEFAULT_BUDGET = {"clauses": 4, "nodes": 180, "expression_depth": 3,
-                  "subquery_depth": 3, "path_hops": 3, "port_nodes": 128}
-CLAUSES = ("MATCH", "OPTIONAL MATCH", "WITH", "RETURN")
+                  "subquery_depth": 3, "path_hops": 3, "port_nodes": 128,
+                  "match_edges": 3, "projections": 2, "expression_arity": 3}
+CLAUSES = ("MATCH", "OPTIONAL MATCH", "WITH", "WITH DISTINCT", "RETURN", "RETURN DISTINCT")
+RETURN_CLAUSES = ("RETURN", "RETURN DISTINCT")
+MATCH_SHAPES = ("node", "edge", "chain", "branch", "converge", "cycle", "disconnected")
+MATCH_FEATURES = ("multi_label", "relationship_alternatives", "property_maps", "named_relationship")
+ROW_OPERATORS = ("query", "union_all", "conditional", "limit")
+COMPARISON_OPERATORS = ("=", "<>", "<", "<=", ">", ">=")
 EXPRESSION_OPERATORS = ("leaf", "comparison", "and", "or", "not", "case",
-                        "coalesce", "count", "exists")
+                        "coalesce", "count", "exists", "null_test")
 
 
 def _failure(code, message, **evidence):
@@ -33,37 +39,45 @@ def _budget(value):
         _failure("invalid_configuration", "Unknown host budget field")
     result = DEFAULT_BUDGET | value
     for key, amount in result.items():
-        lower = 0 if key in {"expression_depth", "subquery_depth"} else 1
+        lower = 0 if key in {"expression_depth", "subquery_depth"} else 2 if key == "expression_arity" else 1
         if type(amount) is not int or amount < lower:
             _failure("invalid_configuration", f"{key} requires an integer >= {lower}")
     if result["clauses"] > 32 or result["expression_depth"] > 8 or result["subquery_depth"] > 8:
         _failure("invalid_configuration", "Host recursion or clause budget exceeds supported bounds")
+    if result["match_edges"] > 6 or result["projections"] > 8 or result["expression_arity"] > 8:
+        _failure("invalid_configuration", "Host matching or expression width exceeds supported bounds")
     return result
 
 
 def _grammar(value):
     if value is None:
         value = {}
-    allowed = {"clauses", "clause_kinds", "port_kinds", "return_type", "expression_operators"}
+    allowed = {"clauses", "clause_kinds", "port_kinds", "return_type", "expression_operators",
+               "match_shapes", "match_features", "row_operators", "comparison_operators"}
     if not isinstance(value, dict) or set(value) - allowed:
         _failure("invalid_configuration", "Unknown host grammar field")
     result = dict(value)
     for key, choices in (("clause_kinds", CLAUSES), ("port_kinds", ("rows", "predicate", "scalar")),
-                         ("expression_operators", EXPRESSION_OPERATORS)):
+                         ("expression_operators", EXPRESSION_OPERATORS), ("match_shapes", MATCH_SHAPES),
+                         ("match_features", MATCH_FEATURES), ("row_operators", ROW_OPERATORS),
+                         ("comparison_operators", COMPARISON_OPERATORS)):
         options = result.get(key, choices)
-        if not isinstance(options, (tuple, list)) or not options or any(x not in choices for x in options):
+        if (not isinstance(options, (tuple, list)) or (not options and key != "match_features")
+                or any(x not in choices for x in options)):
             _failure("invalid_configuration", f"Invalid {key}")
         result[key] = tuple(dict.fromkeys(options))
-    if "RETURN" not in result["clause_kinds"]:
+    if not set(RETURN_CLAUSES) & set(result["clause_kinds"]):
         _failure("invalid_configuration", "The host grammar requires RETURN")
+    if "query" not in result["row_operators"]:
+        _failure("invalid_configuration", "The row grammar requires the terminal query production")
     if result.get("return_type", "integer") not in {"integer", "boolean"}:
         _failure("unsupported_fragment", "Host return_type supports integer and boolean")
     if "clauses" in result:
         if not isinstance(result["clauses"], (tuple, list)):
             _failure("invalid_configuration", "Explicit host clauses require a sequence")
         kinds = tuple(result["clauses"])
-        if (not kinds or kinds[-1] != "RETURN" or any(k not in CLAUSES for k in kinds)
-                or "RETURN" in kinds[:-1] or kinds[0] == "OPTIONAL MATCH"):
+        if (not kinds or kinds[-1] not in RETURN_CLAUSES or any(k not in CLAUSES for k in kinds)
+                or any(k in RETURN_CLAUSES for k in kinds[:-1]) or kinds[0] == "OPTIONAL MATCH"):
             _failure("invalid_configuration", "Invalid explicit host clause sequence")
         if any(k not in result["clause_kinds"] for k in kinds):
             _failure("invalid_configuration", "Explicit clause is disabled by the grammar")
@@ -77,15 +91,19 @@ def _capabilities(profile):
     if not isinstance(profile, dict):
         _failure("invalid_configuration", "capability_profile must be a mapping")
     # Capabilities constrain productions, never provide concrete graph data.
-    allowed = {"clause_kinds", "expression_operators", "subqueries", "optional_match", "with"}
+    allowed = {"clause_kinds", "expression_operators", "subqueries", "optional_match", "with",
+               "distinct", "match_shapes", "match_features", "row_operators", "comparison_operators"}
     if set(profile) - allowed:
         _failure("invalid_configuration", "Unknown host capability field")
     result = dict(profile)
-    for key in ("subqueries", "optional_match", "with"):
+    for key in ("subqueries", "optional_match", "with", "distinct"):
         if key in result and type(result[key]) is not bool:
             _failure("invalid_configuration", f"{key} requires a boolean")
-    for key, choices in (("clause_kinds", CLAUSES), ("expression_operators", EXPRESSION_OPERATORS)):
-        if key in result and (not isinstance(result[key], (tuple, list)) or not result[key]
+    for key, choices in (("clause_kinds", CLAUSES), ("expression_operators", EXPRESSION_OPERATORS),
+                         ("match_shapes", MATCH_SHAPES), ("match_features", MATCH_FEATURES),
+                         ("row_operators", ROW_OPERATORS), ("comparison_operators", COMPARISON_OPERATORS)):
+        if key in result and (not isinstance(result[key], (tuple, list))
+                              or (not result[key] and key != "match_features")
                               or any(item not in choices for item in result[key])):
             _failure("invalid_configuration", f"Invalid capability {key}")
     return result
@@ -95,11 +113,12 @@ def _choices(grammar, capabilities):
     clauses = tuple(k for k in grammar["clause_kinds"]
                     if k in capabilities.get("clause_kinds", CLAUSES)
                     and (k != "OPTIONAL MATCH" or capabilities.get("optional_match", True))
-                    and (k != "WITH" or capabilities.get("with", True)))
+                    and (not k.startswith("WITH") or capabilities.get("with", True))
+                    and ("DISTINCT" not in k or capabilities.get("distinct", True)))
     operators = tuple(k for k in grammar["expression_operators"]
                       if k in capabilities.get("expression_operators", EXPRESSION_OPERATORS)
                       and (k not in {"count", "exists"} or capabilities.get("subqueries", True)))
-    if "RETURN" not in clauses or not operators:
+    if not set(RETURN_CLAUSES) & set(clauses) or not operators:
         _failure("unsupported_fragment", "Capabilities leave no complete host grammar")
     return clauses, operators
 
@@ -118,16 +137,17 @@ def sample_clause_skeleton(grammar=None, capability_profile=None, clause_budget=
         count = rng.randint(1, limit)
         prefix = []
         for index in range(count - 1):
-            candidates = [k for k in allowed if k != "RETURN"
+            candidates = [k for k in allowed if k not in RETURN_CLAUSES
                           and (k != "OPTIONAL MATCH" or index > 0)]
             if not candidates:
                 break
             prefix.append(rng.choice(candidates))
-        kinds = (*prefix, "RETURN")
+        kinds = (*prefix, rng.choice([k for k in allowed if k in RETURN_CLAUSES]))
     if len(kinds) > limit or any(k not in allowed for k in kinds):
         _failure("generation_exhausted", "Clause skeleton does not fit the capability/budget")
     slots = {"MATCH": ("matching", "predicate"), "OPTIONAL MATCH": ("matching", "predicate"),
-             "WITH": ("projection", "predicate"), "RETURN": ("projection",)}
+             "WITH": ("projection", "predicate"), "WITH DISTINCT": ("projection", "predicate"),
+             "RETURN": ("projection",), "RETURN DISTINCT": ("projection",)}
     clauses = tuple({"clause_id": f"clause:{i}", "kind": kind, "syntax_slots": slots[kind]}
                     for i, kind in enumerate(kinds))
     trace = tuple({"production_id": f"clause/{kind}", "position": i,
@@ -300,42 +320,126 @@ class _Builder:
         return self.node(Port, "port:0", kind, "rows" if kind == "rows" else
                          "boolean" if kind == "predicate" else "integer", ())
 
-    def match(self, scope, optional=False):
-        visible = [name for name, kind in scope.visible_symbols if kind.rstrip("?") == "node"]
-        reuse = visible and self.rng.random() < .45
-        left_name = self.rng.choice(visible) if reuse else self.fresh()
-        labels = () if reuse else (self.slot("label", "string", (f"AstHost{left_name}",), scope),)
-        left = self.node(ir.Node, left_name, labels)
-        shape = "node"
-        if self.rng.random() < .55:
-            right_name = self.fresh()
-            right = self.node(ir.Node, right_name,
-                              (self.slot("label", "string", (f"AstHost{right_name}",), scope),))
-            relation = self.node(ir.Relationship, type=self.slot("relationship_type", "string",
-                                                                (f"AST_HOST_{right_name}",), scope))
-            left = self.node(ir.Edge, left, relation, right, self.rng.choice(("out", "in", "undirected")))
-            shape = "edge"
-        clause = self.node(ir.Match, left, None, optional)
-        self.trace.append({"production_id": f"match/{shape}", "scope_id": scope.scope_id,
-                           "optional": optional, "imports": tuple(visible) if reuse else ()})
-        return clause
+    def _match_features(self):
+        defaults = ("multi_label", "relationship_alternatives", "property_maps", "named_relationship")
+        return set(self.grammar.get("match_features", defaults)) & set(self.capabilities.get("match_features", defaults))
 
-    def leaf(self, expected, scope, depth):
-        available = [name for name, kind in scope.visible_symbols if kind.rstrip("?") == expected]
-        entities = [name for name, kind in scope.visible_symbols if kind.rstrip("?") in {"node", "relationship"}]
+    def _match_node(self, scope, *, reuse=False):
+        visible = [name for name, kind in scope.visible_symbols if kind.rstrip("?") == "node"]
+        if reuse and visible and self.rng.random() < .45:
+            return self.node(ir.Node, self.rng.choice(visible))
+        name = self.fresh()
+        labels = [self.slot("label", "string", (f"AstHost{name}",), scope)]
+        features = self._match_features()
+        if "multi_label" in features and self.rng.random() < .3:
+            labels.append(self.slot("label", "string", (f"AstHost{name}Extra",), scope))
+        properties = (("host_match", self.literal("integer", scope)),) if (
+            "property_maps" in features and self.rng.random() < .25) else ()
+        return self.node(ir.Node, name, tuple(labels), properties)
+
+    def _match_reference(self, node):
+        # A repeated binding is another AST occurrence, with its own budget
+        # charge, rather than a shared object hidden from the node counter.
+        return self.node(ir.Node, node.variable)
+
+    def _match_edge(self, scope, left, right, *, direction=None):
+        features = self._match_features()
+        relation_type = self.slot("relationship_type", "string", (f"AST_HOST_{self.next_slot}",), scope)
+        alternatives = ()
+        if "relationship_alternatives" in features and self.rng.random() < .3:
+            alternatives = (self.slot("relationship_type", "string", (f"AST_HOST_ALT_{self.next_slot}",), scope),)
+        properties = (("host_edge", self.literal("integer", scope)),) if (
+            "property_maps" in features and self.rng.random() < .2) else ()
+        variable = self.fresh("rel") if "named_relationship" in features and self.rng.random() < .35 else None
+        relation = self.node(ir.Relationship, variable=variable, type=relation_type,
+                             properties=properties, alternatives=alternatives)
+        return self.node(ir.Edge, left, relation, right,
+                         direction or self.rng.choice(("out", "in", "undirected")))
+
+    def matches(self, scope, optional=False, max_clauses=None):
+        """Generate topology as separate MATCH atoms with explicit shared nodes.
+
+        Their semantics include cross-clause relationship reuse and, for
+        OPTIONAL, independent NULL extension. They are not a single Cypher
+        path pattern with implicit relationship uniqueness.
+        """
+        minimum = {"node": 1, "edge": 1, "chain": 2, "branch": 2,
+                   "converge": 2, "cycle": 3, "disconnected": 2}
+        limit = min(self.budget.get("match_edges", 3), max_clauses) if max_clauses is not None else self.budget.get("match_edges", 3)
+        allowed = self.capabilities.get("match_shapes", tuple(minimum))
+        candidates = [shape for shape in self.grammar.get("match_shapes", tuple(minimum))
+                      if shape in allowed and minimum[shape] <= limit]
+        if not candidates:
+            _failure("generation_exhausted", "No matching shape fits the remaining clause/edge budget")
+        shape = self.rng.choice(candidates)
+        count = self.rng.randint(minimum[shape], limit) if minimum[shape] > 1 else 1
+        parts, imported = [], set()
+        incoming = {name for name, kind in scope.visible_symbols if kind.rstrip("?") == "node"}
+
+        def append(pattern):
+            parts.append(self.node(ir.Match, pattern, None, optional))
+            nodes = (pattern,) if isinstance(pattern, ir.Node) else (pattern.left, pattern.right)
+            imported.update(node.variable for node in nodes if node.variable in incoming)
+
+        if shape == "node":
+            append(self._match_node(scope, reuse=True))
+        elif shape == "disconnected":
+            for _ in range(count):
+                append(self._match_edge(scope, self._match_node(scope), self._match_node(scope)))
+        else:
+            root = self._match_node(scope, reuse=True)
+            if shape == "edge":
+                append(self._match_edge(scope, root, self._match_node(scope)))
+            elif shape == "converge":
+                target = self._match_node(scope)
+                append(self._match_edge(scope, root, target, direction="out"))
+                for _ in range(count - 1):
+                    append(self._match_edge(scope, self._match_node(scope), self._match_reference(target), direction="out"))
+            else:
+                previous = root
+                for index in range(count):
+                    left = root if index == 0 else self._match_reference(root if shape == "branch" else previous)
+                    target = self._match_reference(root) if shape == "cycle" and index == count - 1 else self._match_node(scope)
+                    append(self._match_edge(scope, left, target, direction="out" if shape in {"branch", "cycle"} else None))
+                    previous = target
+        self.trace.append({"production_id": f"match/{shape}", "scope_id": scope.scope_id,
+                           "optional": optional, "imports": tuple(sorted(imported)), "clauses": len(parts)})
+        return tuple(parts)
+
+    def match(self, scope, optional=False):
+        """Keep the single-atom boundary for callers with one MATCH slot."""
+        return self.matches(scope, optional, max_clauses=1)[0]
+
+    def leaf(self, expected, scope, depth, *, ordered=False):
+        # NULL is syntax, not an alternative inside every typed terminal: a
+        # later binding must not silently change the terminal's scalar type.
+        if self.rng.random() < .15:
+            return self.node(ir.Literal, None)
+        # The shared concrete IR has no graph-property schema. An integer
+        # host alias can also originate in such a property, so ordering uses
+        # only operands whose numeric type survives concrete IR validation.
+        available = [] if ordered else [name for name, kind in scope.visible_symbols if kind.rstrip("?") == expected]
+        entities = [] if ordered else [name for name, kind in scope.visible_symbols if kind.rstrip("?") in {"node", "relationship"}]
         if available and self.rng.random() < .3:
             name = self.rng.choice(available)
             self.uses.append({"scope_id": scope.scope_id, "name": name, "kind": "scalar"})
             return self.node(ir.Variable, name)
-        if entities and (expected != "boolean" or depth > 0) and self.rng.random() < .35:
+        boolean_comparisons = tuple(op for op in self.comparison_choices() if op in {"=", "<>"})
+        if entities and (expected != "boolean" or depth > 0 and boolean_comparisons
+                         and "comparison" in self.operators) and self.rng.random() < .35:
             name = self.rng.choice(entities)
             key = self.slot("property_key", expected, ("host_number" if expected == "integer" else "host_flag",), scope)
             prop = self.node(ir.Property, name, key)
             self.uses.append({"scope_id": scope.scope_id, "name": name, "kind": "property"})
             if expected == "boolean":
-                return self.node(ir.Comparison, prop, "=", self.literal("boolean", scope))
+                return self.node(ir.Comparison, prop, self.rng.choice(boolean_comparisons), self.literal("boolean", scope))
             return prop
         return self.literal(expected, scope)
+
+    def comparison_choices(self):
+        enabled = self.capabilities.get("comparison_operators", ("=", "<>", "<", "<=", ">", ">="))
+        return tuple(op for op in self.grammar.get("comparison_operators", ("=", "<>", "<", "<=", ">", ">="))
+                     if op in enabled)
 
     def port_fits(self, expected, depth, subquery_depth):
         """Whether a port has a type-correct path within the remaining budgets."""
@@ -346,17 +450,20 @@ class _Builder:
         port_type = "boolean" if self.port_kind == "predicate" else "integer"
         if expected == port_type:
             return True
-        adapter = "case" if expected == "integer" else "comparison"
-        return can_query or depth > 0 and adapter in self.operators
+        adapters = ("case",) if expected == "integer" else ("comparison", "null_test")
+        return can_query or depth > 0 and any(adapter in self.operators
+            and (adapter != "comparison" or self.comparison_choices()) for adapter in adapters)
 
-    def expression(self, expected, scope, depth, subquery_depth=0, need_port=False):
+    def expression(self, expected, scope, depth, subquery_depth=0, need_port=False, *, ordered=False):
         candidates = ["leaf"]
         if depth > 0:
             candidates += ["case", "coalesce"]
-            candidates += ["comparison", "and", "or", "not"] if expected == "boolean" else []
+            candidates += ["comparison", "null_test", "and", "or", "not"] if expected == "boolean" else []
         if subquery_depth < self.budget["subquery_depth"]:
             candidates += ["count" if expected == "integer" else "exists"]
         candidates = [operator for operator in candidates if operator in self.operators]
+        if not self.comparison_choices():
+            candidates = [operator for operator in candidates if operator != "comparison"]
         # A typed port may be nested beneath any compatible production. Its
         # path depends only on the host grammar and host RNG.
         if need_port and depth <= 0:
@@ -379,14 +486,15 @@ class _Builder:
         if need_port:
             candidates = [op for op in candidates if op != "leaf"]
             child_depth = max(0, depth - 1)
-            valid_children = {"comparison": ("integer",), "and": ("boolean",), "or": ("boolean",),
+            valid_children = {"comparison": ("integer",), "null_test": ("integer", "boolean"),
+                              "and": ("boolean",), "or": ("boolean",),
                               "not": ("boolean",), "case": ("boolean", expected), "coalesce": (expected,)}
             candidates = [op for op in candidates if op not in valid_children or any(
                 self.port_fits(kind, child_depth, subquery_depth) for kind in valid_children[op])]
             if self.port_kind != "rows" and ((self.port_kind == "predicate") == (expected == "boolean")):
                 candidates.append("port")
             if not candidates:
-                return self.expression(expected, scope, 0, subquery_depth, True)
+                return self.expression(expected, scope, 0, subquery_depth, True, ordered=ordered)
         operator = self.rng.choice(candidates)
         self.trace.append({"production_id": f"expression/{operator}", "expected_type": expected,
                            "scope_id": scope.scope_id, "depth": depth, "contains_port": need_port})
@@ -394,7 +502,7 @@ class _Builder:
         if operator == "port":
             return self.port(scope)
         if operator == "leaf":
-            return self.leaf(expected, scope, depth)
+            return self.leaf(expected, scope, depth, ordered=ordered)
         if operator in {"count", "exists"}:
             if need_port and self.port_kind == "rows" and (
                     depth == 0 or subquery_depth + 1 >= self.budget["subquery_depth"] or self.rng.random() < .7):
@@ -403,14 +511,24 @@ class _Builder:
                 body = self.rows(scope, child_depth, subquery_depth + 1, need_port)
             return self.node(ir.Count if operator == "count" else ir.Exists, body=body)
         if operator == "comparison":
+            comparator = self.rng.choice(self.comparison_choices())
+            needs_numeric = comparator in {"<", "<=", ">", ">="}
             left_port = need_port and self.rng.choice((True, False))
-            left = self.expression("integer", scope, child_depth, subquery_depth, left_port)
-            right = self.expression("integer", scope, child_depth, subquery_depth, need_port and not left_port)
-            return self.node(ir.Comparison, left, self.rng.choice(("=", "<>")), right)
+            left = self.expression("integer", scope, child_depth, subquery_depth, left_port, ordered=needs_numeric)
+            right = self.expression("integer", scope, child_depth, subquery_depth, need_port and not left_port,
+                                    ordered=needs_numeric)
+            return self.node(ir.Comparison, left, comparator, right)
+        if operator == "null_test":
+            kinds = [kind for kind in ("integer", "boolean") if not need_port
+                     or self.port_fits(kind, child_depth, subquery_depth)]
+            operand = self.expression(self.rng.choice(kinds), scope, child_depth, subquery_depth, need_port)
+            return self.node(ir.Comparison, operand, self.rng.choice(("IS NULL", "IS NOT NULL")),
+                             self.node(ir.Literal, None))
         if operator in {"and", "or"}:
-            side = self.rng.randrange(2) if need_port else -1
+            arity = self.rng.randint(2, self.budget.get("expression_arity", 3))
+            side = self.rng.randrange(arity) if need_port else -1
             operands = tuple(self.expression("boolean", scope, child_depth, subquery_depth, need_port and index == side)
-                             for index in range(2))
+                             for index in range(arity))
             return self.node(ir.Boolean, operator.upper(), operands)
         if operator == "not":
             return self.node(ir.Negation, self.expression("boolean", scope, child_depth, subquery_depth, need_port))
@@ -420,26 +538,65 @@ class _Builder:
                      if self.port_fits(kind, child_depth, subquery_depth)]
             side = self.rng.choice(sides) if need_port else -1
             condition = self.expression("boolean", scope, child_depth, subquery_depth, need_port and side == 0)
-            yes = self.expression(expected, scope, child_depth, subquery_depth, need_port and side == 1)
-            no = self.expression(expected, scope, child_depth, subquery_depth, need_port and side == 2)
+            yes = self.expression(expected, scope, child_depth, subquery_depth, need_port and side == 1, ordered=ordered)
+            no = self.expression(expected, scope, child_depth, subquery_depth, need_port and side == 2, ordered=ordered)
             return self.node(ir.Case, condition, yes, no)
-        side = self.rng.randrange(2) if need_port else -1
-        arguments = tuple(self.expression(expected, scope, child_depth, subquery_depth, need_port and side == index)
-                          for index in range(2))
+        arity = self.rng.randint(2, self.budget.get("expression_arity", 3))
+        side = self.rng.randrange(arity) if need_port else -1
+        arguments = tuple(self.expression(expected, scope, child_depth, subquery_depth, need_port and side == index,
+                                          ordered=ordered) for index in range(arity))
         return self.node(ir.Call, "coalesce", arguments)
 
-    def rows(self, parent, depth, subquery_depth, need_port=False):
+    def rows(self, parent, depth, subquery_depth, need_port=False, output_type=None):
+        # All branches share an explicit one-column interface. In particular,
+        # a raw row port cannot be a UNION branch: M1 does not yet know the
+        # columns of the local rule that M2 will insert there.
+        expected = output_type or (("boolean" if self.port_kind == "predicate" else "integer")
+                                  if need_port and self.port_kind != "rows"
+                                  else self.rng.choice(("integer", "boolean")))
+        allowed = self.capabilities.get("row_operators", ROW_OPERATORS)
+        operators = [kind for kind in self.grammar["row_operators"] if kind in allowed
+                     and (kind == "query" or depth > 0)
+                     and (kind != "limit" or not need_port)]
+        if not operators:
+            _failure("generation_exhausted", "No row production fits the remaining grammar/budget")
+        operator = self.rng.choice(operators)
+        self.trace.append({"production_id": f"rows/{operator}", "expected_type": expected,
+                           "depth": depth, "contains_port": need_port})
+        if operator == "union_all":
+            count = self.rng.randint(2, self.budget["expression_arity"])
+            side = self.rng.randrange(count) if need_port else -1
+            branches = tuple(self.rows(parent, depth - 1, subquery_depth, need_port and i == side, expected)
+                             for i in range(count))
+            return self.node(ir.UnionAll, branches)
+        if operator == "conditional":
+            side = self.rng.randrange(3) if need_port else -1
+            condition = self.expression("boolean", parent, depth - 1, subquery_depth,
+                                        need_port and side == 0)
+            yes = self.rows(parent, depth - 1, subquery_depth, need_port and side == 1, expected)
+            no = self.rows(parent, depth - 1, subquery_depth, need_port and side == 2, expected)
+            return self.node(ir.ConditionalQuery, condition, yes, no)
+        if operator == "limit":
+            # An enclosing unordered LIMIT has no general equivalence proof.
+            # Limits therefore occur only in target-independent row subtrees.
+            body = self.rows(parent, depth - 1, subquery_depth, False, expected)
+            return self.node(ir.RowLimit, body, self.rng.randint(0, 2))
         scope = self.new_scope(parent)
         pipeline = []
-        if "MATCH" in self.clause_kinds and depth > 0 and self.rng.random() < .4:
-            clause = self.match(scope)
-            scope = advance_scope(clause, scope)
-            pipeline.append(clause)
-        expected = ("boolean" if self.port_kind == "predicate" else "integer") if need_port and self.port_kind != "rows" else self.rng.choice(("integer", "boolean"))
-        expression = self.expression(expected, scope, depth, subquery_depth, need_port)
+        if "MATCH" in self.clause_kinds and self.budget["clauses"] > 1 and depth > 0 and self.rng.random() < .4:
+            for clause in self.matches(scope, max_clauses=self.budget["clauses"] - 1):
+                scope = advance_scope(clause, scope)
+                pipeline.append(clause)
+        predicate_port = need_port and bool(pipeline) and self.rng.random() < .5
+        if predicate_port:
+            condition = self.expression("boolean", scope, depth, subquery_depth, True)
+            pipeline[-1] = replace(pipeline[-1], where=condition)
+        expression = self.expression(expected, scope, depth, subquery_depth, need_port and not predicate_port)
         self.scopes.append(scope)
-        return self.node(ir.Query, None, None, (self.node(ir.Alias, expression, self.fresh("sub")),),
-                         pipeline=tuple(pipeline))
+        distinct = "RETURN DISTINCT" in self.clause_kinds and (
+            "RETURN" not in self.clause_kinds or self.rng.random() < .25)
+        return self.node(ir.Query, None, None, (self.node(ir.Alias, expression, "row_value"),),
+                         pipeline=tuple(pipeline), distinct=distinct)
 
 
 def _located(value, address=()):
@@ -491,34 +648,46 @@ def expand_host_structure(skeleton, grammar=None, capability_profile=None, budge
     stages = []
     if (not skeleton.clauses or any(not isinstance(item, dict) or "kind" not in item or "clause_id" not in item
                                     for item in skeleton.clauses)
-            or skeleton.clauses[-1]["kind"] != "RETURN"):
+            or skeleton.clauses[-1]["kind"] not in RETURN_CLAUSES):
         _failure("interface_mismatch", "A host clause skeleton must end in RETURN")
+    if len(skeleton.clauses) > limits["clauses"]:
+        _failure("generation_exhausted", "Clause skeleton exceeds the expansion clause budget")
     if any(item["kind"] not in builder.clause_kinds for item in skeleton.clauses):
         _failure("unsupported_fragment", "Clause skeleton uses a disabled host capability")
-    for item in skeleton.clauses[:-1]:
+    for index, item in enumerate(skeleton.clauses[:-1]):
         kind = item["kind"]
-        incoming = scope
         if kind in {"MATCH", "OPTIONAL MATCH"}:
-            clause = builder.match(scope, kind == "OPTIONAL MATCH")
-        elif kind == "WITH":
+            remaining = limits["clauses"] - len(pipeline) - (len(skeleton.clauses) - index - 1)
+            expanded = builder.matches(scope, kind == "OPTIONAL MATCH", max_clauses=remaining)
+        elif kind in {"WITH", "WITH DISTINCT"}:
             # Projection reads the incoming scope, not sibling aliases.
-            projections = [builder.node(ir.Variable, name) for name, _ in scope.visible_symbols if builder.rng.random() < .6]
+            retained = [name for name, _ in scope.visible_symbols if builder.rng.random() < .6]
+            width = builder.rng.randint(1, limits["projections"])
+            projections = [builder.node(ir.Variable, name) for name in retained[:width - 1]]
             alias = builder.node(ir.Alias, builder.expression("integer", scope, min(1, limits["expression_depth"])),
                                  builder.fresh("alias"))
             projections.append(alias)
-            clause = builder.node(ir.With, tuple(projections))
+            expanded = (builder.node(ir.With, tuple(projections), distinct=kind == "WITH DISTINCT"),)
         else:
             _failure("interface_mismatch", f"Unsupported skeleton clause {kind}")
-        scope = advance_scope(clause, scope)
-        if builder.rng.random() < .3:
-            condition = builder.expression("boolean", scope, min(1, limits["expression_depth"]))
-            clause = replace(clause, where=condition)
-        stages.append({"clause_id": item["clause_id"], "kind": kind,
-                       "input_symbols": incoming.visible_symbols, "output_symbols": scope.visible_symbols})
-        pipeline.append(clause)
+        for part, clause in enumerate(expanded):
+            incoming = scope
+            scope = advance_scope(clause, scope)
+            if builder.rng.random() < .3:
+                condition = builder.expression("boolean", scope, min(1, limits["expression_depth"]))
+                clause = replace(clause, where=condition)
+            stages.append({"clause_id": f"{item['clause_id']}/{part}", "kind": kind,
+                           "input_symbols": incoming.visible_symbols, "output_symbols": scope.visible_symbols})
+            pipeline.append(clause)
     expected = grammar.get("return_type", builder.rng.choice(("integer", "boolean")))
     result = builder.expression(expected, scope, limits["expression_depth"], need_port=True)
-    query = builder.node(ir.Query, None, None, (builder.node(ir.Alias, result, "value"),), pipeline=tuple(pipeline))
+    projections = [builder.node(ir.Alias, result, "value")]
+    for index in range(1, builder.rng.randint(1, limits["projections"])):
+        expression = builder.expression(builder.rng.choice(("integer", "boolean")), scope,
+                                         limits["expression_depth"])
+        projections.append(builder.node(ir.Alias, expression, f"value_{index}"))
+    query = builder.node(ir.Query, None, None, tuple(projections), pipeline=tuple(pipeline),
+                         distinct=skeleton.clauses[-1]["kind"] == "RETURN DISTINCT")
     builder.scopes.append(scope)
     found = [(address, value) for address, value in _located(query) if isinstance(value, Port)]
     if len(found) != 1:
