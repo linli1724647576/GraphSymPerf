@@ -8,7 +8,7 @@ import pytest
 import ir
 from dependencies import find_mutation_sites, matching_quantity_observation, node_at, replace_at
 from executor import typed_bag
-from main import prepare_case
+from main import prepare_legacy_case as prepare_case
 from mutator import plan_mutation_with_correspondence
 from population import EntityBindingDemand, MatchDemand, PopulationError, evaluate_query, synthesize_relational_state
 from state import GraphSpec

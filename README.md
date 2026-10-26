@@ -1,15 +1,16 @@
 # GraphSymPerf
 
-用于论文实验的图数据库性能缺陷检测代码。新生成路径以 `paper/vldb27-GraphSymPerf.pdf` 为准，统一使用论文 P1–P13、S1–S10；递归符号骨架经 AST 依赖分析，由算法 1 求解图状态和共同赋值，再由算法 2 实例化并局部变异。历史 P1–P16 配方与存档保留在 `legacy-v1`。两条路径都只支持显式列出的受限语义片段。
+用于论文实验的图数据库性能缺陷检测代码。默认入口 `ast-pattern-v1` 按六个阶段运行：随机生成有类型宿主 AST → 在兼容位置嵌入 Pattern → 联合构造图状态与终端绑定 → 实例化完整查询 → 单点变异 → 检查语义及工作依赖。M1 不读取 Pattern 或具体图数据；通用构图器消费完整 AST 的需求，使用显式 GraphSpec v2。规则目录采用论文 P1–P13、S1–S10，P10 另有三种形式。
 
-论文路径的配置见 [configs/symbolic-paper.yaml](configs/symbolic-paper.yaml)，机制与验证边界见 [递归生成说明](docs/compositional-generation.md)。P10 支持独立组件、共享锚点和两边链，所有论文规则均可放入 `EXISTS`、`COUNT`、`WITH` 的递归上下文。新图状态与行流扩展目前通过 Neo4j 路径验证，其他数据库继续使用各自的能力门槛。
+新配置见 [configs/ast-pattern.yaml](configs/ast-pattern.yaml)，方法及接口规范分别见 [方法文档](docs/ast-pattern-method.md) 与 [代码技术文档](docs/ast-pattern-implementation.md)。新流程首先支持 Neo4j；其他数据库继续通过显式兼容方法使用各自的能力门槛。物理调用次数在没有可靠计划映射时记录为未知，不从 AST 求值机会推定实际执行次数。
 
-P10 链与 S3 另支持显式变异标记、跨副本来源对应和向内需求求解：链可按语法预算延长，S3 可嵌套并使用属性、COUNT 或 EXISTS 条件；外层 COUNT 阈值会约束内部匹配数。这两族使用输出和潜在工作目标，骨架不再逐边指定8/1配方。运行示例见 [链目标配置](configs/goal-chain.yaml) 与 [条件目标配置](configs/goal-conditional.yaml)；其余规则仍保留各自已验证的有限构图合同。
+历史固定配方使用 `generation.method: legacy-v1` 和 `pattern_catalog: legacy-v1`；原递归符号流程使用 `generation.method: symbolic-v1`，配置见 [symbolic-paper.yaml](configs/symbolic-paper.yaml)。它们用于历史实验兼容与回放，新入口构造失败不会回退到旧流程。旧编号与新论文编号的对应关系单独保存。
 
 ## 文件
 
 ```text
 Src/
+  ast_pattern/   六阶段合同、随机宿主、局部规则嵌入、构图与依赖检查
   main.py        配置、实验预算、保存与重放
   generator.py   模板、候选绑定、受控构图、参考查询
   mutator.py     对称变换与高成本引用替换
@@ -73,7 +74,7 @@ FalkorDB 的 `database` 是独立图名；有认证时填写 `password_env`。�
 
 ArcadeDB 的 Cypher 目标使用原生 `opencypher` 前端；框架中的语言名仍为 `cypher`。AGE 使用原生 Cypher 包装及 PostgreSQL 计划，成本入口分别验证属性映射 GIN 和属性表达式 BTree；建图后对实验表执行 `VACUUM (ANALYZE)`，清理 GIN 待处理项并刷新统计。Ladybug 使用类型化节点／关系表及主键索引，路径显式指定原生 `TRAIL`。它的多标签语义不能用于 P7。每个目标的已验证版本和支持范围见 [Cypher 实测覆盖](docs/cypher-support.md)。
 
-骨架和成本角色直接使用结构化数据，内置模板不依赖解析虚构的 Cypher 种子。流程是骨架 → `GraphSpec` → 状态绑定 → 查询 IR → 语义保持变换 → 目标方言。图状态按有限 recipe 分批构造，成本数量、属性、逆关系和参考区域在真实目标中检查。解析器仅负责可选 Cypher 种子导入，公共 IR 不依赖语言渲染器；生成时保留布尔项、标签、路径和分支顺序。
+六阶段入口直接产生结构化 AST。M1 完成普通匹配、表达式与子查询的结构展开，只保留声明的 Pattern 端口和图相关终端；M2 后不再长出普通算子。M3 对源与声明备选联合求解，M4 固定使用接受的绑定。构造超出支持片段或预算时保存分阶段失败原因，未知不等于无解。可选 GDsmith 查询种子只属于 `legacy-v1`，不进入新 M1。
 
 Gremlin 已实际接入 JanusGraph 1.1.0、Apache HugeGraph 1.7.0 和 ArcadeDB 26.10.2，分别开放 25、24、22 项现有 Pattern（ArcadeDB 为原 12 项 P 加 S1–S10）；配置示例为 `configs/janusgraph.yaml`、`configs/hugegraph.yaml`、`configs/arcadedb-gremlin.yaml`。ArcadeDB 本轮增加的是已有 DBMS 的 Gremlin 语言目标，未增加 Pattern 或原生探针（Native probe）；选择依据及影响力、维护响应的证据边界见 [新增目标选择](docs/gremlin-target-selection-20261018.md)。
 
@@ -83,7 +84,7 @@ Gremlin 已实际接入 JanusGraph 1.1.0、Apache HugeGraph 1.7.0 和 ArcadeDB 2
 
 ## 模板与图状态
 
-默认直接使用自有模板，`generation.log_files: []`，不依赖 GDsmith。配置日志路径可继续使用 GDsmith 作为可选结构输入；这不是保持 GDsmith 原查询结果的变换，等价性从模板实例化后的查询开始。
+默认 `generation.method: ast-pattern-v1` 不依赖 GDsmith 安装。它借鉴 GDsmith 的骨架、类型和作用域组织，独立实现图前结构生成。`generation.ast` 配置 AST 与求解预算、最多尝试数以及目标入口要求。`pattern_options` 仅在 M2 选择局部规则形式，例如 P10 的 `form: chain`；不能影响已经生成的 M1 候选。旧日志与模板选项须显式选择兼容方法。
 
 `seeds` 控制查询候选绑定；`generation.data_seed` 控制图中噪声节点的标识偏移，当前不随机改变拓扑。固定后者，同一 pattern、状态变体和规模的查询组合使用相同构图。候选池包含受控谓词写法、匹配与过滤位置、分支次序、有限路径界限、计数／存在操作和列表表达式。实际 `template_id`、`variant`、绑定和来源写入每个案例。增加种子只会枚举有限组合；不能把重复查询数当成覆盖数。
 
@@ -123,7 +124,9 @@ Neo4j 先分批删除关系、再分批删除节点，避免密集图清理占�
 
 每次运行创建 `results/<运行>/`。每例包含 `setup.cypher`、`query_a.cypher`、`query_b.cypher`、可选的 `query_ref.cypher` 和 `result.json`，保存绑定、来源、预期结果、版本、全部样本和输入指纹。Gremlin 查询文件使用 `.gremlin` 后缀；实际参数保存在 `result.json` 的 `query_bindings` 中，重放时同时校验查询文本和参数。
 
-新格式 3 在 `result.json` 中额外保存查询 IR、图状态描述、实际方言、输出列映射与逻辑 `ir_hash`。`setup.cypher` 保留传统构图展示，新适配器以 `graph_spec` 分批构图；它不是 AGE/Ladybug/Gremlin 的可直接执行建图脚本。新库的 `query_*.cypher` 或 `query_*.gremlin` 是实际执行文本。格式 1/2 的原 `input_hash` 保持兼容；旧格式携带新增执行元数据时，另用 `extension_hash` 校验。跨目标重放使用已保存 IR 重新生成，不重新调用随机生成器。
+六阶段案例使用归档格式 4，保存 M1–M6 的完整记录、阶段摘要链、联合绑定、依赖证书和源码指纹，并输出 `M1-host.json` 等独立阶段文件、`M3-state.json`、`M3-bindings.json` 和 `M6-runtime.json`。读取时同时校验记录与文件，缺失阶段或改变图、查询、规则条件会被拒绝。执行回放使用已保存输入；`ast_pattern.pipeline.reproduce_generation` 在相同源码指纹下按种子重新生成，并核对各阶段摘要。
+
+格式 1/2/3 保留历史解码与输入哈希。格式 3 保存查询 IR、图状态、方言、列映射和逻辑 `ir_hash`；`setup.cypher` 用于构图展示，显式状态通过 `graph_spec` 分批加载。旧格式不能伪装为六阶段用例。
 
 ```bash
 python Src/main.py --config config.yaml --replay results/<运行>/<案例>

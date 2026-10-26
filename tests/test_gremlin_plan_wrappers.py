@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 
 from executor import ApacheHugeGraph, JanusGraph
-from main import prepare_case
+from main import prepare_legacy_case as prepare_case
 
 
 @pytest.mark.parametrize("target,kind", [("janusgraph", JanusGraph), ("hugegraph", ApacheHugeGraph)])

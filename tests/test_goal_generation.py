@@ -8,7 +8,7 @@ import pytest
 import ir
 from dependencies import find_mutation_sites, node_at, replace_at
 from executor import typed_bag
-from main import prepare_case
+from main import prepare_legacy_case as prepare_case
 from population import evaluate_query
 from query import parse_query
 from state import GraphSpec

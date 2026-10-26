@@ -18,6 +18,7 @@ database:
   allow_reset: true
 
 generation:
+  method: symbolic-v1
   log_files: []
   data_seed: 0
   complexity: 0

@@ -5,7 +5,7 @@ import os
 import pytest
 
 from executor import CaseFailure, Neo4j, check_case, measurement_settings, run_case, typed_bag
-from main import prepare_case, read_case, save_case
+from main import prepare_legacy_case as prepare_case, read_case, save_case
 from test_scalar_goal_acceptance import (PUBLIC_CASES, alias_rebinding_skeleton, boolean_skeleton, case_dual_skeleton,
                                          coalesce_skeleton, nested_case_skeleton, nested_coalesce_skeleton,
                                          nested_query_skeleton)

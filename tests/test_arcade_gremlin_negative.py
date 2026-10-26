@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from executor import CaseFailure, _gremlin_state_checks, make_database, typed_bag
-from main import prepare_case
+from main import prepare_legacy_case as prepare_case
 from state import GraphSpec
 from test_arcade_gremlin_integration import arcade_config, _write
 

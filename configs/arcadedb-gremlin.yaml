@@ -29,6 +29,7 @@ seeds:
 cases_per_pattern: 2
 seconds_per_pattern: 90
 generation:
+  method: legacy-v1
   complexity: 0
   data_seed: 0
 measurement:

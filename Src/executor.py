@@ -547,7 +547,7 @@ def check_case(db, case: dict, settings: dict):
                 raise CaseFailure("cost_check_failed", f"cost_check_{index}")
     parameters = case.get("parameters", {})
     reference = (_query_input(case, "ref") if case.get("query_ref") else
-                 _query_input(case, "b") if case.get("reference_side") == "b" else None)
+                 _query_input(case, case["reference_side"]) if case.get("reference_side") in {"a", "b"} else None)
     db._reference_query = reference
     db._reference_evidence = None
     if reference:
@@ -726,6 +726,33 @@ def _collect_plans(db, case, report):
         report["index_evidence"] = db.index_evidence
 
 
+def _comparison_direction(case):
+    """Return the expected costly side, retaining historical reference records."""
+    direction = case.get("mutation_direction", case.get("mutation_record", {}).get("direction"))
+    if direction not in (None, "symmetry", "L_to_H", "H_to_R"):
+        raise ValueError("unsupported mutation direction")
+    reference = case.get("reference_side")
+    if reference not in (None, "a", "b", "ref") or reference == "ref" and not case.get("query_ref"):
+        raise ValueError("reference_side must identify a, b or an existing query_ref")
+    roles = case.get("side_roles", {})
+    if not isinstance(roles, dict) or roles and set(roles) != {"a", "b"}:
+        raise ValueError("side_roles must identify both query sides")
+    if direction == "L_to_H":
+        if reference == "b" or roles and roles != {"a": "L", "b": "H"}:
+            raise ValueError("L_to_H conflicts with declared side roles")
+        return "b"
+    if direction == "H_to_R":
+        if reference == "a" or roles and roles != {"a": "H", "b": "R"}:
+            raise ValueError("H_to_R conflicts with declared side roles")
+        return "a"
+    if direction == "symmetry":
+        return None
+    if reference in {"a", "b"}:
+        return "b" if reference == "a" else "a"
+    # Old archives did not record direction: their S queries use H -> R.
+    return "a" if case.get("pattern") in tuple(f"S{i}" for i in range(1, 11)) else None
+
+
 def run_case(case: dict, database: dict, measurement: dict | None = None, *, state_cache: dict | None = None) -> dict:
     """Execute one case. Failures are reportable; stop_target forbids continuation."""
     report = {"status": "started", "reason": "", "stop_target": False, "dbms": database.get("dbms", "neo4j"),
@@ -747,6 +774,19 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
     try:
         settings = measurement_settings(measurement or {})
         report["measurement"] = settings
+        expected_slow = _comparison_direction(case)
+        if not traversal_mode:
+            ab["pair_kind"] = report["pair_kind"] = "reference" if expected_slow else "symmetry"
+        ab["expected_slow_side"] = expected_slow
+        if (case.get("method_version") is not None or "stage_records" in case or
+                case.get("generation_method") == "ast-pattern-v1"):
+            from ast_pattern.evidence_adapter import validate_dependency_case
+            from ast_pattern.contracts import StageFailure
+            try:
+                validate_dependency_case(case, database)
+            except StageFailure as exc:
+                raise CaseFailure("invalid_case", f"{exc.stage}/{exc.code}",
+                                  details={"dependency_failure": exc.to_data()}) from exc
         if case.get("compile_error"):
             raise CaseFailure(case["compile_error"]["status"], case["compile_error"]["reason"])
         if case.get("query_ir"):
@@ -784,8 +824,6 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                     raise CaseFailure("invalid_case", "gremlin_text_or_bindings_differ_from_ir")
             else:
                 validate_read_query(case[f"query_{side}"])
-        if case.get("reference_side") not in (None, "b", "ref") or case.get("reference_side") == "ref" and not case.get("query_ref"):
-            raise ValueError("reference_side must identify b or an existing query_ref")
         guard = case.get("bindings", {}).get("scor", {})
         if guard.get("guard_facts"):
             if any(guard.get(name) not in case.get("checks", [])
@@ -815,6 +853,7 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 raise
         report["state_reused"] = _restore_state(db, case, fingerprint, state_cache)
         baseline, report["result_rows"] = check_case(db, case, settings)
+        report["result_check"] = "passed"
         if hasattr(db, "statistics_evidence"):
             report.setdefault("statistics_evidence", []).append({"phase": phase, "rows": db.statistics_evidence})
         if hasattr(db, "_state_evidence"):
@@ -829,7 +868,8 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
             for side in ("a", "b"):
                 name = f"query_{side}_vs_ref"
                 comparison = {"pair_kind": "explicit_traversal" if traversal_mode else "reference", "status": "started",
-                              "discovery": {"warmups": [], "samples": []}, "confirmation_sessions": [], "summary": None}
+                              "discovery": {"warmups": [], "samples": []}, "confirmation_sessions": [], "summary": None,
+                              "expected_slow_side": "a"}
                 report["reference_comparisons"][name] = comparison
                 comparisons.append((name, (_query_input(case, side), _query_input(case, "ref")), comparison))
         active = []
@@ -842,12 +882,13 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
             slow = "a" if median(sample["a_ms"] - sample["b_ms"] for sample in samples) > 0 else "b"
             discovery["summary"] = summarize(samples, slow)
             reference_comparison = comparison["pair_kind"] == "reference"
-            if (not reference_comparison or slow == "a") and (discovery["summary"]["median_ratio"] >= settings["screen_ratio"] and
+            expected = comparison.get("expected_slow_side", "a")
+            if (not reference_comparison or slow == expected) and (discovery["summary"]["median_ratio"] >= settings["screen_ratio"] and
                     discovery["summary"]["direction_consistency"] >= settings["direction_consistency"]):
                 active.append((name, queries, comparison, slow, [], []))
             else:
                 comparison["status"] = "no_candidate"
-                if reference_comparison and slow != "a":
+                if reference_comparison and slow != expected:
                     comparison["reference_direction"] = "reference_not_faster"
         current_comparison = None
         if "reference_direction" in ab:
@@ -961,6 +1002,13 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
                 report.update(status="environment_error", reason=f"close_failed:{type(exc).__name__}", stop_target=True)
                 if state_cache is not None:
                     state_cache.clear()
+        if case.get("method_version") == "ast-pattern-v1":
+            from ast_pattern.evidence_adapter import attach_runtime_evidence
+            try:
+                report["dependency_evidence"] = attach_runtime_evidence(case, report)
+            except ValueError as exc:
+                report["dependency_evidence"] = {"status": "unverified", "result_relation": "unknown",
+                                                  "reason": str(exc), "physical_invocations": "unknown"}
     return report
 
 

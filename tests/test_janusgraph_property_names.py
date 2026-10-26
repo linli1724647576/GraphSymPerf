@@ -10,7 +10,7 @@ import pytest
 from executor import CaseFailure, JanusGraph, _gremlin_state_checks
 from languages import (JANUSGRAPH_PROPERTY_PREFIX, gremlin_property_key,
                        logical_gremlin_property_key, generate)
-from main import prepare_case
+from main import prepare_legacy_case as prepare_case
 from query import parse_query
 from state import GraphSpec
 

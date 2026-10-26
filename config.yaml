@@ -7,10 +7,21 @@ database:
   dedicated: true
   allow_reset: false
 generation:
-  log_files: []
+  method: ast-pattern-v1
   data_seed: 0
-  limit: 20
-  complexity: 2
+  ast:
+    max_attempts: 32
+    require_target_entry: true
+    ast_budget:
+      clauses: 4
+      nodes: 180
+      expression_depth: 3
+      subquery_depth: 3
+      port_nodes: 128
+    solver_budget:
+      terminal_assignments: 32
+      max_nodes: 200000
+      max_edges: 1000000
 patterns:
 - P1
 - P2
@@ -25,9 +36,6 @@ patterns:
 - P11
 - P12
 - P13
-- P14
-- P15
-- P16
 - S1
 - S2
 - S3
@@ -76,3 +84,4 @@ measurement:
   bootstrap_samples: 10000
   timeout_seconds: 10
   max_rows: 100000
+pattern_catalog: paper-v1

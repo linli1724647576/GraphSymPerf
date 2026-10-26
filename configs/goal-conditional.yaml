@@ -12,6 +12,7 @@ database:
   dedicated: true
   allow_reset: true
 generation:
+  method: symbolic-v1
   composition:
     contexts: [count, with]
     threshold: 9

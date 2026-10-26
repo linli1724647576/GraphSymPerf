@@ -16,7 +16,7 @@ import pytest
 from executor import make_database, supported_patterns, typed_bag
 from generator import PatternNotApplicable
 from languages import generate
-from main import prepare_case, read_case, read_config, save_case
+from main import prepare_legacy_case as prepare_case, read_case, read_config, save_case
 from query import parse_query
 from test_gremlin_semantics import _CASES, _EDGES, _NODES
 

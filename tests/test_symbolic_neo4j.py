@@ -7,7 +7,7 @@ import pytest
 
 from executor import CaseFailure, Neo4j, check_case, measurement_settings, run_case, typed_bag
 from ir import Alias, Count, Query, UnionAll, from_data
-from main import prepare_case, read_case, save_case
+from main import prepare_legacy_case as prepare_case, read_case, save_case
 from query import render_query
 from state import GraphSpec
 

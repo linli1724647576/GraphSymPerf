@@ -7,7 +7,7 @@ import pytest
 
 from executor import CaseFailure, Neo4j, check_case, measurement_settings, run_case, typed_bag
 import ir
-from main import compile_case, prepare_case, read_case, save_case
+from main import compile_case, prepare_legacy_case as prepare_case, read_case, save_case
 from test_optional_goal_acceptance import (matching_skeleton, optional_follow_skeleton,
                                            nested_optional_skeleton, optional_property_null_skeleton,
                                            optional_skeleton, per_input_population, mixed_scalar_population, walk)

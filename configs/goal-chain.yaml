@@ -13,6 +13,7 @@ database:
   dedicated: true
   allow_reset: true
 generation:
+  method: symbolic-v1
   composition:
     form: chain
     contexts: [count, with]

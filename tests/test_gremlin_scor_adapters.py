@@ -11,7 +11,7 @@ import pytest
 
 import executor
 from executor import ApacheHugeGraph, GremlinHTTP, JanusGraph, run_case, typed_bag
-from main import prepare_case
+from main import prepare_legacy_case as prepare_case
 from test_executor import FakeDatabase, SETTINGS
 
 

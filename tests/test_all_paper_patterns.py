@@ -7,7 +7,7 @@ import pytest
 
 from executor import typed_bag
 from ir import Alias, Edge, Match, Node, Property, clauses, from_data, to_data, validate_query
-from main import prepare_case
+from main import prepare_legacy_case as prepare_case
 from population import evaluate_query
 from query import parse_query, projection_names
 from state import GraphSpec

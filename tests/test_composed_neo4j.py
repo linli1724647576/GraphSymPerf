@@ -5,7 +5,7 @@ import os
 import pytest
 
 from executor import CaseFailure, Neo4j, check_case, measurement_settings, run_case
-from main import prepare_case, read_case, save_case
+from main import prepare_legacy_case as prepare_case, read_case, save_case
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.skipif(

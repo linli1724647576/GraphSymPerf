@@ -115,6 +115,69 @@ def test_optional_introductions_are_nullable_but_existing_inputs_keep_their_type
     assert set(scope.nullable_types) == {"r", "b"}
 
 
+@pytest.mark.parametrize("entity_type", ["node?", "node", "relationship?", "relationship"])
+def test_property_projection_preserves_optional_and_missing_property_nullability(entity_type):
+    scope = ScopeState(visible_symbols=(("v", entity_type),))
+    age = TerminalSlot("property:age", "property_key", ("age",), type="integer")
+    projected = advance_scope(ir.With((ir.Alias(ir.Property("v", age), "x"),)), scope)
+    assert dict(projected.visible_symbols) == {"x": "integer?"}
+    assert projected.nullable_types == ("x",)
+
+
+@pytest.mark.parametrize("arguments,expected", [
+    ((ir.Variable("a"), ir.Variable("b")), "integer?"),
+    ((ir.Variable("a"), ir.Literal(0)), "integer"),
+    ((ir.Literal(None), ir.Variable("a"), ir.Variable("b")), "integer?"),
+    ((ir.Literal(None), ir.Literal(None)), "null"),
+    ((ir.Literal(0), ir.Variable("flag")), "integer"),
+    ((ir.Variable("untyped"), ir.Literal(0)), "any"),
+])
+def test_coalesce_requires_a_proven_nonnull_argument_to_remove_nullable(arguments, expected):
+    scope = ScopeState(visible_symbols=(("a", "integer?"), ("b", "integer?"), ("flag", "boolean?"), ("untyped", "any?")))
+    projected = advance_scope(ir.With((ir.Alias(ir.Call("coalesce", arguments), "x"),)), scope)
+    assert dict(projected.visible_symbols)["x"] == expected
+    assert ("x" in projected.nullable_types) == (expected == "null" or expected.endswith("?"))
+
+
+def test_nullable_scalar_operators_keep_three_valued_results_and_case_branch_types():
+    scope = ScopeState(visible_symbols=(("number", "integer?"), ("guard", "boolean?")))
+    comparison = ir.Comparison(ir.Variable("number"), "=", ir.Literal(0))
+    projected = advance_scope(ir.With((
+        ir.Alias(comparison, "comparison"),
+        ir.Alias(ir.Negation(comparison), "negation"),
+        ir.Alias(ir.Boolean("AND", (ir.Variable("guard"), comparison)), "conjunction"),
+        ir.Alias(ir.Case(ir.Variable("guard"), ir.Literal(0), ir.Literal(1)), "selected"),
+        ir.Alias(ir.Comparison(ir.Variable("number"), "IS NULL", ir.Literal(None)), "null_test"),
+    )), scope)
+    assert dict(projected.visible_symbols) == {
+        "comparison": "boolean?", "negation": "boolean?", "conjunction": "boolean?",
+        "selected": "integer", "null_test": "boolean"}
+
+
+@pytest.mark.parametrize("restrictions", ["capabilities", "grammar"])
+def test_return_only_capability_is_obeyed_in_every_nested_query_block(restrictions):
+    grammar = {"clauses": ["RETURN"]}
+    capabilities = None
+    if restrictions == "capabilities":
+        capabilities = {"clause_kinds": ["RETURN"]}
+    else:
+        grammar["clause_kinds"] = ["RETURN"]
+    nested_seen = False
+    for seed in range(60):
+        host = generate_random_ast(grammar=grammar, capability_profile=capabilities, host_seed=seed)
+        queries = [node for node in walk(host.tree) if isinstance(node, ir.Query)]
+        nested_seen |= len(queries) > 1
+        assert all(not ir.clauses(query) for query in queries)
+        assert not any(isinstance(node, ir.Match) for node in walk(host.tree))
+    assert nested_seen, "The regression must exercise nested producers, not just root RETURN"
+
+
+def test_structure_pass_rejects_a_skeleton_from_a_disabled_capability():
+    skeleton = sample_clause_skeleton({"clauses": ["MATCH", "RETURN"]}, seed=0)
+    with pytest.raises(StageFailure, match="disabled host capability"):
+        expand_host_structure(skeleton, capability_profile={"clause_kinds": ["RETURN"]}, seed=0)
+
+
 def test_budget_exhaustion_is_stage_specific_and_never_fills_an_illegal_default():
     with pytest.raises(StageFailure) as error:
         generate_random_ast(budget={"nodes": 1}, host_seed=0)

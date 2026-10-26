@@ -6,7 +6,7 @@ from dataclasses import fields, is_dataclass, replace
 import pytest
 
 from executor import Neo4j, check_case, measurement_settings, run_case, typed_bag
-from main import prepare_case, read_case, save_case
+from main import prepare_legacy_case as prepare_case, read_case, save_case
 from symbolic import Symbol
 
 

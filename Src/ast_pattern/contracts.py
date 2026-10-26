@@ -63,19 +63,63 @@ def digest(value):
 
 
 def shape(value):
-    """Topology/type signature, ignoring names and graph-dependent leaf values."""
-    if isinstance(value, TerminalSlot) or type(value).__name__ == "Symbol":
-        kind = value.kind
-        example = value.candidates[0] if value.candidates else None
-        return {"leaf": "str" if kind in ("identifier", "label", "relationship_type", "property_key")
-                else "int" if kind == "integer" else type(example).__name__}
-    if is_dataclass(value):
-        return {"node": type(value).__name__, **{f.name: shape(getattr(value, f.name)) for f in fields(value)}}
-    if isinstance(value, dict):
-        return {str(k): shape(v) for k, v in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [shape(v) for v in value]
-    return {"leaf": type(value).__name__}
+    """Query-only signature preserving operators and ordered AST topology.
+
+    Graph identifiers and literal values are leaves, while operator names,
+    traversal modes and clause modifiers are structural choices. This is
+    not a fingerprint of stage metadata; use ``digest`` for those records.
+    """
+    import ir
+
+    ast_types = tuple(getattr(ir, name) for name in (
+        "Literal", "Property", "Variable", "Comparison", "Boolean", "Negation", "Node", "Relationship",
+        "Edge", "Exists", "Count", "Call", "Case", "ListExpr", "Concat", "All", "Alias", "Match", "With",
+        "Query", "UnionAll", "RowLimit", "ConditionalQuery"))
+    structural_fields = {
+        ir.Comparison: frozenset({"operator"}), ir.Boolean: frozenset({"operator"}),
+        ir.Call: frozenset({"name"}), ir.Edge: frozenset({"direction"}),
+        ir.Relationship: frozenset({"path_mode"}), ir.Match: frozenset({"optional"}),
+        ir.With: frozenset({"distinct"}), ir.Query: frozenset({"distinct"}),
+    }
+
+    def terminal(item):
+        if isinstance(item, TerminalSlot) or type(item).__name__ == "Symbol":
+            kind = item.kind
+            example = item.candidates[0] if item.candidates else None
+            return {"leaf": "str" if kind in ("identifier", "label", "relationship_type", "property_key")
+                    else "int" if kind == "integer" else type(example).__name__}
+        return {"leaf": type(item).__name__}
+
+    def visit(item):
+        if isinstance(item, TerminalSlot) or type(item).__name__ == "Symbol":
+            return terminal(item)
+        if isinstance(item, Port):
+            return {"node": "Port", "kind": item.kind, "expected_type": item.expected_type,
+                    "imports": [terminal(name) for name in item.imports]}
+        if isinstance(item, ast_types):
+            result = {"node": type(item).__name__}
+            keep = structural_fields.get(type(item), ())
+            for field in fields(item):
+                child = getattr(item, field.name)
+                if field.name in keep:
+                    result[field.name] = child
+                elif isinstance(item, ir.Literal) and field.name == "value":
+                    # An accepted nullable literal may materialize as NULL.
+                    # Its position remains the same terminal slot; type and
+                    # domain consistency are checked by the binding contract.
+                    result[field.name] = {"leaf": "literal"}
+                else:
+                    result[field.name] = visit(child)
+            return result
+        if isinstance(item, (tuple, list)):
+            return [visit(child) for child in item]
+        if is_dataclass(item) or isinstance(item, dict):
+            raise TypeError("shape accepts query AST nodes, not stage metadata")
+        return terminal(item)
+
+    if not isinstance(value, (*ast_types, Port, TerminalSlot)) and type(value).__name__ != "Symbol":
+        raise TypeError("shape requires a query AST node or terminal")
+    return visit(value)
 
 
 def shape_digest(tree):

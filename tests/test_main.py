@@ -35,7 +35,7 @@ def test_save_and_read_are_lossless_and_detect_changed_input(tmp_path):
 
 
 def test_run_and_replay_use_same_inputs_without_calling_generator_again(tmp_path, monkeypatch):
-    config = {'database': {}, 'generation': {'log_files': [str(FIXTURE)]},
+    config = {'database': {}, 'generation': {"method": "legacy-v1", 'log_files': [str(FIXTURE)]},
               'patterns': ['P1', 'P4', 'P5'], 'scales': [2], 'seeds': [0],
               'max_cases': 3, 'max_seconds': 60, 'output': str(tmp_path), 'measurement': main.measurement_settings({})}
     cases = []
@@ -64,12 +64,12 @@ def test_configuration_never_enables_reset_implicitly(tmp_path):
 @pytest.mark.parametrize('variant,patterns', [('empty_low', ['P10', 'P11']), ('multi_low', ['P11', 'P13']), ('pruning_path', ['P3'])])
 def test_state_variants_are_saved_and_replayed_with_checked_results(tmp_path, variant, patterns):
     for pattern in patterns:
-        case = main.prepare_case(None, pattern, 3, 1234, 0, 2, variant)
+        case = main.prepare_legacy_case(None, pattern, 3, 1234, 0, 2, variant)
         assert case['state_variant'] == variant
         directory = tmp_path / pattern
         main.save_case(directory, case, {}, {'status': 'no_candidate'})
         assert main.read_case(directory)[0] == case
-        original = main.prepare_case(None, pattern, 3, 1234, 0, 2)
+        original = main.prepare_legacy_case(None, pattern, 3, 1234, 0, 2)
         assert 'state_variant' not in original
         if variant != 'pruning_path':
             assert original['query_a'] == case['query_a'] and original['query_b'] == case['query_b']
@@ -82,13 +82,13 @@ def test_state_variants_are_saved_and_replayed_with_checked_results(tmp_path, va
 def test_config_rejects_undefined_state_variants(tmp_path, variant, patterns):
     path = tmp_path / 'config.yaml'
     path.write_text(yaml.safe_dump({'database': {'dedicated': True, 'allow_reset': True},
-                                    'patterns': patterns, 'generation': {'state_variant': variant}}))
+                                    'patterns': patterns, 'generation': {"method": "legacy-v1", 'state_variant': variant}}))
     with pytest.raises(ValueError, match='state'):
         main.read_config(path)
 
 
 def test_environment_failure_stops_later_cases(tmp_path, monkeypatch):
-    config = {'database': {}, 'generation': {'log_files': [str(FIXTURE)]},
+    config = {'database': {}, 'generation': {"method": "legacy-v1", 'log_files': [str(FIXTURE)]},
               'patterns': ['P1', 'P4', 'P5'], 'scales': [2], 'seeds': [0],
               'max_cases': 3, 'max_seconds': 60, 'output': str(tmp_path), 'measurement': {}}
     monkeypatch.setattr(main, 'run_case', lambda *args, **kwargs: {'status': 'timeout', 'stop_target': True})
@@ -97,7 +97,7 @@ def test_environment_failure_stops_later_cases(tmp_path, monkeypatch):
 
 
 def test_default_budget_reaches_every_pattern_before_repeating_sources(tmp_path, monkeypatch):
-    config = {'database': {}, 'generation': {'log_files': [str(FIXTURE)]},
+    config = {'database': {}, 'generation': {"method": "legacy-v1", 'log_files': [str(FIXTURE)]},
               'patterns': list(main.PATTERNS), 'scales': [2, 5], 'seeds': [0],
               'max_cases': 2 * len(main.PATTERNS), 'max_seconds': 60, 'output': str(tmp_path), 'measurement': {}}
     executed = []
@@ -116,7 +116,7 @@ def test_default_budget_reaches_every_pattern_before_repeating_sources(tmp_path,
 
 
 def test_builtin_templates_do_not_require_gdsmith(tmp_path, monkeypatch):
-    config = {'database': {}, 'generation': {}, 'patterns': ['P4'], 'scales': [2],
+    config = {'database': {}, 'generation': {"method": "legacy-v1", }, 'patterns': ['P4'], 'scales': [2],
               'seeds': [0], 'cases_per_pattern': 1, 'seconds_per_pattern': 10,
               'output': str(tmp_path), 'measurement': {}}
     monkeypatch.setattr(main, 'load_seeds', lambda _: pytest.fail('built-in mode called GDsmith'))
@@ -127,7 +127,7 @@ def test_builtin_templates_do_not_require_gdsmith(tmp_path, monkeypatch):
 
 
 def test_slow_pattern_cannot_spend_other_patterns_reserved_time(tmp_path, monkeypatch):
-    config = {'database': {}, 'generation': {}, 'patterns': ['P1', 'P4', 'P5'],
+    config = {'database': {}, 'generation': {"method": "legacy-v1", }, 'patterns': ['P1', 'P4', 'P5'],
               'scales': [2], 'seeds': [0, 1, 2], 'cases_per_pattern': 3,
               'seconds_per_pattern': 1, 'output': str(tmp_path), 'measurement': {}}
     now, executed = [0.0], []
@@ -179,7 +179,7 @@ def test_old_format_replay_keeps_case_identity(tmp_path, monkeypatch):
 
 
 def test_unsupported_pattern_is_visible_in_run_manifest(tmp_path, monkeypatch):
-    config = {'database': {}, 'generation': {}, 'patterns': ['P1', 'S3'], 'scales': [2],
+    config = {'database': {}, 'generation': {"method": "legacy-v1", }, 'patterns': ['P1', 'S3'], 'scales': [2],
               'seeds': [0], 'cases_per_pattern': 1, 'seconds_per_pattern': 10,
               'output': str(tmp_path), 'measurement': {}}
     monkeypatch.setattr(main, 'supported_patterns', lambda _: {'P1'})
@@ -196,7 +196,7 @@ def test_small_legacy_budget_requires_explicit_pattern_subset():
 
 
 def test_complexity_inputs_are_saved_and_protected(tmp_path):
-    case = main.prepare_case(None, 'S1', 3, 1234, 0, 2)
+    case = main.prepare_legacy_case(None, 'S1', 3, 1234, 0, 2)
     assert case['complexity'] == 2
     main.save_case(tmp_path, case, {}, {'status': 'no_candidate'})
     assert main.read_case(tmp_path)[0] == case

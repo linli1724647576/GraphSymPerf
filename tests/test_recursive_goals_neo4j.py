@@ -5,7 +5,7 @@ import os
 import pytest
 
 from executor import CaseFailure, Neo4j, check_case, measurement_settings, run_case, typed_bag
-from main import prepare_case, read_case, save_case
+from main import prepare_legacy_case as prepare_case, read_case, save_case
 from test_recursive_goal_acceptance import (count_interval_skeleton, disjunction_skeleton,
                                             local_u_count_guard_skeleton, local_with_guard_skeleton, null_else_skeleton)
 

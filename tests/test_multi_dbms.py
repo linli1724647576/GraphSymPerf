@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from executor import run_case, supported_patterns
-from main import prepare_case, read_case, read_config, save_case
+from main import prepare_legacy_case as prepare_case, read_case, read_config, save_case
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.skipif(

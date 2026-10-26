@@ -14,7 +14,7 @@ from query import QueryError
 def case(target="neo4j", pattern="P1"):
     fixture = Path(__file__).parent / "fixtures/gdsmith/neo4j_seeds.log"
     source = load_seeds({"log_files": [str(fixture)]})[0]
-    return main.prepare_case(source, pattern, 2, 0, 0, database={"dbms": target})
+    return main.prepare_legacy_case(source, pattern, 2, 0, 0, database={"dbms": target})
 
 
 def change_record(directory, update):

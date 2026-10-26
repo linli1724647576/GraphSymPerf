@@ -135,6 +135,23 @@ def sample_clause_skeleton(grammar=None, capability_profile=None, clause_budget=
     return ClauseSkeleton(clauses, trace, seed)
 
 
+def _nullable(kind):
+    return kind == "null" or kind.endswith("?")
+
+
+def _join_scalar_types(kinds, *, nullable):
+    concrete = {kind.rstrip("?") for kind in kinds if kind != "null"}
+    if not concrete:
+        return "null"
+    if len(concrete) == 1:
+        result = next(iter(concrete))
+    elif concrete <= {"integer", "float", "number"}:
+        result = "number"
+    else:
+        result = "any"
+    return result + ("?" if nullable else "")
+
+
 def _symbol_type(expression, scope):
     available = dict(scope.visible_symbols)
     if isinstance(expression, ir.Variable):
@@ -144,24 +161,43 @@ def _symbol_type(expression, scope):
     if isinstance(expression, ir.Literal):
         value = expression.value
         if isinstance(value, TerminalSlot):
-            return value.type
+            return _join_scalar_types((value.type,), nullable=_nullable(value.type) or None in value.candidates)
         return {bool: "boolean", int: "integer", type(None): "null", str: "string"}.get(type(value), "any")
     if isinstance(expression, Port):
         return expression.expected_type
     if isinstance(expression, ir.Property):
         if available.get(expression.variable, "").rstrip("?") not in {"node", "relationship"}:
             _failure("unbound_symbol", "A property requires a visible entity binding")
-        return expression.key.type if isinstance(expression.key, TerminalSlot) else "any"
+        # A typed property-key slot constrains the property's non-NULL value
+        # type, not its existence. M3 has not yet established the property on
+        # each reachable entity; even a mandatory node can lack the key.
+        kind = expression.key.type if isinstance(expression.key, TerminalSlot) else "any"
+        return _join_scalar_types((kind,), nullable=True)
     if isinstance(expression, ir.Count):
         return "integer"
-    if isinstance(expression, (ir.Exists, ir.Boolean, ir.Negation, ir.Comparison)):
+    if isinstance(expression, ir.Exists):
         return "boolean"
+    if isinstance(expression, ir.Comparison):
+        if expression.operator in {"IS NULL", "IS NOT NULL"}:
+            return "boolean"
+        kinds = (_symbol_type(expression.left, scope), _symbol_type(expression.right, scope))
+        return "boolean?" if any(_nullable(kind) for kind in kinds) else "boolean"
+    if isinstance(expression, (ir.Boolean, ir.Negation)):
+        operands = expression.terms if isinstance(expression, ir.Boolean) else (expression.expression,)
+        return "boolean?" if any(_nullable(_symbol_type(item, scope)) for item in operands) else "boolean"
     if isinstance(expression, ir.Case):
         left, right = (_symbol_type(e, scope) for e in (expression.then, expression.otherwise))
-        return left if left == right else left.rstrip("?") + "?"
+        return _join_scalar_types((left, right), nullable=_nullable(left) or _nullable(right))
     if isinstance(expression, ir.Call) and expression.name == "coalesce":
         kinds = [_symbol_type(e, scope) for e in expression.args]
-        return next((kind.rstrip("?") for kind in kinds if kind != "null"), "null")
+        if not kinds:
+            _failure("interface_mismatch", "coalesce requires at least one argument")
+        reachable = []
+        for kind in kinds:
+            reachable.append(kind)
+            if not _nullable(kind):
+                break
+        return _join_scalar_types(reachable, nullable=all(_nullable(kind) for kind in reachable))
     _failure("unsupported_fragment", f"No host type rule for {type(expression).__name__}")
 
 
@@ -214,14 +250,14 @@ def advance_scope(clause, incoming_scope):
         _failure("unsupported_fragment", "Only MATCH and WITH advance host scope")
     return replace(incoming_scope, visible_symbols=tuple(available.items()), definitions=tuple(definitions),
                    exports=tuple(available), alias_sources=tuple(aliases),
-                   nullable_types=tuple(name for name, kind in available.items() if kind.endswith("?")))
+                   nullable_types=tuple(name for name, kind in available.items() if _nullable(kind)))
 
 
 class _Builder:
     def __init__(self, grammar, capabilities, budget, seed):
         self.grammar, self.capabilities, self.budget = grammar, capabilities, budget
         self.rng = random.Random(seed)
-        self.operators = _choices(grammar, capabilities)[1]
+        self.clause_kinds, self.operators = _choices(grammar, capabilities)
         self.used_nodes, self.next_symbol, self.next_slot, self.next_scope = 0, 0, 0, 0
         self.slots, self.trace, self.scopes, self.uses = [], [], [], []
         self.port_kind = self.rng.choice(grammar["port_kinds"])
@@ -395,7 +431,7 @@ class _Builder:
     def rows(self, parent, depth, subquery_depth, need_port=False):
         scope = self.new_scope(parent)
         pipeline = []
-        if depth > 0 and self.rng.random() < .4:
+        if "MATCH" in self.clause_kinds and depth > 0 and self.rng.random() < .4:
             clause = self.match(scope)
             scope = advance_scope(clause, scope)
             pipeline.append(clause)
@@ -457,6 +493,8 @@ def expand_host_structure(skeleton, grammar=None, capability_profile=None, budge
                                     for item in skeleton.clauses)
             or skeleton.clauses[-1]["kind"] != "RETURN"):
         _failure("interface_mismatch", "A host clause skeleton must end in RETURN")
+    if any(item["kind"] not in builder.clause_kinds for item in skeleton.clauses):
+        _failure("unsupported_fragment", "Clause skeleton uses a disabled host capability")
     for item in skeleton.clauses[:-1]:
         kind = item["kind"]
         incoming = scope

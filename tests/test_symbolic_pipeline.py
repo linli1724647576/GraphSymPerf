@@ -9,7 +9,7 @@ import pytest
 from executor import typed_bag
 from ir import RowLimit, UnionAll, from_data
 from generator import PatternNotApplicable
-from main import COMPOSITION_EXTENSION_FIELDS, measurement_settings, prepare_case, read_case, save_case
+from main import COMPOSITION_EXTENSION_FIELDS, measurement_settings, prepare_legacy_case as prepare_case, read_case, save_case
 from population import evaluate_query
 from state import GraphSpec
 

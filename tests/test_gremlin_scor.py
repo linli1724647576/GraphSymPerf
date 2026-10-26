@@ -15,7 +15,7 @@ from generator import instantiate
 from gremlin import generate_gremlin
 from ir import Property, QueryError
 from languages import UnsupportedFeature, generate, render_saved, validate_language
-from main import prepare_case
+from main import prepare_legacy_case as prepare_case
 from mutator import mutate
 from query import parse_query, projection_names
 from test_executor import CASE, SETTINGS, FakeDatabase

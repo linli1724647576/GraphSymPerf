@@ -18,7 +18,7 @@ from state import GraphSpec
 
 
 def make_case(pattern, contexts=(), *, threshold=0, scale=7, seed=0):
-    return main.prepare_case(None, pattern, scale, seed, 9,
+    return main.prepare_legacy_case(None, pattern, scale, seed, 9,
                              composition={"contexts": list(contexts), "threshold": threshold})
 
 
@@ -200,7 +200,7 @@ def test_catalog_dependency_and_population_evidence_survive_archiving(tmp_path, 
 def test_composition_config_accepts_only_the_implemented_paper_patterns(tmp_path):
     config = {"database": {"dbms": "neo4j", "uri": "bolt://unused:7687", "database": "neo4j",
                             "dedicated": True, "allow_reset": True},
-              "patterns": ["P3", "P4", "P10"], "generation": {"composition": {"contexts": []}}}
+              "patterns": ["P3", "P4", "P10"], "generation": {"method": "symbolic-v1", "composition": {"contexts": []}}}
     filename = tmp_path / "config.yaml"
     filename.write_text(json.dumps(config))
     assert main.read_config(filename)["patterns"] == ["P3", "P4", "P10"]
@@ -212,7 +212,7 @@ def test_composition_config_accepts_only_the_implemented_paper_patterns(tmp_path
 
 
 def test_no_composition_keeps_legacy_p10_independent_match_semantics():
-    case = main.prepare_case(None, "P10", 3, 0, 9)
+    case = main.prepare_legacy_case(None, "P10", 3, 0, 9)
     query = from_data(case["query_ir"]["a"])
     parts = clauses(query)
     assert len(parts) == 2

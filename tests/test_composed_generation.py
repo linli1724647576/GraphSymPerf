@@ -17,7 +17,7 @@ from state import GraphSpec
 def test_composition_uses_existing_compiler_and_verifies_both_queries(contexts):
     from population import evaluate_query
 
-    case = main.prepare_case(None, "P3", 4, 17, 9,
+    case = main.prepare_legacy_case(None, "P3", 4, 17, 9,
                              composition={"contexts": contexts})
     assert "compile_error" not in case
     assert case["graph_spec"]["version"] == 2
@@ -32,7 +32,7 @@ def test_composition_uses_existing_compiler_and_verifies_both_queries(contexts):
 
 
 def test_outer_count_threshold_changes_population_not_a_pattern_recipe():
-    cases = [main.prepare_case(None, "P3", 5, 0, 3,
+    cases = [main.prepare_legacy_case(None, "P3", 5, 0, 3,
                               composition={"contexts": ["count", "with"], "threshold": threshold})
              for threshold in (0, 2)]
     assert next(value for key, value in cases[0]["expected_rows"][0].items() if key != "u.uid") == 1
@@ -42,8 +42,8 @@ def test_outer_count_threshold_changes_population_not_a_pattern_recipe():
 
 def test_expansion_preserves_answer_and_archive_protects_dependency_evidence(tmp_path):
     options = {"contexts": ["count", "with"], "threshold": 2}
-    small = main.prepare_case(None, "P3", 1, 0, 3, composition=options)
-    large = main.prepare_case(None, "P3", 19, 0, 3, composition=options)
+    small = main.prepare_legacy_case(None, "P3", 1, 0, 3, composition=options)
+    large = main.prepare_legacy_case(None, "P3", 19, 0, 3, composition=options)
     assert small["expected_rows"] == large["expected_rows"]
     settings = main.measurement_settings({})
     main.save_case(tmp_path, small, settings, {"status": "no_candidate"})
@@ -59,7 +59,7 @@ def test_expansion_preserves_answer_and_archive_protects_dependency_evidence(tmp
 
 @pytest.mark.parametrize("strip_metadata", [False, True])
 def test_composed_archive_cannot_drop_the_evidence_hash(tmp_path, strip_metadata):
-    case = main.prepare_case(None, "P3", 3, 0, 1, composition={"contexts": ["count", "with"]})
+    case = main.prepare_legacy_case(None, "P3", 3, 0, 1, composition={"contexts": ["count", "with"]})
     main.save_case(tmp_path, case, main.measurement_settings({}), {"status": "no_candidate"})
     path = tmp_path / "result.json"
     saved = json.loads(path.read_text())
@@ -76,10 +76,10 @@ def test_composed_archive_cannot_drop_the_evidence_hash(tmp_path, strip_metadata
 def test_unverified_backends_reject_recursive_features_before_compilation():
     for database in ({"dbms": "memgraph", "language": "cypher"},
                      {"dbms": "janusgraph", "language": "gremlin"}):
-        case = main.prepare_case(None, "P3", 2, 0, 1,
+        case = main.prepare_legacy_case(None, "P3", 2, 0, 1,
                                  composition={"contexts": ["count", "with"]}, database=database)
         assert case["compile_error"]["status"] == "unsupported_feature"
-    bare = main.prepare_case(None, "P3", 2, 0, 1, composition={"contexts": []},
+    bare = main.prepare_legacy_case(None, "P3", 2, 0, 1, composition={"contexts": []},
                              database={"dbms": "memgraph", "language": "cypher"})
     assert bare["compile_error"]["reason"] == "explicit_state_loading_not_verified_for_target"
 
@@ -87,7 +87,7 @@ def test_unverified_backends_reject_recursive_features_before_compilation():
 def test_runtime_cannot_bypass_the_explicit_state_backend_gate(monkeypatch):
     import executor
 
-    case = main.prepare_case(None, "P3", 3, 0, 1, composition={"contexts": []})
+    case = main.prepare_legacy_case(None, "P3", 3, 0, 1, composition={"contexts": []})
     monkeypatch.setattr(executor, "make_database", lambda *args: pytest.fail("unsupported target was opened"))
     report = executor.run_case(case, {"dbms": "memgraph", "language": "cypher"}, {})
     assert report["status"] == "unsupported_feature"
@@ -95,7 +95,7 @@ def test_runtime_cannot_bypass_the_explicit_state_backend_gate(monkeypatch):
 
 
 def test_large_population_remains_a_bounded_specification():
-    case = main.prepare_case(None, "P3", 10**7, 0, 3,
+    case = main.prepare_legacy_case(None, "P3", 10**7, 0, 3,
                              composition={"contexts": ["count", "with"], "threshold": 2})
     assert "compile_error" not in case
     assert case["population_constraints"]["valid_paths"] == 3
@@ -110,7 +110,7 @@ def test_legacy_controls_are_not_silently_ignored_by_composition(legacy):
     from generator import PatternNotApplicable
 
     with pytest.raises(PatternNotApplicable):
-        main.prepare_case(None, "P3", 2, 0, 1, composition={"contexts": ["exists"]}, **legacy)
+        main.prepare_legacy_case(None, "P3", 2, 0, 1, composition={"contexts": ["exists"]}, **legacy)
 
 
 @pytest.mark.parametrize("contexts", [context for depth in range(4)
@@ -119,7 +119,7 @@ def test_operator_products_reuse_the_same_generation_and_mutation_rules(contexts
     from executor import typed_bag
     from population import evaluate_query
 
-    case = main.prepare_case(None, "P3", 6, len(contexts) % 3, 11,
+    case = main.prepare_legacy_case(None, "P3", 6, len(contexts) % 3, 11,
                              composition={"contexts": contexts})
     assert "compile_error" not in case
     spec = GraphSpec.from_dict(case["graph_spec"])
