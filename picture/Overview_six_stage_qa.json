@@ -1,0 +1,14 @@
+{
+  "figure": "Overview_six_stage.svg",
+  "canvas": [
+    3080,
+    1720
+  ],
+  "editableTextElements": 84,
+  "minimumFont": 37,
+  "outOfCanvasText": [],
+  "overlappingTextBoxes": [],
+  "source": "user-supplied Overview; original five-region layout retained",
+  "semanticReview": "M1–M6 aligned with the current six-stage method",
+  "runtimeConclusion": "performance candidate; root-cause confirmation remains separate"
+}
