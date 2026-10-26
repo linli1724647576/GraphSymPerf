@@ -54,11 +54,15 @@ def test_actual_execution_archive_replay_and_bound_runtime_evidence(tmp_path, pa
     assert replayed["status"] == "no_candidate", replayed
 
 
-@pytest.mark.parametrize("pattern", ["P3", "P10", "S7"])
+@pytest.mark.parametrize("pattern", ["P3", "P10", "S7", "S8"])
 def test_large_certified_states_preserve_results_in_the_real_database(pattern):
     settings = measurement_settings({"timeout_seconds": 30})
+    grammar = ({"clauses": ["RETURN"], "port_kinds": ["scalar"],
+                "return_type": "boolean" if pattern == "S8" else "integer",
+                "expression_operators": ["leaf"]} if pattern in {"S7", "S8"} else
+               {"clauses": ["RETURN"], "port_kinds": ["rows"], "expression_operators": ["count"]})
     case = prepare_case(None, pattern, 10000, 0, 3, database=configuration(), ast_options={
-        "grammar": {"clauses": ["RETURN"], "port_kinds": ["rows"], "expression_operators": ["count"]}})
+        "grammar": grammar})
     assert case["dependency_report"]["static"]["input_observation_scope"] == "certified_proof_graph"
     assert case["graph_spec"]["scale"] == 10000
     database = Neo4j(configuration(), settings)

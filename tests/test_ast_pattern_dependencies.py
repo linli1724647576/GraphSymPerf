@@ -232,3 +232,90 @@ def test_property_reads_follow_entity_alias_identity_and_are_deduplicated():
     assert property_reads[0]["domain_intersection_interval"] == [2, 2]
     assert property_reads[0]["physical_effect"] == "unknown"
 
+
+def reframe_pair_fixture(pair, embedded, state, left, right, address):
+    record = {**pair.mutation_record, "site": {**pair.mutation_record["site"], "address": list(address)}}
+    pair = replace(pair, query_a=left, query_b=right, mutation_record=record,
+                   bindings={**pair.bindings, "mutation_site": list(address)})
+    instances = tuple(replace(item, site_address=address) for item in embedded.instances)
+    embedded = replace(embedded, tree=left, host=HostAst(left), instances=instances)
+    proof = (state.spec if state.spec.counts()["nodes"] <= 5000 else
+             GraphSpec.from_dict(state.population.evidence["validation_graph_spec"]))
+    state = replace(state, embedded_digest=embedded.embedded_digest,
+                    population=replace(state.population, expected_rows=evaluate_query(left, proof)))
+    return pair, embedded, state
+
+
+@pytest.mark.parametrize("pattern", ["P3", "P4", "S7"])
+def test_count_of_rows_does_not_demand_an_unused_return_expression(pattern):
+    options = {"scalar_contexts": []} if pattern in {"P4", "S7"} else {}
+    pair, embedded, state = dependency_fixture(pattern, options)
+    old_address = tuple(pair.mutation_record["site"]["address"])
+    def wrap(tree):
+        body = ir.Query(None, None, (ir.Alias(ir.Count(body=tree), "discarded"),))
+        return ir.Query(None, None, (ir.Alias(ir.Count(body=body), "n"),))
+    left, right = wrap(pair.query_a), wrap(pair.query_b)
+    address = ("returns", 0, "expression", "body", "returns", 0, "expression", "body", *old_address)
+    pair, embedded, state = reframe_pair_fixture(pair, embedded, state, left, right, address)
+    report = check_dependencies(pair, embedded, state)
+    assert report.static["result_relation"] == "proved", report.static
+    assert report.static["target_valid"] is False
+    assert report.static["logical_demand"] == "masked"
+    assert report.static["value_dependency"] == "unused"
+    assert report.static["logical_request_interval"] == [0, 0]
+    assert report.static["proof_model_syntactic_entry_count"] == 1
+    assert any(step.get("reason") == "unobserved_projection" for step in report.static["ancestor_steps"])
+    if pattern == "S7":
+        assert report.static["protected_work_masked"] is False
+
+
+@pytest.mark.parametrize("consumer,distinct,valid", [("count", False, False), ("count", True, True), ("exists", True, False)])
+def test_distinct_return_values_are_needed_by_count_but_not_exists(consumer, distinct, valid):
+    pair, embedded, state = dependency_fixture("P4", {"scalar_contexts": []})
+    expression = ir.Count if consumer == "count" else ir.Exists
+    def wrap(tree):
+        return ir.Query(None, None, (ir.Alias(expression(body=replace(tree, distinct=distinct)), "n"),))
+    address = ("returns", 0, "expression", "body", *pair.mutation_record["site"]["address"])
+    pair, embedded, state = reframe_pair_fixture(pair, embedded, state, wrap(pair.query_a), wrap(pair.query_b), address)
+    report = check_dependencies(pair, embedded, state)
+    assert report.static["result_relation"] == "proved", report.static
+    assert report.static["target_valid"] is valid
+    if not valid:
+        assert report.static["logical_demand"] == "masked"
+
+
+@pytest.mark.parametrize("used_in_where", [False, True])
+def test_with_alias_liveness_reaches_filters_and_drops_unused_values(used_in_where):
+    pair, embedded, state = dependency_fixture("P4", {"scalar_contexts": []})
+    suffix = tuple(pair.mutation_record["site"]["address"])[3:]
+    def wrap(tree):
+        scalar = tree.returns[1].expression
+        clause = ir.With((ir.Alias(scalar, "observed"),),
+                         where=ir.Comparison(ir.Variable("observed"), "=", ir.Literal(False)) if used_in_where else None)
+        body = ir.Query(None, None, (ir.Literal(1),),
+                        pipeline=(ir.Match(tree.pattern, tree.where), clause))
+        return ir.Query(None, None, (ir.Alias(ir.Count(body=body), "n"),))
+    address = ("returns", 0, "expression", "body", "pipeline", 1, "projections", 0, "expression", *suffix)
+    pair, embedded, state = reframe_pair_fixture(pair, embedded, state, wrap(pair.query_a), wrap(pair.query_b), address)
+    report = check_dependencies(pair, embedded, state)
+    assert report.static["result_relation"] == "proved", report.static
+    assert report.static["target_valid"] is used_in_where
+    assert (report.static["logical_demand"] == "masked") is not used_in_where
+
+
+def test_large_dead_projection_has_zero_demand_by_syntax_not_by_sample_size():
+    pair, embedded, state = dependency_fixture("P3", scale=10000)
+    def wrap(tree):
+        body = ir.Query(None, None, (ir.Alias(ir.Count(body=tree), "unused"),))
+        return ir.Query(None, None, (ir.Alias(ir.Count(body=body), "n"),))
+    left, right = wrap(pair.query_a), wrap(pair.query_b)
+    address = ("returns", 0, "expression", "body", "returns", 0, "expression", "body", *pair.mutation_record["site"]["address"])
+    # Only one scalar result is returned at every graph scale. The existing M3
+    # path/growth certificate remains scoped to its original matching domain.
+    pair, embedded, state = reframe_pair_fixture(pair, embedded, state, left, right, address)
+    report = check_dependencies(pair, embedded, state)
+    assert report.static["result_relation"] == "proved", report.static
+    assert report.static["logical_request_interval"] == [0, 0]
+    assert report.static["global_mask_evidence"]["kind"] == "syntactic_unobserved_projection"
+    assert report.static["target_valid"] is False
+

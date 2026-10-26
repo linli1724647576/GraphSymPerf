@@ -52,7 +52,7 @@ def generation_options(options=None):
                "max_attempts", "pattern_options", "host_seed", "embed_seed", "require_target_entry"}
     if set(options) - allowed:
         raise ValueError(f"Unknown AST generation options: {sorted(set(options) - allowed)}")
-    attempts = options.setdefault("max_attempts", 32)
+    attempts = options.setdefault("max_attempts", 64)
     if type(attempts) is not int or not 1 <= attempts <= 512:
         raise ValueError("AST generation max_attempts must be between 1 and 512")
     for name in ("host_seed", "embed_seed"):

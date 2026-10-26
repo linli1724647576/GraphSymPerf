@@ -57,6 +57,9 @@ class _LogicalTrace(_Interpreter):
     def __init__(self, spec, max_events=100_000):
         super().__init__(spec)
         self.inputs = defaultdict(list)
+        self.syntactic_inputs = defaultdict(list)
+        self.flow_demands = defaultdict(set)
+        self.projection_requirements = {}
         self.max_events = max_events
         self.events = 0
 
@@ -115,7 +118,8 @@ class _LogicalTrace(_Interpreter):
             raise PopulationError(f"Unsupported demand function: {value.name}")
         if isinstance(value, (ir.Count, ir.Exists)):
             if value.body is not None:
-                rows = self.run_at(value.body, (*address, "body"), env)
+                rows = self.run_at(value.body, (*address, "body"), env,
+                                   demand="count" if isinstance(value, ir.Count) else "exists")
             else:
                 rows = []
                 self.record_pattern(value.pattern, (*address, "pattern"), env)
@@ -136,21 +140,55 @@ class _LogicalTrace(_Interpreter):
             return None if left is None or right is None else left + right
         raise PopulationError(f"Unsupported logical expression: {type(value).__name__}")
 
-    def _project_at(self, items, env, address, field):
+    def _project_at(self, items, env, address, field, required=None):
+        names = projection_names(ir.Query(None, None, items))
+        required = set(range(len(items))) if required is None else set(required)
+        for i in range(len(items)):
+            self.syntactic_inputs[(*address, field, i)].append(dict(env))
         return {name: self.expression_at(item, env, (*address, field, i))
-                for i, (name, item) in enumerate(zip(projection_names(ir.Query(None, None, items)), items))}
+                for i, (name, item) in enumerate(zip(names, items)) if i in required}
 
-    def run_at(self, flow, address=(), outer=None):
+    def _required_with_projections(self, flow, steps, values_needed, demand):
+        """Backpropagate lexical uses through WITH boundaries.
+
+        Every filter and match consumes bindings. Final projected values are
+        needed only by a value consumer or count-sensitive DISTINCT. This is a
+        logical liveness analysis; no physical projection pushdown is assumed.
+        """
+        needed = set().union(*(ir.expression_variables(item.expression if isinstance(item, ir.Alias) else item)
+                               for item in flow.returns)) if values_needed else set()
+        plans = {}
+        for clause, location in reversed(steps):
+            if isinstance(clause, ir.Match):
+                needed.update(ir.pattern_variables(clause.pattern))
+                if clause.where is not None:
+                    needed.update(ir.expression_variables(clause.where))
+            elif isinstance(clause, ir.With):
+                names = projection_names(ir.Query(None, None, clause.projections))
+                outputs_needed = set(needed)
+                if clause.where is not None:
+                    outputs_needed.update(ir.expression_variables(clause.where))
+                live = {i for i, name in enumerate(names) if name in outputs_needed}
+                if clause.distinct and demand != "exists":
+                    live = set(range(len(names)))
+                plans[location] = live
+                needed = set().union(*(ir.expression_variables(
+                    item.expression if isinstance(item, ir.Alias) else item)
+                    for i, item in enumerate(clause.projections) if i in live)) if live else set()
+        return plans
+
+    def run_at(self, flow, address=(), outer=None, *, demand="values"):
         env = dict(outer or {})
         self.record(address, env)
+        self.flow_demands[address].add(demand)
         if isinstance(flow, ir.ConditionalQuery):
             field = "then" if self.expression_at(flow.condition, env, (*address, "condition")) is True else "otherwise"
-            return self.run_at(getattr(flow, field), (*address, field), env)
+            return self.run_at(getattr(flow, field), (*address, field), env, demand=demand)
         if isinstance(flow, ir.UnionAll):
             return [row for i, branch in enumerate(flow.branches)
-                    for row in self.run_at(branch, (*address, "branches", i), env)]
+                    for row in self.run_at(branch, (*address, "branches", i), env, demand=demand)]
         if isinstance(flow, ir.RowLimit):
-            return [] if flow.limit == 0 else self.run_at(flow.body, (*address, "body"), env)[:flow.limit]
+            return [] if flow.limit == 0 else self.run_at(flow.body, (*address, "body"), env, demand=demand)[:flow.limit]
         if not isinstance(flow, ir.Query):
             raise PopulationError("Unsupported logical row producer")
         if flow.pipeline:
@@ -158,6 +196,12 @@ class _LogicalTrace(_Interpreter):
         else:
             steps = [(ir.Match(flow.pattern, flow.where), address)] if flow.pattern is not None else []
             steps += [(clause, (*address, "matches", i)) for i, clause in enumerate(flow.matches)]
+        values_needed = demand == "values" or flow.distinct and demand == "count"
+        required_returns = set(range(len(flow.returns))) if values_needed else set()
+        self.projection_requirements[(address, "returns")] = required_returns
+        with_plans = self._required_with_projections(flow, steps, values_needed, demand)
+        for location, live in with_plans.items():
+            self.projection_requirements[(location, "projections")] = live
         rows = [env]
         for clause, location in steps:
             if isinstance(clause, ir.Match):
@@ -174,15 +218,15 @@ class _LogicalTrace(_Interpreter):
                     matched.extend(candidates)
                 rows = matched
             elif isinstance(clause, ir.With):
-                rows = [self._project_at(clause.projections, row, location, "projections") for row in rows]
-                if clause.distinct:
+                rows = [self._project_at(clause.projections, row, location, "projections", with_plans[location]) for row in rows]
+                if clause.distinct and demand != "exists":
                     rows = _distinct(rows)
                 if clause.where is not None:
                     rows = [row for row in rows if self.expression_at(clause.where, row, (*location, "where")) is True]
             else:
                 raise PopulationError("Unsupported logical clause")
-        result = [self._project_at(flow.returns, row, address, "returns") for row in rows]
-        if flow.distinct:
+        result = [self._project_at(flow.returns, row, address, "returns", required_returns) for row in rows]
+        if flow.distinct and demand != "exists":
             result = _distinct(result)
         return result[:flow.limit] if flow.limit is not None else result
 
@@ -200,6 +244,12 @@ def _ancestor_demands(tree, address, trace):
         if child in ("args", "terms"):
             step["child_index"] = address[length + 1]
         inputs = trace.inputs.get(location, ())
+        if isinstance(value, (ir.Query, ir.With)) and child in ("returns", "projections"):
+            live = trace.projection_requirements.get((location, child))
+            index = address[length + 1]
+            if live is not None and index not in live:
+                step.update(logical_demand="masked", value_dependency="unused", reason="unobserved_projection",
+                            row_consumers=sorted(trace.flow_demands.get(location, ())))
         if isinstance(value, ir.Exists):
             step["logical_demand"] = "witness"
         elif isinstance(value, ir.Count):
@@ -256,6 +306,13 @@ def _ancestor_demands(tree, address, trace):
                 step.update(logical_demand="masked", value_dependency="unused", reason="decisive_sibling")
             elif not masks or any(masks):
                 step.update(logical_demand="conditional", value_dependency="conditional")
+        # LIMIT/filter annotations describe row demand; they cannot revive a
+        # projected scalar that its row consumer never observes.
+        if isinstance(value, (ir.Query, ir.With)) and child in ("returns", "projections"):
+            live = trace.projection_requirements.get((location, child))
+            if live is not None and address[length + 1] not in live:
+                step.update(logical_demand="masked", value_dependency="unused", reason="unobserved_projection",
+                            row_consumers=sorted(trace.flow_demands.get(location, ())))
         steps.append(step)
     return steps
 
@@ -533,6 +590,9 @@ def _global_mask_evidence(tree, steps, trace, evidence):
             continue
         address = tuple(step["address"])
         node = node_at(tree, address)
+        if step.get("reason") == "unobserved_projection":
+            return {"kind": "syntactic_unobserved_projection", "address": list(address),
+                    "row_consumers": step.get("row_consumers", [])}
         if isinstance(node, ir.RowLimit) and node.limit == 0 or isinstance(node, ir.Query) and node.limit == 0:
             return {"kind": "syntactic_zero_limit", "address": list(address)}
         inputs = trace.inputs.get(address, ())
@@ -608,6 +668,12 @@ def check_dependencies(pair, embedded, graph_state, evidence_context=None):
         trace.run_at(pair.query_a)
         entry_address = tuple(site.guards.get("envelope_site", address))
         entries = trace.inputs.get(entry_address, ())
+        syntactic_entries = entries
+        if not syntactic_entries:
+            for length in range(len(entry_address), -1, -1):
+                syntactic_entries = trace.syntactic_inputs.get(entry_address[:length], ())
+                if syntactic_entries:
+                    break
         steps = _ancestor_demands(pair.query_a, address, trace)
         external_steps = _ancestor_demands(pair.query_a, entry_address, trace)
         masked = any(step["logical_demand"] == "masked" for step in steps)
@@ -657,6 +723,7 @@ def check_dependencies(pair, embedded, graph_state, evidence_context=None):
                       proof_model_input_cardinality_interval=observed_input_interval,
                       proof_model_distinct_input_bindings=len(counts),
                       proof_model_input_multiplicities=sorted(counts.values()),
+                      proof_model_syntactic_entry_count=len(syntactic_entries),
                       proof_model_logical_request_interval=observed_request_interval,
                       proof_model_exposure_status=exposure,
                       global_mask_evidence=global_mask,
@@ -666,7 +733,7 @@ def check_dependencies(pair, embedded, graph_state, evidence_context=None):
                       exposure_status=exposure,
                       exposure_observation_scope=scope,
                       protected_work_masked=known_mask and not external_mask,
-                      target_valid=static["result_relation"] == "proved" and bool(entries),
+                      target_valid=static["result_relation"] == "proved" and bool(entries) and not external_mask,
                       target_valid_scope="M3_preserved_construction_witness" if compressed else "full_graph",
                       target_entry_evidence={"scope": scope, "proof_model_entries": len(entries),
                           "basis": "M3 construction and preserved stable witness" if compressed else "complete logical graph observation",

@@ -1469,6 +1469,64 @@ _EMPTY_SPEC = GraphSpec('AST', 1, 0, version=2, include_reference=False,
                        edge_groups=(), index_requirements=())
 
 
+def _stable_exists_union_witness(problem, info, exists_path, expression, changed_branch, assignment, spec):
+    """Use a positive sibling quantity whose reads are independent of growth.
+
+    The row-demand verifier independently checks this obligation over actual
+    inputs and retains its loaded-state query. Small-model truth is insufficient.
+    """
+    context = getattr(problem, 'growth_context', None)
+    if context is None or not isinstance(expression.body, ir.UnionAll):
+        return None
+    families, full = context
+    for index, branch in enumerate(expression.body.branches):
+        if index == changed_branch or not isinstance(branch, ir.Query):
+            continue
+        if branch.pattern is None or branch.pipeline or branch.matches or branch.limit is not None:
+            continue
+        branch_path = (*exists_path, 'body', 'branches', index)
+        atom_address = (*info['prefix'], *branch_path, 'pattern')
+        positive = [demand for demand in problem.demands
+                    if tuple(demand.address) == atom_address
+                    and (demand.min_matches > 0 or (demand.exact_matches is not None and demand.exact_matches > 0)
+                         or demand.scale_matches and problem.scale > 0)]
+        if not positive:
+            continue
+        forest_branch = (*info['prefix'], *branch_path)
+        reads = [read for read in problem.occurrences
+                 if read['address'][:len(forest_branch)] == forest_branch]
+        independent = True
+        for family in families:
+            if not family['growing']:
+                continue
+            for read in reads:
+                if any(not _local_exclusion(problem, read, candidate, assignment)
+                       for candidate in _family_reads(problem, read, family, families, full)):
+                    independent = False
+                    break
+            if not independent:
+                break
+        if not independent:
+            continue
+        try:
+            values = _lexical_values(problem, info, branch_path, ir.Exists(body=branch), spec)
+        except (PopulationError, ValueError, KeyError, TypeError):
+            continue
+        if not values or any(value is not True for value in values):
+            continue
+        return {'kind': 'exists_preserved_union_witness',
+                'address': list((*info['prefix'], *exists_path)),
+                'witness_branch_address': list(forest_branch),
+                'quantity_obligation_address': list(atom_address),
+                'minimum_rows': max(demand.min_matches if demand.min_matches > 0 else
+                                    demand.exact_matches if demand.exact_matches is not None else 1
+                                    for demand in positive),
+                'proof': 'positive_per_input_quantity_and_independent_growth_reads',
+                'required_state_check': 'matching_quantity_observation',
+                'physical_early_termination_guaranteed': False}
+    return None
+
+
 def _masking_ancestor(problem, occurrence, assignment, spec, bindings):
     address = occurrence['address']
     info = occurrence['info']
@@ -1482,6 +1540,14 @@ def _masking_ancestor(problem, occurrence, assignment, spec, bindings):
         kind = type(ancestor).__name__
         if kind == 'RowLimit' and ancestor.limit == 0:
             return {'kind': 'zero_limit', 'address': list((*prefix, *local[:length]))}
+        if (isinstance(ancestor, ir.Exists) and child == 'body'
+                and isinstance(ancestor.body, ir.UnionAll)
+                and local[length + 1:length + 2] == ('branches',)
+                and len(local) > length + 2 and type(local[length + 2]) is int):
+            witness = _stable_exists_union_witness(problem, info, local[:length], ancestor,
+                                                  local[length + 2], assignment, spec)
+            if witness is not None:
+                return witness
         if isinstance(ancestor, ir.Case):
             truth = scalar((*local[:length], 'condition'), ancestor.condition)
             selected = 'then' if truth is True else 'otherwise' if truth is False or truth is None else None

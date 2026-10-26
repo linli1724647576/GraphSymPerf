@@ -167,7 +167,10 @@ def test_structural_holes_cannot_be_resolved_during_graph_search():
 def test_goal_checks_close_random_outer_with_bindings_instead_of_only_the_rule_anchor(pattern):
     from ast_pattern.host_generator import generate_random_ast
     from query import parse_query
-    host = generate_random_ast(host_seed=3)
+    # P4 is a Boolean value law. Use a compatible Boolean port rather than
+    # dropping that value through the former COUNT-of-projection adapter.
+    grammar = {"port_kinds": ["predicate"]} if pattern == "P4" else None
+    host = generate_random_ast(grammar=grammar, host_seed=3)
     item = embed_patterns(host, selection_policy=pattern, embed_seed=3)
     state, plan, _ = construct_graph_state(item, 7, 3)
     source = instantiate_query(item, state, plan)

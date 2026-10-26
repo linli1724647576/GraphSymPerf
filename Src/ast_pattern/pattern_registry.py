@@ -68,8 +68,14 @@ class PatternSpec:
         return self.catalogue, self.pattern_id, self.form
 
     @property
+    def native_scalar(self):
+        return self.pattern_id in {'P4', 'P5', 'P13', 'S1', 'S2', 'S4', 'S7', 'S8'}
+
+    @property
     def source_interface(self):
-        return {'kind': 'rows', 'imports': (), 'adapters': self.interfaces}
+        return {'kind': 'rows', 'imports': (), 'adapters': self.interfaces,
+                'native_scalar': self.native_scalar,
+                'native_requires': 'matching_scalar_type' if self.native_scalar else None}
 
     @property
     def replacement_interface(self):
@@ -135,7 +141,10 @@ def _spec(pattern_id, form=None):
                        'short_circuit' if short else 'symmetry', _PREMISES[pattern_id],
                        _STATE_NEEDS.get(pattern_id, ('matching_quantity', 'scalar_premises')),
                        'masked_candidate_growth' if short else 'asymmetric_candidate_work',
-                       'envelope_equal' if short else 'per_binding_observation_bijection')
+                       'envelope_equal' if short else 'per_binding_observation_bijection',
+                       interfaces=(('rows', 'boolean') if pattern_id in {'P4', 'P5', 'S1', 'S2', 'S8'}
+                                   else ('rows', 'integer', 'boolean', 'float', 'string')
+                                   if pattern_id in {'P13', 'S4', 'S7'} else ('rows', 'integer', 'boolean')))
 
 
 class PatternRegistry:

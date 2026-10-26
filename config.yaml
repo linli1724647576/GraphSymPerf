@@ -10,7 +10,7 @@ generation:
   method: ast-pattern-v1
   data_seed: 0
   ast:
-    max_attempts: 32
+    max_attempts: 64
     require_target_entry: true
     ast_budget:
       clauses: 4

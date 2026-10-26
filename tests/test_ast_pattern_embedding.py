@@ -74,7 +74,14 @@ def test_every_rule_embeds_locally_without_the_historical_host_builder(monkeypat
 @pytest.mark.parametrize('pattern', ['P3', 'P4', 'S7', 'S8'])
 def test_declared_observation_adapters_preserve_the_host_interface(kind, expected, adapter, pattern):
     original = host(kind, expected)
+    if pattern in {'P4', 'S8'} and expected == 'integer':
+        with pytest.raises(StageFailure) as error:
+            embed_patterns(original, selection_policy=pattern)
+        assert error.value.code == 'no_compatible_site'
+        return
     embedded = embed_patterns(original, selection_policy=pattern)
+    if kind != 'rows' and pattern in {'P4', 'S7', 'S8'}:
+        adapter = 'native_scalar'
     assert embedded.origin_map['adapter'] == adapter
     assert replace_at(embedded.tree, original.ports[0].address,
                       node_at(original.tree, original.ports[0].address)) == original.tree
@@ -115,7 +122,7 @@ def test_unsupported_scalar_interface_is_classified_without_rewriting_host():
     original = host('scalar', 'string')
     before = original.to_data()
     with pytest.raises(StageFailure) as error:
-        embed_patterns(original, selection_policy='S7')
+        embed_patterns(original, selection_policy='P3')
     assert error.value.code == 'no_compatible_site'
     assert original.to_data() == before
 
@@ -152,3 +159,64 @@ def test_multiple_registered_ports_are_explicitly_outside_the_initial_contract()
     with pytest.raises(StageFailure) as error:
         embed_patterns(original, selection_policy='P3')
     assert error.value.code == 'unsupported_fragment'
+
+
+NATIVE_SCALAR_RULES = ('P4', 'P5', 'P13', 'S1', 'S2', 'S4', 'S7', 'S8')
+
+
+def native_type(pattern):
+    return 'boolean' if pattern in {'P4', 'P5', 'S1', 'S2', 'S8'} else 'integer'
+
+
+def native_pair(pattern, original):
+    from ast_pattern.state_builder import construct_graph_state
+    from ast_pattern.instantiation import instantiate_query
+    from ast_pattern.mutation import mutate_target
+    from ast_pattern.dependency_check import check_dependencies
+
+    embedded = embed_patterns(original, selection_policy=pattern, embed_seed=0)
+    state, plan, _ = construct_graph_state(embedded, 5, 3)
+    pair = mutate_target(instantiate_query(embedded, state, plan), state, embedded.target_id)
+    return embedded, pair, check_dependencies(pair, embedded, state)
+
+
+@pytest.mark.parametrize('pattern', NATIVE_SCALAR_RULES)
+@pytest.mark.parametrize('outer_variable', [None, 'pattern_0__u'])
+def test_native_scalar_laws_have_a_real_value_consumer_and_no_implicit_imports(pattern, outer_variable):
+    original = host('scalar', native_type(pattern), variable=outer_variable)
+    before = original.to_data()
+    embedded, pair, report = native_pair(pattern, original)
+    assert embedded.origin_map['adapter'] == 'native_scalar'
+    assert embedded.instances[0].imports == ()
+    assert report.static['result_relation'] == 'proved'
+    assert report.static['target_valid'] is True
+    assert original.to_data() == before
+    assert replace_at(embedded.tree, original.ports[0].address,
+                      node_at(original.tree, original.ports[0].address)) == original.tree
+    # Direct insertion changes the value expression itself; it is never a
+    # COUNT/EXISTS wrapper around a projection that drops the scalar value.
+    inserted = node_at(embedded.tree, original.ports[0].address)
+    if pattern == 'S8':
+        assert isinstance(inserted, ir.Exists) and isinstance(inserted.body, ir.UnionAll)
+    else:
+        assert not isinstance(inserted, (ir.Count, ir.Exists))
+    assert embedded.skeleton.mark.address == embedded.instances[0].site_address
+
+
+@pytest.mark.parametrize('pattern', NATIVE_SCALAR_RULES)
+def test_native_scalar_below_an_unused_count_projection_is_reported_as_masked(pattern):
+    original = host('scalar', native_type(pattern))
+    inner = original.tree
+    outer = ir.Query(None, None, (ir.Alias(ir.Count(body=inner), 'number'),))
+    original = replace(original, tree=outer, ports=(replace(original.ports[0],
+        address=('returns', 0, 'expression', 'body', *original.ports[0].address)),))
+    _, _, report = native_pair(pattern, original)
+    assert report.static['result_relation'] == 'proved'
+    assert report.static['target_valid'] is False
+
+
+@pytest.mark.parametrize('pattern', ['P4', 'P5', 'S1', 'S2', 'S8'])
+def test_boolean_native_rule_cannot_be_coerced_to_integer_by_counting_its_rows(pattern):
+    with pytest.raises(StageFailure) as rejected:
+        embed_patterns(host('scalar', 'integer'), selection_policy=pattern)
+    assert rejected.value.code == 'no_compatible_site'
