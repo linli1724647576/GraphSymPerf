@@ -1,12 +1,14 @@
 # GraphSymPerf：随机 AST 与 Pattern 嵌入的代码技术设计
 
-方法版本：`ast-pattern-v1`；文档修订：`implementation-r2`。日期：2026-10-26。配套方法文档：[随机 AST 与 Pattern 嵌入的方法](ast-pattern-method.md)。
+配套的完整中文方法稿见 [六阶段方法汇报稿](GraphSymPerf-六阶段方法汇报稿.md)。本文统一称“中间结果表”（简称“结果表”）；工程类型 `RowStream` 表示产生这类结果的查询结构，不预设物理执行必须逐行进行。
+
+方法版本：`ast-pattern-v1`；文档修订：`implementation-r3`。日期：2026-10-26。配套方法文档：[随机 AST 与 Pattern 嵌入的方法](ast-pattern-method.md)。
 
 本文说明当前 `ast-pattern-v1` 实现及其验收合同。六个阶段统一标识为 M1–M6：随机生成 AST、嵌入模式（Pattern）、构造模式感知图状态（Pattern-aware Graph State）、实例化完整查询、执行局部变异、检查依赖关系。`Src/ast_pattern/` 已实现六阶段模块，`main.prepare_case()` 和常规运行配置默认使用新入口。本文将实际接口、压缩图上的证据范围及尚未接入的扩展要求分别注明；冻结版本、测试结果和数据库验收记录见 [实现验收记录](ast-pattern-implementation-status.md)。
 
 ## 1. 实现目标与不可混同的对象
 
-新入口先生成与具体 Pattern 无关的抽象语法树（Abstract Syntax Tree，AST），再从树中选择兼容位置嵌入 Pattern。原有“选择 Pattern → 构造内核 → 向外包装”保留为显式 `symbolic-v1` 兼容路线；有限模板保留为显式 `legacy-v1` 路线。新入口复用已有类型系统、局部规则、需求求解、显式图表示及执行器，不在失败后回退兼容路线。
+新入口先生成与具体 Pattern 无关的抽象语法树（Abstract Syntax Tree，AST），再检查预留接口并嵌入兼容 Pattern。原有“选择 Pattern → 构造内核 → 向外包装”保留为显式 `symbolic-v1` 兼容路线；有限模板保留为显式 `legacy-v1` 路线。新入口复用已有类型系统、局部规则、需求求解、显式图表示及执行器，不在失败后回退兼容路线。
 
 区分下列对象，避免同一个 `pattern` 字段承担多种职责。
 
@@ -51,7 +53,7 @@
 | 能力 | 源码证据 | 复用方式与边界 |
 |---|---|---|
 | 有类型 IR 与作用域 | `Src/ir.py:23–213`；`row_stream_imports:467`、`row_stream_schema:478`、`validate_query:694` | 复用节点类型和校验器；抽象槽位校验需要补充 |
-| 行流和标量语法 | `Src/row_grammar.py:22`；`Src/scalar_grammar.py:24` | 提取通用产生式；移除宿主生成对特定 law 的依赖 |
+| 结果表和标量语法 | `Src/row_grammar.py:22`；`Src/scalar_grammar.py:24` | 提取通用产生式；移除宿主生成对特定 law 的依赖 |
 | 结构位置与词法绑定 | `Src/dependencies.py:21`、`:36`、`:106`、`:191`、`:207` | 复用定位、替换、定义—使用与行消费记录 |
 | 显式变异标记 | `Src/symbolic.py`，`MutationMark` | 当前关联一个登记实例与实际位点；多个显式实例仍为扩展 |
 | 显式图表示 | `Src/state.py:87`，`GraphSpec`；`:114–125`、`:150–152` | 复用 v2 图组；v1 Pattern 配方仅用于旧回放 |
@@ -135,7 +137,7 @@ Src/ast_pattern/
 | `PatternInstance` | `instance_id`、`pattern_id`、`form`、`port_id`、`site_address`、`imports`、`exports`、`rule_version` | 当前登记一个目标实例 |
 | `EmbeddedAst` | `host`、`tree`、`skeleton`、`instances`、`target_id`、`origin_map`、`outside_port_digest`；属性 `embedded_digest` | `skeleton` 是现有语义求解器的适配对象，不重新生成外层结构 |
 
-当前 M1 产生一个显式未填端口，M2 填入一个登记的 Pattern。局部行流可按端口接口原样插入，或经 `COUNT`、`EXISTS` 转成整数、布尔表达式；这些接口提升由 M2 声明并记录。M2 检查将插入区域换回原 Port 后整棵宿主的摘要不变。
+当前 M1 产生一个显式未填端口，M2 填入一个登记的 Pattern。局部结果表可按端口接口原样插入，或经 `COUNT`、`EXISTS` 转成整数、布尔表达式；这些接口提升由 M2 声明并记录。M2 检查将插入区域换回原 Port 后整棵宿主的摘要不变。
 
 多端口默认子树、任意已有子树替换和同时登记多个嵌套 Pattern 仍是扩展合同。`default_subtree` 及 `instances` 的容器字段为此保留，但不能据字段存在宣称通用多实例嵌入或联合求解已经完成。
 
@@ -207,7 +209,7 @@ M1 采用两层生成。第一层依照通用子句语法与合法后继关系�
 | 匹配约束 | 节点多标签、关系类型备选、节点/关系属性映射、命名关系变量；单边方向可为正向、反向或无向 |
 | 投影 | 中间投影的变量保留与丢弃、标量别名、多列返回、投影/返回去重 |
 | 标量结构 | 比较、空值判断、AND/OR/NOT、CASE、coalesce、COUNT、EXISTS、类型相容的叶子；布尔连接及 coalesce 可有多个操作数 |
-| 子查询行流 | 普通查询、UNION ALL、条件行流；不含目标端口的固定分支还可包含行数截断 |
+| 子查询结果表 | 普通查询、UNION ALL、条件结果表；不含目标端口的固定分支还可包含行数截断 |
 
 多 MATCH 的链与闭环不等价于把各边写进同一 MATCH 的多段路径：关系唯一性规则按实际子句边界解释。普通宿主不生成单边自环，也不生成额外裸有界路径。现有路径构图器要求单个有界路径、命名路径和节点局部 ALL 观察；该能力继续用于 P3 局部规则，不能据此宣称普通宿主支持任意数量的变长路径。形状示意见 [外层搜索空间说明](ast-host-search-space.md)。
 
@@ -222,13 +224,13 @@ advance_scope(clause, incoming_scope)
 validate_abstract_types_and_scopes(host)
 ```
 
-匹配、表达式和子行流的递归展开分别由内部 `_Builder.matches()`、`_Builder.expression()`、`_Builder.rows()` 实现，类型与可空性由 `_symbol_type()` 及 `advance_scope()` 推导。匹配组返回若干独立的 `ir.Match`，每条均推进作用域，并计入所在查询块的子句预算。原设计中的 `ExpansionRequest`、`expand_match_shape()`、`expand_expression_shape()` 并未作为独立 API 引入；其参数职责由 builder 的期望类型、scope、深度及预算状态承担。
+匹配、表达式和子结果表的递归展开分别由内部 `_Builder.matches()`、`_Builder.expression()`、`_Builder.rows()` 实现，类型与可空性由 `_symbol_type()` 及 `advance_scope()` 推导。匹配组返回若干独立的 `ir.Match`，每条均推进作用域，并计入所在查询块的子句预算。原设计中的 `ExpansionRequest`、`expand_match_shape()`、`expand_expression_shape()` 并未作为独立 API 引入；其参数职责由 builder 的期望类型、scope、深度及预算状态承担。
 
 子句骨架中的普通语法槽位（例如 WHERE 条件、投影表达式、匹配项）必须在 M1 第二层展开。它们与保留给 M2 的 Pattern 端口不同：前者不能遗留给 M3 或 M4；后者具有完整的输入输出接口和独立标识。当前只保留一个未填 Pattern 端口，位置在最终 RETURN 表达式的子树中；顶层 MATCH/WITH 的 WHERE 与 WITH 投影不直接承载该显式端口，返回表达式内的嵌套查询过滤条件可以承载。多端口、任意已有子树替换与默认子树仍为扩展要求。所选端口类别与位置由通用类型语法决定，不以某个 Pattern 能否适配指导生成。
 
 第二层按依赖顺序工作：先为 MATCH 展开匹配形状并登记变量，再生成可引用这些变量的 WHERE；先在输入作用域中生成 WITH 投影表达式与别名，再建立输出作用域并生成本系统支持片段中的 WITH WHERE。子查询递归调用相同产生式，相关导入通过 symbol ID 显式登记。`RETURN COUNT { ROW_HOLE }` 因而可以直接由返回整数的位置展开得到，不需要为它增加起始 MATCH。
 
-UNION ALL 与条件行流在分支间统一列名、列顺序和类型；UNION ALL 只向一个分支传递 `need_port=True`，条件行流则在守卫及两个分支中选择一个位置，保证全树恰好一个显式端口。普通行流查询还可将该路径置于匹配后的 WHERE。行数截断只在 `need_port=False` 的子树中生成。当前等价传播不接受包含目标的无序 LIMIT，因此不能把目标放进该结构再依赖 M6 偶然接受。
+UNION ALL 与条件结果表在分支间统一列名、列顺序和类型；UNION ALL 只向一个分支传递 `need_port=True`，条件结果表则在守卫及两个分支中选择一个位置，保证全树恰好一个显式端口。普通结果表查询还可将该路径置于匹配后的 WHERE。行数截断只在 `need_port=False` 的子树中生成。当前等价传播不接受包含目标的无序 LIMIT，因此不能把目标放进该结构再依赖 M6 偶然接受。
 
 ```python
 # 与当前公开 M1 一致的调用顺序，省略参数校验。
@@ -250,7 +252,7 @@ return replace(host, host_seed=host_seed)
 | 别名 | 保存表达式来源和推导类型；实体透传保留身份和可空性；同层兄弟别名不能未经语义支持相互引用 |
 | COUNT/EXISTS 子查询 | 显式导入所需外层 symbol，局部定义不泄露；Count 返回非 NULL 整数，Exists 返回布尔值；空输入行为由 M3 推导 |
 | CASE/coalesce/布尔式 | 依据操作符签名生成子类型及 nullable 标记；不把“可空”理解为实际值必定 NULL |
-| UNION/条件行流 | 各分支在各自作用域展开，出口按列类型和可空性统一；仅生成目标能力与当前 IR 支持的形式 |
+| UNION/条件结果表 | 各分支在各自作用域展开，出口按列类型和可空性统一；仅生成目标能力与当前 IR 支持的形式 |
 
 宿主配置中的 `grammar` 可限制 `clauses/clause_kinds/port_kinds/return_type/expression_operators`，以及新增的 `match_shapes/match_features/row_operators/comparison_operators`。`capabilities` 对同名候选取交集，`distinct=false` 禁用去重形式；能力限制作用于嵌套查询，不能只过滤顶层骨架。当前有序比较仅接受 IR 可以确认的数值类型，属性类型仍未知时不直接生成属性的 `<`、`<=`、`>`、`>=` 比较；等值比较和空值判断仍可观察属性。
 
@@ -280,7 +282,7 @@ embed_patterns(host, registry, selection_policy, embed_seed, budget) -> Embedded
 
 插入采用捕获规避重命名，绑定通过 symbol ID 接入。规则中需要的外部节点只能从端口可见绑定中选；无法绑定时可以在规则声明的局部区域定义新变量，不能在外层悄悄追加 MATCH。插入后验证端口输出接口与所有外部消费者一致，保存变异目标、合法替换区域、替代结构及来源映射。
 
-当前 `embed_patterns()` 要求一个声明端口且树中恰好一个实际 Port，返回一个 `PatternInstance`。按行流观察的规则可经 Count/Exists 提升接入整数或布尔位置。P4/P5/P13/S1/S2/S4/S7/S8 等标量规则直接插入相容的标量或谓词端口，避免把其值投影包入计数后丢弃；S8 的原生结果为 EXISTS 的布尔值。首版原生标量形式将自由 guard、prefix、payload 表示为规则声明的符号字面量，图工作子查询在局部声明自己的锚点；imports 为空，即使宿主存在节点也不会擅自捕获。节点导入型原生 guard 属于后续扩展。宿主中原本存在的 coalesce、布尔吸收或 CASE 等上下文由 M6 识别，不计作第二个显式嵌入实例。多实例重叠、联合前提和身份保持仍需扩展专门的嵌入与求解合同。
+当前 `embed_patterns()` 要求一个声明端口且树中恰好一个实际 Port，返回一个 `PatternInstance`。按结果表观察的规则可经 Count/Exists 提升接入整数或布尔位置。P4/P5/P13/S1/S2/S4/S7/S8 等标量规则直接插入相容的标量或谓词端口，避免把其值投影包入计数后丢弃；S8 的原生结果为 EXISTS 的布尔值。首版原生标量形式将自由 guard、prefix、payload 表示为规则声明的符号字面量，图工作子查询在局部声明自己的锚点；imports 为空，即使宿主存在节点也不会擅自捕获。节点导入型原生 guard 属于后续扩展。宿主中原本存在的 coalesce、布尔吸收或 CASE 等上下文由 M6 识别，不计作第二个显式嵌入实例。多实例重叠、联合前提和身份保持仍需扩展专门的嵌入与求解合同。
 
 ### M3：联合构造 Pattern-aware Graph State
 
@@ -309,8 +311,8 @@ M3 借鉴 GDsmith GenExpr 的“父需求分解为子需求”，但分析对象
 | WHERE 保留一行 | 对该行绑定要求精确 T；F 与 N 均不保留行，但在后续其他观察中仍区分 |
 | CASE 输出某值 | 条件为 T 时约束 THEN；条件为 F 或 N 时约束 ELSE；分支选择不改 AST |
 | coalesce 输出由第 j 项决定 | 前 j−1 项为 N，第 j 项非 NULL 并满足目标值；后续项保持已有结构 |
-| COUNT 条件 | 对其直接行流形成非负整数区间或区间并，再与共享需求求交；如 `count != 2` 不退化成单区间 |
-| EXISTS 为 T/F | 对实际输入分别要求直接行流至少一行/零行；不跳过中间 RETURN 或聚合 |
+| COUNT 条件 | 对其直接结果表形成非负整数区间或区间并，再与共享需求求交；如 `count != 2` 不退化成单区间 |
+| EXISTS 为 T/F | 对实际输入分别要求直接结果表至少一行/零行；不跳过中间 RETURN 或聚合 |
 
 空输入必须单独表示为绑定域基数 0。不能将“没有输入行”编码为某个表达式的 NULL，也不能利用全称命题的空域真值，把完全不可达的 S7 目标标成已获得有效决定性输入。需要非空输入的目标附加基数下界；S5/S9 所需的零需求或空输入则按各自合同保留。对空直接子查询，COUNT 的值为 0；若中间操作重新产生一行，应逐算子重新计算实际行域。
 
@@ -331,7 +333,7 @@ M3 借鉴 GDsmith GenExpr 的“父需求分解为子需求”，但分析对象
 
 1. 从全部终端槽位的联合域枚举候选赋值，保留共享键、类型、区间和规则前提之间的约束；将源码树与声明备选解析成供求解使用的内部候选树，不发布查询。
 2. 根据词法 symbol ID、导入关系和显式相同/分离约束建立实体域。使用等价类合并必须相同的域，并检查分离约束；不得按变量拼写合并不同作用域的节点。
-3. 从外层消费者需求建立实际输入绑定和行流见证：为计数下界分配有效行，为 EXISTS 建立见证，为每个 OPTIONAL 输入确定匹配或 NULL 扩展；先交叉检查行数与值域约束。
+3. 从外层消费者需求建立实际输入绑定和结果表见证：为计数下界分配有效行，为 EXISTS 建立见证，为每个 OPTIONAL 输入确定匹配或 NULL 扩展；先交叉检查行数与值域约束。
 4. 将这些需求降低为通用匹配、路径、属性、实体绑定与逆边义务，调用相应有限构造组件实现节点组和边组。共享区域合并后重算连接产生的多重性，不以局部满足替代全树满足。
 5. 选择受目标变异影响的工作轴，扩张候选、有效匹配或输入重复域。扩张遵循规则关系：失败候选必须被排除，短路区域由决定性事实保护，对称两侧保持匹配对应和多重性。
 6. 扫描源树及备选中的全部读取，检查扩张域是否产生额外可观察匹配，并逐消费者验证两侧结果关系。允许同一 N 下两侧结果共同增长；不要求不同 N 之间结果固定。例如 P10 的有效输出多重性可随规模增长，条件是每个规模下两侧一致。
@@ -392,7 +394,7 @@ check_dependencies(pair, embedded, graph_state, evidence_context=None) \
 
 `check_dependencies()` 首先产生静态报告，不连接数据库。`pipeline.generate_case()` 只接受根部结果关系为 `proved` 的报告，并默认要求目标入口有效。随后 `main.prepare_case()` 编译完整查询，`executor.run_case()` 在建立数据库连接前调用 `validate_dependency_case()` 检查阶段链、图/IR/绑定/编译产物及必要状态检查。完整执行后，`attach_runtime_evidence()` 将运行报告与同一图、查询和目标摘要绑定；`evidence_context` 参数也可接收这种已经绑定的独立报告。
 
-静态分析沿 AST 祖先、实际定义—使用边和行流生产—消费边传播。报告保留 `analysis/semantic_propagation/ancestor_steps/scope_binding_edges/row_consumption_edges`，并使用逻辑解释器记录消费方式和实际输入。模式注册版本在 M2 的 PatternSpec 与实例中保存；不是每个传播步骤都各存一个独立版本字段。
+静态分析沿 AST 祖先、实际定义—使用边和结果表生产—消费边传播。报告保留 `analysis/semantic_propagation/ancestor_steps/scope_binding_edges/row_consumption_edges`，并使用逻辑解释器记录消费方式和实际输入。模式注册版本在 M2 的 PatternSpec 与实例中保存；不是每个传播步骤都各存一个独立版本字段。
 
 | 层次 | 需要计算的内容 | 结果类型 |
 |---|---|---|
@@ -401,7 +403,7 @@ check_dependencies(pair, embedded, graph_state, evidence_context=None) \
 | 调用多重性 | 相关输入域和重复输入行如何使局部逻辑求值被请求 | 精确值或上下界、依赖键；物理调用次数另记未知 |
 | 跨 Pattern 影响 | 内层变异是否改变外层规则的前提、见证域、暴露或可观测目标 | 每个实例独立保存 `premise_status=satisfied/refuted/unknown` 与 `exposure_status=exposed/masked/conditional/unreachable/unknown` |
 
-例如 COUNT 通常观察输入行数；EXISTS 只观察空/非空；LIMIT 需要输出顺序或同值投影合同；WITH 必须区分普通投影、过滤、DISTINCT 以及聚合；OPTIONAL 必须逐输入行判断 NULL 扩展。逻辑 trace 区分 `values/count/exists` 需求模式：无 DISTINCT 的 COUNT 不请求其直接行流的未使用 RETURN 值，EXISTS 也不请求 DISTINCT 投影值；COUNT DISTINCT 保留可能影响行数的值。WITH 从后继匹配、WHERE 和有效返回列逆向追踪活跃别名。未被消费的投影标记为 `unobserved_projection`，整个目标因此受外层屏蔽时 `target_valid=False`；短路内部保护仍单独报告。上述内容约束语义和逻辑需求，不意味着物理计划一定按语法顺序求值。
+例如 COUNT 通常观察输入行数；EXISTS 只观察空/非空；LIMIT 需要输出顺序或同值投影合同；WITH 必须区分普通投影、过滤、DISTINCT 以及聚合；OPTIONAL 必须逐输入行判断 NULL 扩展。逻辑 trace 区分 `values/count/exists` 需求模式：无 DISTINCT 的 COUNT 不请求其直接结果表的未使用 RETURN 值，EXISTS 也不请求 DISTINCT 投影值；COUNT DISTINCT 保留可能影响行数的值。WITH 从后继匹配、WHERE 和有效返回列逆向追踪活跃别名。未被消费的投影标记为 `unobserved_projection`，整个目标因此受外层屏蔽时 `target_valid=False`；短路内部保护仍单独报告。上述内容约束语义和逻辑需求，不意味着物理计划一定按语法顺序求值。
 
 对于 m 行相关输入，逻辑请求数可能为 m；数据库可能去相关、缓存或物化。当前 evidence adapter 保留完整运行结果、原始 plans、数据库版本和计时摘要，但尚未实现可靠的计划算子到 AST 位点映射，因此 `physical_plan_mapping/physical_invocations` 均保持 `unknown`。
 
@@ -445,7 +447,7 @@ ValScope 的借鉴边界是“定位修改点 → 沿实际使用依赖逐层传
 | S3 `conditional` | S3 | 将非选中查询分支 L 换为 H | 原生条件查询能力；决定条件及分支输出 schema 一致；非选中分支的行可不同 |
 | S4 `case_guard` | S4 | 将 CASE 非选中标量分支 L 换为 H | 决定条件及选中分支固定；备选类型相容；FALSE/NULL 的 ELSE 行为分别核验 |
 | S5 `empty_limit` | S5 | LIMIT 0 内的 L 换为 H | 全外壳输出仍为空；H 的读取域可增长；不能将“空结果”误判为无意义测试 |
-| S6 `bounded_demand` | S6 | 需求已满足时替换后续行流 L→H | 每个输入绑定的保留见证数达到 k；当前保守合同使用同值投影和流式分支；保留 LIMIT envelope |
+| S6 `bounded_demand` | S6 | 需求已满足时替换后续结果表 L→H | 每个输入绑定的保留见证数达到 k；当前保守合同使用同值投影和流式分支；保留 LIMIT envelope |
 | S7 `coalesce` | S7 | 已有非 NULL 前缀时替换后续参数 L→H | 前缀中更早参数为 NULL，决定参数非 NULL；0、false、空字符串均非 NULL；L/H 类型相容 |
 | S8 `existential_witness` | S8 | 已有见证时替换其他候选区域 L→H | 每个实际输入绑定有保留见证；EXISTS 仍为 TRUE；候选备选可改变局部多重集 |
 | S9 `empty_input` | S9 | 空必选输入后的独立读取 L→H | 精确空输入和合法下游接口；不跨会重新产生行的聚合；不把 OPTIONAL 空分支当作零输入 |
@@ -459,7 +461,7 @@ ValScope 的借鉴边界是“定位修改点 → 沿实际使用依赖逐层传
 
 ### 7.1 P3：随机 COUNT 宿主中的路径镜像
 
-M1 可能随机生成如下宿主。`ROW_HOLE` 是行流端口，外层 COUNT 是已经确定的结构，不因选择 P3 而追加。
+M1 可能随机生成如下宿主。`ROW_HOLE` 是结果表端口，外层 COUNT 是已经确定的结构，不因选择 P3 而追加。
 
 ```text
 Return(
@@ -608,7 +610,7 @@ M6-runtime.json
 | 验收用例 | 当前合同或扩展范围 |
 |---|---|
 | 同一宿主、多个兼容 Pattern | M1 归档一致；M2 选择不同局部规则；外部结构保持 |
-| 同一 Pattern、不同宿主和深度 | 不调用完整 Pattern 模板；覆盖行流、谓词、标量等允许接口 |
+| 同一 Pattern、不同宿主和深度 | 不调用完整 Pattern 模板；覆盖结果表、谓词、标量等允许接口 |
 | 多个同形局部规则位点 | 局部结构显式 mark 选择目标；多个宿主显式 Port 当前被拒绝 |
 | P3 的 N 参数族 | 模型上 N+4 节点、N+3 边、N+1 候选、1 个通过；两查询 COUNT=1；目标计时另行记录 |
 | P3 的顺序敏感路径消费 | 返回路径节点序列等不满足反转不变的观察时拒绝，不能仅看外层 COUNT |
@@ -657,7 +659,7 @@ GD1–GD5 主要对应 `test_ast_pattern_host/embedding/contracts`；GD6–GD10 
 
 本轮实现以一个登记目标、现有有界 IR 与 Neo4j 显式图加载为验收范围。仍需单独扩展的能力包括：多个显式端口/实例的联合构造，任意已有子树替换，更多目标数据库的 v2 状态加载，以及可信的物理计划到 AST 位点映射。扩展这些能力时继续使用局部 Pattern 合同、全树共享需求和阶段证据，不改变六阶段方法顺序。
 
-UNWIND、ORDER BY、SKIP 尚未加入普通宿主语法；它们需要查询表示、作用域、解释、图数量约束及依赖传播共同支持。普通宿主中的任意变长路径与单 MATCH 多边路径也不属于本轮扩展。新增候选采用已有可解释的子句和行流组合，不以仅能渲染语法文本代替六阶段支持。
+UNWIND、ORDER BY、SKIP 尚未加入普通宿主语法；它们需要查询表示、作用域、解释、图数量约束及依赖传播共同支持。普通宿主中的任意变长路径与单 MATCH 多边路径也不属于本轮扩展。新增候选采用已有可解释的子句和结果表组合，不以仅能渲染语法文本代替六阶段支持。
 
 实现与方法的一致性通过 M1 宿主、M2 插入、M3 联合状态、M4 全树赋值、M5 单点变异、M6 依赖及执行证据逐步检查。字段存在或某个测试通过不代替未接入能力的声明。
 

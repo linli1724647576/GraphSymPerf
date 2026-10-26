@@ -17,7 +17,7 @@ RETURN
 RETURN DISTINCT
 ```
 
-RETURN 形式终止当前查询块。WHERE 随 MATCH 或 WITH 生成，不作为可以脱离变量定义单独排列的子句。COUNT、EXISTS、CASE、coalesce 属于表达式；UNION ALL 和条件行流用于组合子查询的结果，不能混同为顶层线性骨架中的任意后继。
+RETURN 形式终止当前查询块。WHERE 随 MATCH 或 WITH 生成，不作为可以脱离变量定义单独排列的子句。COUNT、EXISTS、CASE、coalesce 属于表达式；UNION ALL 和条件结果表用于组合子查询的结果，不能混同为顶层线性骨架中的任意后继。
 
 例如，可以生成：
 
@@ -31,8 +31,8 @@ MATCH → WITH DISTINCT → RETURN
 RETURN
 └── COUNT
     └── UNION ALL
-        ├── 含 Pattern 插入口的行流
-        └── 普通查询行流
+        ├── 含 Pattern 插入口的结果表
+        └── 普通查询结果表
 ```
 
 每次选择的是当前位置的下一条产生式；多样性来自这些选择的组合。
@@ -71,7 +71,7 @@ RETURN /* 随机表达式与一个 Pattern 插入口 */
 
 ## 3 表达式怎样扩大搜索空间
 
-假设 RETURN 需要一个整数，可以选择整数叶子、CASE、coalesce 或 COUNT。CASE 会继续生成布尔条件和两个整数分支；COUNT 会继续生成输入行流。布尔条件还可以选择六种数值/等值比较、空值判断、AND、OR、NOT、CASE、coalesce 或 EXISTS。
+假设 RETURN 需要一个整数，可以选择整数叶子、CASE、coalesce 或 COUNT。CASE 会继续生成布尔条件和两个整数分支；COUNT 会继续生成输入结果表。布尔条件还可以选择六种数值/等值比较、空值判断、AND、OR、NOT、CASE、coalesce 或 EXISTS。
 
 例如，生成过程可以逐层得到：
 
@@ -80,7 +80,7 @@ RETURN /* 随机表达式与一个 Pattern 插入口 */
 └── CASE
     ├── 条件：某个计数 > 某个整数
     ├── THEN：COUNT
-    │   └── Pattern 行流插入口
+    │   └── Pattern 结果表插入口
     └── ELSE：某个整数
 ```
 
@@ -117,7 +117,7 @@ ast_budget:
 | 结构或操作 | 当前边界 |
 |---|---|
 | Pattern 插入口 | 全树一个显式端口，位于最终 RETURN 表达式的子树中 |
-| UNION ALL/条件行流 | 分支列接口一致；端口只沿一条递归路径传递，可以落在分支或条件守卫中 |
+| UNION ALL/条件结果表 | 分支列接口一致；端口只沿一条递归路径传递，可以落在分支或条件守卫中 |
 | LIMIT | 普通宿主只放在不含目标端口的固定子树中；包含目标的无序截断不具有通用等价传播证明 |
 | 裸有界路径、单边自环 | 不作为普通宿主形状生成；P3 使用已有单有界路径及节点局部 ALL 的专门支持片段 |
 | 单 MATCH 多边路径 | 本轮采用多 MATCH 共享变量组合，没有新增该原子类型 |

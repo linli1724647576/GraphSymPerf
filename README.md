@@ -4,7 +4,9 @@
 
 新配置见 [configs/ast-pattern.yaml](configs/ast-pattern.yaml)，方法及接口规范分别见 [方法文档](docs/ast-pattern-method.md) 与 [代码技术文档](docs/ast-pattern-implementation.md)。新流程首先支持 Neo4j；其他数据库继续通过显式兼容方法使用各自的能力门槛。物理调用次数在没有可靠计划映射时记录为未知，不从 AST 求值机会推定实际执行次数。
 
-宿主语法 `typed-host-v2` 增加七类匹配形状、去重形式、多列投影、联合与条件行流、空值判断及更多比较。复合形状通过多个 MATCH 共享变量生成；候选与预算配置、直观例子和支持边界见 [外层搜索空间说明](docs/ast-host-search-space.md)。
+宿主语法 `typed-host-v2` 增加七类匹配形状、去重形式、多列投影、联合与条件子查询、空值判断及更多比较。复合形状通过多个 MATCH 共享变量生成；候选与预算配置、直观例子和支持边界见 [外层搜索空间说明](docs/ast-host-search-space.md)。
+
+面向导师汇报的完整中文方法稿见 [六阶段方法汇报稿](docs/GraphSymPerf-六阶段方法汇报稿.md)（[PDF](docs/GraphSymPerf-六阶段方法汇报稿.pdf)、[离线 HTML](docs/GraphSymPerf-六阶段方法汇报稿.html)），包含两个贯穿案例、一个依赖对照、四段伪代码及两张可编辑 SVG。
 
 历史固定配方使用 `generation.method: legacy-v1` 和 `pattern_catalog: legacy-v1`；原递归符号流程使用 `generation.method: symbolic-v1`，配置见 [symbolic-paper.yaml](configs/symbolic-paper.yaml)。它们用于历史实验兼容与回放，新入口构造失败不会回退到旧流程。旧编号与新论文编号的对应关系单独保存。
 

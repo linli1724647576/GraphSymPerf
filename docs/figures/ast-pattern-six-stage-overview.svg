@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1040" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
+<title id="title">GraphSymPerf 六阶段方法总览</title>
+<desc id="desc">先独立生成抽象查询结构并嵌入局部测试模式，再联合构图、实例化和单点变异，最后分别检查结果关系与逻辑求值需求。</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#52677C"/></marker>
+<marker id="work-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#C76B24"/></marker>
+</defs>
+<rect width="1600" height="1040" fill="white"/>
+<text x="65" y="63" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="42" font-weight="700" fill="#15324F" text-anchor="start">从随机 AST 到结果保持的测试查询对</text>
+<text x="65" y="105" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="400" fill="#52677C" text-anchor="start">结构先固定，图与终端联合确定；同一图上只改变一个目标位点</text>
+<rect x="65" y="150" width="450" height="265" rx="18" fill="#FCFDFE" stroke="#D8E2EB" stroke-width="2"/>
+<rect x="87" y="170" width="59" height="40" rx="10" fill="#2B6CB0" stroke="#2B6CB0" stroke-width="2"/>
+<text x="116" y="198" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="700" fill="white" text-anchor="middle">M1</text>
+<text x="163" y="198" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">基于 AST 的随机查询生成</text>
+<text x="93" y="252" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">选择查询骨架与匹配形状</text>
+<text x="93" y="292" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">按期望值类型逐层展开</text>
+<text x="93" y="332" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">保留一个带类型的插入口</text>
+<path d="M90 355H490" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="93" y="391" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="28" font-weight="650" fill="#2B6CB0" text-anchor="start">A₀：抽象查询结构</text>
+<rect x="575" y="150" width="450" height="265" rx="18" fill="#FCFDFE" stroke="#D8E2EB" stroke-width="2"/>
+<rect x="597" y="170" width="59" height="40" rx="10" fill="#2B6CB0" stroke="#2B6CB0" stroke-width="2"/>
+<text x="626" y="198" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="700" fill="white" text-anchor="middle">M2</text>
+<text x="673" y="198" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">嵌入测试模式（Pattern）</text>
+<text x="603" y="252" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">核对局部规则的输入与输出</text>
+<text x="603" y="292" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">固定源结构及变异备选</text>
+<text x="603" y="332" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">标记唯一变异位点</text>
+<path d="M600 355H1000" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="603" y="391" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="28" font-weight="650" fill="#2B6CB0" text-anchor="start">A：包含目标的完整结构</text>
+<rect x="1085" y="150" width="450" height="265" rx="18" fill="#FCFDFE" stroke="#D8E2EB" stroke-width="2"/>
+<rect x="1107" y="170" width="59" height="40" rx="10" fill="#2D7A64" stroke="#2D7A64" stroke-width="2"/>
+<text x="1136" y="198" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="700" fill="white" text-anchor="middle">M3</text>
+<text x="1183" y="198" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">构造模式感知图状态</text>
+<text x="1113" y="252" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">合并局部前提与外层约束</text>
+<text x="1113" y="292" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">联合确定图、终端与见证</text>
+<text x="1113" y="332" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">保留可核查的构造事实</text>
+<path d="M1110 355H1510" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1113" y="391" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="28" font-weight="650" fill="#2D7A64" text-anchor="start">(G, β, I)：图、绑定、事实</text>
+<path d="M525 282H564" fill="none" stroke="#52677C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M1035 282H1074" fill="none" stroke="#52677C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M1310 427V460H290V516" fill="none" stroke="#52677C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="525" y="438" width="570" height="44" rx="0" fill="white" stroke="white" stroke-width="2"/>
+<text x="810" y="469" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="24" font-weight="600" fill="#2D7A64" text-anchor="middle">共同图状态与联合绑定传递至后续阶段</text>
+<rect x="65" y="535" width="450" height="265" rx="18" fill="#FCFDFE" stroke="#D8E2EB" stroke-width="2"/>
+<rect x="87" y="555" width="59" height="40" rx="10" fill="#2B6CB0" stroke="#2B6CB0" stroke-width="2"/>
+<text x="116" y="583" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="700" fill="white" text-anchor="middle">M4</text>
+<text x="163" y="583" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">查询实例化</text>
+<text x="93" y="637" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">按联合绑定填充整棵 AST</text>
+<text x="93" y="677" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">保持结构与变量连接一致</text>
+<text x="93" y="717" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">不再随机选择表达式</text>
+<path d="M90 740H490" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="93" y="776" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="28" font-weight="650" fill="#2B6CB0" text-anchor="start">Q₁：完整原查询</text>
+<rect x="575" y="535" width="450" height="265" rx="18" fill="#FCFDFE" stroke="#D8E2EB" stroke-width="2"/>
+<rect x="597" y="555" width="59" height="40" rx="10" fill="#C76B24" stroke="#C76B24" stroke-width="2"/>
+<text x="626" y="583" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="700" fill="white" text-anchor="middle">M5</text>
+<text x="673" y="583" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">按 Pattern 变异</text>
+<text x="603" y="637" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">在同一图状态上局部变换</text>
+<text x="603" y="677" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">对称：保持允许的观察</text>
+<text x="603" y="717" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">短路：替换受保护的工作</text>
+<path d="M600 740H1000" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="603" y="776" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="28" font-weight="650" fill="#C76B24" text-anchor="start">(Q₁, Q₂)：结果保持的查询对</text>
+<rect x="1085" y="535" width="450" height="265" rx="18" fill="#FCFDFE" stroke="#D8E2EB" stroke-width="2"/>
+<rect x="1107" y="555" width="59" height="40" rx="10" fill="#2D7A64" stroke="#2D7A64" stroke-width="2"/>
+<text x="1136" y="583" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="700" fill="white" text-anchor="middle">M6</text>
+<text x="1183" y="583" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">依赖检查与传播分析</text>
+<text x="1113" y="637" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">沿完整局部边界向外传播</text>
+<text x="1113" y="677" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">结果关系：逐层保持相等</text>
+<text x="1113" y="717" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">逻辑需求：检查屏蔽与重复</text>
+<path d="M1110 740H1510" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1113" y="776" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="28" font-weight="650" fill="#2D7A64" text-anchor="start">Δ：结果关系与需求报告</text>
+<path d="M525 667H564" fill="none" stroke="#52677C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M1035 667H1074" fill="none" stroke="#52677C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="65" y="855" width="960" height="101" rx="18" fill="#F2F8F5" stroke="#BED8CD" stroke-width="2"/>
+<text x="93" y="892" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="700" fill="#2D7A64" text-anchor="start">接受用例</text>
+<text x="93" y="932" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="400" fill="#15324F" text-anchor="start">共同图 G ＋ 原查询 Q₁ ＋ 变异查询 Q₂ ＋ 依赖报告 Δ</text>
+<rect x="1085" y="855" width="450" height="101" rx="18" fill="#FFF8F0" stroke="#E7C6A5" stroke-width="2" stroke-dasharray="8 5"/>
+<text x="1113" y="892" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="650" fill="#C76B24" text-anchor="start">任一阶段失败：记录原因</text>
+<text x="1113" y="932" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="400" fill="#15324F" text-anchor="start">在预算内从 M1 重新采样</text>
+<text x="65" y="1007" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="23" font-weight="400" fill="#52677C" text-anchor="start">β：全查询终端的联合绑定；I：已核查图事实。实际性能及物理执行由数据库验证。</text>
+</svg>

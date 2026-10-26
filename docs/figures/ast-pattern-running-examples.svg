@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1480" viewBox="0 0 1600 1480" role="img" aria-labelledby="title desc">
+<title id="title">P3 与 S7 两个贯穿示例及外层屏蔽对照</title>
+<desc id="desc">P3通过失败候选扩大路径搜索机会并反转无向路径，计数保持为一；S7通过非空前缀保护不同回退表达式，返回相同多重集；最后对照整个目标值被外层忽略的情况。</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#52677C"/></marker>
+<marker id="work-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#C76B24"/></marker>
+</defs>
+<rect width="1600" height="1480" fill="white"/>
+<text x="65" y="62" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="40" font-weight="700" fill="#15324F" text-anchor="start">两个例子贯穿六阶段：路径反转与短路替换</text>
+<text x="65" y="103" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="23" font-weight="400" fill="#52677C" text-anchor="start">图规模与名称仅作方法示例；蓝色表示结构，橙色表示被排除或受保护的潜在工作</text>
+<rect x="65" y="135" width="1470" height="475" rx="18" fill="#FCFDFE" stroke="#D8E2EB" stroke-width="2"/>
+<text x="92" y="179" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="31" font-weight="700" fill="#2B6CB0" text-anchor="start">例 A｜无向路径反转（P3）</text>
+<text x="90" y="227" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">随机结构与局部规则</text>
+<text x="90" y="262" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="22" font-weight="400" fill="#52677C" text-anchor="start">M1–M2</text>
+<text x="615" y="227" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">模式感知图状态</text>
+<text x="615" y="262" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="22" font-weight="400" fill="#52677C" text-anchor="start">M3</text>
+<text x="1160" y="227" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">查询对与外层观察</text>
+<text x="1160" y="262" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="22" font-weight="400" fill="#52677C" text-anchor="start">M4–M6</text>
+<path d="M560 215V574" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1105 215V574" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="105" y="290" width="350" height="53" rx="18" fill="#F0F5FB" stroke="#BFD1E7" stroke-width="2"/>
+<text x="280" y="325" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="28" font-weight="650" fill="#2B6CB0" text-anchor="middle">RETURN</text>
+<path d="M280 345V367" fill="none" stroke="#52677C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="105" y="379" width="350" height="53" rx="18" fill="#F0F5FB" stroke="#BFD1E7" stroke-width="2"/>
+<text x="280" y="414" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="28" font-weight="650" fill="#2B6CB0" text-anchor="middle">COUNT { □结果表 }</text>
+<text x="100" y="478" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="400" fill="#15324F" text-anchor="start">嵌入：无向二跳路径</text>
+<text x="100" y="522" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="400" fill="#15324F" text-anchor="start">谓词：ALL keep = true</text>
+<path d="M655 384L792 319L977 319" fill="none" stroke="#2D7A64" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M655 384L792 449L977 419M792 449L977 499" fill="none" stroke="#C76B24" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="9 6"/>
+<circle cx="655" cy="384" r="25" fill="#F0F5FB" stroke="#2B6CB0" stroke-width="3"/>
+<text x="655" y="393" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#2B6CB0" text-anchor="middle">s</text>
+<circle cx="792" cy="319" r="25" fill="#F2F8F5" stroke="#2D7A64" stroke-width="3"/>
+<text x="792" y="328" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#2D7A64" text-anchor="middle">a</text>
+<circle cx="977" cy="319" r="25" fill="#F2F8F5" stroke="#2D7A64" stroke-width="3"/>
+<text x="977" y="328" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#2D7A64" text-anchor="middle">t</text>
+<circle cx="792" cy="449" r="25" fill="#FFF4E8" stroke="#C76B24" stroke-width="3"/>
+<text x="792" y="458" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#C76B24" text-anchor="middle">b</text>
+<circle cx="977" cy="419" r="25" fill="#F2F8F5" stroke="#2D7A64" stroke-width="3"/>
+<text x="977" y="428" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#2D7A64" text-anchor="middle">z₁</text>
+<circle cx="977" cy="499" r="25" fill="#F2F8F5" stroke="#2D7A64" stroke-width="3"/>
+<text x="977" y="508" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#2D7A64" text-anchor="middle">z₂</text>
+<text x="630" y="434" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="22" font-weight="400" fill="#2B6CB0" text-anchor="start">Start</text>
+<text x="943" y="285" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="22" font-weight="400" fill="#2D7A64" text-anchor="start">Target</text>
+<text x="736" y="506" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="23" font-weight="600" fill="#C76B24" text-anchor="start">keep=false</text>
+<text x="620" y="534" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="22" font-weight="400" fill="#52677C" text-anchor="start">t、z₁、z₂ 均为 Target</text>
+<text x="620" y="564" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#2D7A64" text-anchor="start">3 条候选 → 1 条有效路径</text>
+<text x="1160" y="312" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="30" font-weight="600" fill="#2B6CB0" text-anchor="start">Q₁：s — … — t</text>
+<text x="1160" y="375" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="30" font-weight="600" fill="#2B6CB0" text-anchor="start">Q₂：t — … — s</text>
+<rect x="1158" y="432" width="345" height="64" rx="18" fill="#F2F8F5" stroke="#BED8CD" stroke-width="2"/>
+<text x="1330" y="474" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="31" font-weight="700" fill="#2D7A64" text-anchor="middle">COUNT：1 → 1</text>
+<text x="1160" y="539" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="400" fill="#52677C" text-anchor="start">反转保持 ALL 的真假</text>
+<text x="1160" y="576" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="400" fill="#52677C" text-anchor="start">外层观察有效匹配数量</text>
+<rect x="65" y="645" width="1470" height="475" rx="18" fill="#FCFDFE" stroke="#D8E2EB" stroke-width="2"/>
+<text x="92" y="689" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="31" font-weight="700" fill="#C76B24" text-anchor="start">例 B｜非空前缀保护回退参数（S7）</text>
+<text x="90" y="737" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">随机结构与局部规则</text>
+<text x="90" y="772" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="22" font-weight="400" fill="#52677C" text-anchor="start">M1–M2</text>
+<text x="615" y="737" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">模式感知图状态</text>
+<text x="615" y="772" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="22" font-weight="400" fill="#52677C" text-anchor="start">M3</text>
+<text x="1160" y="737" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#15324F" text-anchor="start">查询对与外层观察</text>
+<text x="1160" y="772" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="22" font-weight="400" fill="#52677C" text-anchor="start">M4–M6</text>
+<path d="M560 725V1084" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1105 725V1084" fill="none" stroke="#D8E2EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="100" y="828" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="29" font-weight="600" fill="#2B6CB0" text-anchor="start">MATCH Root</text>
+<text x="100" y="877" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="29" font-weight="600" fill="#2B6CB0" text-anchor="start">RETURN □整数</text>
+<path d="M280 894V916" fill="none" stroke="#52677C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="100" y="932" width="395" height="65" rx="18" fill="#FFF8F0" stroke="#E7C6A5" stroke-width="2"/>
+<text x="297" y="973" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="650" fill="#C76B24" text-anchor="middle">coalesce(NULL, κ, L)</text>
+<text x="100" y="1057" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#15324F" text-anchor="start">κ 非空；只替换回退参数 L</text>
+<circle cx="642" cy="836" r="25" fill="#F0F5FB" stroke="#2B6CB0" stroke-width="3"/>
+<text x="642" y="845" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#2B6CB0" text-anchor="middle">u₁</text>
+<circle cx="725" cy="836" r="25" fill="#F0F5FB" stroke="#2B6CB0" stroke-width="3"/>
+<text x="725" y="845" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#2B6CB0" text-anchor="middle">u₂</text>
+<text x="790" y="845" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="400" fill="#2B6CB0" text-anchor="start">…  m 个 Root</text>
+<path d="M815 953L941 923" fill="none" stroke="#C76B24" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#work-arrow)"/>
+<path d="M816 959H941" fill="none" stroke="#C76B24" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#work-arrow)"/>
+<path d="M815 965L941 995" fill="none" stroke="#C76B24" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#work-arrow)"/>
+<circle cx="789" cy="959" r="25" fill="#FFF4E8" stroke="#C76B24" stroke-width="3"/>
+<text x="789" y="968" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#C76B24" text-anchor="middle">r</text>
+<circle cx="969" cy="916" r="20" fill="#FFF4E8" stroke="#C76B24" stroke-width="3"/>
+<text x="969" y="925" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#C76B24" text-anchor="middle">v₁</text>
+<circle cx="969" cy="959" r="20" fill="#FFF4E8" stroke="#C76B24" stroke-width="3"/>
+<text x="969" y="968" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#C76B24" text-anchor="middle">v₂</text>
+<circle cx="969" cy="1002" r="20" fill="#FFF4E8" stroke="#C76B24" stroke-width="3"/>
+<text x="969" y="1011" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="600" fill="#C76B24" text-anchor="middle">vN</text>
+<text x="634" y="945" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="23" font-weight="400" fill="#C76B24" text-anchor="start">WorkRoot</text>
+<text x="844" y="895" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="24" font-weight="600" fill="#C76B24" text-anchor="start">HIGH</text>
+<text x="845" y="1050" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="400" fill="#C76B24" text-anchor="start">N 个工作邻居</text>
+<text x="618" y="1094" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="24" font-weight="600" fill="#2D7A64" text-anchor="start">前缀 κ=0；两类根节点不重叠</text>
+<text x="1160" y="820" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="24" font-weight="600" fill="#C76B24" text-anchor="start">Q₁：coalesce(NULL, 0, 0)</text>
+<text x="1160" y="865" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="24" font-weight="600" fill="#C76B24" text-anchor="start">Q₂：coalesce(NULL, 0,</text>
+<text x="1160" y="910" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="24" font-weight="600" fill="#C76B24" text-anchor="start">        COUNT { HIGH 区域 })</text>
+<rect x="1158" y="956" width="345" height="65" rx="18" fill="#F2F8F5" stroke="#BED8CD" stroke-width="2"/>
+<text x="1330" y="998" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="700" fill="#2D7A64" text-anchor="middle">两侧均返回 m 份 0</text>
+<text x="1160" y="1061" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="25" font-weight="400" fill="#52677C" text-anchor="start">整体被使用，回退项应短路</text>
+<rect x="65" y="1160" width="1470" height="211" rx="18" fill="#F8FAFC" stroke="#BBCAD7" stroke-width="2"/>
+<text x="94" y="1203" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="30" font-weight="700" fill="#15324F" text-anchor="start">依赖对照｜整个 Pattern 的值被外层忽略</text>
+<text x="94" y="1255" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="29" font-weight="600" fill="#2B6CB0" text-anchor="start">COUNT { RETURN coalesce(…) AS x }</text>
+<text x="800" y="1255" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="27" font-weight="600" fill="#C76B24" text-anchor="start">只数返回行，不使用 x → 目标被屏蔽</text>
+<text x="94" y="1324" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="26" font-weight="400" fill="#52677C" text-anchor="start">当前流程重新生成该目标；它与“整体被观察、仅内部回退项应短路”的有效 S7 用例不同。</text>
+<text x="65" y="1428" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',Arial,sans-serif" font-size="24" font-weight="400" fill="#52677C" text-anchor="start">mN 仅表示逐输入枚举 H 时的潜在候选规模；物理调用、缓存、去相关和实际性能需要执行验证。</text>
+</svg>

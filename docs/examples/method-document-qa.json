@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-26",
+  "manuscript": "docs/GraphSymPerf-六阶段方法汇报稿.md",
+  "pdf_pages": 15,
+  "six_stages": 6,
+  "pseudocode_algorithms": 4,
+  "main_examples": [
+    "P3 bounded path reversal",
+    "S7 protected fallback replacement"
+  ],
+  "dependency_counterexample": "COUNT ignores unused projection values",
+  "canonical_table_term": "中间结果表（保留重复行）",
+  "figures": [
+    {
+      "file": "docs/figures/ast-pattern-running-examples.svg",
+      "width": "1600",
+      "height": "1480",
+      "minimum_font_px": 22.0
+    },
+    {
+      "file": "docs/figures/ast-pattern-six-stage-overview.svg",
+      "width": "1600",
+      "height": "1040",
+      "minimum_font_px": 23.0
+    }
+  ],
+  "figure_review": "PNG source previews and all PDF pages inspected; final updates retain layout",
+  "semantic_checks": "docs/examples/six-stage-example-validation.json",
+  "references_verified": [
+    "https://taoxiease.github.io/publications/issta23-gdsmith.pdf",
+    "https://www.usenix.org/system/files/osdi26-lin-li.pdf"
+  ],
+  "artifacts_sha256": {
+    "docs/GraphSymPerf-六阶段方法汇报稿.md": "309357f483f7b6d06e6928ad956377aaf5abcbe46dfe9cf3bbf25771e02870f2",
+    "docs/GraphSymPerf-六阶段方法汇报稿.html": "701894fde0ef5c4726fe18f52ada66d8b593ccccfa9f21c62e6afd55cc091b7a",
+    "docs/GraphSymPerf-六阶段方法汇报稿.pdf": "0eb37ef0aed2ee1c513973f34a244afd4c9d26d1589be36e602dc3f344759e7d",
+    "docs/figures/ast-pattern-running-examples.svg": "8bcf2e64189e65a17981e5593e529c2c799fea6390dc3c15f9d9e9f319003255",
+    "docs/figures/ast-pattern-six-stage-overview.svg": "390db1af790e9e7a38f0f83e3484b993a8fb587c31e5afbc361d746226f1c9a7"
+  }
+}
