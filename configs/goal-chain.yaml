@@ -1,0 +1,23 @@
+# Syntax budgets and observable/work goals; no per-edge population recipe.
+pattern_catalog: paper-v1
+patterns: [P10]
+scales: [10, 100]
+seeds: [0, 1, 2]
+database:
+  dbms: neo4j
+  language: cypher
+  uri: bolt://127.0.0.1:7687
+  user: neo4j
+  password_env: GRAPHSYMPERF_NEO4J_PASSWORD
+  database: neo4j
+  dedicated: true
+  allow_reset: true
+generation:
+  composition:
+    form: chain
+    contexts: [count, with]
+    threshold: 9
+    # Omit chain_length to sample 2–4 edges; an explicit budget supports 2–6.
+measurement:
+  timeout_seconds: 30
+output: ../results/goal-chain

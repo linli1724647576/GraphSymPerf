@@ -1,0 +1,21 @@
+{
+  "editable_native_objects": 216,
+  "pictures": 0,
+  "media_files": 0,
+  "fonts": [
+    "Arial",
+    "Menlo",
+    "Times New Roman"
+  ],
+  "width_mm": 180.0,
+  "height_mm": 115.92,
+  "visible_text_scope": "Algorithm 2 generation and mutation only",
+  "visible_text": "(a) Skeleton population Input: S, p, k, d; (G, I) from Algorithm 1 Initialize S x copy Q 1 x \u03b2 = {} Choose by role(x) L H 0 \u2026 Forms over H Structural choices labels \u00b7 types \u00b7 bounds V x Filter V x kind \u00b7 type scope \u00b7 G, I nonempty pool select (k) e e At most d equivalent wrappers Q 1 [x  \u21a6  e]; \u03b2[x] \u2190 e update variable bindings next x \u00b7 dependency order Q 1 e all x bound valid Q\u2081 applicable p (b) Query-pair construction Q 2  \u2190 copy( Q 1 ) type(p) SY SC Symmetry transformation e.g., P3 GSP_LINK*1..3 u :GspLow {id:1} v :GspHigh GSP_LINK*1..3 v :GspHigh u :GspLow {id:1} Q 1 Q 2 Reference substitution e.g., S7 coalesce NULL 0 COUNT H coalesce NULL 0 COUNT R Q 1 Q 2 H  \u21a6  R Q\u2082 valid; structurally distinct from Q\u2081 Guard failure: reject Output (G, I,  Q 1 ,  Q 2 , \u03bc) \u03bc = (p, k, d, \u03b2)",
+  "algorithm1_unchanged": true,
+  "overflow_check": "passed",
+  "render_engine": "LibreOffice",
+  "visual_review": "passed after correcting flow routing and reference-substitution arrow",
+  "independent_algorithm_review": "passed",
+  "final_pptx_sha256": "0d798bd48522ea000923656ea2ca6b0ed4f0d866757f37e3f34b33ac372d16f6",
+  "published_file": "/Users/sakuraq/Documents/\u79d1\u7814\u5b9e\u4e60/GraphSymPerf/picture/Algorithm_2_query_pair_construction.pptx"
+}

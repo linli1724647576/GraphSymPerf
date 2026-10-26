@@ -1,0 +1,33 @@
+# Paper identifiers: P10 is the shared-anchor mandatory-MATCH form.
+pattern_catalog: paper-v1
+patterns: [P3, P4, P10]
+scales: [10, 100]
+seeds: [0, 1, 2]
+cases_per_pattern: 6
+seconds_per_pattern: 120
+schedule_seed: 0
+
+database:
+  dbms: neo4j
+  language: cypher
+  uri: bolt://127.0.0.1:7687
+  user: neo4j
+  password_env: GRAPHSYMPERF_NEO4J_PASSWORD
+  database: neo4j
+  dedicated: true
+  allow_reset: true
+
+generation:
+  log_files: []
+  data_seed: 0
+  complexity: 0
+  state_variant: original
+  composition:
+    contexts: [count, with]
+    threshold: 0
+
+measurement:
+  timeout_seconds: 30
+  collect_plans: true
+
+output: ../results/compositional-paper

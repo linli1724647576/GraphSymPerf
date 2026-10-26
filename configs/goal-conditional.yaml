@@ -1,0 +1,22 @@
+pattern_catalog: paper-v1
+patterns: [S3]
+scales: [10, 100]
+seeds: [0, 1, 2]
+database:
+  dbms: neo4j
+  language: cypher
+  uri: bolt://127.0.0.1:7687
+  user: neo4j
+  password_env: GRAPHSYMPERF_NEO4J_PASSWORD
+  database: neo4j
+  dedicated: true
+  allow_reset: true
+generation:
+  composition:
+    contexts: [count, with]
+    threshold: 9
+    conditional_depth: 3
+    guard_kind: count
+measurement:
+  timeout_seconds: 30
+output: ../results/goal-conditional

@@ -18,7 +18,7 @@ ladybug = ["ladybug==0.21.2"]
 
 [tool.setuptools]
 package-dir = {"" = "Src"}
-py-modules = ["main", "query", "generator", "mutator", "executor", "summarize", "ir", "languages", "state", "gremlin"]
+py-modules = ["main", "query", "generator", "mutator", "executor", "summarize", "ir", "languages", "state", "gremlin", "composition", "dependencies", "population", "paper_patterns", "symbolic", "relational_population", "requirements", "row_grammar", "scalar_grammar"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

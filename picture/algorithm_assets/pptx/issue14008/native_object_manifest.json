@@ -1,0 +1,2190 @@
+[
+  {
+    "file": "Algorithm_1_graph_state_generation.pptx",
+    "widthMm": 180,
+    "heightMm": 48.6,
+    "source": "https://github.com/neo4j/neo4j/issues/14008",
+    "shapeCount": 36,
+    "textCount": 33,
+    "objectMap": [
+      {
+        "source": 0,
+        "name": "canvas_rect_0",
+        "type": "rect",
+        "group": "canvas"
+      },
+      {
+        "source": 1,
+        "name": "p3-skeleton_rect_1",
+        "type": "rect",
+        "group": "p3-skeleton"
+      },
+      {
+        "source": 2,
+        "name": "p3-skeleton_text_2",
+        "type": "text",
+        "group": "p3-skeleton"
+      },
+      {
+        "name": "p3-skeleton_text_2_run0",
+        "text": "(a) Skeleton S",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 78.791259765625,
+        "sourceSize": 17,
+        "sourceAdvance": 112.41748046875
+      },
+      {
+        "source": 3,
+        "name": "p3-skeleton_line_3",
+        "type": "line",
+        "group": "p3-skeleton"
+      },
+      {
+        "source": 4,
+        "name": "p3-skeleton_text_4",
+        "type": "text",
+        "group": "p3-skeleton"
+      },
+      {
+        "name": "p3-skeleton_text_4_run0",
+        "text": "P3 · bounded-path symmetry",
+        "key": "Arial|bold|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 68,
+        "sourceX": 35.0965576171875,
+        "sourceSize": 14.5,
+        "sourceAdvance": 199.806884765625
+      },
+      {
+        "source": 5,
+        "name": "p3-skeleton_text_5",
+        "type": "text",
+        "group": "p3-skeleton"
+      },
+      {
+        "name": "p3-skeleton_text_5_run0",
+        "text": "MATCH p =",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 92,
+        "sourceX": 97.468505859375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 75.06298828125
+      },
+      {
+        "source": 6,
+        "name": "p3-skeleton_line_6",
+        "type": "line",
+        "group": "p3-skeleton"
+      },
+      {
+        "source": 7,
+        "name": "p3-skeleton_circle_7",
+        "type": "circle",
+        "group": "p3-skeleton"
+      },
+      {
+        "source": 8,
+        "name": "p3-skeleton_circle_8",
+        "type": "circle",
+        "group": "p3-skeleton"
+      },
+      {
+        "source": 9,
+        "name": "p3-skeleton_text_9",
+        "type": "text",
+        "group": "p3-skeleton"
+      },
+      {
+        "name": "p3-skeleton_text_9_run0",
+        "text": "L",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 143,
+        "sourceX": 59.4384765625,
+        "sourceSize": 20,
+        "sourceAdvance": 11.123046875
+      },
+      {
+        "source": 10,
+        "name": "p3-skeleton_text_10",
+        "type": "text",
+        "group": "p3-skeleton"
+      },
+      {
+        "name": "p3-skeleton_text_10_run0",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 143,
+        "sourceX": 194.7783203125,
+        "sourceSize": 20,
+        "sourceAdvance": 14.443359375
+      },
+      {
+        "source": 11,
+        "name": "p3-skeleton_text_11",
+        "type": "text",
+        "group": "p3-skeleton"
+      },
+      {
+        "name": "p3-skeleton_text_11_run0",
+        "text": "T*m..n",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 121,
+        "sourceX": 113.6500244140625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 42.699951171875
+      },
+      {
+        "source": 12,
+        "name": "p3-skeleton_text_12",
+        "type": "text",
+        "group": "p3-skeleton"
+      },
+      {
+        "name": "p3-skeleton_text_12_run0",
+        "text": "WHERE φ(p)",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 182,
+        "sourceX": 90.970458984375,
+        "sourceSize": 15,
+        "sourceAdvance": 88.05908203125
+      },
+      {
+        "source": 13,
+        "name": "p3-skeleton_text_13",
+        "type": "text",
+        "group": "p3-skeleton"
+      },
+      {
+        "name": "p3-skeleton_text_13_run0",
+        "text": "pruning_path",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 218,
+        "sourceX": 92.6717529296875,
+        "sourceSize": 14.5,
+        "sourceAdvance": 84.656494140625
+      },
+      {
+        "source": 14,
+        "name": "p3-skeleton_text_14",
+        "type": "text",
+        "group": "p3-skeleton"
+      },
+      {
+        "name": "p3-skeleton_text_14_run0",
+        "text": "N = 300,000",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 242,
+        "sourceX": 91.7197265625,
+        "sourceSize": 17,
+        "sourceAdvance": 86.560546875
+      },
+      {
+        "source": 15,
+        "name": "p3-skeleton_line_15",
+        "type": "line",
+        "group": "p3-skeleton"
+      },
+      {
+        "source": 16,
+        "name": "p3-graph_rect_16",
+        "type": "rect",
+        "group": "p3-graph"
+      },
+      {
+        "source": 17,
+        "name": "p3-graph_text_17",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_17_run0",
+        "text": "(b) Graph state G",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 439.576416015625,
+        "sourceSize": 17,
+        "sourceAdvance": 138.84716796875
+      },
+      {
+        "source": 18,
+        "name": "p3-graph_line_18",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 19,
+        "name": "p3-graph_text_19",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_19_run0",
+        "text": "All edges: GSP_LINK",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 69,
+        "sourceX": 439.68603515625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 138.6279296875
+      },
+      {
+        "source": 20,
+        "name": "p3-graph_line_20",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 21,
+        "name": "p3-graph_line_21",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 22,
+        "name": "p3-graph_line_22",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 23,
+        "name": "p3-graph_line_23",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 24,
+        "name": "p3-graph_line_24",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 25,
+        "name": "p3-graph_line_25",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 26,
+        "name": "p3-graph_circle_26",
+        "type": "circle",
+        "group": "p3-graph"
+      },
+      {
+        "source": 27,
+        "name": "p3-graph_text_27",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_27_run0",
+        "text": "1",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 103,
+        "sourceX": 339.272705078125,
+        "sourceSize": 17,
+        "sourceAdvance": 9.45458984375
+      },
+      {
+        "source": 28,
+        "name": "p3-graph_circle_28",
+        "type": "circle",
+        "group": "p3-graph"
+      },
+      {
+        "source": 29,
+        "name": "p3-graph_text_29",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_29_run0",
+        "text": "2",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 103,
+        "sourceX": 495.272705078125,
+        "sourceSize": 17,
+        "sourceAdvance": 9.45458984375
+      },
+      {
+        "source": 30,
+        "name": "p3-graph_circle_30",
+        "type": "circle",
+        "group": "p3-graph"
+      },
+      {
+        "source": 31,
+        "name": "p3-graph_text_31",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_31_run0",
+        "text": "3",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 103,
+        "sourceX": 655.272705078125,
+        "sourceSize": 17,
+        "sourceAdvance": 9.45458984375
+      },
+      {
+        "source": 32,
+        "name": "p3-graph_circle_32",
+        "type": "circle",
+        "group": "p3-graph"
+      },
+      {
+        "source": 33,
+        "name": "p3-graph_text_33",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_33_run0",
+        "text": "0",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 181,
+        "sourceX": 405.272705078125,
+        "sourceSize": 17,
+        "sourceAdvance": 9.45458984375
+      },
+      {
+        "source": 34,
+        "name": "p3-graph_circle_34",
+        "type": "circle",
+        "group": "p3-graph"
+      },
+      {
+        "source": 35,
+        "name": "p3-graph_circle_35",
+        "type": "circle",
+        "group": "p3-graph"
+      },
+      {
+        "source": 36,
+        "name": "p3-graph_text_36",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_36_run0",
+        "text": ":GspLow",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 128,
+        "sourceX": 315.389404296875,
+        "sourceSize": 14.5,
+        "sourceAdvance": 57.22119140625
+      },
+      {
+        "source": 37,
+        "name": "p3-graph_text_37",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_37_run0",
+        "text": "{id:1}",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 150,
+        "sourceX": 327.468017578125,
+        "sourceSize": 14.5,
+        "sourceAdvance": 33.06396484375
+      },
+      {
+        "source": 38,
+        "name": "p3-graph_text_38",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_38_run0",
+        "text": ":GspMiddle",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 128,
+        "sourceX": 463.332275390625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 73.33544921875
+      },
+      {
+        "source": 39,
+        "name": "p3-graph_text_39",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_39_run0",
+        "text": ":GspHigh",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 128,
+        "sourceX": 629.7786865234375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 60.442626953125
+      },
+      {
+        "source": 40,
+        "name": "p3-graph_text_40",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_40_run0",
+        "text": ":GspBad",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 205,
+        "sourceX": 381.7894287109375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 56.421142578125
+      },
+      {
+        "source": 41,
+        "name": "p3-graph_text_41",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_41_run0",
+        "text": ":GspMiddle",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 205,
+        "sourceX": 498.332275390625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 73.33544921875
+      },
+      {
+        "source": 42,
+        "name": "p3-graph_text_42",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_42_run0",
+        "text": ":GspHigh",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 205,
+        "sourceX": 629.7786865234375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 60.442626953125
+      },
+      {
+        "source": 43,
+        "name": "p3-graph_line_43",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 44,
+        "name": "p3-graph_line_44",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 45,
+        "name": "p3-graph_line_45",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 46,
+        "name": "p3-graph_text_46",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_46_run0",
+        "text": "× N",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 139,
+        "sourceX": 585.4697265625,
+        "sourceSize": 17,
+        "sourceAdvance": 27.060546875
+      },
+      {
+        "source": 47,
+        "name": "p3-graph_text_47",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_47_run0",
+        "text": "keep=false",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 229,
+        "sourceX": 374.7305908203125,
+        "sourceSize": 14.5,
+        "sourceAdvance": 70.538818359375
+      },
+      {
+        "source": 48,
+        "name": "p3-graph_text_48",
+        "type": "text",
+        "group": "p3-graph"
+      },
+      {
+        "name": "p3-graph_text_48_run0",
+        "text": "Other nodes: keep=true",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 249,
+        "sourceX": 453.6236572265625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 152.752685546875
+      },
+      {
+        "source": 49,
+        "name": "p3-graph_line_49",
+        "type": "line",
+        "group": "p3-graph"
+      },
+      {
+        "source": 50,
+        "name": "p3-output_rect_50",
+        "type": "rect",
+        "group": "p3-output"
+      },
+      {
+        "source": 51,
+        "name": "p3-output_text_51",
+        "type": "text",
+        "group": "p3-output"
+      },
+      {
+        "name": "p3-output_text_51_run0",
+        "text": "(c) Output",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 833.40087890625,
+        "sourceSize": 17,
+        "sourceAdvance": 81.1982421875
+      },
+      {
+        "source": 52,
+        "name": "p3-output_line_52",
+        "type": "line",
+        "group": "p3-output"
+      },
+      {
+        "source": 53,
+        "name": "p3-output_text_53",
+        "type": "text",
+        "group": "p3-output"
+      },
+      {
+        "name": "p3-output_text_53_run0",
+        "text": "(G, I)",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 13.776377952755906,
+        "sourceBaseline": 82,
+        "sourceX": 844.013916015625,
+        "sourceSize": 27,
+        "sourceAdvance": 59.97216796875
+      },
+      {
+        "source": 54,
+        "name": "p3-output_text_54",
+        "type": "text",
+        "group": "p3-output"
+      },
+      {
+        "name": "p3-output_text_54_run0",
+        "text": "I:",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 112,
+        "sourceX": 780,
+        "sourceSize": 18,
+        "sourceAdvance": 11.98828125
+      },
+      {
+        "source": 55,
+        "name": "p3-output_text_55",
+        "type": "text",
+        "group": "p3-output"
+      },
+      {
+        "name": "p3-output_text_55_run0",
+        "text": "unique anchor u",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 112,
+        "sourceX": 808,
+        "sourceSize": 14.5,
+        "sourceAdvance": 103.999267578125
+      },
+      {
+        "source": 56,
+        "name": "p3-output_text_56",
+        "type": "text",
+        "group": "p3-output"
+      },
+      {
+        "name": "p3-output_text_56_run0",
+        "text": "uid 0: keep=false",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 139,
+        "sourceX": 808,
+        "sourceSize": 14.5,
+        "sourceAdvance": 110.03857421875
+      },
+      {
+        "source": 57,
+        "name": "p3-output_text_57",
+        "type": "text",
+        "group": "p3-output"
+      },
+      {
+        "name": "p3-output_text_57_run0",
+        "text": "2-hop witness",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 166,
+        "sourceX": 808,
+        "sourceSize": 14.5,
+        "sourceAdvance": 89.4638671875
+      },
+      {
+        "source": 58,
+        "name": "p3-output_text_58",
+        "type": "text",
+        "group": "p3-output"
+      },
+      {
+        "name": "p3-output_text_58_run0",
+        "text": "index: GspLow(id)",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 194,
+        "sourceX": 815.5716552734375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 116.856689453125
+      },
+      {
+        "source": 59,
+        "name": "p3-output_line_59",
+        "type": "line",
+        "group": "p3-output"
+      },
+      {
+        "source": 60,
+        "name": "p3-output_text_60",
+        "type": "text",
+        "group": "p3-output"
+      },
+      {
+        "name": "p3-output_text_60_run0",
+        "text": "Algorithm 2",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.418897637795276,
+        "sourceBaseline": 248,
+        "sourceX": 832.274658203125,
+        "sourceSize": 16.5,
+        "sourceAdvance": 83.45068359375
+      }
+    ]
+  },
+  {
+    "file": "Algorithm_2_query_pair_construction.pptx",
+    "widthMm": 180,
+    "heightMm": 81.72,
+    "source": "https://github.com/neo4j/neo4j/issues/14008",
+    "shapeCount": 67,
+    "textCount": 71,
+    "objectMap": [
+      {
+        "source": 0,
+        "name": "canvas_rect_0",
+        "type": "rect",
+        "group": "canvas"
+      },
+      {
+        "source": 1,
+        "name": "canvas_rect_1",
+        "type": "rect",
+        "group": "canvas"
+      },
+      {
+        "source": 2,
+        "name": "canvas_text_2",
+        "type": "text",
+        "group": "canvas"
+      },
+      {
+        "name": "canvas_text_2_run0",
+        "text": "Skeleton S",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 86.541259765625,
+        "sourceSize": 17,
+        "sourceAdvance": 86.91748046875
+      },
+      {
+        "source": 3,
+        "name": "canvas_line_3",
+        "type": "line",
+        "group": "canvas"
+      },
+      {
+        "source": 4,
+        "name": "canvas_line_4",
+        "type": "line",
+        "group": "canvas"
+      },
+      {
+        "source": 5,
+        "name": "canvas_rect_5",
+        "type": "rect",
+        "group": "canvas"
+      },
+      {
+        "source": 6,
+        "name": "canvas_text_6",
+        "type": "text",
+        "group": "canvas"
+      },
+      {
+        "name": "canvas_text_6_run0",
+        "text": "Base query ",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 441.7945861816406,
+        "sourceSize": 17,
+        "sourceAdvance": 96.38037109375
+      },
+      {
+        "name": "canvas_text_6_run1",
+        "text": "Q",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 538.1749572753906,
+        "sourceSize": 17,
+        "sourceAdvance": 13.22314453125
+      },
+      {
+        "name": "canvas_text_6_run2",
+        "text": "1",
+        "key": "Arial|bold|normal",
+        "fontPt": 6.245291338582678,
+        "sourceBaseline": 39.349627,
+        "sourceX": 551.3981018066406,
+        "sourceSize": 12.24,
+        "sourceAdvance": 6.80731201171875
+      },
+      {
+        "source": 7,
+        "name": "canvas_line_7",
+        "type": "line",
+        "group": "canvas"
+      },
+      {
+        "source": 8,
+        "name": "canvas_line_8",
+        "type": "line",
+        "group": "canvas"
+      },
+      {
+        "source": 9,
+        "name": "canvas_rect_9",
+        "type": "rect",
+        "group": "canvas"
+      },
+      {
+        "source": 10,
+        "name": "canvas_text_10",
+        "type": "text",
+        "group": "canvas"
+      },
+      {
+        "name": "canvas_text_10_run0",
+        "text": "Mutated query ",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 799.5343322753906,
+        "sourceSize": 17,
+        "sourceAdvance": 120.90087890625
+      },
+      {
+        "name": "canvas_text_10_run1",
+        "text": "Q",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 920.4352111816406,
+        "sourceSize": 17,
+        "sourceAdvance": 13.22314453125
+      },
+      {
+        "name": "canvas_text_10_run2",
+        "text": "2",
+        "key": "Arial|bold|normal",
+        "fontPt": 6.245291338582678,
+        "sourceBaseline": 39.349627,
+        "sourceX": 933.6583557128906,
+        "sourceSize": 12.24,
+        "sourceAdvance": 6.80731201171875
+      },
+      {
+        "source": 11,
+        "name": "canvas_line_11",
+        "type": "line",
+        "group": "canvas"
+      },
+      {
+        "source": 12,
+        "name": "canvas_line_12",
+        "type": "line",
+        "group": "canvas"
+      },
+      {
+        "source": 13,
+        "name": "p3-handoff_text_13",
+        "type": "text",
+        "group": "p3-handoff"
+      },
+      {
+        "name": "p3-handoff_text_13_run0",
+        "text": "(G, I)",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.69448818897638,
+        "sourceBaseline": 36,
+        "sourceX": 293.898681640625,
+        "sourceSize": 19,
+        "sourceAdvance": 42.20263671875
+      },
+      {
+        "source": 14,
+        "name": "p3-handoff_line_14",
+        "type": "line",
+        "group": "p3-handoff"
+      },
+      {
+        "source": 15,
+        "name": "p3-query-pair_text_15",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_15_run0",
+        "text": "P3 · Neo4j #14008",
+        "key": "Arial|bold|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 70,
+        "sourceX": 20,
+        "sourceSize": 15.5,
+        "sourceAdvance": 130.970458984375
+      },
+      {
+        "source": 16,
+        "name": "p3-query-pair_text_16",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_16_run0",
+        "text": "MATCH p =",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 98,
+        "sourceX": 92.468505859375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 75.06298828125
+      },
+      {
+        "source": 17,
+        "name": "p3-query-pair_line_17",
+        "type": "line",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 18,
+        "name": "p3-query-pair_text_18",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_18_run0",
+        "text": "T*m..n",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 128,
+        "sourceX": 108.6500244140625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 42.699951171875
+      },
+      {
+        "source": 19,
+        "name": "p3-query-pair_circle_19",
+        "type": "circle",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 20,
+        "name": "p3-query-pair_text_20",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_20_run0",
+        "text": "L",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 161,
+        "sourceX": 67.4384765625,
+        "sourceSize": 20,
+        "sourceAdvance": 11.123046875
+      },
+      {
+        "source": 21,
+        "name": "p3-query-pair_circle_21",
+        "type": "circle",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 22,
+        "name": "p3-query-pair_text_22",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_22_run0",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 161,
+        "sourceX": 179.7783203125,
+        "sourceSize": 20,
+        "sourceAdvance": 14.443359375
+      },
+      {
+        "source": 23,
+        "name": "p3-query-pair_text_23",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_23_run0",
+        "text": "WHERE φ(p)",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 215,
+        "sourceX": 85.970458984375,
+        "sourceSize": 15,
+        "sourceAdvance": 88.05908203125
+      },
+      {
+        "source": 24,
+        "name": "p3-query-pair_text_24",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_24_run0",
+        "text": "MATCH p =",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 98,
+        "sourceX": 462.468505859375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 75.06298828125
+      },
+      {
+        "source": 25,
+        "name": "p3-query-pair_line_25",
+        "type": "line",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 26,
+        "name": "p3-query-pair_text_26",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_26_run0",
+        "text": "GSP_LINK*1..3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 128,
+        "sourceX": 449.625244140625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 100.74951171875
+      },
+      {
+        "source": 27,
+        "name": "p3-query-pair_circle_27",
+        "type": "circle",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 28,
+        "name": "p3-query-pair_text_28",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_28_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 161,
+        "sourceX": 438,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "source": 29,
+        "name": "p3-query-pair_text_29",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_29_run0",
+        "text": ":GspLow",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 193,
+        "sourceX": 414.389404296875,
+        "sourceSize": 14.5,
+        "sourceAdvance": 57.22119140625
+      },
+      {
+        "source": 30,
+        "name": "p3-query-pair_text_30",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_30_run0",
+        "text": "{id:1}",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 215,
+        "sourceX": 426.468017578125,
+        "sourceSize": 14.5,
+        "sourceAdvance": 33.06396484375
+      },
+      {
+        "source": 31,
+        "name": "p3-query-pair_circle_31",
+        "type": "circle",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 32,
+        "name": "p3-query-pair_text_32",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_32_run0",
+        "text": "v",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 161,
+        "sourceX": 552.5615234375,
+        "sourceSize": 20,
+        "sourceAdvance": 8.876953125
+      },
+      {
+        "source": 33,
+        "name": "p3-query-pair_text_33",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_33_run0",
+        "text": ":GspHigh",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 193,
+        "sourceX": 526.7786865234375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 60.442626953125
+      },
+      {
+        "source": 34,
+        "name": "p3-query-pair_text_34",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_34_run0",
+        "text": "MATCH p =",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 98,
+        "sourceX": 832.468505859375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 75.06298828125
+      },
+      {
+        "source": 35,
+        "name": "p3-query-pair_line_35",
+        "type": "line",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 36,
+        "name": "p3-query-pair_text_36",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_36_run0",
+        "text": "GSP_LINK*1..3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 128,
+        "sourceX": 819.625244140625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 100.74951171875
+      },
+      {
+        "source": 37,
+        "name": "p3-query-pair_circle_37",
+        "type": "circle",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 38,
+        "name": "p3-query-pair_text_38",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_38_run0",
+        "text": "v",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 161,
+        "sourceX": 808.5615234375,
+        "sourceSize": 20,
+        "sourceAdvance": 8.876953125
+      },
+      {
+        "source": 39,
+        "name": "p3-query-pair_text_39",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_39_run0",
+        "text": ":GspHigh",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 193,
+        "sourceX": 782.7786865234375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 60.442626953125
+      },
+      {
+        "source": 40,
+        "name": "p3-query-pair_circle_40",
+        "type": "circle",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 41,
+        "name": "p3-query-pair_text_41",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_41_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 161,
+        "sourceX": 922,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "source": 42,
+        "name": "p3-query-pair_text_42",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_42_run0",
+        "text": ":GspLow",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 193,
+        "sourceX": 898.389404296875,
+        "sourceSize": 14.5,
+        "sourceAdvance": 57.22119140625
+      },
+      {
+        "source": 43,
+        "name": "p3-query-pair_text_43",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_43_run0",
+        "text": "{id:1}",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 215,
+        "sourceX": 910.468017578125,
+        "sourceSize": 14.5,
+        "sourceAdvance": 33.06396484375
+      },
+      {
+        "source": 44,
+        "name": "p3-query-pair_line_44",
+        "type": "line",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 45,
+        "name": "p3-query-pair_text_45",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_45_run0",
+        "text": "Skeleton",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 122,
+        "sourceX": 286.785888671875,
+        "sourceSize": 14.5,
+        "sourceAdvance": 56.42822265625
+      },
+      {
+        "source": 46,
+        "name": "p3-query-pair_text_46",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_46_run0",
+        "text": "population",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 139,
+        "sourceX": 281.53955078125,
+        "sourceSize": 14.5,
+        "sourceAdvance": 66.9208984375
+      },
+      {
+        "source": 47,
+        "name": "p3-query-pair_text_47",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_47_run0",
+        "text": "β",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 180,
+        "sourceX": 310.517578125,
+        "sourceSize": 18,
+        "sourceAdvance": 8.96484375
+      },
+      {
+        "source": 48,
+        "name": "p3-query-pair_line_48",
+        "type": "line",
+        "group": "p3-query-pair"
+      },
+      {
+        "source": 49,
+        "name": "p3-query-pair_text_49",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_49_run0",
+        "text": "Symmetry",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 122,
+        "sourceX": 652.375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 65.25
+      },
+      {
+        "source": 50,
+        "name": "p3-query-pair_text_50",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_50_run0",
+        "text": "transformation",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 139,
+        "sourceX": 638.660888671875,
+        "sourceSize": 14.5,
+        "sourceAdvance": 92.67822265625
+      },
+      {
+        "source": 51,
+        "name": "p3-query-pair_text_51",
+        "type": "text",
+        "group": "p3-query-pair"
+      },
+      {
+        "name": "p3-query-pair_text_51_run0",
+        "text": "P3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 189,
+        "sourceX": 676.1322021484375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 17.735595703125
+      },
+      {
+        "source": 52,
+        "name": "p3-bindings_text_52",
+        "type": "text",
+        "group": "p3-bindings"
+      },
+      {
+        "name": "p3-bindings_text_52_run0",
+        "text": "Substitution map β",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 288,
+        "sourceX": 57.56640625,
+        "sourceSize": 16,
+        "sourceAdvance": 144.8671875
+      },
+      {
+        "source": 53,
+        "name": "p3-bindings_circle_53",
+        "type": "circle",
+        "group": "p3-bindings"
+      },
+      {
+        "source": 54,
+        "name": "p3-bindings_text_54",
+        "type": "text",
+        "group": "p3-bindings"
+      },
+      {
+        "name": "p3-bindings_text_54_run0",
+        "text": "L",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.69448818897638,
+        "sourceBaseline": 326,
+        "sourceX": 37.716552734375,
+        "sourceSize": 19,
+        "sourceAdvance": 10.56689453125
+      },
+      {
+        "source": 55,
+        "name": "p3-bindings_line_55",
+        "type": "line",
+        "group": "p3-bindings"
+      },
+      {
+        "source": 56,
+        "name": "p3-bindings_circle_56",
+        "type": "circle",
+        "group": "p3-bindings"
+      },
+      {
+        "source": 57,
+        "name": "p3-bindings_text_57",
+        "type": "text",
+        "group": "p3-bindings"
+      },
+      {
+        "name": "p3-bindings_text_57_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.69448818897638,
+        "sourceBaseline": 326,
+        "sourceX": 106.25,
+        "sourceSize": 19,
+        "sourceAdvance": 9.5
+      },
+      {
+        "source": 58,
+        "name": "p3-bindings_text_58",
+        "type": "text",
+        "group": "p3-bindings"
+      },
+      {
+        "name": "p3-bindings_text_58_run0",
+        "text": ":GspLow",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 324,
+        "sourceX": 135,
+        "sourceSize": 15,
+        "sourceAdvance": 59.1943359375
+      },
+      {
+        "source": 59,
+        "name": "p3-bindings_text_59",
+        "type": "text",
+        "group": "p3-bindings"
+      },
+      {
+        "name": "p3-bindings_text_59_run0",
+        "text": "{id:1}",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 345,
+        "sourceX": 135,
+        "sourceSize": 15,
+        "sourceAdvance": 34.2041015625
+      },
+      {
+        "source": 60,
+        "name": "p3-bindings_circle_60",
+        "type": "circle",
+        "group": "p3-bindings"
+      },
+      {
+        "source": 61,
+        "name": "p3-bindings_text_61",
+        "type": "text",
+        "group": "p3-bindings"
+      },
+      {
+        "name": "p3-bindings_text_61_run0",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.69448818897638,
+        "sourceBaseline": 383,
+        "sourceX": 36.139404296875,
+        "sourceSize": 19,
+        "sourceAdvance": 13.72119140625
+      },
+      {
+        "source": 62,
+        "name": "p3-bindings_line_62",
+        "type": "line",
+        "group": "p3-bindings"
+      },
+      {
+        "source": 63,
+        "name": "p3-bindings_circle_63",
+        "type": "circle",
+        "group": "p3-bindings"
+      },
+      {
+        "source": 64,
+        "name": "p3-bindings_text_64",
+        "type": "text",
+        "group": "p3-bindings"
+      },
+      {
+        "name": "p3-bindings_text_64_run0",
+        "text": "v",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.69448818897638,
+        "sourceBaseline": 383,
+        "sourceX": 106.783447265625,
+        "sourceSize": 19,
+        "sourceAdvance": 8.43310546875
+      },
+      {
+        "source": 65,
+        "name": "p3-bindings_text_65",
+        "type": "text",
+        "group": "p3-bindings"
+      },
+      {
+        "name": "p3-bindings_text_65_run0",
+        "text": ":GspHigh",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 381,
+        "sourceX": 135,
+        "sourceSize": 15,
+        "sourceAdvance": 62.52685546875
+      },
+      {
+        "source": 66,
+        "name": "p3-bindings_text_66",
+        "type": "text",
+        "group": "p3-bindings"
+      },
+      {
+        "name": "p3-bindings_text_66_run0",
+        "text": "Neo4j 2026.09.0",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 436,
+        "sourceX": 76.7896728515625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 106.420654296875
+      },
+      {
+        "source": 67,
+        "name": "p3-witness-and-result_text_67",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_67_run0",
+        "text": "Matching witness p",
+        "key": "Arial|bold|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 283,
+        "sourceX": 428.5206298828125,
+        "sourceSize": 15.5,
+        "sourceAdvance": 142.958740234375
+      },
+      {
+        "source": 68,
+        "name": "p3-witness-and-result_line_68",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 69,
+        "name": "p3-witness-and-result_line_69",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 70,
+        "name": "p3-witness-and-result_circle_70",
+        "type": "circle",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 71,
+        "name": "p3-witness-and-result_text_71",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_71_run0",
+        "text": "1",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 319,
+        "sourceX": 423.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 72,
+        "name": "p3-witness-and-result_line_72",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 73,
+        "name": "p3-witness-and-result_line_73",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 74,
+        "name": "p3-witness-and-result_text_74",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_74_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 340,
+        "sourceX": 423.75,
+        "sourceSize": 17,
+        "sourceAdvance": 8.5
+      },
+      {
+        "source": 75,
+        "name": "p3-witness-and-result_circle_75",
+        "type": "circle",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 76,
+        "name": "p3-witness-and-result_text_76",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_76_run0",
+        "text": "2",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 319,
+        "sourceX": 495.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 77,
+        "name": "p3-witness-and-result_line_77",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 78,
+        "name": "p3-witness-and-result_line_78",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 79,
+        "name": "p3-witness-and-result_circle_79",
+        "type": "circle",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 80,
+        "name": "p3-witness-and-result_text_80",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_80_run0",
+        "text": "3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 319,
+        "sourceX": 567.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 81,
+        "name": "p3-witness-and-result_line_81",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 82,
+        "name": "p3-witness-and-result_line_82",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 83,
+        "name": "p3-witness-and-result_text_83",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_83_run0",
+        "text": "v",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 340,
+        "sourceX": 568.227294921875,
+        "sourceSize": 17,
+        "sourceAdvance": 7.54541015625
+      },
+      {
+        "source": 84,
+        "name": "p3-witness-and-result_text_84",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_84_run0",
+        "text": "φ(p): all nodes keep=true",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 357,
+        "sourceX": 418.926025390625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 162.14794921875
+      },
+      {
+        "source": 85,
+        "name": "p3-witness-and-result_line_85",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 86,
+        "name": "p3-witness-and-result_rect_86",
+        "type": "rect",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 87,
+        "name": "p3-witness-and-result_line_87",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 88,
+        "name": "p3-witness-and-result_line_88",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 89,
+        "name": "p3-witness-and-result_line_89",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 90,
+        "name": "p3-witness-and-result_text_90",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_90_run0",
+        "text": "u.uid",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 390,
+        "sourceX": 424.2786865234375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 31.442626953125
+      },
+      {
+        "source": 91,
+        "name": "p3-witness-and-result_text_91",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_91_run0",
+        "text": "v.uid",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 390,
+        "sourceX": 485.223876953125,
+        "sourceSize": 14.5,
+        "sourceAdvance": 29.55224609375
+      },
+      {
+        "source": 92,
+        "name": "p3-witness-and-result_text_92",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_92_run0",
+        "text": "hops",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 390,
+        "sourceX": 544.2786865234375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 31.442626953125
+      },
+      {
+        "source": 93,
+        "name": "p3-witness-and-result_text_93",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_93_run0",
+        "text": "1",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 411,
+        "sourceX": 435.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 94,
+        "name": "p3-witness-and-result_text_94",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_94_run0",
+        "text": "3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 411,
+        "sourceX": 495.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 95,
+        "name": "p3-witness-and-result_text_95",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_95_run0",
+        "text": "2",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 411,
+        "sourceX": 555.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 96,
+        "name": "p3-witness-and-result_text_96",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_96_run0",
+        "text": "Runtime: 2.70 ms",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 438,
+        "sourceX": 437.30859375,
+        "sourceSize": 16,
+        "sourceAdvance": 125.3828125
+      },
+      {
+        "source": 97,
+        "name": "p3-witness-and-result_text_97",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_97_run0",
+        "text": "Matching witness p",
+        "key": "Arial|bold|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 283,
+        "sourceX": 798.5206298828125,
+        "sourceSize": 15.5,
+        "sourceAdvance": 142.958740234375
+      },
+      {
+        "source": 98,
+        "name": "p3-witness-and-result_line_98",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 99,
+        "name": "p3-witness-and-result_line_99",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 100,
+        "name": "p3-witness-and-result_circle_100",
+        "type": "circle",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 101,
+        "name": "p3-witness-and-result_text_101",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_101_run0",
+        "text": "3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 319,
+        "sourceX": 793.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 102,
+        "name": "p3-witness-and-result_line_102",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 103,
+        "name": "p3-witness-and-result_line_103",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 104,
+        "name": "p3-witness-and-result_text_104",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_104_run0",
+        "text": "v",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 340,
+        "sourceX": 794.227294921875,
+        "sourceSize": 17,
+        "sourceAdvance": 7.54541015625
+      },
+      {
+        "source": 105,
+        "name": "p3-witness-and-result_circle_105",
+        "type": "circle",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 106,
+        "name": "p3-witness-and-result_text_106",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_106_run0",
+        "text": "2",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 319,
+        "sourceX": 865.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 107,
+        "name": "p3-witness-and-result_line_107",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 108,
+        "name": "p3-witness-and-result_line_108",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 109,
+        "name": "p3-witness-and-result_circle_109",
+        "type": "circle",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 110,
+        "name": "p3-witness-and-result_text_110",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_110_run0",
+        "text": "1",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 319,
+        "sourceX": 937.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 111,
+        "name": "p3-witness-and-result_line_111",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 112,
+        "name": "p3-witness-and-result_line_112",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 113,
+        "name": "p3-witness-and-result_text_113",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_113_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 340,
+        "sourceX": 937.75,
+        "sourceSize": 17,
+        "sourceAdvance": 8.5
+      },
+      {
+        "source": 114,
+        "name": "p3-witness-and-result_text_114",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_114_run0",
+        "text": "φ(p): all nodes keep=true",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 357,
+        "sourceX": 788.926025390625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 162.14794921875
+      },
+      {
+        "source": 115,
+        "name": "p3-witness-and-result_line_115",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 116,
+        "name": "p3-witness-and-result_rect_116",
+        "type": "rect",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 117,
+        "name": "p3-witness-and-result_line_117",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 118,
+        "name": "p3-witness-and-result_line_118",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 119,
+        "name": "p3-witness-and-result_line_119",
+        "type": "line",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "source": 120,
+        "name": "p3-witness-and-result_text_120",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_120_run0",
+        "text": "u.uid",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 390,
+        "sourceX": 794.2786865234375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 31.442626953125
+      },
+      {
+        "source": 121,
+        "name": "p3-witness-and-result_text_121",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_121_run0",
+        "text": "v.uid",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 390,
+        "sourceX": 855.223876953125,
+        "sourceSize": 14.5,
+        "sourceAdvance": 29.55224609375
+      },
+      {
+        "source": 122,
+        "name": "p3-witness-and-result_text_122",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_122_run0",
+        "text": "hops",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 390,
+        "sourceX": 914.2786865234375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 31.442626953125
+      },
+      {
+        "source": 123,
+        "name": "p3-witness-and-result_text_123",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_123_run0",
+        "text": "1",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 411,
+        "sourceX": 805.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 124,
+        "name": "p3-witness-and-result_text_124",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_124_run0",
+        "text": "3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 411,
+        "sourceX": 865.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 125,
+        "name": "p3-witness-and-result_text_125",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_125_run0",
+        "text": "2",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 411,
+        "sourceX": 925.6898193359375,
+        "sourceSize": 15.5,
+        "sourceAdvance": 8.620361328125
+      },
+      {
+        "source": 126,
+        "name": "p3-witness-and-result_text_126",
+        "type": "text",
+        "group": "p3-witness-and-result"
+      },
+      {
+        "name": "p3-witness-and-result_text_126_run0",
+        "text": "Runtime: 530.10 ms",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 438,
+        "sourceX": 798.41015625,
+        "sourceSize": 16,
+        "sourceAdvance": 143.1796875
+      }
+    ]
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "file": "Algorithm_1_graph_state_generation.pptx",
+    "missing_text": [],
+    "embedded_images": 0,
+    "native_shapes_including_text": 56,
+    "text_fragments": 25,
+    "max_baseline_error_svg_units": 0.11319638475958982,
+    "median_baseline_error_svg_units": 0.002395111837500963,
+    "width_mm": 180.0,
+    "height_mm": 48.6,
+    "renderer": "LibreOffice PDF export"
+  },
+  {
+    "file": "Algorithm_2_query_pair_construction.pptx",
+    "missing_text": [],
+    "embedded_images": 0,
+    "native_shapes_including_text": 108,
+    "text_fragments": 57,
+    "max_baseline_error_svg_units": 0.11213928976172838,
+    "median_baseline_error_svg_units": 0.0010565298574647386,
+    "width_mm": 180.0,
+    "height_mm": 81.72,
+    "renderer": "LibreOffice PDF export"
+  }
+]

@@ -10,7 +10,7 @@ import ast
 import json
 import math
 import re
-from dataclasses import replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 
 from lark import Lark, Transformer, UnexpectedInput
 from lark.exceptions import VisitError
@@ -19,16 +19,23 @@ from lark.exceptions import VisitError
 from ir import (
     Alias, All, Boolean, Call, Case, Comparison, Concat, ConditionalQuery, Count,
     Edge, Exists, Expression, ListExpr, Literal, Match, Negation, Node, Pattern, Property,
-    Query, QueryError, Relationship, UnionAll, Variable, clauses,
+    Query, QueryError, Relationship, RowLimit, RowStream, UnionAll, Variable, With, clauses,
     expression_variables, pattern_variables, validate_query,
-    with_clauses,
+    row_stream_imports, with_clauses,
 )
 
 _GRAMMAR = r"""
-query: conditional_query ";"? | union_query ";"?
-union_query: single_query ("UNION"i "ALL"i single_query)*
-conditional_query: "CYPHER"i "25" "WHEN"i expr "THEN"i "{" single_query "}" "ELSE"i "{" single_query "}"
-single_query: match_clause* return_clause limit_clause?
+query: cypher_version? row_stream ";"?
+cypher_version: "CYPHER"i "25"
+?row_stream: conditional_query | union_query
+union_query: row_query ("UNION"i "ALL"i row_query)*
+?row_query: single_query | row_call
+row_call: "CALL"i "(" import_names? ")" "{" row_stream "}" return_clause limit_clause?
+import_names: NAME ("," NAME)*
+conditional_query: "WHEN"i expr "THEN"i "{" row_query "}" "ELSE"i "{" row_query "}"
+single_query: pipeline_clause* return_clause limit_clause?
+?pipeline_clause: match_clause | with_clause
+with_clause: "WITH"i distinct? projection where_clause?
 return_clause: "RETURN"i distinct? projection
 distinct: "DISTINCT"i
 limit_clause: "LIMIT"i INT
@@ -65,8 +72,10 @@ map_entry: NAME ":" literal
 ?atom: exists | count | case | all_expr | function | list_expr | property | literal
      | NAME -> variable
      | "(" expr ")"
-exists: "EXISTS"i "{" "MATCH"i pattern where_clause? "}"
-count: "COUNT"i "{" "MATCH"i pattern where_clause? "}"
+exists: "EXISTS"i "{" subquery "}"
+count: "COUNT"i "{" subquery "}"
+?subquery: row_stream
+         | "MATCH"i pattern where_clause? -> short_subquery
 case: "CASE"i "WHEN"i expr "THEN"i expr "ELSE"i expr "END"i
 all_expr: "all"i "(" NAME "IN"i expr "WHERE"i expr ")"
 function: NAME "(" [expr ("," expr)*] ")"
@@ -87,6 +96,15 @@ STRING: /'(?:[^'\\]|\\.)*'/ | /"(?:[^"\\]|\\.)*"/
 %ignore /\/\/[^\n]*/
 %ignore /(?s:\/\*.*?\*\/)/
 """
+
+
+@dataclass(frozen=True)
+class _RowCall:
+    body: object
+    imports: tuple[str, ...]
+    returns: tuple[Expression | Alias, ...]
+    distinct: bool
+    limit: int | None
 
 
 class _Build(Transformer):
@@ -187,10 +205,13 @@ class _Build(Transformer):
         return replace(items[1], path_variable=str(items[0]))
 
     def exists(self, items):
-        return Exists(items[0], items[1] if len(items) == 2 else None)
+        return Exists(body=items[0]) if isinstance(items[0], (Query, UnionAll, RowLimit, ConditionalQuery, _RowCall)) else Exists(*items[0])
 
     def count(self, items):
-        return Count(items[0], items[1] if len(items) == 2 else None)
+        return Count(body=items[0]) if isinstance(items[0], (Query, UnionAll, RowLimit, ConditionalQuery, _RowCall)) else Count(*items[0])
+
+    def short_subquery(self, items):
+        return items[0], items[1] if len(items) == 2 else None
 
     def projection(self, items):
         return tuple(items)
@@ -225,6 +246,12 @@ class _Build(Transformer):
     def distinct(self, _):
         return True
 
+    def with_clause(self, items):
+        distinct = items[0] is True
+        projections = items[1] if distinct else items[0]
+        where_items = items[2:] if distinct else items[1:]
+        return With(projections, where_items[0] if where_items else None, distinct)
+
     def return_clause(self, items):
         return items[-1], len(items) == 2
 
@@ -239,11 +266,23 @@ class _Build(Transformer):
     def union_query(self, items):
         return items[0] if len(items) == 1 else UnionAll(tuple(items))
 
+    def import_names(self, items):
+        return tuple(map(str, items))
+
+    def row_call(self, items):
+        imports = items.pop(0) if isinstance(items[0], tuple) and all(isinstance(item, str) for item in items[0]) else ()
+        limit = items.pop() if type(items[-1]) is int else None
+        returns, distinct = items[-1]
+        return _RowCall(items[0], imports, returns, distinct, limit)
+
     def conditional_query(self, items):
         return ConditionalQuery(*items)
 
+    def cypher_version(self, _):
+        return "cypher25"
+
     def query(self, items):
-        return items[0]
+        return items[-1]
 
 
 _PARSER = Lark(_GRAMMAR, parser="lalr", start=["query", "pattern", "expr"], maybe_placeholders=False)
@@ -256,8 +295,62 @@ def _parse(text: str, start: str):
         raise QueryError(f"Unsupported Cypher {start}: {exc}") from exc
 
 
-def parse_query(text: str) -> Query | UnionAll | ConditionalQuery:
-    query = _parse(text, "query")
+def _lower_calls(value, scope: frozenset[str] = frozenset(), *, _group_allowed: bool = False):
+    """Accept only transparent generated CALL boundaries, never general CALL."""
+    if isinstance(value, _RowCall):
+        if len(value.imports) != len(set(value.imports)) or not set(value.imports) <= scope:
+            raise QueryError("CALL imports must be distinct bindings in the enclosing scope")
+        body = _lower_calls(value.body, frozenset(value.imports))
+        if row_stream_imports(body, scope) != frozenset(value.imports):
+            raise QueryError("CALL imports do not match the row stream's lexical bindings")
+        names = projection_names(body)
+        if value.distinct or value.returns != tuple(Variable(name) for name in names):
+            raise QueryError("Generated CALL must transparently return its row-stream columns")
+        _check_call_boundary(body, scope, frozenset(value.imports))
+        if value.limit is None:
+            if not isinstance(body, (UnionAll, ConditionalQuery)) or not _group_allowed:
+                raise QueryError("An unlimited generated CALL only groups a nested composed row stream")
+            return body
+        return RowLimit(body, value.limit)
+    if isinstance(value, UnionAll):
+        return replace(value, branches=tuple(_lower_calls(branch, scope, _group_allowed=True) for branch in value.branches))
+    if isinstance(value, ConditionalQuery):
+        return replace(value, condition=_lower_calls(value.condition, scope),
+                       then=_lower_calls(value.then, scope, _group_allowed=True),
+                       otherwise=_lower_calls(value.otherwise, scope, _group_allowed=True))
+    if isinstance(value, Query):
+        env = set(scope)
+        stages = []
+        for clause in clauses(value):
+            if isinstance(clause, Match):
+                env.update(pattern_variables(clause.pattern))
+                stages.append(replace(clause, where=_lower_calls(clause.where, frozenset(env))))
+            else:
+                projections = tuple(_lower_calls(item, frozenset(env)) for item in clause.projections)
+                if any(not isinstance(item, (Alias, Variable)) for item in projections):
+                    raise QueryError("WITH expressions require an alias; existing variables may pass through")
+                env = {item.name for item in projections}
+                stages.append(replace(clause, projections=projections,
+                                      where=_lower_calls(clause.where, frozenset(env))))
+        result = with_clauses(value, tuple(stages))
+        return replace(result, returns=tuple(_lower_calls(item, frozenset(env)) for item in value.returns))
+    if isinstance(value, (Count, Exists)):
+        if value.body is not None:
+            return replace(value, body=_lower_calls(value.body, scope))
+        inner = scope | frozenset(pattern_variables(value.pattern))
+        return replace(value, where=_lower_calls(value.where, inner))
+    if isinstance(value, All):
+        return replace(value, items=_lower_calls(value.items, scope),
+                       predicate=_lower_calls(value.predicate, scope | {value.variable}))
+    if isinstance(value, tuple):
+        return tuple(_lower_calls(item, scope) for item in value)
+    if is_dataclass(value):
+        return replace(value, **{field.name: _lower_calls(getattr(value, field.name), scope) for field in fields(value)})
+    return value
+
+
+def parse_query(text: str) -> RowStream | ConditionalQuery:
+    query = _lower_calls(_parse(text, "query"))
     validate_query(query)
     return query
 
@@ -314,7 +407,7 @@ def render_pattern(pattern: Pattern, dialect: str = "cypher") -> str:
     return f"{prefix}{render_pattern(pattern.left, dialect)}{left}{middle}{right}{render_pattern(pattern.right, dialect)}"
 
 
-def render_expression(expression: Expression, dialect: str = "cypher") -> str:
+def render_expression(expression: Expression, dialect: str = "cypher", *, _scope: frozenset[str] = frozenset()) -> str:
     if isinstance(expression, Literal):
         return _literal(expression)
     if isinstance(expression, Variable):
@@ -322,59 +415,158 @@ def render_expression(expression: Expression, dialect: str = "cypher") -> str:
     if isinstance(expression, Property):
         return f"{_identifier(expression.variable)}.{_identifier(expression.key)}"
     if isinstance(expression, Comparison):
-        left = render_expression(expression.left, dialect)
+        left = render_expression(expression.left, dialect, _scope=_scope)
         if expression.operator in ("IS NULL", "IS NOT NULL"):
             return f"({left} {expression.operator})"
         if expression.operator not in ("=", "<>", "<", "<=", ">", ">="):
             raise QueryError("Unsupported comparison operator")
-        return f"({left} {expression.operator} {render_expression(expression.right, dialect)})"
+        return f"({left} {expression.operator} {render_expression(expression.right, dialect, _scope=_scope)})"
     if isinstance(expression, Boolean):
         if expression.operator not in ("AND", "OR") or len(expression.terms) < 2:
             raise QueryError("A Boolean expression requires AND/OR and at least two operands")
-        return "(" + f" {expression.operator} ".join((render_expression(item, dialect) for item in expression.terms)) + ")"
+        return "(" + f" {expression.operator} ".join((render_expression(item, dialect, _scope=_scope) for item in expression.terms)) + ")"
     if isinstance(expression, Negation):
-        return f"(NOT {render_expression(expression.expression, dialect)})"
+        return f"(NOT {render_expression(expression.expression, dialect, _scope=_scope)})"
     if isinstance(expression, (Exists, Count)):
-        where = " WHERE " + render_expression(expression.where, dialect) if expression.where is not None else ""
         operator = "EXISTS" if isinstance(expression, Exists) else "COUNT"
+        if expression.body is not None:
+            return f"{operator} {{ {_render_query(expression.body, dialect, _scope)} }}"
+        inner = _scope | frozenset(pattern_variables(expression.pattern))
+        where = " WHERE " + render_expression(expression.where, dialect, _scope=inner) if expression.where is not None else ""
         return f"{operator} {{ MATCH {render_pattern(expression.pattern, dialect)}{where} }}"
     if isinstance(expression, Call):
         if expression.name not in ("length", "coalesce", "range", "size", "nodes"):
             raise QueryError(f"Unsupported function: {expression.name}")
-        return expression.name + "(" + ", ".join((render_expression(item, dialect) for item in expression.args)) + ")"
+        return expression.name + "(" + ", ".join((render_expression(item, dialect, _scope=_scope) for item in expression.args)) + ")"
     if isinstance(expression, Case):
-        return f"CASE WHEN {render_expression(expression.condition, dialect)} THEN {render_expression(expression.then, dialect)} ELSE {render_expression(expression.otherwise, dialect)} END"
+        return f"CASE WHEN {render_expression(expression.condition, dialect, _scope=_scope)} THEN {render_expression(expression.then, dialect, _scope=_scope)} ELSE {render_expression(expression.otherwise, dialect, _scope=_scope)} END"
     if isinstance(expression, ListExpr):
-        return "[" + ", ".join((render_expression(item, dialect) for item in expression.items)) + "]"
+        return "[" + ", ".join((render_expression(item, dialect, _scope=_scope) for item in expression.items)) + "]"
     if isinstance(expression, Concat):
-        return f"({render_expression(expression.left, dialect)} + {render_expression(expression.right, dialect)})"
+        return f"({render_expression(expression.left, dialect, _scope=_scope)} + {render_expression(expression.right, dialect, _scope=_scope)})"
     if isinstance(expression, All):
-        return f"all({_identifier(expression.variable)} IN {render_expression(expression.items, dialect)} WHERE {render_expression(expression.predicate, dialect)})"
+        return f"all({_identifier(expression.variable)} IN {render_expression(expression.items, dialect, _scope=_scope)} WHERE {render_expression(expression.predicate, dialect, _scope=_scope | {expression.variable})})"
     raise QueryError("Unsupported expression")
 
 
-def projection_names(query: Query | UnionAll | ConditionalQuery) -> tuple[str, ...]:
+def projection_names(query: RowStream | ConditionalQuery) -> tuple[str, ...]:
     """Historical Cypher result labels, for compatibility with existing archives."""
+    if isinstance(query, RowLimit):
+        return projection_names(query.body)
     if isinstance(query, UnionAll):
         return projection_names(query.branches[0])
     if isinstance(query, ConditionalQuery):
         return projection_names(query.then)
-    return tuple(item.name if isinstance(item, Alias) else render_expression(item) for item in query.returns)
-
-
-def render_query(query: Query | UnionAll | ConditionalQuery, dialect: str = "cypher") -> str:
-    validate_query(query)
-    if isinstance(query, ConditionalQuery):
-        return f"CYPHER 25 WHEN {render_expression(query.condition, dialect)} THEN {{ {render_query(query.then, dialect)} }} ELSE {{ {render_query(query.otherwise, dialect)} }}"
-    if isinstance(query, UnionAll):
-        return " UNION ALL ".join((render_query(branch, dialect) for branch in query.branches))
-    parts = []
+    scope = set()
     for clause in clauses(query):
-        parts.append(("OPTIONAL MATCH " if clause.optional else "MATCH ") + render_pattern(clause.pattern, dialect))
+        if isinstance(clause, Match):
+            scope.update(pattern_variables(clause.pattern))
+        else:
+            scope = {item.name for item in clause.projections}
+    return tuple(item.name if isinstance(item, Alias) else render_expression(item, _scope=frozenset(scope)) for item in query.returns)
+
+
+def render_query(query: RowStream | ConditionalQuery, dialect: str = "cypher") -> str:
+    validate_query(query)
+    text = _render_query(query, dialect)
+
+    def conditional(value):
+        if isinstance(value, ConditionalQuery):
+            return True
+        if is_dataclass(value):
+            return any(conditional(getattr(value, field.name)) for field in fields(value))
+        return isinstance(value, tuple) and any(conditional(item) for item in value)
+
+    return "CYPHER 25 " + text if conditional(query) else text
+
+
+def _render_projection(items: tuple[Expression | Alias, ...], dialect: str, scope: frozenset[str]) -> str:
+    return ", ".join(render_expression(item.expression, dialect, _scope=scope) + " AS " + item.name
+                     if isinstance(item, Alias) else render_expression(item, dialect, _scope=scope) for item in items)
+
+
+def _check_call_boundary(body: RowStream, outer: frozenset[str], imports: frozenset[str]) -> None:
+    names = projection_names(body)
+    for name in names:
+        _identifier(name)  # Computed anonymous columns need an explicit alias.
+    if set(names) & outer:
+        raise QueryError("A generated CALL output cannot collide with an outer binding")
+
+    def check(value, scope):
+        if isinstance(value, Query):
+            env = set(scope)
+            for clause in clauses(value):
+                if isinstance(clause, Match):
+                    local = set(pattern_variables(clause.pattern))
+                    if (local & imports) - env:
+                        raise QueryError("A generated CALL cannot rebind an imported variable after WITH")
+                    env.update(local)
+                else:
+                    if any(isinstance(item, Alias) and item.name in imports for item in clause.projections):
+                        raise QueryError("A generated CALL cannot redefine an imported variable")
+                    for item in clause.projections:
+                        check(item, frozenset(env))
+                    env = {item.name for item in clause.projections}
+                check(clause.where, frozenset(env))
+            for item in value.returns:
+                check(item, frozenset(env))
+        elif isinstance(value, (Count, Exists)):
+            if value.body is not None:
+                check(value.body, scope)
+            else:
+                local = frozenset(pattern_variables(value.pattern))
+                if (local & imports) - scope:
+                    raise QueryError("A generated CALL cannot rebind an imported variable after WITH")
+                check(value.where, scope | local)
+        elif isinstance(value, Alias) and value.name in imports:
+            raise QueryError("A generated CALL cannot redefine an imported variable")
+        elif isinstance(value, All):
+            check(value.items, scope)
+            check(value.predicate, scope | {value.variable})
+        elif is_dataclass(value):
+            for field in fields(value):
+                check(getattr(value, field.name), scope)
+        elif isinstance(value, tuple):
+            for child in value:
+                check(child, scope)
+
+    check(body, imports)
+
+
+def _render_row_call(body: RowStream, dialect: str, scope: frozenset[str], limit: int | None = None) -> str:
+    if dialect != "cypher":
+        raise QueryError("Global row-stream scopes are only compiled for Neo4j Cypher")
+    imports = row_stream_imports(body, scope)
+    _check_call_boundary(body, scope, imports)
+    names = projection_names(body)
+    text = f"CALL ({', '.join(sorted(imports))}) {{ {_render_query(body, dialect, imports)} }} RETURN {', '.join(names)}"
+    return text + (f" LIMIT {limit}" if limit is not None else "")
+
+
+def _render_query(query: RowStream | ConditionalQuery, dialect: str, scope: frozenset[str] = frozenset()) -> str:
+    """Render a tree whose enclosing query has already validated lexical scope."""
+    if isinstance(query, ConditionalQuery):
+        def branch(value):
+            return (_render_query(value, dialect, scope) if isinstance(value, (Query, RowLimit))
+                    else _render_row_call(value, dialect, scope))
+        return f"WHEN {render_expression(query.condition, dialect, _scope=scope)} THEN {{ {branch(query.then)} }} ELSE {{ {branch(query.otherwise)} }}"
+    if isinstance(query, RowLimit):
+        return _render_row_call(query.body, dialect, scope, query.limit)
+    if isinstance(query, UnionAll):
+        return " UNION ALL ".join(_render_row_call(branch, dialect, scope) if isinstance(branch, (UnionAll, ConditionalQuery))
+                                   else _render_query(branch, dialect, scope) for branch in query.branches)
+    parts = []
+    env = set(scope)
+    for clause in clauses(query):
+        if isinstance(clause, With):
+            parts.append(("WITH DISTINCT " if clause.distinct else "WITH ") + _render_projection(clause.projections, dialect, frozenset(env)))
+            env = {item.name for item in clause.projections}
+        else:
+            env.update(pattern_variables(clause.pattern))
+            parts.append(("OPTIONAL MATCH " if clause.optional else "MATCH ") + render_pattern(clause.pattern, dialect))
         if clause.where is not None:
-            parts.append("WHERE " + render_expression(clause.where, dialect))
-    returns = tuple(render_expression(item.expression, dialect) + " AS " + item.name if isinstance(item, Alias) else render_expression(item, dialect) for item in query.returns)
-    parts.append(("RETURN DISTINCT " if query.distinct else "RETURN ") + ", ".join(returns))
+            parts.append("WHERE " + render_expression(clause.where, dialect, _scope=frozenset(env)))
+    parts.append(("RETURN DISTINCT " if query.distinct else "RETURN ") + _render_projection(query.returns, dialect, frozenset(env)))
     if query.limit is not None:
         parts.append(f"LIMIT {query.limit}")
     return " ".join(parts)

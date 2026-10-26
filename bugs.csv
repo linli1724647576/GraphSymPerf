@@ -43,3 +43,10 @@ fc5bfe459aafa25a9a579e121629f673e494068eb61a236b82f709a5aedd2f53,memgraph,BUG002
 ,neo4j,GH-13866,confirmed,https://github.com/neo4j/neo4j/issues/13866,,Logical BUG,,user_provided,2026-10-10,
 ,neo4j,GH-13867,confirmed,https://github.com/neo4j/neo4j/issues/13867,,Performance BUG,,user_provided,2026-10-10,
 ,neo4j,GH-14007,pending,https://github.com/neo4j/neo4j/issues/14007,,Performance BUG,,user_provided,2026-10-10,BUG list/Neo4j/P4/BUG002.md
+8ad76efe0073292a7f770a3672893eb86d4bd6e2c03f32c4c91c931380eada9b,arcadedb,BUG003,reproduced,,ArcadeDB/26.10.2 (build e854692736b48971f92dff78a1e727bc570bb6a2/1792085686249/main),Performance BUG,reproduced,local_experiment,2026-10-18,BUG list/ArcadeDB/S8/BUG003.md
+60a1f52212ff01a7e5ac4d69267c48ba83ed8d3c0cb06374fa7fd6369c3c7766,arcadedb,BUG004,reproduced,,ArcadeDB/26.10.2 (build e854692736b48971f92dff78a1e727bc570bb6a2/1792085686249/main),Performance BUG,reproduced,local_experiment,2026-10-18,BUG list/ArcadeDB/S5/BUG004.md
+35760156ebea9c7f0c039161a2ed3e3af9b8ab90209a61a997d591b571032703,janusgraph,BUG003,reproduced,,JanusGraph/1.1.0,Performance BUG,reproduced,local_experiment,2026-10-18,BUG list/JanusGraph/P3/BUG003.md
+25db70c97edc0804e9ab5a13f818769d71e15875e2d56744842f711451f4bc04,hugegraph,BUG003,reproduced,,ApacheHugeGraph/1.7.0,Performance BUG,reproduced,local_experiment,2026-10-18,BUG list/HugeGraph/P3/BUG003.md
+70a257e002583a9dba02c6693e66bf9e5aeff41009075fce3142398cf5d2ee14,hugegraph,BUG004,reproduced,,ApacheHugeGraph/1.7.0,Performance BUG,reproduced,local_experiment,2026-10-18,BUG list/HugeGraph/P13/BUG004.md
+82f6c61e71ecb3defd1fea56fb367671ecc94871de415c5737185d368a7bc0e2,janusgraph,BUG004,reproduced,,JanusGraph/1.1.0,Performance BUG,reproduced,local_experiment,2026-10-19,BUG list/JanusGraph/S5/BUG004.md
+7d49840c7094ef2c46f2a36065a570f85d1886f4dc293ff19bec3947ad7677cb,janusgraph,BUG005,reproduced,,JanusGraph/1.1.0,Performance BUG,reproduced,local_experiment,2026-10-19,BUG list/JanusGraph/S6/BUG005.md

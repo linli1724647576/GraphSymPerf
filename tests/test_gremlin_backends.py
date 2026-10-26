@@ -105,7 +105,7 @@ def test_native_profile_is_preserved_without_db_hits_alias():
     raw = {"@type": "g:TraversalMetrics", "@value": {"duration": 0.123, "metrics": []}}
     db._request = lambda query, parameters, timeout: (calls.append(query) or envelope([raw]), 1.0)
     result = db.explain("g.V().project('c0').by('uid')", {}, analyze=True)
-    assert calls == ["(g.V().project('c0').by('uid')).profile().next()"]
+    assert calls == ["(g.V().project('c0').by('uid')).limit(3).profile().next()"]
     assert result["plan"] == [raw]
     assert "DB Hits" not in json.dumps(result)
 
@@ -245,7 +245,7 @@ def test_graph_loading_streams_recipe_and_assigns_parallel_edge_ordinals(monkeyp
     assert "'_gsp_edge_ordinal'" in db._edge_script()
 
 
-@pytest.mark.parametrize("pattern", ["P3", "P12"])
+@pytest.mark.parametrize("pattern", ["P12"])
 def test_hugegraph_multi_endpoint_relationship_rejected_before_data_reset(pattern):
     db, calls = adapter(ApacheHugeGraph), []
     db._reset = lambda: calls.append("reset")

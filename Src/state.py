@@ -7,7 +7,9 @@ recipe stores only scale and seeds; rows are streamed in bounded batches.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import random
+import re
 from typing import Any, Iterator
 
 
@@ -22,6 +24,15 @@ class _Affine:
 
 def _value(value: Any, i: int) -> Any:
     return value.at(i) if isinstance(value, _Affine) else value
+
+
+def _property_equal(left: Any, right: Any) -> bool:
+    # Python treats False as 0 and True as 1; database property equality keeps
+    # Boolean and numeric values separate. Integer/float numeric equality is
+    # retained for property-map observations.
+    if type(left) is bool or type(right) is bool:
+        return type(left) is type(right) and left == right
+    return left == right
 
 
 @dataclass(frozen=True)
@@ -42,6 +53,32 @@ class _Edges:
     properties: dict[str, Any]
 
 
+def _edge_endpoint_count(group: _Edges, source_uid: int | None, target_uid: int | None) -> int:
+    """Count a group's edges selected by fixed endpoint observations.
+
+    Both affine endpoints share the edge index. A fixed UID can select one
+    index, all indices (a constant endpoint), or none; two selected indices
+    must agree. This also counts parallel edges without expanding the group.
+    """
+    selected = None
+    for endpoint, wanted in ((group.source, source_uid), (group.target, target_uid)):
+        if wanted is None:
+            continue
+        if type(endpoint) is int or endpoint.step == 0:
+            actual = endpoint if type(endpoint) is int else endpoint.base
+            if actual != wanted:
+                return 0
+            continue
+        delta = wanted - endpoint.base
+        if delta % endpoint.step:
+            return 0
+        index = delta // endpoint.step
+        if not 0 <= index < group.count or selected is not None and selected != index:
+            return 0
+        selected = index
+    return group.count if selected is None else 1
+
+
 _PATTERNS = {f"P{i}" for i in range(1, 17)} | {f"S{i}" for i in range(1, 11)}
 _VARIANTS = {"original", "empty_low", "multi_low", "pruning_path"}
 
@@ -54,11 +91,14 @@ class GraphSpec:
     state_variant: str = "original"
     include_reference: bool = True
     version: int = 1
+    node_groups: tuple[dict[str, Any], ...] = ()
+    edge_groups: tuple[dict[str, Any], ...] = ()
+    index_requirements: tuple[dict[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        if self.version != 1:
+        if self.version not in (1, 2):
             raise ValueError("unsupported graph recipe version")
-        if self.pattern not in _PATTERNS:
+        if self.pattern not in _PATTERNS and not (self.version == 2 and self.pattern == "AST"):
             raise ValueError("unsupported graph pattern")
         if type(self.scale) is not int or self.scale <= 0:
             raise ValueError("scale must be a positive integer")
@@ -71,11 +111,19 @@ class GraphSpec:
             raise ValueError("state variant is not applicable to this pattern")
         if type(self.include_reference) is not bool:
             raise ValueError("include_reference must be boolean")
+        if self.version == 2:
+            if not self.node_groups:
+                raise ValueError("explicit graph states require nonempty node groups")
+            self._explicit_groups()  # Validate the serialized, bounded representation.
 
     def to_dict(self) -> dict[str, Any]:
-        return {"version": self.version, "pattern": self.pattern, "scale": self.scale,
+        result = {"version": self.version, "pattern": self.pattern, "scale": self.scale,
                 "data_seed": self.data_seed, "state_variant": self.state_variant,
                 "include_reference": self.include_reference}
+        if self.version == 2:
+            result.update(node_groups=list(self.node_groups), edge_groups=list(self.edge_groups),
+                          index_requirements=list(self.index_requirements))
+        return result
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> GraphSpec:
@@ -83,6 +131,8 @@ class GraphSpec:
 
     @property
     def indexes(self) -> list[dict[str, str]]:
+        if self.version == 2:
+            return [dict(value) for value in self.index_requirements]
         if self.pattern == "P16":
             return []
         if self.pattern.startswith("S"):
@@ -98,6 +148,8 @@ class GraphSpec:
         return [{"name": "gsp_cost_lookup", "label": label, "property": key}]
 
     def _groups(self) -> tuple[list[_Nodes], list[_Edges]]:
+        if self.version == 2:
+            return self._explicit_groups()
         p, n = self.pattern, self.scale
         o = random.Random(self.data_seed).randrange(10_000, 1_000_000)
         nodes: list[_Nodes] = []
@@ -238,6 +290,49 @@ class GraphSpec:
             node("GspHigh", _Affine(o + 1), 4 * n, keep=False)
         return nodes, edges
 
+    def _explicit_groups(self) -> tuple[list[_Nodes], list[_Edges]]:
+        def identifier(value):
+            if not isinstance(value, str) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is None:
+                raise ValueError("invalid explicit graph identifier")
+            return value
+
+        def scalar(value):
+            if isinstance(value, dict) and set(value) == {"affine"}:
+                affine = value["affine"]
+                if set(affine) != {"base", "step"} or any(type(v) is not int for v in affine.values()):
+                    raise ValueError("invalid affine graph value")
+                return _Affine(**affine)
+            if type(value) not in (type(None), bool, int, float, str):
+                raise ValueError("unsupported explicit graph value")
+            return value
+
+        def count(group):
+            value = group["count"]
+            if type(value) is not int or value <= 0:
+                raise ValueError("explicit groups require positive counts")
+            return value
+
+        nodes, edges = [], []
+        for group in self.node_groups:
+            labels = tuple(identifier(label) for label in group["labels"])
+            if not labels:
+                raise ValueError("explicit node groups require a label")
+            props = {identifier(key): scalar(value) for key, value in group["properties"].items()}
+            if "uid" not in props or not isinstance(props["uid"], (int, _Affine)) or type(props["uid"]) is bool:
+                raise ValueError("explicit node groups require integer uid values")
+            nodes.append(_Nodes(count(group), labels, props))
+        for group in self.edge_groups:
+            source, target = scalar(group["source"]), scalar(group["target"])
+            if any(type(value) is not int and not isinstance(value, _Affine) for value in (source, target)):
+                raise ValueError("explicit edge endpoints require integer uid values")
+            edges.append(_Edges(count(group), source, target, identifier(group["source_label"]),
+                                identifier(group["target_label"]), identifier(group["type"]),
+                                {identifier(k): scalar(v) for k, v in group.get("properties", {}).items()}))
+        for index in self.index_requirements:
+            for field in ("name", "label", "property"):
+                identifier(index[field])
+        return nodes, edges
+
     def iter_nodes(self) -> Iterator[dict[str, Any]]:
         for group in self._groups()[0]:
             for i in range(group.count):
@@ -311,6 +406,7 @@ class GraphSpec:
             checks.append({"kind": "node_count", "labels": [label], "properties": {}, "expected": count})
             checks.append({"kind": "distinct_values", "label": label, "property": "uid", "expected": count})
         # Constant property populations establish selectivity and boolean guards.
+        seen_checks = set()
         for group in nodes:
             constant = {key: value for key, value in group.properties.items() if not isinstance(value, _Affine)}
             if type(group.properties["uid"]) is int:
@@ -322,10 +418,12 @@ class GraphSpec:
                                "properties": witness})
             if constant:
                 count = sum(other.count for other in nodes if set(group.labels).issubset(other.labels)
-                            and all(other.properties.get(key) == value for key, value in constant.items()))
+                            and all(_property_equal(other.properties.get(key), value) for key, value in constant.items()))
                 check = {"kind": "node_count", "labels": list(group.labels), "properties": constant, "expected": count}
-                if check not in checks:
+                identity = json.dumps(check, sort_keys=True)
+                if identity not in seen_checks:
                     checks.append(check)
+                    seen_checks.add(identity)
         for kind in sorted({group.type for group in edges}):
             checks.append({"kind": "edge_count", "type": kind, "expected": sum(group.count for group in edges if group.type == kind)})
         for group in edges:
@@ -334,20 +432,21 @@ class GraphSpec:
             check = {"kind": "edge_count", "type": group.type, "source_label": group.source_label,
                      "target_label": group.target_label, "source_properties": source_props,
                      "target_properties": target_props}
-            count = sum(other.count for other in edges if other.type == group.type
+            count = sum(_edge_endpoint_count(other, source_props.get('uid'), target_props.get('uid'))
+                        for other in edges if other.type == group.type
                         and group.source_label in primary_labels[other.source_label]
-                        and group.target_label in primary_labels[other.target_label]
-                        and (not source_props or other.source == group.source)
-                        and (not target_props or other.target == group.target))
+                        and group.target_label in primary_labels[other.target_label])
             check["expected"] = count
-            if check not in checks:
+            identity = json.dumps(check, sort_keys=True)
+            if identity not in seen_checks:
                 checks.append(check)
+                seen_checks.add(identity)
         if self.pattern == "P2":
             for forward, reverse in (("GSP_FORWARD", "GSP_REVERSE"), ("GSP_REVERSE", "GSP_FORWARD")):
                 checks.extend([{"kind": "distinct_values", "type": forward, "property": "pair", "expected": self.scale + 1},
                                {"kind": "inverse_edges", "forward": forward, "reverse": reverse,
                                 "pair_key": "pair", "expected": 0}])
-        if self.pattern in {"P4", "P5", "P15"} and self.include_reference:
+        if self.version == 1 and self.pattern in {"P4", "P5", "P15"} and self.include_reference:
             checks.append({"kind": "reference_edges", "reference": "GSP_REFERENCE", "original": "GSP_EXPAND",
                            "source_label": "GspAnchor", "target_label": "GspLeaf", "guard_property": "keep",
                            "guard_value": self.pattern == "P4", "expected": 0})
@@ -366,11 +465,20 @@ def _literal(value: Any) -> str:
         return str(value).lower()
     if type(value) is int:
         return str(value)
+    if type(value) in (str, float):
+        return json.dumps(value, ensure_ascii=False)
     raise ValueError("state checks only support integer, boolean and null values")
 
 
 def _properties(value: dict[str, Any]) -> str:
     return " {" + ", ".join(f"{key}: {_literal(item)}" for key, item in value.items()) + "}" if value else ""
+
+
+def _matching_properties(variable: str, values: dict[str, Any]) -> tuple[str, list[str]]:
+    """NULL state observations match absent properties through IS NULL."""
+    concrete = {key: value for key, value in values.items() if value is not None}
+    missing = [f'{variable}.{key} IS NULL' for key, value in values.items() if value is None]
+    return _properties(concrete), missing
 
 
 def render_state_checks(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -385,13 +493,19 @@ def render_state_checks(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         expected = [{"count": check["expected"]}] if "expected" in check else None
         if kind == "node_count":
             labels = "".join(":" + label for label in check["labels"])
-            query = f"MATCH (n{labels}{_properties(check['properties'])}) RETURN count(n) AS `count`"
+            properties, missing = _matching_properties('n', check['properties'])
+            guard = ' WHERE ' + ' AND '.join(missing) if missing else ''
+            query = f"MATCH (n{labels}{properties}){guard} RETURN count(n) AS `count`"
         elif kind == "edge_count":
             source = ":" + check["source_label"] if check.get("source_label") else ""
             target = ":" + check["target_label"] if check.get("target_label") else ""
-            query = (f"MATCH (u{source}{_properties(check.get('source_properties', {}))})"
-                     f"-[r:{check['type']}]->(v{target}{_properties(check.get('target_properties', {}))}) "
-                     "RETURN count(r) AS `count`")
+            source_props, source_missing = _matching_properties('u', check.get('source_properties', {}))
+            edge_props, edge_missing = _matching_properties('r', check.get('properties', {}))
+            target_props, target_missing = _matching_properties('v', check.get('target_properties', {}))
+            missing = [*source_missing, *edge_missing, *target_missing]
+            guard = ' WHERE ' + ' AND '.join(missing) if missing else ''
+            query = (f"MATCH (u{source}{source_props})-[r:{check['type']}{edge_props}]->(v{target}{target_props})"
+                     f"{guard} RETURN count(r) AS `count`")
         elif kind == "node_properties":
             query = f"MATCH (n:{check['label']} {{uid: {check['uid']}}}) RETURN " + ", ".join(
                 f"n.{key} AS `{key}`" for key in check["properties"])

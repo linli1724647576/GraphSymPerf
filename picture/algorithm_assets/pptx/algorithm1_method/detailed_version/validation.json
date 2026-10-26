@@ -1,0 +1,25 @@
+{
+  "editable_native_objects": 160,
+  "pictures": 0,
+  "media_files": 0,
+  "fonts": [
+    "Arial",
+    "Times New Roman"
+  ],
+  "width_mm": 180.0,
+  "height_mm": 111.96,
+  "visible_text_scope": "Algorithm 1 graph construction specification and recorded conditions only",
+  "render_engine": "LibreOffice",
+  "overflow_check": "passed",
+  "visual_review": "passed",
+  "independent_algorithm_review": "passed",
+  "state_tests": {
+    "command": ".venv/bin/python -m pytest -q tests/test_state.py",
+    "passed": 104
+  },
+  "algorithm2_pptx_unchanged": true,
+  "algorithm1_numbered_lines": 25,
+  "algorithm2_pseudocode_unchanged": true,
+  "final_pptx_sha256": "8c50f7c6bc090bcccc14c9bd17a04b32a1e67bd2714fc052a134a17fc32b5497",
+  "published_file": "/Users/sakuraq/Documents/\u79d1\u7814\u5b9e\u4e60/GraphSymPerf/picture/Algorithm_1_graph_state_generation.pptx"
+}

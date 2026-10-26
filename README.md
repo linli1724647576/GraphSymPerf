@@ -1,6 +1,10 @@
 # GraphSymPerf
 
-用于论文实验的图数据库性能缺陷检测代码。采用 SCor 风格的有限模板和候选池，构造低／高成本区域，测试结果保持的对称变体与低成本参考。当前模式为 P1–P16 与 SCor 图查询适配 S1–S10；只支持显式列出的受限结构，不是通用 Cypher 重写器。
+用于论文实验的图数据库性能缺陷检测代码。新生成路径以 `paper/vldb27-GraphSymPerf.pdf` 为准，统一使用论文 P1–P13、S1–S10；递归符号骨架经 AST 依赖分析，由算法 1 求解图状态和共同赋值，再由算法 2 实例化并局部变异。历史 P1–P16 配方与存档保留在 `legacy-v1`。两条路径都只支持显式列出的受限语义片段。
+
+论文路径的配置见 [configs/symbolic-paper.yaml](configs/symbolic-paper.yaml)，机制与验证边界见 [递归生成说明](docs/compositional-generation.md)。P10 支持独立组件、共享锚点和两边链，所有论文规则均可放入 `EXISTS`、`COUNT`、`WITH` 的递归上下文。新图状态与行流扩展目前通过 Neo4j 路径验证，其他数据库继续使用各自的能力门槛。
+
+P10 链与 S3 另支持显式变异标记、跨副本来源对应和向内需求求解：链可按语法预算延长，S3 可嵌套并使用属性、COUNT 或 EXISTS 条件；外层 COUNT 阈值会约束内部匹配数。这两族使用输出和潜在工作目标，骨架不再逐边指定8/1配方。运行示例见 [链目标配置](configs/goal-chain.yaml) 与 [条件目标配置](configs/goal-conditional.yaml)；其余规则仍保留各自已验证的有限构图合同。
 
 ## 文件
 
@@ -14,6 +18,11 @@ Src/
   languages.py   目标方言生成、输出列映射与能力检查
   gremlin.py     公共 IR 到受限 Gremlin 遍历的参数化生成
   state.py       有限图状态描述、分批数据与成本检查
+  symbolic.py    递归符号骨架、算法 1/2 的共同赋值合同
+  dependencies.py AST 作用域、定义引用、局部关系与外层传播
+  population.py  路径与见证需求的有限构图和解释验证
+  relational_population.py 固定长度匹配、空值行与扩张读取闭包
+  requirements.py 输出、真假与潜在工作目标的向内传播和整数分配
   executor.py    八种数据库执行、原生计划与重复测量
   summarize.py   独立 BUG 与 pattern 贡献汇总
 config.yaml      单个测试目标和实验参数
@@ -62,13 +71,15 @@ FalkorDB 的 `database` 是独立图名；有认证时填写 `password_env`。�
 
 新增目标示例在 `configs/arcadedb.yaml`、`configs/age.yaml`、`configs/ladybug.yaml`。先准备专用测试目标，填写连接与密码环境变量，再显式开启 `allow_reset`。ArcadeDB 需要预先建立指定数据库；AGE 需要在指定 PostgreSQL 库安装 AGE 扩展，`graph` 仅指定本工具重建的图；Ladybug 使用指定目录中自己创建的临时子目录，每次独立连接都重新构图。嵌入式图不会被错误地跨连接复用。
 
-ArcadeDB 使用原生 `opencypher` 前端；框架中的语言名仍为 `cypher`。AGE 使用原生 Cypher 包装及 PostgreSQL 计划，成本入口分别验证属性映射 GIN 和属性表达式 BTree；建图后对实验表执行 `VACUUM (ANALYZE)`，清理 GIN 待处理项并刷新统计。Ladybug 使用类型化节点／关系表及主键索引，路径显式指定原生 `TRAIL`。它的多标签语义不能用于 P7。每个目标的已验证版本和支持范围见 [Cypher 实测覆盖](docs/cypher-support.md)。
+ArcadeDB 的 Cypher 目标使用原生 `opencypher` 前端；框架中的语言名仍为 `cypher`。AGE 使用原生 Cypher 包装及 PostgreSQL 计划，成本入口分别验证属性映射 GIN 和属性表达式 BTree；建图后对实验表执行 `VACUUM (ANALYZE)`，清理 GIN 待处理项并刷新统计。Ladybug 使用类型化节点／关系表及主键索引，路径显式指定原生 `TRAIL`。它的多标签语义不能用于 P7。每个目标的已验证版本和支持范围见 [Cypher 实测覆盖](docs/cypher-support.md)。
 
 骨架和成本角色直接使用结构化数据，内置模板不依赖解析虚构的 Cypher 种子。流程是骨架 → `GraphSpec` → 状态绑定 → 查询 IR → 语义保持变换 → 目标方言。图状态按有限 recipe 分批构造，成本数量、属性、逆关系和参考区域在真实目标中检查。解析器仅负责可选 Cypher 种子导入，公共 IR 不依赖语言渲染器；生成时保留布尔项、标签、路径和分支顺序。
 
-Gremlin 已实际接入 JanusGraph 1.1.0 与 Apache HugeGraph 1.7.0，分别完成 12 项、11 项 Pattern 的小图执行；配置示例为 `configs/janusgraph.yaml`、`configs/hugegraph.yaml`。公共 IR 直接生成受限、无 lambda 的参数化遍历，未实现任意 Gremlin 文本解析或全语言统一解析器。GQL 仍明确返回 `UnsupportedLanguage`。启动、支持范围和语义证据见 [Gremlin 实测覆盖](docs/gremlin-support.md)。
+Gremlin 已实际接入 JanusGraph 1.1.0、Apache HugeGraph 1.7.0 和 ArcadeDB 26.10.2，分别开放 25、24、22 项现有 Pattern（ArcadeDB 为原 12 项 P 加 S1–S10）；配置示例为 `configs/janusgraph.yaml`、`configs/hugegraph.yaml`、`configs/arcadedb-gremlin.yaml`。ArcadeDB 本轮增加的是已有 DBMS 的 Gremlin 语言目标，未增加 Pattern 或原生探针（Native probe）；选择依据及影响力、维护响应的证据边界见 [新增目标选择](docs/gremlin-target-selection-20261018.md)。
 
-`languages.generate()` 支持经过目标版本验证的 `verified_features` 覆盖保守语法限制；它不能覆盖已知的语义不兼容。Gremlin 的可空结果投影必须显式验证后启用；可变长度路径、OPTIONAL 和多标签合取尚不支持。显式遍历改变起点或执行顺序时，即使结果相同、耗时差异稳定，也只记录 `timing_observation`，不自动计为遗漏优化候选或 BUG。
+公共查询中间表示（IR）直接生成受限、无匿名函数（lambda）的遍历。ArcadeDB 使用原生 HTTP 的 Java Gremlin 引擎，复用现有 SQL／JSONL 建图与索引检查；其 `constant()` 位置按目标语法生成严格类型字面量，其余谓词值仍独立绑定。2026-10-18 首轮接入门禁通过 107 项真实接口检查与 1,250 项离线测试；后续 S1–S10 接入在性能测试前另通过 290 项真实接口／语义检查，收尾补充 1 项动态 NULL 守卫回归，合计 291 项；该轮离线回归 1,362 项通过。启动、支持范围和语义证据见 [Gremlin 实测覆盖](docs/gremlin-support.md)，正式性能结果另见 [2026-10-18 Gremlin 实验记录](docs/gremlin-experiment-20261018.md)。 P10 扩规模与 S1–S10 后续结果见 [续测记录](docs/gremlin-p10-scor-20261018.md)；P3、P13、P16 随后已在 JanusGraph／HugeGraph 补齐：JanusGraph 当前完整套件 101 项通过、1 项专用测试跳过，HugeGraph 最新完整套件 102 项通过，离线回归更新为 1,422 项；实现、版本适配及测试结果见 [扩展记录](docs/gremlin-extended-20261018.md)，保留限制见 [编译边界](docs/gremlin-pattern-boundaries.md)。两库各完成 56 个既定性能输入，缩减及独立重放后新增 JanusGraph P3、HugeGraph P3／P13 三份本地报告，完整建图和查询又在新容器核验通过；三份报告对应本轮两个优化机会族，未提交上游。随后 S1–S10 已接入 JanusGraph／HugeGraph：诊断结果上限对齐后，v5 新空库的12种子、3复杂度原生门禁分别为 429 passed 和 301 passed／128 项明确不支持，离线回归 1,528 项通过；HugeGraph 保留原非索引 uid 变体的原生限制，不补索引或改变查询。[v5 冻结门禁](results/gremlin-scor-janus-huge-20261018-v5/interface-gate.json)通过后，按用户要求只续测 JanusGraph，完成 **164 个唯一原计划输入（150 主阶段＋14 条件阶段）**，另四个条件槽位明确未测、零遗漏；175 个物理存档还包括10次有限验证和一次旧外部休眠中断，不能称为175个新输入。五组原始统计审计零错误，三个最终代表各40对确认样本通过原门槛；精确新空库程序与全图验证后，本地登记 [S5／BUG004](BUG%20list/JanusGraph/S5/BUG004.md)（70.214619×）和 [S6／BUG005](BUG%20list/JanusGraph/S6/BUG005.md)（184.037156×）。S8 与 S6 的相同 EntryList 邻接预装载路径合并报告；S5 尾部 limit(0) 的高倍率未过噪声门槛，不报告或重试。最终独立格式和原生证据复核已通过，任务已完成；两份报告均未提交上游，独立跨库根因数未知。HugeGraph 停测前的80个完整输入及取消记录保留，既有 Pattern 方法、原阈值和门禁后冻结源码均保持不变。详见 [S1–S10 接入与 JanusGraph 续测记录](docs/gremlin-scor-janus-huge-20261018.md)。未实现任意 Gremlin 文本解析或全语言统一解析器；GQL 仍明确返回 `UnsupportedLanguage`。
+
+`languages.generate()` 支持经过目标版本验证的 `verified_features` 覆盖保守语法限制；它不能覆盖已知的语义不兼容。Gremlin 的可空结果投影必须显式验证后启用；JanusGraph／HugeGraph 已支持 P3 有界 TRAIL、P13 OPTIONAL 空值延展和 P16 服务器列表／ALL；P7 多标签合取继续拒绝，动态范围端点等未验证片段仍显式拒绝。显式遍历改变起点或执行顺序时，即使结果相同、耗时差异稳定，也只记录 `timing_observation`，不自动计为遗漏优化候选或 BUG。
 
 ## 模板与图状态
 
@@ -84,7 +95,7 @@ P 模式主要包括端点／路径镜像、布尔操作数交换、比较对偶
 
 `pruning_path`（仅 P3）构造低端入口、`keep=false` 的失败节点及后续扇出，另保留一条全 `keep=true` 的两跳见证；查询使用固定 `1..3` 界限和 `ALL(x IN nodes(p) WHERE x.keep=true)`。路径镜像保留完整节点谓词与结果多重集。当前只允许 `nodes(p)` 作为 ALL 的直接输入，谓词观察绑定节点自身的标量属性；不允许返回图实体或观察路径位置。
 
-S 模式按 SCor 原论文十项分类对应 OR、AND、条件分支、CASE、跳过／限制扫描、COALESCE、首次匹配、空输入连接和空集合运算适配。S3 使用 Cypher 25 条件查询；S10 使用空输入与 EXISTS／NOT EXISTS 适配，不是原生 INTERSECT／EXCEPT。
+S 模式按 SCor 原论文十项分类对应 OR、AND、条件分支、CASE、跳过／限制扫描、COALESCE、首次匹配、空输入连接和空集合运算适配。S3 在 Cypher 目标中使用 Cypher 25 条件查询，在已验证的 ArcadeDB Gremlin 目标中使用 `choose()`；S10 使用空输入与 EXISTS／NOT EXISTS 适配，不是原生 INTERSECT／EXCEPT。
 
 S 模式以小参考区域替换高成本关系引用；LIMIT 和 EXISTS 保留足够见证。P4/P5/P15 增加由可见 `keep` 决定事实构造的参考关系，只省略已被决定项屏蔽的工作；P16 通过显式失败元素构造短列表参考。其他 P 模式继续比较对称查询对，不强行添加答案标签或低成本参考。P2 在同一状态中使用配对正／逆关系，不是整图物理反转实验。
 

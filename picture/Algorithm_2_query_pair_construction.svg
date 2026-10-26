@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180mm" height="81.72mm" viewBox="0 0 1000 454" role="img" aria-labelledby="algorithm2-title algorithm2-desc">
+<title id="algorithm2-title">Skeleton population and query mutation (Algorithm 2)</title><desc id="algorithm2-desc">Two aligned rows illustrate independent S7 and P1 instances. Each row proceeds from a skeleton to a base query and a mutated query. Graph information and construction conditions guide skeleton population. In S7, L is instantiated as zero and E_H as a COUNT subquery; reference substitution changes only the HIGH relationship type to REF. In P1, endpoint symmetry exchanges the written endpoint order, retaining each variable&#x27;s labels, identifier constraint, and projection. Each mutated query is derived from a copy of its own base query. Dashed nodes are placeholders; red and explicit labels identify local changes.</desc>
+<defs>
+<marker id="algorithm2-black" markerWidth="7" markerHeight="7" refX="6.5" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 7 3.5 L 0 7 Z" fill="#000000"/></marker>
+<marker id="algorithm2-red" markerWidth="7" markerHeight="7" refX="6.5" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 7 3.5 L 0 7 Z" fill="#B32025"/></marker>
+</defs>
+<rect x="0" y="0" width="1000" height="454" rx="0" fill="#FFFFFF" stroke="none" stroke-width="1.1"/>
+<rect x="8" y="8" width="244" height="438" rx="0" fill="#FFFFFF" stroke="#000000" stroke-width="0.8"/>
+<text x="130.0" y="32" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" font-style="normal" text-anchor="middle">Skeleton S</text>
+<line x1="8" y1="46" x2="252" y2="46" stroke="#000000" stroke-width="0.7"/>
+<line x1="8" y1="263" x2="252" y2="263" stroke="#000000" stroke-width="0.7"/>
+<rect x="378" y="8" width="244" height="438" rx="0" fill="#FFFFFF" stroke="#000000" stroke-width="0.8"/>
+<text x="500.0" y="32" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" font-style="normal" text-anchor="middle">Base query Q<tspan baseline-shift="sub" font-size="12.24">1</tspan></text>
+<line x1="378" y1="46" x2="622" y2="46" stroke="#000000" stroke-width="0.7"/>
+<line x1="378" y1="263" x2="622" y2="263" stroke="#000000" stroke-width="0.7"/>
+<rect x="748" y="8" width="244" height="438" rx="0" fill="#FFFFFF" stroke="#000000" stroke-width="0.8"/>
+<text x="870.0" y="32" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" font-style="normal" text-anchor="middle">Mutated query Q<tspan baseline-shift="sub" font-size="12.24">2</tspan></text>
+<line x1="748" y1="46" x2="992" y2="46" stroke="#000000" stroke-width="0.7"/>
+<line x1="748" y1="263" x2="992" y2="263" stroke="#000000" stroke-width="0.7"/>
+<g id="algorithm2-handoff" aria-label="Graph information passed into skeleton population">
+<text x="315" y="36" fill="#000000" font-family="Times New Roman, Times, serif" font-size="19" font-weight="400" font-style="italic" text-anchor="middle">(G, I)</text>
+<line x1="315" y1="50" x2="315" y2="91" stroke="#000000" stroke-width="1.1" marker-end="url(#algorithm2-black)"/>
+</g>
+<g id="algorithm2-short-circuit" aria-label="S7: placeholder population and reference substitution">
+<text x="20" y="70" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="15.5" font-weight="700" font-style="normal" text-anchor="start">S7 · Short-circuit pattern</text>
+<line x1="130" y1="133" x2="60" y2="170" stroke="#000000" stroke-width="1.05"/>
+<line x1="130" y1="133" x2="130" y2="167" stroke="#000000" stroke-width="1.05"/>
+<line x1="130" y1="133" x2="197" y2="165" stroke="#000000" stroke-width="1.05"/>
+<rect x="75" y="106" width="110" height="27" rx="2" fill="#FFFFFF" stroke="#000000" stroke-width="1.1"/>
+<text x="130" y="124" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15.5" font-weight="400" font-style="normal" text-anchor="middle">coalesce</text>
+<rect x="36" y="170" width="48" height="28" rx="2" fill="#FFFFFF" stroke="#000000" stroke-width="1.1"/>
+<text x="60" y="189" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">NULL</text>
+<circle cx="130" cy="184" r="17" fill="#FFFFFF" stroke="#000000" stroke-width="1.25" stroke-dasharray="3 3"/>
+<text x="130" y="190" fill="#000000" font-family="Times New Roman, Times, serif" font-size="20" font-weight="400" font-style="italic" text-anchor="middle">L</text>
+<circle cx="197" cy="184" r="19" fill="#FFFFFF" stroke="#000000" stroke-width="1.25" stroke-dasharray="3 3"/>
+<text x="197" y="190" fill="#000000" font-family="Times New Roman, Times, serif" font-size="19" font-weight="400" font-style="italic" text-anchor="middle">E<tspan baseline-shift="sub" font-size="13.68">H</tspan></text>
+<line x1="500" y1="133" x2="418" y2="170" stroke="#000000" stroke-width="1.05"/>
+<line x1="500" y1="133" x2="488" y2="167" stroke="#000000" stroke-width="1.05"/>
+<line x1="500" y1="133" x2="565" y2="162" stroke="#000000" stroke-width="1.05"/>
+<rect x="445" y="106" width="110" height="27" rx="2" fill="#FFFFFF" stroke="#000000" stroke-width="1.1"/>
+<text x="500" y="124" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15.5" font-weight="400" font-style="normal" text-anchor="middle">coalesce</text>
+<rect x="394" y="170" width="48" height="28" rx="2" fill="#FFFFFF" stroke="#000000" stroke-width="1.1"/>
+<text x="418" y="189" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">NULL</text>
+<circle cx="488" cy="184" r="17" fill="#FFFFFF" stroke="#B32025" stroke-width="1.25"/>
+<text x="488" y="190" fill="#B32025" font-family="Times New Roman, Times, serif" font-size="20" font-weight="400" font-style="italic" text-anchor="middle">0</text>
+<rect x="518" y="162" width="94" height="46" rx="2" fill="#FFFFFF" stroke="#B32025" stroke-width="1.1"/>
+<text x="565" y="181" fill="#000000" font-family="Courier New, Courier, monospace" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">COUNT {…}</text>
+<text x="565" y="200" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">:HIGH</text>
+<line x1="870" y1="133" x2="788" y2="170" stroke="#000000" stroke-width="1.05"/>
+<line x1="870" y1="133" x2="858" y2="167" stroke="#000000" stroke-width="1.05"/>
+<line x1="870" y1="133" x2="935" y2="162" stroke="#000000" stroke-width="1.05"/>
+<rect x="815" y="106" width="110" height="27" rx="2" fill="#FFFFFF" stroke="#000000" stroke-width="1.1"/>
+<text x="870" y="124" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15.5" font-weight="400" font-style="normal" text-anchor="middle">coalesce</text>
+<rect x="764" y="170" width="48" height="28" rx="2" fill="#FFFFFF" stroke="#000000" stroke-width="1.1"/>
+<text x="788" y="189" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">NULL</text>
+<circle cx="858" cy="184" r="17" fill="#FFFFFF" stroke="#000000" stroke-width="1.25"/>
+<text x="858" y="190" fill="#000000" font-family="Times New Roman, Times, serif" font-size="20" font-weight="400" font-style="italic" text-anchor="middle">0</text>
+<rect x="888" y="162" width="94" height="46" rx="2" fill="#FFFFFF" stroke="#000000" stroke-width="1.1"/>
+<text x="935" y="181" fill="#000000" font-family="Courier New, Courier, monospace" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">COUNT {…}</text>
+<text x="935" y="200" fill="#B32025" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">:REF</text>
+<line x1="917" y1="203" x2="953" y2="203" stroke="#B32025" stroke-width="1"/>
+<line x1="265" y1="150" x2="365" y2="150" stroke="#000000" stroke-width="1.35" marker-end="url(#algorithm2-black)"/>
+<text x="315.0" y="117" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">Skeleton</text>
+<text x="315.0" y="134" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">population</text>
+<text x="315.0" y="175" fill="#000000" font-family="Times New Roman, Times, serif" font-size="18" font-weight="400" font-style="italic" text-anchor="middle">β</text>
+<line x1="635" y1="150" x2="735" y2="150" stroke="#000000" stroke-width="1.35" marker-end="url(#algorithm2-black)"/>
+<text x="685.0" y="117" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">Reference</text>
+<text x="685.0" y="134" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">substitution</text>
+<text x="685.0" y="175" fill="#000000" font-family="Times New Roman, Times, serif" font-size="18" font-weight="400" font-style="italic" text-anchor="middle">H ↦ R</text>
+<text x="130" y="234" fill="#000000" font-family="Times New Roman, Times, serif" font-size="17.5" font-weight="400" font-style="italic" text-anchor="middle">L ≠ NULL</text>
+<text x="500" y="234" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">value = 0</text>
+<text x="870" y="234" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">value = 0</text>
+</g>
+<g id="algorithm2-symmetry" aria-label="P1: local endpoint mirroring preserves variable constraints">
+<text x="20" y="288" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="15.5" font-weight="700" font-style="normal" text-anchor="start">P1 · Symmetry pattern</text>
+<line x1="90" y1="345" x2="170" y2="345" stroke="#000000" stroke-width="1.2"/>
+<text x="130" y="332" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">T</text>
+<circle cx="73" cy="345" r="17" fill="#FFFFFF" stroke="#000000" stroke-width="1.25" stroke-dasharray="3 3"/>
+<text x="73" y="351" fill="#000000" font-family="Times New Roman, Times, serif" font-size="20" font-weight="400" font-style="italic" text-anchor="middle">L</text>
+<circle cx="187" cy="345" r="17" fill="#FFFFFF" stroke="#000000" stroke-width="1.25" stroke-dasharray="3 3"/>
+<text x="187" y="351" fill="#000000" font-family="Times New Roman, Times, serif" font-size="20" font-weight="400" font-style="italic" text-anchor="middle">H</text>
+<line x1="460" y1="345" x2="540" y2="345" stroke="#000000" stroke-width="1.2"/>
+<text x="500" y="332" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">T</text>
+<circle cx="443" cy="345" r="17" fill="#FFFFFF" stroke="#B32025" stroke-width="1.25"/>
+<text x="443" y="351" fill="#B32025" font-family="Times New Roman, Times, serif" font-size="20" font-weight="400" font-style="italic" text-anchor="middle">u</text>
+<text x="443" y="382" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">:Low</text>
+<text x="443" y="400" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">{id:1}</text>
+<circle cx="557" cy="345" r="17" fill="#FFFFFF" stroke="#B32025" stroke-width="1.25"/>
+<text x="557" y="351" fill="#B32025" font-family="Times New Roman, Times, serif" font-size="20" font-weight="400" font-style="italic" text-anchor="middle">v</text>
+<text x="557" y="382" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">:High</text>
+<text x="500" y="429" fill="#000000" font-family="Courier New, Courier, monospace" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">RETURN u.uid, v.uid</text>
+<line x1="830" y1="345" x2="910" y2="345" stroke="#000000" stroke-width="1.2"/>
+<text x="870" y="332" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">T</text>
+<circle cx="813" cy="345" r="17" fill="#FFFFFF" stroke="#B32025" stroke-width="1.25"/>
+<text x="813" y="351" fill="#B32025" font-family="Times New Roman, Times, serif" font-size="20" font-weight="400" font-style="italic" text-anchor="middle">v</text>
+<text x="813" y="382" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">:High</text>
+<circle cx="927" cy="345" r="17" fill="#FFFFFF" stroke="#B32025" stroke-width="1.25"/>
+<text x="927" y="351" fill="#B32025" font-family="Times New Roman, Times, serif" font-size="20" font-weight="400" font-style="italic" text-anchor="middle">u</text>
+<text x="927" y="382" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">:Low</text>
+<text x="927" y="400" fill="#000000" font-family="Courier New, Courier, monospace" font-size="15" font-weight="400" font-style="normal" text-anchor="middle">{id:1}</text>
+<text x="870" y="429" fill="#000000" font-family="Courier New, Courier, monospace" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">RETURN u.uid, v.uid</text>
+<line x1="265" y1="345" x2="365" y2="345" stroke="#000000" stroke-width="1.35" marker-end="url(#algorithm2-black)"/>
+<text x="315.0" y="312" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">Skeleton</text>
+<text x="315.0" y="329" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">population</text>
+<text x="315.0" y="370" fill="#000000" font-family="Times New Roman, Times, serif" font-size="18" font-weight="400" font-style="italic" text-anchor="middle">β</text>
+<line x1="635" y1="345" x2="735" y2="345" stroke="#000000" stroke-width="1.35" marker-end="url(#algorithm2-black)"/>
+<text x="685.0" y="312" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">Symmetry</text>
+<text x="685.0" y="329" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">transformation</text>
+<text x="130" y="429" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14.5" font-weight="400" font-style="normal" text-anchor="middle">Dashed nodes: placeholders</text>
+</g>
+</svg>

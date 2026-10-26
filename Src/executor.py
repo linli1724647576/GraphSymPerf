@@ -65,10 +65,13 @@ def supported_patterns(config):
     """Conservative syntax coverage; a server can still reject a newer feature."""
     name = config.get("dbms", "neo4j").lower()
     language = config.get("language", "cypher")
-    if language == "gremlin" and name in {"janusgraph", "hugegraph"}:
+    if language == "gremlin" and name in {"janusgraph", "hugegraph", "arcadedb"}:
         patterns = {f"P{i}" for i in range(1, 16)} - {"P3", "P7", "P13"}
         if name == "hugegraph":
             patterns -= {"P12"}
+        patterns |= {f"S{i}" for i in range(1, 11)}
+        if name != "arcadedb":
+            patterns |= {"P3", "P13", "P16"}
         return patterns
     if language != "cypher":
         return set()
@@ -88,6 +91,8 @@ def supported_patterns(config):
 
 def make_database(config, settings):
     name = config.get("dbms", "neo4j").lower()
+    if name == "arcadedb" and config.get("language", "cypher") == "gremlin":
+        return ArcadeDBGremlin(config, settings)
     adapters = {"neo4j": Neo4j, "memgraph": Memgraph, "falkordb": FalkorDB,
                 "arcadedb": ArcadeDB, "age": ApacheAGE, "ladybug": LadybugDB,
                 "janusgraph": JanusGraph, "hugegraph": ApacheHugeGraph}
@@ -142,10 +147,28 @@ def validate_read_query(query, *, schema_check=False):
     if not isinstance(query, str) or not query.strip():
         raise ValueError("read query must be non-empty text")
     code = _IGNORED.sub(" ", query).strip().rstrip(";").strip()
-    if re.match(r"^CYPHER\s+25\s+WHEN\b", code, re.I):
-        code = re.sub(r"^CYPHER\s+25\s+", "", code, count=1, flags=re.I)
-        if ";" in code or _FORBIDDEN.search(code):
-            raise ValueError("conditional query must remain read-only")
+    if re.search(r"\bCALL\b", code, re.I):
+        # Only the parser's generated, scoped row-stream wrappers are admitted.
+        # Procedure calls and writes have no representation in that grammar.
+        from query import parse_query
+        from ir import requirements
+        try:
+            tree = parse_query(query)
+            if not requirements(tree) & {"row_limit", "recursive_row_stream", "call_scope"}:
+                raise ValueError("CALL is not a supported row-stream wrapper")
+        except ValueError as exc:
+            raise ValueError("query is outside the supported read-only row-stream fragment") from exc
+        return
+    if re.match(r"^CYPHER\s+25\b", code, re.I):
+        # WHEN may occur inside COUNT/EXISTS rather than at the query root.
+        # The prefix is valid only for the fully parsed, typed read fragment.
+        from query import parse_query
+        from ir import requirements
+        try:
+            if "conditional_query" not in requirements(parse_query(query)):
+                raise ValueError("CYPHER 25 requires a supported conditional row stream")
+        except ValueError as exc:
+            raise ValueError("query is outside the supported conditional read-only fragment") from exc
         return
     if schema_check and re.match(r"^SHOW\s+INDEXES\b", code, re.I):
         code = re.sub(r"^SHOW\s+INDEXES\b", "RETURN", code, count=1, flags=re.I)
@@ -739,6 +762,8 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
         if case.get("graph_spec"):
             from state import GraphSpec
             spec = GraphSpec.from_dict(case["graph_spec"])
+            if spec.version == 2 and database.get("dbms", "neo4j") != "neo4j":
+                raise CaseFailure("unsupported_feature", "explicit_state_loading_not_verified_for_target")
             if (case.get("state_checks", spec.state_checks()) != spec.state_checks()
                     or case.get("index_requirements", spec.indexes) != spec.indexes):
                 raise CaseFailure("invalid_case", "graph_recipe_and_cost_metadata_differ")
@@ -781,7 +806,7 @@ def run_case(case: dict, database: dict, measurement: dict | None = None, *, sta
         report["database_version"] = getattr(db, "version", "unknown")
         if hasattr(db, "server_result_limit"):
             report["server_resultset_size"] = db.server_result_limit
-        if case.get("required_cypher") == 25:
+        if not traversal_mode and case.get("required_cypher") == 25:
             try:
                 db.execute("CYPHER 25 RETURN 1 AS supported", {}, settings["timeout_seconds"])
             except CaseFailure as exc:
@@ -1005,6 +1030,8 @@ def _cypher_data(value):
 class ArcadeDB:
     """Native HTTP Cypher reads and typed JSONL graph loading."""
 
+    _connection_probe = "RETURN 1 AS connected"
+
     def __init__(self, config, settings):
         self.database, self.settings = _target_name(config), settings
         self.uri = config["uri"].rstrip("/")
@@ -1023,7 +1050,7 @@ class ArcadeDB:
             if not isinstance(info.get("version"), str) or not info["version"]:
                 raise CaseFailure("environment_error", "arcadedb_version_unavailable", stop_target=True)
             self.version = "ArcadeDB/" + info["version"]
-            probe = self.execute("RETURN 1 AS connected", {}, settings["timeout_seconds"])
+            probe = self.execute(self._connection_probe, {}, settings["timeout_seconds"])
             if not probe["complete"] or probe["rows"] != [{"connected": 1}]:
                 raise CaseFailure("environment_error", "arcadedb_connection_probe_failed", stop_target=True)
         except Exception:
@@ -1121,7 +1148,7 @@ class ArcadeDB:
 
     def health(self):
         try:
-            result = self.execute("RETURN 1 AS connected", {}, self.settings["timeout_seconds"])
+            result = self.execute(self._connection_probe, {}, self.settings["timeout_seconds"])
             return result["complete"] and result["rows"] == [{"connected": 1}]
         except Exception:
             return False
@@ -1200,6 +1227,81 @@ class ArcadeDB:
 
     def close(self):
         self._connection.close()
+
+
+class ArcadeDBGremlin(ArcadeDB):
+    """Gremlin over ArcadeDB's native HTTP API, with its SQL/JSONL loader.
+
+    The server selects the Gremlin engine. No Groovy fallback, terminal
+    toList(), GraphSON envelope, or client-side binding substitution is used.
+    """
+
+    _connection_probe = "g.inject(1).project('connected').by(__.identity())"
+    query_engine = "Gremlin native HTTP (server-selected engine)"
+
+    def _query(self, text, parameters, timeout, *, language="gremlin", command=False):
+        return super()._query(text, parameters, timeout, language=language, command=command)
+
+    def execute(self, query, parameters, timeout):
+        result = self._query(query, parameters, timeout)
+        rows = result.get("result")
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise CaseFailure("incomplete_result", "arcadedb_invalid_result_rows")
+        if "truncated" in result and type(result["truncated"]) is not bool:
+            raise CaseFailure("incomplete_result", "arcadedb_invalid_truncation_flag")
+        if "returned" in result and (type(result["returned"]) is not int or result["returned"] != len(rows)):
+            raise CaseFailure("incomplete_result", "arcadedb_returned_count_mismatch")
+        if "limit" in result:
+            limit = result["limit"]
+            if type(limit) is not int:
+                raise CaseFailure("incomplete_result", "arcadedb_invalid_result_cap")
+            if 0 < limit < self.settings["max_rows"] + 1:
+                raise CaseFailure("configuration_error", "arcadedb_server_result_cap_too_small", stop_target=True)
+        # Generated traversals return flat projected maps. Reject values that
+        # cannot participate in the same typed-bag proof as other backends.
+        typed_bag(rows)
+        complete = len(rows) <= self.settings["max_rows"] and result.get("truncated") is not True
+        return {"rows": rows[:self.settings["max_rows"]], "complete": complete,
+                "elapsed_ms": result["_client_elapsed_ms"]}
+
+    def explain(self, query, parameters, analyze=True):
+        if analyze:
+            # The native detailed profiler instruments this traversal and
+            # returns GremlinExecutionPlan with original metric names/units.
+            # It is a separate request from every timed ordinary execution.
+            result = self._request(f"/api/v1/query/{quote(self.database, safe='')}", {
+                "language": "gremlin", "command": query, "params": parameters,
+                "limit": self.settings["max_rows"] + 1, "serializer": "record",
+                "profileExecution": "detailed"}, self.settings["timeout_seconds"])
+            fields = {key: result[key] for key in ("explain", "explainPlan") if result.get(key)}
+            if not fields:
+                raise CaseFailure("unsupported_feature", "arcadedb_gremlin_execution_plan_unavailable")
+            rows = result.get("result")
+            if (not isinstance(rows, list) or result.get("truncated")
+                    or len(rows) > self.settings["max_rows"]):
+                raise CaseFailure("incomplete_result", "arcadedb_gremlin_profile_truncated")
+        else:
+            # explain() returns a TraversalExplanation, not a traversal. The
+            # query endpoint's idempotence parser requires a traversal; the
+            # command endpoint is needed for this read-only terminal result.
+            result = self._query(query + ".explain()", parameters, self.settings["timeout_seconds"], command=True)
+            rows = result.get("result")
+            if (not isinstance(rows, list) or len(rows) != 1
+                    or not isinstance(rows[0], dict) or not rows[0].get("result")):
+                raise CaseFailure("unsupported_feature", "arcadedb_gremlin_execution_plan_unavailable")
+            fields = {"result": rows}
+        return {"format": "arcadedb_gremlin_native", "analyze": analyze, "plan": fields}
+
+    def check_state(self, state):
+        spec = _recipe(state)
+        checks = []
+        for number, check in enumerate(_gremlin_state_checks(spec.state_checks(), lambda_free=True)):
+            actual = self.execute(check["query"], {}, self.settings["timeout_seconds"])
+            if not actual["complete"] or typed_bag(actual["rows"]) != typed_bag(check["expected_rows"]):
+                raise CaseFailure("cost_check_failed", f"arcadedb_gremlin_structured_cost_check_{number}")
+            checks.append({"query": check["query"], "rows": actual["rows"]})
+        return {"indexes": self._check_indexes(spec), "checks": checks,
+                "preparation": "fresh_schema_and_native_indexes"}
 
 
 
@@ -1716,23 +1818,32 @@ def _g_literal(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False)
 
 
-def _g_properties(prefix, properties):
+def _g_properties(prefix, properties, *, target="tinkergraph"):
+    from languages import gremlin_property_key
     for key, value in properties.items():
         _native_identifier(key)
+        key = gremlin_property_key(key, target)
         prefix += (f".hasNot({_g_literal(key)})" if value is None else
                    f".has({_g_literal(key)}, {_g_literal(value)})")
     return prefix
 
 
-def _gremlin_state_checks(checks, *, scan_edges=False):
+def _gremlin_state_checks(checks, *, scan_edges=False, lambda_free=False, edge_label_groups=None,
+                          target="tinkergraph"):
     """Render the finite structural vocabulary directly as Gremlin."""
     result = []
+    from languages import gremlin_property_key
+    def property_key(key):
+        return _g_literal(gremlin_property_key(key, target))
     def edge_start(label):
         if scan_edges:
             # HugeGraph's label index materializes batches of edge IDs and
             # serializes the full IdQuery as an off-heap cache key. The key
             # has a 16 KiB limit. Untimed population checks can scan instead,
             # keeping experiment traversals and physical indexes unchanged.
+            if edge_label_groups and label in edge_label_groups:
+                labels = _g_literal(edge_label_groups[label])
+                return f"g.E().filter{{ t -> {labels}.contains(t.get().label()) }}"
             return f"g.E().filter{{ t -> t.get().label() == {_g_literal(label)} }}"
         return f"g.E().hasLabel({_g_literal(label)})"
 
@@ -1745,14 +1856,14 @@ def _gremlin_state_checks(checks, *, scan_edges=False):
             query = "g.V()"
             for label in check["labels"]:
                 query += f".hasLabel({_g_literal(label)})"
-            count_query(_g_properties(query, check["properties"]), check["expected"])
+            count_query(_g_properties(query, check["properties"], target=target), check["expected"])
         elif kind == "edge_count":
             query = edge_start(check["type"])
             for side, step in (("source", "outV"), ("target", "inV")):
                 condition = f"__.{step}()"
                 if check.get(side + "_label"):
                     condition += f".hasLabel({_g_literal(check[side + '_label'])})"
-                condition = _g_properties(condition, check.get(side + "_properties", {}))
+                condition = _g_properties(condition, check.get(side + "_properties", {}), target=target)
                 if condition != f"__.{step}()":
                     query += f".filter({condition})"
             count_query(query, check["expected"])
@@ -1761,30 +1872,43 @@ def _gremlin_state_checks(checks, *, scan_edges=False):
             keys = list(check["properties"])
             query += ".project(" + ", ".join(_g_literal(key) for key in keys) + ")"
             for key in keys:
-                query += f".by(__.coalesce(__.values({_g_literal(key)}), __.constant(null)))"
+                query += f".by(__.coalesce(__.values({property_key(key)}), __.constant(null)))"
             result.append({"query": query, "expected_rows": [check["properties"]]})
         elif kind == "distinct_values":
             query = (f"g.V().hasLabel({_g_literal(check['label'])})" if "label" in check else
                      edge_start(check["type"]))
-            count_query(query + f".values({_g_literal(check['property'])}).dedup()", check["expected"])
+            count_query(query + f".values({property_key(check['property'])}).dedup()", check["expected"])
         elif kind == "inverse_edges":
-            key = _g_literal(check["pair_key"])
-            query = (edge_start(check["forward"]) + ".filter{ t -> def f=t.get(); "
-                     f"g.V(f.inVertex().id()).outE({_g_literal(check['reverse'])})"
-                     ".filter{ b -> b.get().inVertex().id() == f.outVertex().id() }"
-                     f".has({key}, f.value({key})).count().next() != 1 }}")
+            key = property_key(check["pair_key"])
+            if lambda_free:
+                query = (edge_start(check["forward"]) + '.as("_gsp_check_edge").outV().as("_gsp_check_source")'
+                         f'.select("_gsp_check_edge").values({key}).as("_gsp_check_pair")'
+                         '.select("_gsp_check_edge").inV()'
+                         f'.filter(__.outE({_g_literal(check["reverse"])})'
+                         f'.filter(__.values({key}).where(P.eq("_gsp_check_pair")))'
+                         '.inV().where(P.eq("_gsp_check_source")).count().is(P.neq(1)))')
+            else:
+                query = (edge_start(check["forward"]) + ".filter{ t -> def f=t.get(); "
+                         f"g.V(f.inVertex().id()).outE({_g_literal(check['reverse'])})"
+                         ".filter{ b -> b.get().inVertex().id() == f.outVertex().id() }"
+                         f".has({key}, f.value({key})).count().next() != 1 }}")
             count_query(query, check["expected"])
         elif kind == "reference_edges":
             for first, second, guarded in ((check["reference"], check["original"], False),
                                            (check["original"], check["reference"], True)):
                 source = f"__.outV().hasLabel({_g_literal(check['source_label'])})"
                 if guarded:
-                    source += (f".has({_g_literal(check['guard_property'])}, true)" if check["guard_value"] else
-                               f".not(__.has({_g_literal(check['guard_property'])}, true))")
+                    source += (f".has({property_key(check['guard_property'])}, true)" if check["guard_value"] else
+                               f".not(__.has({property_key(check['guard_property'])}, true))")
                 query = (edge_start(first) + f".filter({source})"
-                         f".filter(__.inV().hasLabel({_g_literal(check['target_label'])}))"
-                         f".filter{{ t -> def e=t.get(); g.V(e.outVertex().id()).outE({_g_literal(second)})"
-                         ".filter{ other -> other.get().inVertex().id() == e.inVertex().id() }.count().next() == 0 }")
+                         f".filter(__.inV().hasLabel({_g_literal(check['target_label'])}))")
+                if lambda_free:
+                    query += ('.as("_gsp_check_edge").inV().as("_gsp_check_target")'
+                              '.select("_gsp_check_edge").outV()'
+                              f'.not(__.outE({_g_literal(second)}).inV().where(P.eq("_gsp_check_target")))')
+                else:
+                    query += (f".filter{{ t -> def e=t.get(); g.V(e.outVertex().id()).outE({_g_literal(second)})"
+                              ".filter{ other -> other.get().inVertex().id() == e.inVertex().id() }.count().next() == 0 }")
                 count_query(query, check["expected"])
         elif kind == "literal":
             result.append({"query": f"g.inject({_g_literal(check['value'])}).project(\"value\").by(__.identity())",
@@ -1797,6 +1921,7 @@ def _gremlin_state_checks(checks, *, scan_edges=False):
 class GremlinHTTP:
     """One persistent HTTP connection; generated traversal results only."""
     backend = "gremlin"
+    property_target = "tinkergraph"
     mime = "application/vnd.gremlin-v3.0+json"
 
     def __init__(self, config, settings):
@@ -1857,8 +1982,14 @@ class GremlinHTTP:
                 if code == 598 or re.search(r"timed? ?out|timeout", message, re.I):
                     raise CaseFailure("timeout", f"{self.backend}_server_timeout", stop_target=True,
                                       details={"cancellation_verified": False, "elapsed_lower_bound_ms": None})
+                # HugeGraph 1.7.0 rejects this native property query instead
+                # of scanning when no matching secondary index exists. Keep
+                # the query/indexes intact and report that input's boundary.
+                unindexed_property = (self.backend == "ApacheHugeGraph" and re.fullmatch(
+                    r"Don't accept query based on properties \[[^\]\r\n]+\] that are not indexed "
+                    r"in label '[^'\r\n]+', may not match secondary condition", message))
                 category = "configuration_error" if response.status in (401, 403) or code in (401, 403) else (
-                    "unsupported_feature" if re.search(r"syntax|not supported|unsupported|No signature|unable to resolve class", message, re.I)
+                    "unsupported_feature" if unindexed_property or re.search(r"syntax|not supported|unsupported|No signature|unable to resolve class", message, re.I)
                     else "query_error")
                 raise CaseFailure(category, f"{self.backend}_server_{code or response.status}",
                                   stop_target=category == "configuration_error", details={"server_message": message})
@@ -1902,7 +2033,8 @@ class GremlinHTTP:
 
     def explain(self, query, parameters, *, analyze=False):
         suffix = ".profile().next()" if analyze else ".explain()"
-        envelope, _ = self._request(f"({query}){suffix}", parameters, self.settings["timeout_seconds"])
+        bounded = f"({query}).limit({self.settings['max_rows'] + 1})"
+        envelope, _ = self._request(f"{bounded}{suffix}", parameters, self.settings["timeout_seconds"])
         if not envelope.get("result", {}).get("data"):
             raise CaseFailure("unsupported_feature", "gremlin_execution_plan_unavailable")
         # Preserve native GraphSON metrics and units, not Cypher DB Hits.
@@ -1953,7 +2085,7 @@ class GremlinHTTP:
     def check_state(self, case):
         spec = self._recipe(case)
         checks = []
-        for number, check in enumerate(_gremlin_state_checks(spec.state_checks())):
+        for number, check in enumerate(_gremlin_state_checks(spec.state_checks(), target=self.property_target)):
             actual = self.execute(check["query"], {}, self.settings["timeout_seconds"])
             if not actual["complete"] or typed_bag(actual["rows"]) != typed_bag(check["expected_rows"]):
                 raise CaseFailure("cost_check_failed", f"gremlin_structured_cost_check_{number}")
@@ -1968,15 +2100,20 @@ class GremlinHTTP:
 
 class JanusGraph(GremlinHTTP):
     backend = "JanusGraph"
+    property_target = "janusgraph"
 
     def _version_script(self):
         return "org.janusgraph.graphdb.configuration.JanusGraphConstants.VERSION"
 
     def _prepare_schema(self, spec):
+        from languages import gremlin_property_key
         schema = spec.schema()
         keys = {"_gsp_identity": "string"}
         for entry in schema["nodes"] + schema["relationships"]:
             keys.update(entry["properties"])
+        self.property_name_mapping = {key: gremlin_property_key(key, self.property_target) for key in keys
+                                      if gremlin_property_key(key, self.property_target) != key}
+        keys = {gremlin_property_key(key, self.property_target): kind for key, kind in keys.items()}
         indexes = [{"name": "gsp_internal_identity", "property": "_gsp_identity"}] + [
             {**index, "name": index["name"] + "_" + index["label"] + "_" + index["property"]} for index in spec.indexes]
         statements = ["_gsp_graph.tx().rollback(); def m=_gsp_graph.openManagement()"]
@@ -1992,7 +2129,7 @@ class JanusGraph(GremlinHTTP):
             statements.append(f"if(m.getEdgeLabel({label})==null) m.makeEdgeLabel({label}).multiplicity(org.janusgraph.core.Multiplicity.MULTI).make()")
         for index in indexes:
             builder = (f"m.buildIndex({_g_literal(index['name'])}, org.apache.tinkerpop.gremlin.structure.Vertex.class)"
-                       f".addKey(m.getPropertyKey({_g_literal(index['property'])}))")
+                       f".addKey(m.getPropertyKey({_g_literal(gremlin_property_key(index['property'], self.property_target))}))")
             if index.get("label"):
                 builder += f".indexOnly(m.getVertexLabel({_g_literal(index['label'])}))"
             else:
@@ -2014,29 +2151,49 @@ class JanusGraph(GremlinHTTP):
                          "if(i.getFieldKeys().any{ i.getIndexStatus(it)!=org.janusgraph.core.schema.SchemaStatus.ENABLED }) "
                          "m.updateIndex(i, org.janusgraph.core.schema.SchemaAction.ENABLE_INDEX).get(); m.commit(); true")
 
+    def _property_key_script(self):
+        from languages import JANUSGRAPH_PROPERTY_PREFIX, JANUSGRAPH_RESERVED_PROPERTY_NAMES
+        prefix = _g_literal(JANUSGRAPH_PROPERTY_PREFIX)
+        reserved = _g_literal(sorted(JANUSGRAPH_RESERVED_PROPERTY_NAMES))
+        return (f"def gsp_property_key = {{ k -> {reserved}.contains(k.toLowerCase(java.util.Locale.ROOT)) "
+                f"|| k.startsWith({prefix}) ? {prefix}+k : k }}; ")
+
     def _vertex_script(self):
-        return ("gsp_rows.each{ r -> def v=g.addV(r.labels[0]).property('_gsp_identity', r.labels[0]+':'+r.uid).next(); "
-                "r.properties.each{ k,x -> if(x!=null) v.property(k, x instanceof Number ? x.longValue() : x) } }; gsp_rows.size()")
+        return (self._property_key_script() +
+                "gsp_rows.each{ r -> def v=g.addV(r.labels[0]).property('_gsp_identity', r.labels[0]+':'+r.uid).next(); "
+                "r.properties.each{ k,x -> if(x!=null) v.property(gsp_property_key(k), x instanceof Number ? x.longValue() : x) } }; gsp_rows.size()")
 
     def _edge_script(self):
-        return ("gsp_rows.each{ r -> def a=g.V().has('_gsp_identity', r.source_label+':'+r.source).next(); "
+        return (self._property_key_script() +
+                "gsp_rows.each{ r -> def a=g.V().has('_gsp_identity', r.source_label+':'+r.source).next(); "
                 "def b=g.V().has('_gsp_identity', r.target_label+':'+r.target).next(); def e=a.addEdge(r.type,b); "
-                "r.properties.each{ k,x -> if(x!=null) e.property(k, x instanceof Number ? x.longValue() : x) } }; gsp_rows.size()")
+                "r.properties.each{ k,x -> if(x!=null) e.property(gsp_property_key(k), x instanceof Number ? x.longValue() : x) } }; gsp_rows.size()")
 
     def _check_indexes(self, spec):
+        from languages import gremlin_property_key
         evidence = []
         for index in spec.indexes:
+            physical_key = gremlin_property_key(index["property"], self.property_target)
             name = index["name"] + "_" + index["label"] + "_" + index["property"]
             values, _ = self._script(
                 f"_gsp_graph.tx().rollback(); def m=_gsp_graph.openManagement(); def i=m.getGraphIndex({_g_literal(name)}); "
                 "def r=i==null ? null : [name:i.name(), keys:i.getFieldKeys().collect{it.name()}, "
                 "state:i.getFieldKeys().collect{i.getIndexStatus(it).toString()}, "
                 "label:i.getSchemaTypeConstraint()==null ? null : i.getSchemaTypeConstraint().name(), composite:i.isCompositeIndex()]; m.rollback(); [r]")
-            if (len(values) != 1 or not isinstance(values[0], dict) or values[0].get("keys") != [index["property"]]
+            if (len(values) != 1 or not isinstance(values[0], dict) or values[0].get("keys") != [physical_key]
                     or values[0].get("label") != index["label"] or values[0].get("state") != ["ENABLED"]
                     or values[0].get("composite") is not True):
                 raise CaseFailure("cost_check_failed", "janusgraph_cost_index_not_enabled")
-            evidence.append({"kind": "label_scoped_composite", **values[0]})
+            entry = {"kind": "label_scoped_composite", **values[0]}
+            if physical_key != index["property"]:
+                entry.update(logical_property=index["property"], physical_property=physical_key)
+            evidence.append(entry)
+        return evidence
+
+    def check_state(self, case):
+        evidence = super().check_state(case)
+        if getattr(self, "property_name_mapping", None):
+            evidence["property_name_mapping"] = self.property_name_mapping.copy()
         return evidence
 
 
@@ -2049,23 +2206,131 @@ class ApacheHugeGraph(GremlinHTTP):
     def _version_script(self):
         return "org.apache.hugegraph.version.CoreVersion.VERSION.toString()"
 
+    def _reset(self):
+        # HugeGraph 1.7.0's RocksDB schema serializer does not persist parent /
+        # sublabel metadata. After restart an edge can be reconstructed with a
+        # different ID, making remove() silently target a nonexistent key. Do
+        # not repair metadata or keep deleting blindly: stop before mutation.
+        labels, _ = self._script(
+            "_gsp_graph.schema().getEdgeLabels().collect{e -> [name:e.name(), "
+            "type:e.edgeLabelType().toString(), parent:e.hasFather() ? _gsp_graph.edgeLabel(e.fatherId()).name() : null, "
+            "links:e.links().collect{p -> [source_label:_gsp_graph.vertexLabel(p.getLeft()).name(), "
+            "target_label:_gsp_graph.vertexLabel(p.getRight()).name()]}]}")
+        if (not isinstance(labels, list) or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
+                                              or not isinstance(row.get("links"), list) for row in labels)):
+            raise CaseFailure("environment_error", "hugegraph_reset_schema_invalid", stop_target=True)
+        by_name = {row["name"]: row for row in labels}
+        if len(by_name) != len(labels):
+            raise CaseFailure("environment_error", "hugegraph_reset_schema_invalid", stop_target=True)
+        for child in labels:
+            match = re.fullmatch(r"(GSP_[A-Za-z0-9_]+)__gsp_([a-f0-9]{16})", child["name"])
+            if not match:
+                continue
+            logical, suffix = match.groups()
+            parent = by_name.get(logical, {})
+            links = child["links"]
+            valid = (child.get("type") == "SUB" and child.get("parent") == logical
+                     and parent.get("type") == "PARENT" and len(links) == 1)
+            if valid:
+                endpoint = links[0]
+                valid = (isinstance(endpoint, dict) and set(endpoint) == {"source_label", "target_label"}
+                         and all(isinstance(value, str) for value in endpoint.values()))
+                if valid:
+                    expected = hashlib.sha256(json.dumps([logical, endpoint["source_label"], endpoint["target_label"]]).encode()).hexdigest()[:16]
+                    valid = suffix == expected and endpoint in parent["links"]
+            if not valid:
+                raise CaseFailure("environment_error", "hugegraph_parent_schema_persistence_loss", stop_target=True,
+                                  details={"physical_edge_label": child["name"], "logical_edge_label": logical,
+                                           "observed_child_schema": child, "observed_parent_schema": parent,
+                                           "recovery": "Use fresh dedicated storage; do not restart a JVM containing parent/sub edge labels."})
+        for kind in ("E", "V"):
+            try:
+                counts, _ = self._script(f"g.{kind}().count().next()")
+            except CaseFailure as failure:
+                failure.details.update(preparation_operation="reset_count", reset_element_kind=kind)
+                raise
+            if len(counts) != 1 or type(counts[0]) is not int or counts[0] < 0:
+                raise CaseFailure("environment_error", "hugegraph_reset_count_invalid", stop_target=True)
+            previous = []
+            # Match the loader's 250-row bound. The 30k-node preparation hit
+            # the unchanged 30 s request timeout with the previous 1000-row reset.
+            batch_size = 250
+            # With no concurrent writers, a complete batch deletion must drain
+            # this population within ceil(count/batch_size) batches plus an empty read.
+            for batch_index in range((counts[0] + batch_size - 1) // batch_size + 1):
+                try:
+                    values, _ = self._script(
+                        f"def batch=g.{kind}().limit({batch_size}).toList(); def ids=batch.collect{{it.id().toString()}}; "
+                        "def stalled=ids.any{gsp_previous_ids.contains(it)}; "
+                        "if(!stalled) batch.each{it.remove()}; [[ids:ids,stalled:stalled]]",
+                        {"gsp_previous_ids": previous})
+                except CaseFailure as failure:
+                    failure.details.update(preparation_operation="reset_batch_removal", reset_element_kind=kind,
+                                           reset_batch_index=batch_index, reset_batch_size=batch_size,
+                                           reset_initial_count=counts[0])
+                    raise
+                if (len(values) != 1 or not isinstance(values[0], dict) or set(values[0]) != {"ids", "stalled"}
+                        or type(values[0]["stalled"]) is not bool or not isinstance(values[0]["ids"], list)
+                        or len(values[0]["ids"]) > batch_size or any(type(value) is not str for value in values[0]["ids"])
+                        or len(set(values[0]["ids"])) != len(values[0]["ids"])):
+                    raise CaseFailure("environment_error", "hugegraph_reset_batch_invalid", stop_target=True)
+                ids = values[0]["ids"]
+                if values[0]["stalled"] or set(ids).intersection(previous):
+                    raise CaseFailure("environment_error", "hugegraph_reset_no_progress", stop_target=True,
+                                      details={"reset_element_kind": kind, "repeated_id_sample": ids[:3]})
+                if not ids:
+                    break
+                previous = ids
+            else:
+                raise CaseFailure("environment_error", "hugegraph_reset_batch_budget_exceeded", stop_target=True,
+                                  details={"reset_element_kind": kind, "initial_count": counts[0]})
+
     def _recipe(self, case):
         spec = super()._recipe(case)
-        if any(len(edge["endpoints"]) != 1 for edge in spec.schema()["relationships"]):
-            # HugeGraph's ordinary edge label has one source/target label pair.
-            # Parent/subtype encoding would alter the logical relation labels.
+        if spec.pattern != "P3" and any(len(edge["endpoints"]) != 1 for edge in spec.schema()["relationships"]):
             raise CaseFailure("unsupported_feature", "hugegraph_multi_endpoint_relationship_type")
         return spec
 
+    @staticmethod
+    def _parent_edge_labels(spec):
+        """P3 alone uses native parent labels; edge label projection is not supported.
+
+        The GraphSpec and timed traversal retain the logical type. Only loading
+        and untimed state checks observe physical endpoint-specific sublabels.
+        """
+        relationships = spec.schema()["relationships"]
+        parents = {}
+        used = {edge["type"] for edge in relationships}
+        for edge in relationships:
+            if len(edge["endpoints"]) == 1:
+                continue
+            if getattr(spec, "pattern", None) != "P3" or not edge["endpoints"]:
+                raise CaseFailure("unsupported_feature", "hugegraph_multi_endpoint_relationship_type")
+            logical = _native_identifier(edge["type"])
+            children = []
+            for endpoint in sorted(edge["endpoints"], key=lambda item: (item["source_label"], item["target_label"])):
+                source, target = (_native_identifier(endpoint[key]) for key in ("source_label", "target_label"))
+                digest = hashlib.sha256(json.dumps([logical, source, target]).encode()).hexdigest()[:16]
+                physical = f"{logical}__gsp_{digest}"
+                if physical in used:
+                    raise CaseFailure("configuration_error", "hugegraph_physical_edge_label_collision")
+                used.add(physical)
+                children.append({"label": physical, "source_label": source, "target_label": target})
+            parents[logical] = children
+        return parents
+
     def _prepare_schema(self, spec):
         schema = spec.schema()
+        self._hugegraph_parent_edges = self._parent_edge_labels(spec)
         keys = {"_gsp_edge_ordinal": "integer"}
         for entry in schema["nodes"] + schema["relationships"]:
             keys.update(entry["properties"])
         # Only experiment labels/indexes are rebuilt; graph and server remain.
         # Emptying the graph does not permit mutating immutable edge endpoints.
         seconds = max(1, math.ceil(self.settings["timeout_seconds"]))
-        reset = ("def s=_gsp_graph.schema(); def names=s.getEdgeLabels().collect{it.name()}; "
+        reset = ("def s=_gsp_graph.schema(); def labels=s.getEdgeLabels(); "
+                 "def names=labels.findAll{ !it.isFather() }.collect{it.name()} + "
+                 "labels.findAll{ it.isFather() }.collect{it.name()}; "
                  "if(names.any{ !it.startsWith('GSP_') }) throw new IllegalStateException('unexpected edge schema'); "
                  "names.each{ n -> def id=s.edgeLabel(n).remove(); if(id!=null && "
                  f"!_gsp_graph.taskScheduler().waitUntilTaskCompleted(id,{seconds}).success()) "
@@ -2076,6 +2341,9 @@ class ApacheHugeGraph(GremlinHTTP):
                  "throw new IllegalStateException('index removal failed') }; true")
         self._script(reset)
         statements = ["def s=_gsp_graph.schema()"]
+        if self._hugegraph_parent_edges:
+            statements.append("if(!_gsp_graph.backendStoreFeatures().supportsFatherAndSubEdgeLabel()) "
+                              "throw new IllegalStateException('parent edge labels unsupported')")
         for key, kind in keys.items():
             statements.append(f"s.propertyKey({_g_literal(key)}).{ {'integer': 'asLong', 'boolean': 'asBoolean'}[kind] }().ifNotExist().create()")
         for node in schema["nodes"]:
@@ -2087,10 +2355,22 @@ class ApacheHugeGraph(GremlinHTTP):
         for edge in schema["relationships"]:
             label = _g_literal(edge["type"])
             args = ", ".join(_g_literal(key) for key in [*edge["properties"], "_gsp_edge_ordinal"])
-            endpoint = edge["endpoints"][0]
-            statements.append(f"s.edgeLabel({label}).link({_g_literal(endpoint['source_label'])}, "
-                              f"{_g_literal(endpoint['target_label'])}).multiTimes().properties({args})"
-                              ".sortKeys('_gsp_edge_ordinal').create()")
+            nullable = ", ".join(_g_literal(key) for key in edge["properties"] if key != "_gsp_edge_ordinal")
+            # Missing user properties represent NULL in the shared IR. Keep
+            # the native identity sort key mandatory on normal/parent/sub labels.
+            nullable = f".nullableKeys({nullable})" if nullable else ""
+            if edge["type"] in self._hugegraph_parent_edges:
+                statements.append(f"s.edgeLabel({label}).asBase().multiTimes().properties({args}){nullable}"
+                                  ".sortKeys('_gsp_edge_ordinal').create()")
+                for child in self._hugegraph_parent_edges[edge["type"]]:
+                    statements.append(f"s.edgeLabel({_g_literal(child['label'])}).withBase({label})"
+                                      f".link({_g_literal(child['source_label'])}, {_g_literal(child['target_label'])})"
+                                      f".multiTimes().properties({args}){nullable}.sortKeys('_gsp_edge_ordinal').create()")
+            else:
+                endpoint = edge["endpoints"][0]
+                statements.append(f"s.edgeLabel({label}).link({_g_literal(endpoint['source_label'])}, "
+                                  f"{_g_literal(endpoint['target_label'])}).multiTimes().properties({args}){nullable}"
+                                  ".sortKeys('_gsp_edge_ordinal').create()")
         for index in spec.indexes:
             name = index["name"] + "_" + index["label"] + "_" + index["property"]
             statements.append(f"s.indexLabel({_g_literal(name)}).onV({_g_literal(index['label'])})"
@@ -2104,14 +2384,25 @@ class ApacheHugeGraph(GremlinHTTP):
                 "v.property(k, x instanceof Number ? x.longValue() : x) } }; gsp_rows.size()")
 
     def _edge_script(self):
-        return ("gsp_rows.each{ r -> def a=g.V(r.source_label+':'+r.source).next(); "
+        mappings = getattr(self, "_hugegraph_parent_edges", {})
+        remap = ""
+        if mappings:
+            rows = [[logical, item["source_label"], item["target_label"], item["label"]]
+                    for logical, children in mappings.items() for item in children]
+            remap = (f"if({_g_literal(list(mappings))}.contains(r.type)) {{ "
+                     f"def mapping={_g_literal(rows)}.find{{ it[0]==r.type && it[1]==r.source_label && it[2]==r.target_label }}; "
+                     "if(mapping==null) throw new IllegalStateException('missing physical edge label'); "
+                     "label=mapping[3] }; ")
+        return ("gsp_rows.each{ r -> def label=r.type; " + remap + "def a=g.V(r.source_label+':'+r.source).next(); "
                 "def b=g.V(r.target_label+':'+r.target).next(); "
                 "def props=['_gsp_edge_ordinal', r.ordinal.longValue()]; "
                 "r.properties.each{ k,x -> if(x!=null){ props.add(k); props.add(x instanceof Number ? x.longValue() : x) } }; "
-                "a.addEdge(r.type,b,props.toArray()) }; gsp_rows.size()")
+                "a.addEdge(label,b,props.toArray()) }; gsp_rows.size()")
 
     def check_state(self, case):
         spec = self._recipe(case)
+        parents = self._parent_edge_labels(spec)
+        groups = {logical: [child["label"] for child in children] for logical, children in parents.items()}
         rendered = []
         for check in spec.state_checks():
             if check["kind"] == "node_count":
@@ -2138,7 +2429,7 @@ class ApacheHugeGraph(GremlinHTTP):
                     query += f".by(__.coalesce(__.values({_g_literal(key)}), __.constant(null)))"
                 rendered.append({"query": query, "expected_rows": [check["properties"]]})
             else:
-                rendered.extend(_gremlin_state_checks([check], scan_edges=True))
+                rendered.extend(_gremlin_state_checks([check], scan_edges=True, edge_label_groups=groups))
         evidence = []
         for number, check in enumerate(rendered):
             actual = self.execute(check["query"], {}, self.settings["timeout_seconds"])
@@ -2146,8 +2437,64 @@ class ApacheHugeGraph(GremlinHTTP):
                 raise CaseFailure("cost_check_failed", f"hugegraph_structured_cost_check_{number}")
             evidence.append({"query": check["query"], "rows": actual["rows"]})
         self.index_evidence = self._check_indexes(spec)
-        return {"indexes": self.index_evidence, "checks": evidence,
-                "preparation": "bounded_data_reset_native_schema_and_indexes"}
+        result = {"indexes": self.index_evidence, "checks": evidence,
+                  "preparation": "bounded_data_reset_native_schema_and_indexes"}
+        if parents:
+            result["physical_edge_schema"] = self._check_parent_edge_schema(spec, parents)
+        return result
+
+    def _check_parent_edge_schema(self, spec, parents):
+        expected = []
+        for edge in spec.schema()["relationships"]:
+            logical = edge["type"]
+            properties = sorted([*edge["properties"], "_gsp_edge_ordinal"])
+            nullable = sorted(key for key in edge["properties"] if key != "_gsp_edge_ordinal")
+            children = parents.get(logical, [])
+            expected.append({"name": logical, "type": "PARENT" if children else "NORMAL", "parent": None,
+                             "links": sorted(edge["endpoints"], key=lambda item: (item["source_label"], item["target_label"])),
+                             "sort_keys": ["_gsp_edge_ordinal"], "properties": properties, "nullable_keys": nullable,
+                             "multiple": True, "status": "CREATED"})
+            expected.extend({"name": child["label"], "type": "SUB", "parent": logical,
+                             "links": [{key: child[key] for key in ("source_label", "target_label")}],
+                             "sort_keys": ["_gsp_edge_ordinal"], "properties": properties, "nullable_keys": nullable,
+                             "multiple": True, "status": "CREATED"} for child in children)
+        values, _ = self._script(
+            "def s=_gsp_graph.schema(); [[supported:_gsp_graph.backendStoreFeatures().supportsFatherAndSubEdgeLabel(), "
+            "labels:s.getEdgeLabels().collect{ e -> [name:e.name(), type:e.edgeLabelType().toString(), "
+            "parent:e.hasFather() ? _gsp_graph.edgeLabel(e.fatherId()).name() : null, "
+            "links:e.links().collect{ p -> [source_label:_gsp_graph.vertexLabel(p.getLeft()).name(), "
+            "target_label:_gsp_graph.vertexLabel(p.getRight()).name()] }, "
+            "sort_keys:e.sortKeys().collect{_gsp_graph.propertyKey(it).name()}, "
+            "properties:e.properties().collect{_gsp_graph.propertyKey(it).name()}, "
+            "nullable_keys:e.nullableKeys().collect{_gsp_graph.propertyKey(it).name()}, "
+            "multiple:e.frequency().toString()=='MULTIPLE', status:e.status().toString()] }]]")
+        if (len(values) != 1 or not isinstance(values[0], dict) or values[0].get("supported") is not True
+                or not isinstance(values[0].get("labels"), list)):
+            raise CaseFailure("cost_check_failed", "hugegraph_parent_edge_schema_unavailable")
+        actual = values[0]["labels"]
+        try:
+            actual = [{**entry, "links": sorted(entry["links"], key=lambda item: (item["source_label"], item["target_label"])),
+                       "properties": sorted(entry["properties"]), "nullable_keys": sorted(entry["nullable_keys"])} for entry in actual]
+        except (KeyError, TypeError):
+            raise CaseFailure("cost_check_failed", "hugegraph_parent_edge_schema_invalid") from None
+        if typed_bag(actual) != typed_bag(expected):
+            raise CaseFailure("cost_check_failed", "hugegraph_parent_edge_schema_mismatch")
+        physical = [entry["name"] for entry in expected if entry["type"] != "PARENT"]
+        counts, _ = self._script(
+            f"def allowed={_g_literal(physical)}; def seen=new HashSet(); def total=0L; def invalid=0L; "
+            "g.E().each{ e -> total++; def p=e.property('_gsp_edge_ordinal'); "
+            "if(!allowed.contains(e.label()) || !p.isPresent() || !(p.value() instanceof Long)) invalid++; "
+            "else { def n=p.value(); if(n<0L) invalid++; seen.add(n) } }; "
+            "[[total:total, distinct_ordinals:seen.size(), invalid:invalid, "
+            "min_ordinal:seen.isEmpty() ? null : Collections.min(seen), "
+            "max_ordinal:seen.isEmpty() ? null : Collections.max(seen)]]")
+        total = spec.counts()["edges"]
+        wanted = {"total": total, "distinct_ordinals": total, "invalid": 0,
+                  "min_ordinal": 0 if total else None, "max_ordinal": total - 1 if total else None}
+        if typed_bag(counts) != typed_bag([wanted]):
+            raise CaseFailure("cost_check_failed", "hugegraph_parent_edge_identity_mismatch")
+        return {"mapping": parents, "labels": actual, "identity": counts[0],
+                "scope": "P3 logical type matching; raw edge.label() remains the physical sublabel"}
 
     def _check_indexes(self, spec):
         evidence = []

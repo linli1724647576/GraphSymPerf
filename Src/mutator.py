@@ -5,9 +5,12 @@ from dataclasses import fields, is_dataclass, replace
 from query import (
     Alias, All, Boolean, Call, Case, Comparison, Concat, ConditionalQuery, Count, Edge, Exists,
     ListExpr, Literal, Negation, Node, Property, Query, QueryError,
-    UnionAll, Variable, clauses, expression_variables, pattern_variables,
+    UnionAll, Variable, With, Match, clauses, expression_variables, pattern_variables,
     validate_query, with_clauses,
 )
+from dependencies import (analyze_dependencies, find_mutation_sites, find_p3_sites, node_at, replace_at,
+                          select_mutation_site,
+                          verify_short_circuit_witness, verify_rule_premises, verify_inverse_pair, site_environment)
 
 
 PATTERNS = {
@@ -51,7 +54,21 @@ def _children(expression):
     if isinstance(expression, Negation):
         return (expression.expression,)
     if isinstance(expression, (Exists, Count)):
+        if expression.body is not None:
+            return (expression.body,)
         return () if expression.where is None else (expression.where,)
+    if isinstance(expression, Query):
+        return (*clauses(expression), *expression.returns)
+    if isinstance(expression, Match):
+        return () if expression.where is None else (expression.where,)
+    if isinstance(expression, With):
+        return (*expression.projections, *((expression.where,) if expression.where is not None else ()))
+    if isinstance(expression, UnionAll):
+        return expression.branches
+    if type(expression).__name__ == 'RowLimit':
+        return (expression.body,)
+    if isinstance(expression, ConditionalQuery):
+        return expression.condition, expression.then, expression.otherwise
     if isinstance(expression, Call):
         return expression.args
     if isinstance(expression, Alias):
@@ -79,25 +96,10 @@ def _pure(expression):
             return (len(expression.args) in (2, 3)
                     and all(isinstance(arg, Literal) and type(arg.value) is int for arg in expression.args)
                     and (len(expression.args) == 2 or expression.args[2].value != 0))
-    if not isinstance(expression, (Comparison, Boolean, Negation, Exists, Count, Call, Alias, Case, ListExpr, Concat, All)):
+    if not isinstance(expression, (Comparison, Boolean, Negation, Exists, Count, Call, Alias, Case, ListExpr, Concat,
+                                   All, Query, Match, With, UnionAll, ConditionalQuery)):
         return False
     return all(_pure(child) for child in _children(expression))
-
-
-def _length_only(expression, path):
-    """Allow only reversal-invariant path observations: length and local ALL."""
-    if isinstance(expression, Call) and expression.name.lower() == 'length' and expression.args == (Variable(path),):
-        return True
-    if (isinstance(expression, All) and isinstance(expression.items, Call)
-            and expression.items.name == 'nodes' and expression.items.args == (Variable(path),)):
-        # validate_query confines the binder to pure node-local properties.
-        # ALL is invariant to reversing the list, unlike positional access.
-        return _length_only(expression.predicate, path)
-    if isinstance(expression, Variable) and expression.name == path:
-        return False
-    if isinstance(expression, Property) and expression.variable == path:
-        return False
-    return all(_length_only(child, path) for child in _children(expression))
 
 
 def _variables(clause):
@@ -459,13 +461,39 @@ def _scor_pattern(query, bindings):
 def find_patterns(query, bindings=None) -> tuple[str, ...]:
     """Match restricted, checked structures; a declared P2 pairing is checked in the DB before timing."""
     validate_query(query)
-    scor = _scor_pattern(query, bindings)
+    paper_pattern = (bindings or {}).get('paper_pattern')
+    if paper_pattern in {'S6', 'S8'}:
+        if ((bindings or {}).get('pattern_catalog', 'paper-v1') != 'paper-v1'
+                or (bindings or {}).get('legacy_pattern', paper_pattern) != paper_pattern):
+            return ()
+        requested = bindings.get('mutation_site')
+        if requested is not None and not isinstance(requested, (tuple, list)):
+            return ()
+        for site in find_mutation_sites(query, paper_pattern, bindings.get('form')):
+            if requested is not None and tuple(requested) != site.address:
+                continue
+            try:
+                verify_short_circuit_witness(query, site, bindings)
+            except QueryError:
+                continue
+            return (paper_pattern,)
+        return ()
+    p3 = ('P3',) if find_p3_sites(query) else ()
+    if type(query).__name__ == 'RowLimit':
+        return ()
+    has_with = isinstance(query, Query) and any(isinstance(part, With) for part in clauses(query))
+    scor = None if has_with else _scor_pattern(query, bindings)
     if isinstance(query, ConditionalQuery):
-        return (scor,) if scor else ()
+        return (*p3, *((scor,) if scor else ()))
     if isinstance(query, UnionAll):
-        return ('P14',) if all(branch.limit is None and all(_pure(item) for item in branch.returns)
-                              and all(_pure(part.where) for part in clauses(branch))
-                              for branch in query.branches) else ()
+        p14 = ('P14',) if all(isinstance(branch, Query) and branch.limit is None
+                             and all(_pure(item) for item in branch.returns)
+                             and all(_pure(part) for part in clauses(branch))
+                             for branch in query.branches) else ()
+        return (*p3, *p14)
+    # Legacy whole-clause swaps do not cross a newly introduced scope boundary.
+    if has_with:
+        return p3
     # Reordering an unordered LIMIT can choose different rows. S5/S6 have
     # separate empty-result/constant-projection contracts; legacy swaps do not.
     if query.limit is not None:
@@ -473,7 +501,7 @@ def find_patterns(query, bindings=None) -> tuple[str, ...]:
     parts = clauses(query)
     if not all(_pure(part.where) for part in parts) or not all(_pure(item) for item in query.returns):
         return ()
-    matches = []
+    matches = list(p3)
     edge = parts[0].pattern if parts else None
     if isinstance(edge, Edge):
         rel = edge.relationship
@@ -484,11 +512,6 @@ def find_patterns(query, bindings=None) -> tuple[str, ...]:
                 and not rel.alternatives and rel.min_hops is None
                 and rel.variable is None and not rel.properties):
             matches.append('P2')
-        if (edge.direction == 'undirected' and rel.min_hops is not None and rel.max_hops is not None
-                and (edge.path_variable is None or
-                     all(_length_only(expr, edge.path_variable)
-                         for expr in (*query.returns, *(part.where for part in parts))))):
-            matches.append('P3')
         if rel.alternatives and len(set((rel.type, *rel.alternatives))) > 1:
             matches.append('P8')
     if parts:
@@ -523,10 +546,221 @@ def find_patterns(query, bindings=None) -> tuple[str, ...]:
     return tuple(sorted(matches, key=lambda item: (item[0], int(item[1:]))))
 
 
+def _plan_mutation(query, site, *, replacement=None, inverse_types=None):
+    """Rewrite a typed candidate term; graph premises are deliberately unchecked.
+
+    Algorithm 1 uses this same local rewrite kernel to solve one shared state.
+    Only ``mutate`` can publish a pair after checking its state obligations.
+    """
+    from dependencies import _located, _clause_addresses
+
+    # Occurrences are traced by their structural origin, including when one
+    # immutable Node object was reused in independent lexical scopes. Rewrites
+    # transport these origins in exactly the same branch that changes the AST.
+    original_origins = {address: address for address, node in _located(query) if isinstance(node, Node)}
+    origins = dict(original_origins)
+
+    def transport(destination, source=None):
+        for address in tuple(origins):
+            if address[:len(destination)] == destination:
+                del origins[address]
+        if source is not None:
+            origins.update({(*destination, *address[len(source):]): origin
+                            for address, origin in original_origins.items() if address[:len(source)] == source})
+
+    pattern = site.paper_pattern
+    original = node_at(query, site.address)
+    if pattern.startswith('S'):
+        if replacement is None:
+            raise QueryError('A short-circuit rewrite requires its replacement term')
+        changed = replace_at(query, site.address, replacement)
+        transport(site.address)
+    elif pattern in {'P1', 'P3'}:
+        changed = replace_at(query, site.address, replace(original, left=original.right, right=original.left))
+        transport((*site.address, 'left'), (*site.address, 'right'))
+        transport((*site.address, 'right'), (*site.address, 'left'))
+    elif pattern == 'P2':
+        if not isinstance(inverse_types, (tuple, list)) or len(inverse_types) != 2 or inverse_types[0] == inverse_types[1]:
+            raise QueryError('An inverse rewrite requires two distinct relationship types')
+        forward, reverse = inverse_types
+        if original.relationship.type not in inverse_types:
+            raise QueryError('The selected edge is outside the inverse relationship pairing')
+        changed = replace_at(query, site.address, replace(original,
+            direction={'out': 'in', 'in': 'out'}[original.direction],
+            relationship=replace(original.relationship, type=reverse if original.relationship.type == forward else forward)))
+    elif pattern in {'P4', 'P5'}:
+        changed = replace_at(query, site.address, replace(original, terms=tuple(reversed(original.terms))))
+        for index in range(len(original.terms)):
+            transport((*site.address, 'terms', index), (*site.address, 'terms', len(original.terms) - index - 1))
+    elif pattern == 'P6':
+        changed = replace_at(query, site.address, replace(original, left=original.right, right=original.left))
+        transport((*site.address, 'left'), (*site.address, 'right'))
+        transport((*site.address, 'right'), (*site.address, 'left'))
+    elif pattern == 'P7':
+        changed = replace_at(query, site.address, replace(original, labels=tuple(reversed(original.labels))))
+    elif pattern == 'P8':
+        types = tuple(reversed((original.type, *original.alternatives)))
+        changed = replace_at(query, site.address, replace(original, type=types[0], alternatives=types[1:]))
+    elif pattern in {'P9', 'P10', 'P11'}:
+        location = tuple(site.guards['query_address'])
+        owner = node_at(query, location)
+        parts = list(clauses(owner))
+        first, second = site.guards['clause_indices']
+        addresses = [address for _, address in _clause_addresses(owner, location)]
+        if pattern == 'P9':
+            parts[first], parts[second] = replace(parts[first], where=parts[second].where), replace(parts[second], where=parts[first].where)
+        else:
+            parts[first], parts[second] = parts[second], parts[first]
+        changed = replace_at(query, location, with_clauses(owner, tuple(parts)))
+        moved_fields = ('where',) if pattern == 'P9' else ('pattern', 'where')
+        for field in moved_fields:
+            transport((*addresses[first], field), (*addresses[second], field))
+            transport((*addresses[second], field), (*addresses[first], field))
+    elif pattern == 'P12':
+        changed = replace_at(query, site.address, replace(original, branches=tuple(reversed(original.branches))))
+        for index in range(len(original.branches)):
+            transport((*site.address, 'branches', index), (*site.address, 'branches', len(original.branches) - index - 1))
+    elif pattern == 'P13':
+        changed = replace_at(query, site.address, Case(Negation(Call('coalesce', (original.condition, Literal(False)))),
+                                                     original.otherwise, original.then))
+        transport((*site.address, 'condition'))
+        transport((*site.address, 'condition', 'expression', 'args', 0), (*site.address, 'condition'))
+        transport((*site.address, 'then'), (*site.address, 'otherwise'))
+        transport((*site.address, 'otherwise'), (*site.address, 'then'))
+    else:
+        raise QueryError(f'Unsupported paper rewrite {pattern}')
+    validate_query(changed)
+    if changed == query:
+        raise QueryError('Mutation would not change the query structure')
+    target_nodes = {address for address, node in _located(changed) if isinstance(node, Node)}
+    if not set(origins).issubset(target_nodes):
+        raise QueryError('A rewrite produced an invalid node-origin trace')
+    return changed, origins
+
+
+def plan_mutation(query, site, *, replacement=None, inverse_types=None):
+    """Plan the local typed rewrite without publishing unchecked graph premises."""
+    return _plan_mutation(query, site, replacement=replacement, inverse_types=inverse_types)[0]
+
+
+def plan_mutation_with_correspondence(query, site, *, replacement=None, inverse_types=None):
+    """Plan one rewrite and retain the unchanged/moved node occurrence origins.
+
+    These equalities align the source and candidate copy without inspecting
+    schema names or guessing from structurally similar atoms. Replacement-local
+    nodes are fresh origins; imported bindings are resolved by dependency scope.
+    """
+    from population import BindingRelation
+
+    changed, origins = _plan_mutation(query, site, replacement=replacement, inverse_types=inverse_types)
+    links = tuple(BindingRelation(('query', *source), ('alternatives', 0, *target))
+                  for target, source in sorted(origins.items(), key=lambda item: tuple(map(str, item[0]))))
+    return changed, links
+
+
+def _paper_mutation(query, legacy_pattern, bindings):
+    """Explicit catalog bridge; historical callers retain historical numbering."""
+    paper_pattern, form = bindings['paper_pattern'], bindings.get('form')
+    requested = bindings.get('mutation_site')
+    if requested is not None and (not isinstance(requested, (tuple, list))
+                                 or any(not (isinstance(part, str) or type(part) is int) for part in requested)):
+        raise QueryError('mutation_site requires a structural address')
+    site = (select_mutation_site(query, paper_pattern, form, requested) if requested is not None
+            else next(iter(find_mutation_sites(query, paper_pattern, form)), None))
+    if site is None:
+        raise QueryError(f'mutation_site is not an applicable paper {paper_pattern} location')
+    from paper_patterns import compositional_rule
+    expected_legacy = compositional_rule(paper_pattern, site.form).legacy_pattern
+    if (legacy_pattern != expected_legacy or bindings.get('legacy_pattern', legacy_pattern) != expected_legacy
+            or bindings.get('pattern_catalog', 'paper-v1') != 'paper-v1'):
+        raise QueryError('Explicit paper catalog and legacy pattern mapping disagree')
+    replacement = None
+    inverse_types = None
+    if paper_pattern.startswith('S'):
+        from dependencies import _constant_columns, _streamable
+        from ir import from_data, decode_fragment, row_stream_schema, RowStream, Expression, Pattern
+        if paper_pattern in {'S6', 'S8'}:
+            verify_short_circuit_witness(query, site, bindings)
+        else:
+            verify_rule_premises(query, site, bindings)
+        try:
+            payload = bindings['replacement']
+            replacement = decode_fragment(payload) if isinstance(payload, dict) and 'fragment' in payload else from_data(payload)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise QueryError(f'Invalid replacement row stream: {exc}') from exc
+        original_fragment = node_at(query, site.address)
+        if isinstance(original_fragment, RowStream):
+            if not isinstance(replacement, RowStream):
+                raise QueryError('A row-stream site requires a row-stream replacement')
+            environment = site_environment(query, site.address)
+            if row_stream_schema(replacement, environment) != row_stream_schema(original_fragment, environment):
+                raise QueryError('A short-circuit replacement must preserve the branch output schema')
+        elif isinstance(original_fragment, Match):
+            if not isinstance(replacement, Match) or replacement.optional:
+                raise QueryError('An empty mandatory input requires a mandatory downstream MATCH')
+            if paper_pattern == 'S9':
+                owner_address = tuple(site.guards['envelope_site'])
+                owner = node_at(query, owner_address)
+                parts = clauses(owner)
+                first_names = set(pattern_variables(parts[0].pattern))
+                if first_names & set(pattern_variables(replacement.pattern)):
+                    raise QueryError('The downstream replacement must remain independent of the empty input')
+        elif isinstance(original_fragment, Pattern):
+            if not isinstance(replacement, Pattern):
+                raise QueryError('A matching site requires a matching-pattern replacement')
+        elif isinstance(original_fragment, Expression):
+            if not isinstance(replacement, Expression):
+                raise QueryError('A scalar site requires a scalar replacement')
+            environment = site_environment(query, site.address)
+            def scalar_schema(expression):
+                return row_stream_schema(Query(None, None, (Alias(expression, 'value'),)), environment)
+            old_kind = scalar_schema(original_fragment)[0][1].rstrip('?')
+            new_kind = scalar_schema(replacement)[0][1].rstrip('?')
+            compatible = (new_kind in {'boolean', 'null'} if paper_pattern in {'S1', 'S2'} else
+                          old_kind == new_kind or 'null' in {old_kind, new_kind})
+            if not compatible:
+                raise QueryError('A scalar replacement must preserve its inferred output schema')
+        else:
+            raise QueryError('Unsupported replacement interface')
+        if not __import__('dependencies')._pure(replacement):
+            raise QueryError('A replacement must be a deterministic total read-only fragment')
+        if paper_pattern in {'S6', 'S8'} and not _streamable(replacement):
+            raise QueryError('A short-circuit replacement must remain streamable')
+        if paper_pattern == 'S6':
+            original = node_at(query, tuple(site.guards['union_site']))
+            if _constant_columns(replacement) != _constant_columns(original):
+                raise QueryError('S6 must preserve every constant projection')
+        if paper_pattern == 'S10':
+            changed_membership = plan_mutation(query, site, replacement=replacement)
+            if not any(item.address == site.address for item in find_mutation_sites(changed_membership, 'S10', site.form)):
+                raise QueryError('A membership replacement must retain its null-safe predicate and DISTINCT envelope')
+    elif paper_pattern == 'P2':
+        inverse_types = tuple(verify_inverse_pair(query, site, bindings)['inverse_types'])
+    from dependencies import propagate_equivalence
+    propagate_equivalence(query, site, bindings)
+    return plan_mutation(query, site, replacement=replacement, inverse_types=inverse_types)
+
+
 def mutate(query, pattern: str, *, bindings=None):
+    if bindings is not None and 'paper_pattern' in bindings:
+        return _paper_mutation(query, pattern, bindings)
     if pattern not in find_patterns(query, bindings):
         raise QueryError(f'Pattern {pattern!r} does not apply to this query')
-    if pattern in SCOR_PAPER_PATTERNS:
+    if pattern == 'P3':
+        sites = find_p3_sites(query)
+        requested = (bindings or {}).get('mutation_site')
+        if requested is None:
+            site = sites[0]
+        else:
+            if (not isinstance(requested, (tuple, list))
+                    or any(not (isinstance(part, str) or type(part) is int) for part in requested)):
+                raise QueryError('mutation_site requires a structural address')
+            site = next((candidate for candidate in sites if candidate.address == tuple(requested)), None)
+            if site is None:
+                raise QueryError('mutation_site is not an applicable P3 location')
+        edge = node_at(query, site.address)
+        result = replace_at(query, site.address, replace(edge, left=edge.right, right=edge.left))
+    elif pattern in SCOR_PAPER_PATTERNS:
         spec = bindings['scor']
         result = _replace_high(query, spec['high_type'], spec['reference_type'])
     elif pattern == 'P14':
@@ -549,7 +783,7 @@ def mutate(query, pattern: str, *, bindings=None):
     else:
         parts = list(clauses(query))
         first = parts[0]
-        if pattern in {'P1', 'P3'}:
+        if pattern == 'P1':
             edge = first.pattern
             parts[0] = replace(first, pattern=replace(edge, left=edge.right, right=edge.left))
         elif pattern == 'P2':

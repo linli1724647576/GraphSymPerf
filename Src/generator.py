@@ -1990,6 +1990,7 @@ def _add_pattern_reference(case: dict[str, Any]) -> None:
 def instantiate(
     seed_query: SeedQuery | str | None, pattern: str, scale: int, seed: int,
     *, data_seed: int | None = None, complexity: int = 0, state_variant: str = "original",
+    composition: dict | None = None,
 ) -> dict[str, Any]:
     """Populate a finite template; query choices and graph layout have separate seeds.
 
@@ -2013,9 +2014,24 @@ def instantiate(
     if state_variant == "pruning_path" and pattern != "P3":
         raise PatternNotApplicable("pruning_path state is only implemented for P3")
     actual_data_seed = seed if data_seed is None else data_seed
-    skeleton = abstract_seed(seed_query, pattern)
+    rule = None
+    if composition is not None:
+        from paper_patterns import compositional_rule
+        try:
+            if not isinstance(composition, dict):
+                raise ValueError("composition requires an options dictionary")
+            rule = compositional_rule(pattern, composition.get("form"))
+        except ValueError as exc:
+            raise PatternNotApplicable(str(exc)) from exc
+    skeleton = abstract_seed(seed_query, rule.legacy_pattern if rule else pattern)
     skeleton = replace(skeleton, source={**skeleton.source, "population_seed": seed,
                                          "data_seed": actual_data_seed})
+    if composition is not None:
+        if state_variant != "original":
+            raise PatternNotApplicable("legacy state variants cannot specify a compositional graph")
+        if complexity != 0:
+            raise PatternNotApplicable("use composition.depth instead of legacy complexity wrapping")
+        return _instantiate_composed(skeleton, scale, seed, actual_data_seed, composition, rule)
     if state_variant != "original":
         skeleton = replace(skeleton, source={**skeleton.source, "state_variant": state_variant})
     case = _BUILDERS[pattern](skeleton, scale, actual_data_seed)
@@ -2048,4 +2064,40 @@ def instantiate(
     if "query_ref" in case:
         validate_query(case["query_ref"])
     case["source"]["populated_query_sha256"] = sha256(render_query(case["query_a"]).encode()).hexdigest()
+    return case
+
+
+def _instantiate_composed(skeleton, scale, seed, data_seed, options, rule):
+    """Run the paper's symbolic skeleton, construction and instantiation stages."""
+    from paper_patterns import PAPER_CATALOG
+    from symbolic import build_symbolic_skeleton, construct_state, instantiate_pair
+
+    try:
+        symbolic = build_symbolic_skeleton(rule.paper_pattern, options, seed)
+        solved = construct_state(symbolic, scale=scale, data_seed=data_seed)
+        pair = instantiate_pair(symbolic, solved)
+    except ValueError as exc:
+        raise PatternNotApplicable(f"symbolic population: {exc}") from exc
+    populated = solved.population
+    source = replace(skeleton, source={**skeleton.source,
+                                      "generation_method": "recursive_symbolic",
+                                      "population_inputs": "symbolic_ast_and_joint_constraints",
+                                      "seed_usage": "local_rule_seed" if skeleton.source.get("generator") == "builtin_template" else "provenance_only_not_embedded",
+                                      "pattern_catalog": PAPER_CATALOG, "paper_pattern": rule.paper_pattern,
+                                      "legacy_pattern": rule.legacy_pattern, "pattern_form": rule.form})
+    if "builtin_pattern" in source.source:
+        source = replace(source, source={**source.source, "builtin_pattern": rule.paper_pattern})
+    checks = [_index_check(index["label"], index["property"]) for index in populated.spec.indexes]
+    case = _pack(source, scale, seed, pair.query_a, populated.setup,
+                 [*checks, *populated.checks, *pair.checks], populated.expected_rows, pair.bindings)
+    case.update(pattern=rule.paper_pattern, query_b=pair.query_b, pattern_catalog=PAPER_CATALOG,
+                paper_pattern=rule.paper_pattern, legacy_pattern=rule.legacy_pattern, pattern_form=rule.form,
+                data_seed=data_seed, composition=json.loads(json.dumps(symbolic.options)),
+                skeleton=f"symbolic {rule.paper_pattern}/{rule.form}", placeholders=[],
+                symbolic_skeleton=symbolic.to_data(), construction_record=solved.construction_record,
+                instantiation_record=pair.instantiation_record, mutation_record=pair.mutation_record,
+                graph_spec=populated.spec.to_dict(), state_checks=populated.spec.state_checks(),
+                index_requirements=populated.spec.indexes,
+                dependency_analysis=solved.construction_record["dependency_analysis"],
+                population_constraints=populated.constraints, population_evidence=populated.evidence)
     return case

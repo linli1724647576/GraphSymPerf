@@ -2,7 +2,8 @@
 
 Tuple order is part of an experimental input: no normalization sorts labels,
 boolean operands, MATCH clauses, or UNION branches. The IR validates scope and
-scalar types without invoking any language generator.
+scalar types without invoking any language generator. Recursive query bodies and
+WITH pipelines extend this supported fragment; they do not admit arbitrary Cypher.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import math
 import re
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import TypeAlias
+from collections.abc import Iterable, Mapping
 
 class QueryError(ValueError):
     """A query lies outside the supported syntax, types, or variable scope."""
@@ -89,16 +91,18 @@ Pattern: TypeAlias = Node | Edge
 
 @dataclass(frozen=True)
 class Exists:
-    pattern: Pattern
+    pattern: Pattern | None = None
     where: Expression | None = None
+    body: RowStream | None = None
 
 
 @dataclass(frozen=True)
 class Count:
     """A scalar COUNT subquery, not an aggregate over the enclosing row stream."""
 
-    pattern: Pattern
+    pattern: Pattern | None = None
     where: Expression | None = None
+    body: RowStream | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +153,15 @@ class Match:
 
 
 @dataclass(frozen=True)
+class With:
+    """A scope boundary: pass existing variables or explicitly alias scalars."""
+
+    projections: tuple[Expression | Alias, ...]
+    where: Expression | None = None
+    distinct: bool = False
+
+
+@dataclass(frozen=True)
 class Query:
     pattern: Pattern | None
     where: Expression | None
@@ -156,6 +169,7 @@ class Query:
     matches: tuple[Match, ...] = ()
     limit: int | None = None
     distinct: bool = False
+    pipeline: tuple[Match | With, ...] = ()
 
     def render(self) -> str:
         from query import render_query
@@ -164,7 +178,19 @@ class Query:
 
 @dataclass(frozen=True)
 class UnionAll:
-    branches: tuple[Query, ...]
+    branches: tuple[RowStream, ...]
+
+    def render(self) -> str:
+        from query import render_query
+        return render_query(self)
+
+
+@dataclass(frozen=True)
+class RowLimit:
+    """A demand over an entire row stream, distinct from Query.limit."""
+
+    body: RowStream
+    limit: int
 
     def render(self) -> str:
         from query import render_query
@@ -173,26 +199,31 @@ class UnionAll:
 
 @dataclass(frozen=True)
 class ConditionalQuery:
-    """A conditional query with exactly two ordinary branches."""
+    """A query-level WHEN with two isolated, compatible row-stream branches."""
 
     condition: Expression
-    then: Query
-    otherwise: Query
+    then: RowStream
+    otherwise: RowStream
 
     def render(self) -> str:
         from query import render_query
         return render_query(self)
 
 
-def clauses(query: Query) -> tuple[Match, ...]:
-    return (Match(query.pattern, query.where), *query.matches) if query.pattern is not None else ()
+RowStream: TypeAlias = Query | UnionAll | RowLimit | ConditionalQuery
 
 
-def with_clauses(query: Query, matches: tuple[Match, ...]) -> Query:
+def clauses(query: Query) -> tuple[Match | With, ...]:
+    return query.pipeline or ((Match(query.pattern, query.where), *query.matches) if query.pattern is not None else ())
+
+
+def with_clauses(query: Query, matches: tuple[Match | With, ...]) -> Query:
     if not matches:
-        return replace(query, pattern=None, where=None, matches=())
-    if matches[0].optional:
+        return replace(query, pattern=None, where=None, matches=(), pipeline=())
+    if isinstance(matches[0], Match) and matches[0].optional:
         raise QueryError("The first MATCH must be mandatory")
+    if query.pipeline or any(isinstance(item, With) for item in matches):
+        return replace(query, pattern=None, where=None, matches=(), pipeline=tuple(matches))
     return replace(query, pattern=matches[0].pattern, where=matches[0].where, matches=tuple(matches[1:]))
 
 
@@ -343,11 +374,112 @@ def expression_variables(expression: Expression) -> frozenset[str]:
     elif isinstance(expression, All):
         return expression_variables(expression.items) | (expression_variables(expression.predicate) - {expression.variable})
     elif isinstance(expression, (Exists, Count)):
+        if expression.body is not None:
+            return query_variables(expression.body)
         refs = expression_variables(expression.where) if expression.where is not None else frozenset()
         return refs | frozenset(pattern_variables(expression.pattern))
     else:
         raise QueryError("Unsupported expression")
     return frozenset().union(*(expression_variables(part) for part in parts))
+
+
+def query_variables(query: RowStream) -> frozenset[str]:
+    """Conservative syntactic references; resolve imports against lexical scope.
+
+    As with the historical short subquery form, pattern-local names are included.
+    This is not a symbol-binding or dependency analysis.
+    """
+    if isinstance(query, RowLimit):
+        return query_variables(query.body)
+    if isinstance(query, UnionAll):
+        return frozenset().union(*(query_variables(branch) for branch in query.branches))
+    if isinstance(query, ConditionalQuery):
+        return expression_variables(query.condition) | query_variables(query.then) | query_variables(query.otherwise)
+    refs = set()
+    for clause in clauses(query):
+        if isinstance(clause, Match):
+            refs.update(pattern_variables(clause.pattern))
+        else:
+            for item in clause.projections:
+                refs.update(expression_variables(item.expression if isinstance(item, Alias) else item))
+        if clause.where is not None:
+            refs.update(expression_variables(clause.where))
+    for item in query.returns:
+        refs.update(expression_variables(item.expression if isinstance(item, Alias) else item))
+    return frozenset(refs)
+
+
+def _expression_imports(expression: Expression, available: set[str]) -> set[str]:
+    """Resolve reads of the supplied lexical bindings, including nested bodies."""
+    if isinstance(expression, Property):
+        return {expression.variable} & available
+    if isinstance(expression, Variable):
+        return {expression.name} & available
+    if isinstance(expression, Literal):
+        return set()
+    if isinstance(expression, (Exists, Count)):
+        if expression.body is not None:
+            return _query_imports(expression.body, available)
+        local = set(pattern_variables(expression.pattern))
+        reads = _expression_imports(expression.where, available | local) if expression.where is not None else set()
+        return (local | reads) & available
+    if isinstance(expression, All):
+        return (_expression_imports(expression.items, available)
+                | (_expression_imports(expression.predicate, available | {expression.variable}) - {expression.variable}))
+    reads = set()
+    if is_dataclass(expression):
+        for field in fields(expression):
+            value = getattr(expression, field.name)
+            for child in value if isinstance(value, tuple) else (value,):
+                if is_dataclass(child):
+                    reads.update(_expression_imports(child, available))
+    return reads
+
+
+def _query_imports(query: RowStream, available: set[str]) -> set[str]:
+    if isinstance(query, RowLimit):
+        return _query_imports(query.body, available)
+    if isinstance(query, UnionAll):
+        return set().union(*(_query_imports(branch, set(available)) for branch in query.branches))
+    if isinstance(query, ConditionalQuery):
+        return (_expression_imports(query.condition, available)
+                | _query_imports(query.then, set(available)) | _query_imports(query.otherwise, set(available)))
+    scope, origins, reads = set(available), set(available), set()
+    for clause in clauses(query):
+        if isinstance(clause, Match):
+            local = set(pattern_variables(clause.pattern))
+            reads.update(local & origins)
+            scope.update(local)
+        elif isinstance(clause, With):
+            for item in clause.projections:
+                expression = item.expression if isinstance(item, Alias) else item
+                reads.update(_expression_imports(expression, scope) & origins)
+            origins.intersection_update(item.name for item in clause.projections if isinstance(item, Variable))
+            scope = {item.name for item in clause.projections}
+        if clause.where is not None:
+            reads.update(_expression_imports(clause.where, scope) & origins)
+    for item in query.returns:
+        expression = item.expression if isinstance(item, Alias) else item
+        reads.update(_expression_imports(expression, scope) & origins)
+    return reads
+
+
+def row_stream_imports(value: RowStream, outerenv: Mapping[str, str] | Iterable[str] = ()) -> frozenset[str]:
+    """Resolve actual reads of supplied outer bindings through lexical scopes.
+
+    Branch-local definitions are isolated; WITH drops and rebindings are
+    respected. This returns names at the supplied interface, not global symbols.
+    """
+    if not isinstance(value, RowStream):
+        raise QueryError("Expected a supported row stream")
+    return frozenset(_query_imports(value, set(outerenv)))
+
+
+def row_stream_schema(value: RowStream, outerenv: Mapping[str, str] | None = None) -> tuple[tuple[str, str], ...]:
+    """Ordered output names and inferred scalar kinds for one row-stream input."""
+    if not isinstance(value, RowStream):
+        raise QueryError("Expected a supported row stream")
+    return _validate_query(value, dict(outerenv or {}))
 
 
 def _join_types(types) -> str:
@@ -398,6 +530,35 @@ def _node_local_predicate(expression: Expression, variable: str) -> bool:
     return all(_node_local_predicate(part, variable) for part in parts)
 
 
+def _validate_exists_scope(body: RowStream, outer: set[str]) -> None:
+    """Reject native EXISTS scope cases outside the lexical WITH model.
+
+    Neo4j keeps outside bindings globally visible inside EXISTS. This fragment
+    therefore forbids shadowing them or dropping and reintroducing their names;
+    an independent body using fresh local names remains a valid row stream.
+    """
+    def visit(value):
+        if isinstance(value, Query):
+            visible = set(outer)
+            for clause in clauses(value):
+                if isinstance(clause, With):
+                    if any(isinstance(item, Alias) and item.name in outer for item in clause.projections):
+                        raise QueryError("EXISTS cannot shadow an outside variable through WITH")
+                    visible = {item.name for item in clause.projections}
+                elif (set(pattern_variables(clause.pattern)) & outer) - visible:
+                    raise QueryError("EXISTS cannot reintroduce a dropped outside binding")
+                else:
+                    visible.update(pattern_variables(clause.pattern))
+        if is_dataclass(value):
+            for field in fields(value):
+                visit(getattr(value, field.name))
+        elif isinstance(value, tuple):
+            for item in value:
+                visit(item)
+
+    visit(body)
+
+
 def _validate_expression(expression: Expression, scope: dict[str, str]) -> str:
     _validate_expression_shape(expression)
     if isinstance(expression, Literal):
@@ -417,7 +578,7 @@ def _validate_expression(expression: Expression, scope: dict[str, str]) -> str:
             raise QueryError(f"Unbound variable: {expression.variable}")
         if scope[expression.variable].rstrip("?") not in ("node", "relationship"):
             raise QueryError("Property access requires a node or relationship")
-        return "unknown"
+        return "unknown?" if scope[expression.variable].endswith("?") else "unknown"
     if isinstance(expression, Comparison):
         left = _validate_expression(expression.left, scope).rstrip("?")
         right = _validate_expression(expression.right, scope).rstrip("?")
@@ -436,6 +597,13 @@ def _validate_expression(expression: Expression, scope: dict[str, str]) -> str:
             raise QueryError("Boolean operands must have a known BOOLEAN-or-NULL type")
         return "boolean"
     if isinstance(expression, (Exists, Count)):
+        if expression.body is not None:
+            if expression.pattern is not None or expression.where is not None or not isinstance(expression.body, RowStream):
+                raise QueryError("A subquery requires either a pattern/WHERE or a row-stream body")
+            _validate_query(expression.body, scope)
+            if isinstance(expression, Exists):
+                _validate_exists_scope(expression.body, set(scope))
+            return "boolean" if isinstance(expression, Exists) else "integer"
         local = pattern_variables(expression.pattern)
         if isinstance(expression, Exists) and not set(local).intersection(scope):
             raise QueryError("EXISTS must reference an outer variable")
@@ -513,7 +681,9 @@ def _validate_expression(expression: Expression, scope: dict[str, str]) -> str:
     raise QueryError("Unsupported expression")
 
 
-def projection_names(query: Query | UnionAll | ConditionalQuery) -> tuple[str, ...]:
+def projection_names(query: RowStream | ConditionalQuery) -> tuple[str, ...]:
+    if isinstance(query, RowLimit):
+        return projection_names(query.body)
     if isinstance(query, UnionAll):
         return projection_names(query.branches[0])
     if isinstance(query, ConditionalQuery):
@@ -521,37 +691,88 @@ def projection_names(query: Query | UnionAll | ConditionalQuery) -> tuple[str, .
     return tuple(item.name if isinstance(item, Alias) else _expression_label(item) for item in query.returns)
 
 
-def validate_query(query: Query | UnionAll | ConditionalQuery) -> None:
+def validate_query(query: RowStream | ConditionalQuery) -> None:
+    _validate_query(query, {})
+
+
+def _validate_with(clause: With, scope: dict[str, str]) -> dict[str, str]:
+    if not isinstance(clause.projections, tuple) or not clause.projections:
+        raise QueryError("WITH requires an ordered nonempty projection tuple")
+    if type(clause.distinct) is not bool:
+        raise QueryError("WITH distinct must be a boolean")
+    exported = {}
+    for item in clause.projections:
+        if isinstance(item, Variable):
+            _identifier(item.name)
+            if item.name not in scope:
+                raise QueryError(f"Unbound variable: {item.name}")
+            name, kind = item.name, scope[item.name]
+        elif isinstance(item, Alias):
+            _identifier(item.name)
+            name = item.name
+            if isinstance(item.expression, Variable):
+                _identifier(item.expression.name)
+                if item.expression.name not in scope:
+                    raise QueryError(f"Unbound variable: {item.expression.name}")
+                # WITH names a binding; passing a graph entity through an
+                # alias preserves its kind and NULLability. Entity values
+                # remain outside ordinary scalar expressions and RETURN.
+                kind = scope[item.expression.name]
+            else:
+                kind = _validate_expression(item.expression, scope)
+        else:
+            raise QueryError("WITH expressions require an alias; existing variables may pass through")
+        if name in exported:
+            raise QueryError("Duplicate WITH projection names")
+        exported[name] = kind
+    if clause.where is not None and not _is_boolean(_validate_expression(clause.where, exported)):
+        raise QueryError("WITH WHERE must be boolean in the projected scope")
+    return exported
+
+
+def _validate_query(query: RowStream | ConditionalQuery, outer_scope: dict[str, str]) -> tuple[tuple[str, str], ...]:
+    if isinstance(query, RowLimit):
+        if not isinstance(query.body, RowStream):
+            raise QueryError("A global LIMIT requires a row-stream body")
+        if type(query.limit) is not int or query.limit < 0:
+            raise QueryError("Global LIMIT requires a nonnegative integer literal")
+        _validate_literal(Literal(query.limit))
+        return _validate_query(query.body, outer_scope)
     if isinstance(query, ConditionalQuery):
-        if not isinstance(query.then, Query) or not isinstance(query.otherwise, Query):
-            raise QueryError("Conditional branches must be ordinary, non-nested queries")
-        if not _is_boolean(_validate_expression(query.condition, {})):
-            raise QueryError("Conditional query condition must be boolean without outer bindings")
-        validate_query(query.then)
-        validate_query(query.otherwise)
-        if projection_names(query.then) != projection_names(query.otherwise):
+        if not isinstance(query.then, RowStream) or not isinstance(query.otherwise, RowStream):
+            raise QueryError("Conditional branches must be supported row streams")
+        if not _is_boolean(_validate_expression(query.condition, outer_scope)):
+            raise QueryError("Conditional query condition must be boolean in its input scope")
+        schemas = [_validate_query(branch, dict(outer_scope)) for branch in (query.then, query.otherwise)]
+        if tuple(name for name, _ in schemas[0]) != tuple(name for name, _ in schemas[1]):
             raise QueryError("Conditional branches must project identical column names in identical order")
-        return
+        return tuple((name, _join_types(schema[index][1] for schema in schemas))
+                     for index, (name, _) in enumerate(schemas[0]))
     if isinstance(query, UnionAll):
-        if not isinstance(query.branches, tuple) or len(query.branches) < 2 or any(not isinstance(branch, Query) for branch in query.branches):
-            raise QueryError("UNION ALL requires at least two ordinary query branches")
-        for branch in query.branches:
-            validate_query(branch)
-        if any(projection_names(branch) != projection_names(query.branches[0]) for branch in query.branches[1:]):
+        if not isinstance(query.branches, tuple) or len(query.branches) < 2 or any(not isinstance(branch, RowStream) for branch in query.branches):
+            raise QueryError("UNION ALL requires at least two row-stream branches")
+        schemas = [_validate_query(branch, dict(outer_scope)) for branch in query.branches]
+        if any(tuple(name for name, _ in schema) != tuple(name for name, _ in schemas[0]) for schema in schemas[1:]):
             raise QueryError("UNION ALL branches must project identical column names in identical order")
-        return
+        return tuple((name, _join_types(schema[index][1] for schema in schemas))
+                     for index, (name, _) in enumerate(schemas[0]))
     if not isinstance(query, Query) or query.pattern is None and (query.where is not None or query.matches):
         raise QueryError("A RETURN-only query cannot have MATCH clauses or WHERE")
-    if not isinstance(query.returns, tuple) or not isinstance(query.matches, tuple):
+    if not isinstance(query.returns, tuple) or not isinstance(query.matches, tuple) or not isinstance(query.pipeline, tuple):
         raise QueryError("Query projections and clauses require ordered tuples")
+    if query.pipeline and (query.pattern is not None or query.where is not None or query.matches):
+        raise QueryError("A query pipeline cannot also use legacy MATCH fields")
     if type(query.distinct) is not bool:
         raise QueryError("distinct must be a boolean")
     if query.limit is not None:
         if type(query.limit) is not int or query.limit < 0:
             raise QueryError("LIMIT requires a nonnegative integer literal")
         _validate_literal(Literal(query.limit))
-    scope = {}
+    scope = dict(outer_scope)
     for clause in clauses(query):
+        if isinstance(clause, With):
+            scope = _validate_with(clause, scope)
+            continue
         if not isinstance(clause, Match) or type(clause.optional) is not bool:
             raise QueryError("Invalid MATCH clause")
         scope = _bind_pattern(clause.pattern, scope, clause.optional)
@@ -562,26 +783,33 @@ def validate_query(query: Query | UnionAll | ConditionalQuery) -> None:
     names = projection_names(query)
     if len(set(names)) != len(names):
         raise QueryError("Duplicate projection names would lose columns during result collection")
+    kinds = []
     for item in query.returns:
         if isinstance(item, Alias):
             _identifier(item.name)
             item = item.expression
-        if _validate_expression(item, scope).rstrip("?") in ("node", "relationship"):
+        kind = _validate_expression(item, scope)
+        if kind.rstrip("?") in ("node", "relationship"):
             raise QueryError("RETURN graph properties instead of graph entities")
+        kinds.append(kind)
+    return tuple(zip(names, kinds))
 
 
-QueryTree: TypeAlias = Query | UnionAll | ConditionalQuery
+QueryTree: TypeAlias = RowStream | ConditionalQuery
 
 _NODES = {cls.__name__: cls for cls in (
     Literal, Property, Variable, Comparison, Boolean, Negation, Node, Relationship,
-    Edge, Exists, Count, Call, Case, ListExpr, Concat, All, Alias, Match, Query,
-    UnionAll, ConditionalQuery,
+    Edge, Exists, Count, Call, Case, ListExpr, Concat, All, Alias, Match, With, Query,
+    UnionAll, RowLimit, ConditionalQuery,
 )}
 
 
 def _encode(value):
     if is_dataclass(value) and type(value).__name__ in _NODES:
-        return {"kind": type(value).__name__, **{field.name: _encode(getattr(value, field.name)) for field in fields(value)}}
+        entries = {field.name: _encode(getattr(value, field.name)) for field in fields(value)
+                   if not (isinstance(value, Query) and field.name == "pipeline" and not value.pipeline)
+                   and not (isinstance(value, (Exists, Count)) and field.name == "body" and value.body is None)}
+        return {"kind": type(value).__name__, **entries}
     if isinstance(value, tuple):
         return [_encode(item) for item in value]
     if value is None or type(value) in (bool, int, float, str):
@@ -600,7 +828,11 @@ def _decode(value):
         return tuple(_decode(item) for item in value)
     if isinstance(value, dict):
         cls = _NODES.get(value.get("kind"))
-        if cls is None or set(value) != {"kind", *(field.name for field in fields(cls))}:
+        if cls is None:
+            raise QueryError("Unknown IR node or unexpected fields")
+        expected = {"kind", *(field.name for field in fields(cls))}
+        optional = {"pipeline"} if cls is Query else {"body"} if cls in (Exists, Count) else set()
+        if not expected - optional <= set(value) <= expected:
             raise QueryError("Unknown IR node or unexpected fields")
         try:
             return cls(**{key: _decode(item) for key, item in value.items() if key != "kind"})
@@ -620,6 +852,24 @@ def from_data(data: dict) -> QueryTree:
     except (AttributeError, TypeError, KeyError) as exc:
         raise QueryError("Invalid saved query IR") from exc
     return query
+
+
+def encode_fragment(fragment: Expression | Match | Pattern | RowStream) -> dict:
+    """Archive a contextual IR fragment; semantic validation belongs to its use."""
+    if not isinstance(fragment, Expression | Match | Pattern | RowStream):
+        raise QueryError("Expected an expression, MATCH, pattern or row stream")
+    return {"version": 1, "fragment": _encode(fragment)}
+
+
+def decode_fragment(data: dict) -> Expression | Match | Pattern | RowStream:
+    """Strict structural decoding without inventing an enclosing query scope."""
+    if (not isinstance(data, dict) or set(data) != {"version", "fragment"}
+            or type(data["version"]) is not int or data["version"] != 1):
+        raise QueryError("Unsupported IR fragment archive")
+    value = _decode(data["fragment"])
+    if not isinstance(value, Expression | Match | Pattern | RowStream):
+        raise QueryError("Expected an expression, MATCH, pattern or row stream")
+    return value
 
 
 def _static_kind(expression: Expression) -> str:
@@ -659,15 +909,32 @@ def requirements(query: QueryTree) -> frozenset[str]:
                 found.update(("bounded_path", "path_mode_" + value.path_mode))
         elif isinstance(value, Match) and value.optional:
             found.add("optional_match")
+        elif isinstance(value, With):
+            found.add("with_clause")
+            if value.distinct:
+                found.add("distinct")
+        elif isinstance(value, (Exists, Count)) and value.body is not None:
+            found.add("query_subquery")
+            if not isinstance(value.body, Query):
+                found.add("recursive_row_stream")
+        elif isinstance(value, RowLimit):
+            found.update(("row_limit", "recursive_row_stream", "call_scope"))
+        elif isinstance(value, UnionAll) and any(not isinstance(branch, Query) for branch in value.branches):
+            found.update(("recursive_row_stream", "call_scope"))
+        elif isinstance(value, ConditionalQuery) and any(not isinstance(branch, Query) for branch in (value.then, value.otherwise)):
+            found.update(("recursive_row_stream", "call_scope"))
         elif isinstance(value, Query):
             if value.distinct:
                 found.add("distinct")
             if value.limit is not None:
                 found.add("limit")
-            if value.pattern is None:
+            if not clauses(value):
                 found.add("return_only")
             bound = set()
             for clause in clauses(value):
+                if isinstance(clause, With):
+                    bound = {item.name for item in clause.projections}
+                    continue
                 nodes = (clause.pattern,) if isinstance(clause.pattern, Node) else (clause.pattern.left, clause.pattern.right)
                 if any(node.variable in bound and node.labels for node in nodes):
                     found.add("label_rebinding")

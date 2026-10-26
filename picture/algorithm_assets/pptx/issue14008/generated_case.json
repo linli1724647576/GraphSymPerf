@@ -1,0 +1,27 @@
+{
+  "pattern": "P3",
+  "scale": 300000,
+  "state_variant": "pruning_path",
+  "query_seed": 0,
+  "data_seed": 0,
+  "wrapping_bound": 0,
+  "query_pair": [
+    "MATCH p = (u:GspLow {id: 1})-[:GSP_LINK*1..3]-(v:GspHigh) WHERE all(x IN nodes(p) WHERE (x.keep = true)) RETURN u.uid, v.uid, length(p) AS hops",
+    "MATCH p = (v:GspHigh)-[:GSP_LINK*1..3]-(u:GspLow {id: 1}) WHERE all(x IN nodes(p) WHERE (x.keep = true)) RETURN u.uid, v.uid, length(p) AS hops"
+  ],
+  "expected_rows": [
+    {
+      "u.uid": 1,
+      "v.uid": 3,
+      "hops": 2
+    }
+  ],
+  "index_requirements": [
+    {
+      "name": "gsp_cost_lookup",
+      "label": "GspLow",
+      "property": "id"
+    }
+  ],
+  "database_executed_in_this_task": false
+}

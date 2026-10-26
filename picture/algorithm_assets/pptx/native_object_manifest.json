@@ -1,0 +1,1730 @@
+[
+  {
+    "file": "Algorithm_1_graph_state_generation.pptx",
+    "widthMm": 180,
+    "heightMm": 48.6,
+    "source": "Algorithm_1_graph_state_generation.svg",
+    "shapeCount": 31,
+    "textCount": 25,
+    "objectMap": [
+      {
+        "source": 0,
+        "name": "ungrouped_rect_0",
+        "type": "rect",
+        "group": "ungrouped"
+      },
+      {
+        "source": 1,
+        "name": "algorithm1-skeleton_rect_1",
+        "type": "rect",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "source": 2,
+        "name": "algorithm1-skeleton_text_2",
+        "type": "text",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "name": "algorithm1-skeleton_text_2_run0",
+        "text": "(a) Skeleton S",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 78.80646514892578,
+        "sourceSize": 17,
+        "sourceAdvance": 112.38707733154297
+      },
+      {
+        "source": 3,
+        "name": "algorithm1-skeleton_line_3",
+        "type": "line",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "source": 4,
+        "name": "algorithm1-skeleton_line_4",
+        "type": "line",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "source": 5,
+        "name": "algorithm1-skeleton_line_5",
+        "type": "line",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "source": 6,
+        "name": "algorithm1-skeleton_line_6",
+        "type": "line",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "source": 7,
+        "name": "algorithm1-skeleton_rect_7",
+        "type": "rect",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "source": 8,
+        "name": "algorithm1-skeleton_text_8",
+        "type": "text",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "name": "algorithm1-skeleton_text_8_run0",
+        "text": "coalesce",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 110.00000762939453,
+        "sourceX": 97.80178833007812,
+        "sourceSize": 15.5,
+        "sourceAdvance": 74.39642333984375
+      },
+      {
+        "source": 9,
+        "name": "algorithm1-skeleton_rect_9",
+        "type": "rect",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "source": 10,
+        "name": "algorithm1-skeleton_text_10",
+        "type": "text",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "name": "algorithm1-skeleton_text_10_run0",
+        "text": "NULL",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 175,
+        "sourceX": 47.00383758544922,
+        "sourceSize": 15,
+        "sourceAdvance": 35.992340087890625
+      },
+      {
+        "source": 11,
+        "name": "algorithm1-skeleton_circle_11",
+        "type": "circle",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "source": 12,
+        "name": "algorithm1-skeleton_text_12",
+        "type": "text",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "name": "algorithm1-skeleton_text_12_run0",
+        "text": "L",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 176,
+        "sourceX": 129.43003845214844,
+        "sourceSize": 20,
+        "sourceAdvance": 11.139938354492188
+      },
+      {
+        "source": 13,
+        "name": "algorithm1-skeleton_circle_13",
+        "type": "circle",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "source": 14,
+        "name": "algorithm1-skeleton_text_14",
+        "type": "text",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "name": "algorithm1-skeleton_text_14_run0",
+        "text": "E",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.69448818897638,
+        "sourceBaseline": 176,
+        "sourceX": 191.2505340576172,
+        "sourceSize": 19,
+        "sourceAdvance": 11.622283935546875
+      },
+      {
+        "name": "algorithm1-skeleton_text_14_run1",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 6.980031496062993,
+        "sourceBaseline": 183.35006713867188,
+        "sourceX": 202.87281799316406,
+        "sourceSize": 13.68,
+        "sourceAdvance": 9.87664794921875
+      },
+      {
+        "source": 15,
+        "name": "algorithm1-skeleton_text_15",
+        "type": "text",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "name": "algorithm1-skeleton_text_15_run0",
+        "text": "L ≠ NULL",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 214,
+        "sourceX": 98.2152328491211,
+        "sourceSize": 18,
+        "sourceAdvance": 73.56954193115234
+      },
+      {
+        "source": 16,
+        "name": "algorithm1-skeleton_text_16",
+        "type": "text",
+        "group": "algorithm1-skeleton"
+      },
+      {
+        "name": "algorithm1-skeleton_text_16_run0",
+        "text": "p = S7, N = 2",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 242,
+        "sourceX": 88.12037658691406,
+        "sourceSize": 17,
+        "sourceAdvance": 93.75924682617188
+      },
+      {
+        "source": 17,
+        "name": "ungrouped_line_17",
+        "type": "line",
+        "group": "ungrouped"
+      },
+      {
+        "source": 18,
+        "name": "algorithm1-graph_rect_18",
+        "type": "rect",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 19,
+        "name": "algorithm1-graph_text_19",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_19_run0",
+        "text": "(b) Graph state G",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 439.5993347167969,
+        "sourceSize": 17,
+        "sourceAdvance": 138.80136108398438
+      },
+      {
+        "source": 20,
+        "name": "algorithm1-graph_line_20",
+        "type": "line",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 21,
+        "name": "algorithm1-graph_line_21",
+        "type": "line",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 22,
+        "name": "algorithm1-graph_line_22",
+        "type": "line",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 23,
+        "name": "algorithm1-graph_circle_23",
+        "type": "circle",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 24,
+        "name": "algorithm1-graph_text_24",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_24_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 145,
+        "sourceX": 359.9927673339844,
+        "sourceSize": 20,
+        "sourceAdvance": 10.01446533203125
+      },
+      {
+        "source": 25,
+        "name": "algorithm1-graph_text_25",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_25_run0",
+        "text": ":Root",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 177,
+        "sourceX": 342.50189208984375,
+        "sourceSize": 15,
+        "sourceAdvance": 44.996185302734375
+      },
+      {
+        "source": 26,
+        "name": "algorithm1-graph_text_26",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_26_run0",
+        "text": "{id:1}",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 195.99998474121094,
+        "sourceX": 337.9999694824219,
+        "sourceSize": 15,
+        "sourceAdvance": 54
+      },
+      {
+        "source": 27,
+        "name": "algorithm1-graph_circle_27",
+        "type": "circle",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 28,
+        "name": "algorithm1-graph_circle_28",
+        "type": "circle",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 29,
+        "name": "algorithm1-graph_circle_29",
+        "type": "circle",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 30,
+        "name": "algorithm1-graph_text_30",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_30_run0",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.714960629921261,
+        "sourceBaseline": 80,
+        "sourceX": 612,
+        "sourceSize": 21,
+        "sourceAdvance": 15.1824951171875
+      },
+      {
+        "source": 31,
+        "name": "algorithm1-graph_text_31",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_31_run0",
+        "text": "×8",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 103.00000762939453,
+        "sourceX": 612,
+        "sourceSize": 17,
+        "sourceAdvance": 19.38580322265625
+      },
+      {
+        "source": 32,
+        "name": "algorithm1-graph_circle_32",
+        "type": "circle",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 33,
+        "name": "algorithm1-graph_circle_33",
+        "type": "circle",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 34,
+        "name": "algorithm1-graph_circle_34",
+        "type": "circle",
+        "group": "algorithm1-graph"
+      },
+      {
+        "source": 35,
+        "name": "algorithm1-graph_text_35",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_35_run0",
+        "text": "R",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.714960629921261,
+        "sourceBaseline": 183,
+        "sourceX": 612,
+        "sourceSize": 21,
+        "sourceAdvance": 12.83966064453125
+      },
+      {
+        "source": 36,
+        "name": "algorithm1-graph_text_36",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_36_run0",
+        "text": "×3",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 206.00001525878906,
+        "sourceX": 612,
+        "sourceSize": 17,
+        "sourceAdvance": 19.38580322265625
+      },
+      {
+        "source": 37,
+        "name": "algorithm1-graph_text_37",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_37_run0",
+        "text": "HIGH",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 95,
+        "sourceX": 450.00384521484375,
+        "sourceSize": 15,
+        "sourceAdvance": 35.992340087890625
+      },
+      {
+        "source": 38,
+        "name": "algorithm1-graph_text_38",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_38_run0",
+        "text": "REF",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 192.00001525878906,
+        "sourceX": 454.4942932128906,
+        "sourceSize": 15,
+        "sourceAdvance": 27.011474609375
+      },
+      {
+        "source": 39,
+        "name": "algorithm1-graph_text_39",
+        "type": "text",
+        "group": "algorithm1-graph"
+      },
+      {
+        "name": "algorithm1-graph_text_39_run0",
+        "text": "Targets: mark = true",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 239,
+        "sourceX": 442.12591552734375,
+        "sourceSize": 15,
+        "sourceAdvance": 133.7481689453125
+      },
+      {
+        "source": 40,
+        "name": "ungrouped_line_40",
+        "type": "line",
+        "group": "ungrouped"
+      },
+      {
+        "source": 41,
+        "name": "algorithm1-output_rect_41",
+        "type": "rect",
+        "group": "algorithm1-output"
+      },
+      {
+        "source": 42,
+        "name": "algorithm1-output_text_42",
+        "type": "text",
+        "group": "algorithm1-output"
+      },
+      {
+        "name": "algorithm1-output_text_42_run0",
+        "text": "(c) Output",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 833.4138793945312,
+        "sourceSize": 17,
+        "sourceAdvance": 81.17230224609375
+      },
+      {
+        "source": 43,
+        "name": "algorithm1-output_line_43",
+        "type": "line",
+        "group": "algorithm1-output"
+      },
+      {
+        "source": 44,
+        "name": "algorithm1-output_text_44",
+        "type": "text",
+        "group": "algorithm1-output"
+      },
+      {
+        "name": "algorithm1-output_text_44_run0",
+        "text": "(G, I)",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 13.776377952755906,
+        "sourceBaseline": 89,
+        "sourceX": 844.0255737304688,
+        "sourceSize": 27,
+        "sourceAdvance": 59.94891357421875
+      },
+      {
+        "source": 45,
+        "name": "algorithm1-output_text_45",
+        "type": "text",
+        "group": "algorithm1-output"
+      },
+      {
+        "name": "algorithm1-output_text_45_run0",
+        "text": "I:",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.69448818897638,
+        "sourceBaseline": 126,
+        "sourceX": 790,
+        "sourceSize": 19,
+        "sourceAdvance": 12.6558837890625
+      },
+      {
+        "source": 46,
+        "name": "algorithm1-output_text_46",
+        "type": "text",
+        "group": "algorithm1-output"
+      },
+      {
+        "name": "algorithm1-output_text_46_run0",
+        "text": "one root",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 126,
+        "sourceX": 820,
+        "sourceSize": 15.5,
+        "sourceAdvance": 56.87115478515625
+      },
+      {
+        "source": 47,
+        "name": "algorithm1-output_text_47",
+        "type": "text",
+        "group": "algorithm1-output"
+      },
+      {
+        "name": "algorithm1-output_text_47_run0",
+        "text": "|H| = 8, |R| = 3",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 154,
+        "sourceX": 820,
+        "sourceSize": 17,
+        "sourceAdvance": 106.75970458984375
+      },
+      {
+        "source": 48,
+        "name": "algorithm1-output_line_48",
+        "type": "line",
+        "group": "algorithm1-output"
+      },
+      {
+        "source": 49,
+        "name": "algorithm1-output_text_49",
+        "type": "text",
+        "group": "algorithm1-output"
+      },
+      {
+        "name": "algorithm1-output_text_49_run0",
+        "text": "Algorithm 2",
+        "key": "Arial|normal|normal",
+        "fontPt": 8.418897637795276,
+        "sourceBaseline": 232.00001525878906,
+        "sourceX": 832.2883911132812,
+        "sourceSize": 16.5,
+        "sourceAdvance": 83.42327880859375
+      }
+    ]
+  },
+  {
+    "file": "Algorithm_2_query_pair_construction.pptx",
+    "widthMm": 180,
+    "heightMm": 81.72,
+    "source": "Algorithm_2_query_pair_construction.svg",
+    "shapeCount": 51,
+    "textCount": 57,
+    "objectMap": [
+      {
+        "source": 0,
+        "name": "ungrouped_rect_0",
+        "type": "rect",
+        "group": "ungrouped"
+      },
+      {
+        "source": 1,
+        "name": "ungrouped_rect_1",
+        "type": "rect",
+        "group": "ungrouped"
+      },
+      {
+        "source": 2,
+        "name": "ungrouped_text_2",
+        "type": "text",
+        "group": "ungrouped"
+      },
+      {
+        "name": "ungrouped_text_2_run0",
+        "text": "Skeleton S",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 86.55682373046875,
+        "sourceSize": 17,
+        "sourceAdvance": 86.88632202148438
+      },
+      {
+        "source": 3,
+        "name": "ungrouped_line_3",
+        "type": "line",
+        "group": "ungrouped"
+      },
+      {
+        "source": 4,
+        "name": "ungrouped_line_4",
+        "type": "line",
+        "group": "ungrouped"
+      },
+      {
+        "source": 5,
+        "name": "ungrouped_rect_5",
+        "type": "rect",
+        "group": "ungrouped"
+      },
+      {
+        "source": 6,
+        "name": "ungrouped_text_6",
+        "type": "text",
+        "group": "ungrouped"
+      },
+      {
+        "name": "ungrouped_text_6_run0",
+        "text": "Base query Q",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 441.8116455078125,
+        "sourceSize": 17,
+        "sourceAdvance": 109.5552978515625
+      },
+      {
+        "name": "ungrouped_text_6_run1",
+        "text": "1",
+        "key": "Arial|bold|normal",
+        "fontPt": 6.245291338582678,
+        "sourceBaseline": 39.34962463378906,
+        "sourceX": 551.366943359375,
+        "sourceSize": 12.24,
+        "sourceAdvance": 6.8214111328125
+      },
+      {
+        "source": 7,
+        "name": "ungrouped_line_7",
+        "type": "line",
+        "group": "ungrouped"
+      },
+      {
+        "source": 8,
+        "name": "ungrouped_line_8",
+        "type": "line",
+        "group": "ungrouped"
+      },
+      {
+        "source": 9,
+        "name": "ungrouped_rect_9",
+        "type": "rect",
+        "group": "ungrouped"
+      },
+      {
+        "source": 10,
+        "name": "ungrouped_text_10",
+        "type": "text",
+        "group": "ungrouped"
+      },
+      {
+        "name": "ungrouped_text_10_run0",
+        "text": "Mutated query Q",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.674015748031497,
+        "sourceBaseline": 32,
+        "sourceX": 799.5469970703125,
+        "sourceSize": 17,
+        "sourceAdvance": 134.08465576171875
+      },
+      {
+        "name": "ungrouped_text_10_run1",
+        "text": "2",
+        "key": "Arial|bold|normal",
+        "fontPt": 6.245291338582678,
+        "sourceBaseline": 39.34962463378906,
+        "sourceX": 933.6316528320312,
+        "sourceSize": 12.24,
+        "sourceAdvance": 6.8214111328125
+      },
+      {
+        "source": 11,
+        "name": "ungrouped_line_11",
+        "type": "line",
+        "group": "ungrouped"
+      },
+      {
+        "source": 12,
+        "name": "ungrouped_line_12",
+        "type": "line",
+        "group": "ungrouped"
+      },
+      {
+        "source": 13,
+        "name": "algorithm2-handoff_text_13",
+        "type": "text",
+        "group": "algorithm2-handoff"
+      },
+      {
+        "name": "algorithm2-handoff_text_13_run0",
+        "text": "(G, I)",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.69448818897638,
+        "sourceBaseline": 36,
+        "sourceX": 293.904296875,
+        "sourceSize": 19,
+        "sourceAdvance": 42.19140625
+      },
+      {
+        "source": 14,
+        "name": "algorithm2-handoff_line_14",
+        "type": "line",
+        "group": "algorithm2-handoff"
+      },
+      {
+        "source": 15,
+        "name": "algorithm2-short-circuit_text_15",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_15_run0",
+        "text": "S7 · Short-circuit pattern",
+        "key": "Arial|bold|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 70,
+        "sourceX": 20,
+        "sourceSize": 15.5,
+        "sourceAdvance": 181.65054321289062
+      },
+      {
+        "source": 16,
+        "name": "algorithm2-short-circuit_line_16",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 17,
+        "name": "algorithm2-short-circuit_line_17",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 18,
+        "name": "algorithm2-short-circuit_line_18",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 19,
+        "name": "algorithm2-short-circuit_rect_19",
+        "type": "rect",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 20,
+        "name": "algorithm2-short-circuit_text_20",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_20_run0",
+        "text": "coalesce",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 124,
+        "sourceX": 92.80400085449219,
+        "sourceSize": 15.5,
+        "sourceAdvance": 74.3919677734375
+      },
+      {
+        "source": 21,
+        "name": "algorithm2-short-circuit_rect_21",
+        "type": "rect",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 22,
+        "name": "algorithm2-short-circuit_text_22",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_22_run0",
+        "text": "NULL",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 189,
+        "sourceX": 42.00489807128906,
+        "sourceSize": 15,
+        "sourceAdvance": 35.99018859863281
+      },
+      {
+        "source": 23,
+        "name": "algorithm2-short-circuit_circle_23",
+        "type": "circle",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 24,
+        "name": "algorithm2-short-circuit_text_24",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_24_run0",
+        "text": "L",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 190.00001525878906,
+        "sourceX": 124.43035888671875,
+        "sourceSize": 20,
+        "sourceAdvance": 11.1392822265625
+      },
+      {
+        "source": 25,
+        "name": "algorithm2-short-circuit_circle_25",
+        "type": "circle",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 26,
+        "name": "algorithm2-short-circuit_text_26",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_26_run0",
+        "text": "E",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.69448818897638,
+        "sourceBaseline": 190.00001525878906,
+        "sourceX": 186.25119018554688,
+        "sourceSize": 19,
+        "sourceAdvance": 11.62158203125
+      },
+      {
+        "name": "algorithm2-short-circuit_text_26_run1",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 6.980031496062993,
+        "sourceBaseline": 197.34963989257812,
+        "sourceX": 197.87277221679688,
+        "sourceSize": 13.68,
+        "sourceAdvance": 9.876052856445312
+      },
+      {
+        "source": 27,
+        "name": "algorithm2-short-circuit_line_27",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 28,
+        "name": "algorithm2-short-circuit_line_28",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 29,
+        "name": "algorithm2-short-circuit_line_29",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 30,
+        "name": "algorithm2-short-circuit_rect_30",
+        "type": "rect",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 31,
+        "name": "algorithm2-short-circuit_text_31",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_31_run0",
+        "text": "coalesce",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 124,
+        "sourceX": 462.80401611328125,
+        "sourceSize": 15.5,
+        "sourceAdvance": 74.3919677734375
+      },
+      {
+        "source": 32,
+        "name": "algorithm2-short-circuit_rect_32",
+        "type": "rect",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 33,
+        "name": "algorithm2-short-circuit_text_33",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_33_run0",
+        "text": "NULL",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 189,
+        "sourceX": 400.0049133300781,
+        "sourceSize": 15,
+        "sourceAdvance": 35.990203857421875
+      },
+      {
+        "source": 34,
+        "name": "algorithm2-short-circuit_circle_34",
+        "type": "circle",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 35,
+        "name": "algorithm2-short-circuit_text_35",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_35_run0",
+        "text": "0",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 190.00001525878906,
+        "sourceX": 482.9930725097656,
+        "sourceSize": 20,
+        "sourceAdvance": 10.013885498046875
+      },
+      {
+        "source": 36,
+        "name": "algorithm2-short-circuit_rect_36",
+        "type": "rect",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 37,
+        "name": "algorithm2-short-circuit_text_37",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_37_run0",
+        "text": "COUNT {…}",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 181,
+        "sourceX": 525.851806640625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 78.29644775390625
+      },
+      {
+        "source": 38,
+        "name": "algorithm2-short-circuit_text_38",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_38_run0",
+        "text": ":HIGH",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 200.00001525878906,
+        "sourceX": 542.5032958984375,
+        "sourceSize": 15,
+        "sourceAdvance": 44.99346923828125
+      },
+      {
+        "source": 39,
+        "name": "algorithm2-short-circuit_line_39",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 40,
+        "name": "algorithm2-short-circuit_line_40",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 41,
+        "name": "algorithm2-short-circuit_line_41",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 42,
+        "name": "algorithm2-short-circuit_rect_42",
+        "type": "rect",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 43,
+        "name": "algorithm2-short-circuit_text_43",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_43_run0",
+        "text": "coalesce",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 124,
+        "sourceX": 832.8040161132812,
+        "sourceSize": 15.5,
+        "sourceAdvance": 74.3919677734375
+      },
+      {
+        "source": 44,
+        "name": "algorithm2-short-circuit_rect_44",
+        "type": "rect",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 45,
+        "name": "algorithm2-short-circuit_text_45",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_45_run0",
+        "text": "NULL",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 189,
+        "sourceX": 770.0049438476562,
+        "sourceSize": 15,
+        "sourceAdvance": 35.99017333984375
+      },
+      {
+        "source": 46,
+        "name": "algorithm2-short-circuit_circle_46",
+        "type": "circle",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 47,
+        "name": "algorithm2-short-circuit_text_47",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_47_run0",
+        "text": "0",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 190.00001525878906,
+        "sourceX": 852.9930419921875,
+        "sourceSize": 20,
+        "sourceAdvance": 10.01385498046875
+      },
+      {
+        "source": 48,
+        "name": "algorithm2-short-circuit_rect_48",
+        "type": "rect",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 49,
+        "name": "algorithm2-short-circuit_text_49",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_49_run0",
+        "text": "COUNT {…}",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 181,
+        "sourceX": 895.851806640625,
+        "sourceSize": 14.5,
+        "sourceAdvance": 78.29644775390625
+      },
+      {
+        "source": 50,
+        "name": "algorithm2-short-circuit_text_50",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_50_run0",
+        "text": ":REF",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 200.00001525878906,
+        "sourceX": 917.0049438476562,
+        "sourceSize": 15,
+        "sourceAdvance": 35.99017333984375
+      },
+      {
+        "source": 51,
+        "name": "algorithm2-short-circuit_line_51",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 52,
+        "name": "algorithm2-short-circuit_line_52",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 53,
+        "name": "algorithm2-short-circuit_text_53",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_53_run0",
+        "text": "Skeleton",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 117,
+        "sourceX": 286.7958068847656,
+        "sourceSize": 14.5,
+        "sourceAdvance": 56.40838623046875
+      },
+      {
+        "source": 54,
+        "name": "algorithm2-short-circuit_text_54",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_54_run0",
+        "text": "population",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 134,
+        "sourceX": 281.5477294921875,
+        "sourceSize": 14.5,
+        "sourceAdvance": 66.904541015625
+      },
+      {
+        "source": 55,
+        "name": "algorithm2-short-circuit_text_55",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_55_run0",
+        "text": "β",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 175,
+        "sourceX": 310.50982666015625,
+        "sourceSize": 18,
+        "sourceAdvance": 8.9803466796875
+      },
+      {
+        "source": 56,
+        "name": "algorithm2-short-circuit_line_56",
+        "type": "line",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "source": 57,
+        "name": "algorithm2-short-circuit_text_57",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_57_run0",
+        "text": "Reference",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 117,
+        "sourceX": 651.5592651367188,
+        "sourceSize": 14.5,
+        "sourceAdvance": 66.88153076171875
+      },
+      {
+        "source": 58,
+        "name": "algorithm2-short-circuit_text_58",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_58_run0",
+        "text": "substitution",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 134,
+        "sourceX": 648.3323364257812,
+        "sourceSize": 14.5,
+        "sourceAdvance": 73.33544921875
+      },
+      {
+        "source": 59,
+        "name": "algorithm2-short-circuit_text_59",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_59_run0",
+        "text": "H ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 175,
+        "sourceX": 663.0889282226562,
+        "sourceSize": 18,
+        "sourceAdvance": 17.5013427734375
+      },
+      {
+        "name": "algorithm2-short-circuit_text_59_run1",
+        "text": "↦",
+        "key": "Menlo|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 175,
+        "sourceX": 680.5672607421875,
+        "sourceSize": 18,
+        "sourceAdvance": 10.86370849609375
+      },
+      {
+        "name": "algorithm2-short-circuit_text_59_run2",
+        "text": " R",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 175,
+        "sourceX": 691.407958984375,
+        "sourceSize": 18,
+        "sourceAdvance": 15.50311279296875
+      },
+      {
+        "source": 60,
+        "name": "algorithm2-short-circuit_text_60",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_60_run0",
+        "text": "L ≠ NULL",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.929133858267717,
+        "sourceBaseline": 234,
+        "sourceX": 94.23947143554688,
+        "sourceSize": 17.5,
+        "sourceAdvance": 71.52102661132812
+      },
+      {
+        "source": 61,
+        "name": "algorithm2-short-circuit_text_61",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_61_run0",
+        "text": "value = 0",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 234,
+        "sourceX": 459.5081481933594,
+        "sourceSize": 15,
+        "sourceAdvance": 80.98367309570312
+      },
+      {
+        "source": 62,
+        "name": "algorithm2-short-circuit_text_62",
+        "type": "text",
+        "group": "algorithm2-short-circuit"
+      },
+      {
+        "name": "algorithm2-short-circuit_text_62_run0",
+        "text": "value = 0",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 234,
+        "sourceX": 829.5081787109375,
+        "sourceSize": 15,
+        "sourceAdvance": 80.983642578125
+      },
+      {
+        "source": 63,
+        "name": "algorithm2-symmetry_text_63",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_63_run0",
+        "text": "P1 · Symmetry pattern",
+        "key": "Arial|bold|normal",
+        "fontPt": 7.908661417322835,
+        "sourceBaseline": 288,
+        "sourceX": 20,
+        "sourceSize": 15.5,
+        "sourceAdvance": 164.47079467773438
+      },
+      {
+        "source": 64,
+        "name": "algorithm2-symmetry_line_64",
+        "type": "line",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 65,
+        "name": "algorithm2-symmetry_text_65",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_65_run0",
+        "text": "T",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 332,
+        "sourceX": 125.49835205078125,
+        "sourceSize": 15,
+        "sourceAdvance": 9.0032958984375
+      },
+      {
+        "source": 66,
+        "name": "algorithm2-symmetry_circle_66",
+        "type": "circle",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 67,
+        "name": "algorithm2-symmetry_text_67",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_67_run0",
+        "text": "L",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 351,
+        "sourceX": 67.43036651611328,
+        "sourceSize": 20,
+        "sourceAdvance": 11.139274597167969
+      },
+      {
+        "source": 68,
+        "name": "algorithm2-symmetry_circle_68",
+        "type": "circle",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 69,
+        "name": "algorithm2-symmetry_text_69",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_69_run0",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 351,
+        "sourceX": 179.77670288085938,
+        "sourceSize": 20,
+        "sourceAdvance": 14.446609497070312
+      },
+      {
+        "source": 70,
+        "name": "algorithm2-symmetry_line_70",
+        "type": "line",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 71,
+        "name": "algorithm2-symmetry_text_71",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_71_run0",
+        "text": "T",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 332,
+        "sourceX": 495.49835205078125,
+        "sourceSize": 15,
+        "sourceAdvance": 9.003265380859375
+      },
+      {
+        "source": 72,
+        "name": "algorithm2-symmetry_circle_72",
+        "type": "circle",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 73,
+        "name": "algorithm2-symmetry_text_73",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_73_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 351,
+        "sourceX": 437.9930725097656,
+        "sourceSize": 20,
+        "sourceAdvance": 10.01385498046875
+      },
+      {
+        "source": 74,
+        "name": "algorithm2-symmetry_text_74",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_74_run0",
+        "text": ":Low",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 382,
+        "sourceX": 425.0048828125,
+        "sourceSize": 15,
+        "sourceAdvance": 35.990203857421875
+      },
+      {
+        "source": 75,
+        "name": "algorithm2-symmetry_text_75",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_75_run0",
+        "text": "{id:1}",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 400.0000305175781,
+        "sourceX": 416.0016174316406,
+        "sourceSize": 15,
+        "sourceAdvance": 53.99676513671875
+      },
+      {
+        "source": 76,
+        "name": "algorithm2-symmetry_circle_76",
+        "type": "circle",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 77,
+        "name": "algorithm2-symmetry_text_77",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_77_run0",
+        "text": "v",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 351,
+        "sourceX": 552.5557861328125,
+        "sourceSize": 20,
+        "sourceAdvance": 8.888427734375
+      },
+      {
+        "source": 78,
+        "name": "algorithm2-symmetry_text_78",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_78_run0",
+        "text": ":High",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 382,
+        "sourceX": 534.5032348632812,
+        "sourceSize": 15,
+        "sourceAdvance": 44.99346923828125
+      },
+      {
+        "source": 79,
+        "name": "algorithm2-symmetry_text_79",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_79_run0",
+        "text": "RETURN u.uid, v.uid",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 429,
+        "sourceX": 417.3626708984375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 165.274658203125
+      },
+      {
+        "source": 80,
+        "name": "algorithm2-symmetry_line_80",
+        "type": "line",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 81,
+        "name": "algorithm2-symmetry_text_81",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_81_run0",
+        "text": "T",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 332,
+        "sourceX": 865.4983520507812,
+        "sourceSize": 15,
+        "sourceAdvance": 9.0032958984375
+      },
+      {
+        "source": 82,
+        "name": "algorithm2-symmetry_circle_82",
+        "type": "circle",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 83,
+        "name": "algorithm2-symmetry_text_83",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_83_run0",
+        "text": "v",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 351,
+        "sourceX": 808.5557250976562,
+        "sourceSize": 20,
+        "sourceAdvance": 8.88848876953125
+      },
+      {
+        "source": 84,
+        "name": "algorithm2-symmetry_text_84",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_84_run0",
+        "text": ":High",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 382,
+        "sourceX": 790.5032348632812,
+        "sourceSize": 15,
+        "sourceAdvance": 44.99346923828125
+      },
+      {
+        "source": 85,
+        "name": "algorithm2-symmetry_circle_85",
+        "type": "circle",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 86,
+        "name": "algorithm2-symmetry_text_86",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_86_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 351,
+        "sourceX": 921.9931030273438,
+        "sourceSize": 20,
+        "sourceAdvance": 10.01385498046875
+      },
+      {
+        "source": 87,
+        "name": "algorithm2-symmetry_text_87",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_87_run0",
+        "text": ":Low",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 382,
+        "sourceX": 909.0049438476562,
+        "sourceSize": 15,
+        "sourceAdvance": 35.990234375
+      },
+      {
+        "source": 88,
+        "name": "algorithm2-symmetry_text_88",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_88_run0",
+        "text": "{id:1}",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 400.0000305175781,
+        "sourceX": 900.0016479492188,
+        "sourceSize": 15,
+        "sourceAdvance": 53.99676513671875
+      },
+      {
+        "source": 89,
+        "name": "algorithm2-symmetry_text_89",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_89_run0",
+        "text": "RETURN u.uid, v.uid",
+        "key": "Courier New|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 429,
+        "sourceX": 787.3626708984375,
+        "sourceSize": 14.5,
+        "sourceAdvance": 165.274658203125
+      },
+      {
+        "source": 90,
+        "name": "algorithm2-symmetry_line_90",
+        "type": "line",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 91,
+        "name": "algorithm2-symmetry_text_91",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_91_run0",
+        "text": "Skeleton",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 312,
+        "sourceX": 286.7958068847656,
+        "sourceSize": 14.5,
+        "sourceAdvance": 56.40838623046875
+      },
+      {
+        "source": 92,
+        "name": "algorithm2-symmetry_text_92",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_92_run0",
+        "text": "population",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 329,
+        "sourceX": 281.5477294921875,
+        "sourceSize": 14.5,
+        "sourceAdvance": 66.904541015625
+      },
+      {
+        "source": 93,
+        "name": "algorithm2-symmetry_text_93",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_93_run0",
+        "text": "β",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 370,
+        "sourceX": 310.50982666015625,
+        "sourceSize": 18,
+        "sourceAdvance": 8.9803466796875
+      },
+      {
+        "source": 94,
+        "name": "algorithm2-symmetry_line_94",
+        "type": "line",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "source": 95,
+        "name": "algorithm2-symmetry_text_95",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_95_run0",
+        "text": "Symmetry",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 312,
+        "sourceX": 652.3860473632812,
+        "sourceSize": 14.5,
+        "sourceAdvance": 65.2279052734375
+      },
+      {
+        "source": 96,
+        "name": "algorithm2-symmetry_text_96",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_96_run0",
+        "text": "transformation",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 329,
+        "sourceX": 638.6744995117188,
+        "sourceSize": 14.5,
+        "sourceAdvance": 92.65118408203125
+      },
+      {
+        "source": 97,
+        "name": "algorithm2-symmetry_text_97",
+        "type": "text",
+        "group": "algorithm2-symmetry"
+      },
+      {
+        "name": "algorithm2-symmetry_text_97_run0",
+        "text": "Dashed nodes: placeholders",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.398425196850394,
+        "sourceBaseline": 429,
+        "sourceX": 38.141178131103516,
+        "sourceSize": 14.5,
+        "sourceAdvance": 183.7176170349121
+      }
+    ]
+  }
+]

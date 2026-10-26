@@ -1,6 +1,6 @@
 """Generate a small language subset from the shared query IR.
 
-Gremlin supports a checked explicit-traversal subset on JanusGraph/HugeGraph.
+Gremlin supports a checked explicit-traversal subset on JanusGraph/HugeGraph/ArcadeDB.
 GQL remains an extension point and fails explicitly until implemented.
 """
 
@@ -9,13 +9,39 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Iterable, Mapping
 
-from ir import Alias, ConditionalQuery, QueryError, QueryTree, UnionAll, requirements
+from ir import Alias, ConditionalQuery, QueryError, QueryTree, RowLimit, UnionAll, requirements
 from query import projection_names, render_query
 
 
 DBMS = ("neo4j", "memgraph", "falkordb", "arcadedb", "age", "ladybug", "janusgraph", "hugegraph")
 LANGUAGES = ("cypher", "gremlin", "gql")
 AGE_TESTED_LIMITS = frozenset({"relationship_alternatives", "label_rebinding", "all", "boolean_expression_coalesce"})
+
+# JanusGraph 1.1.0 SystemTypeManager.ADDITIONAL_RESERVED_NAMES. These are
+# ordinary logical property names in the IR, not JanusGraph's implicit keys.
+JANUSGRAPH_RESERVED_PROPERTY_NAMES = frozenset({"key", "vertex", "edge", "element", "property", "label"})
+JANUSGRAPH_PROPERTY_PREFIX = "_gsp_property_"
+
+
+def gremlin_property_key(key: str, target: str) -> str:
+    """Encode only provider-reserved property slots; never rewrite scalar values.
+
+    Escape the prefix itself so a logical ``key`` and ``_gsp_property_key``
+    remain different properties. Labels, IR, columns and GraphSpec stay logical.
+    """
+    if target == "janusgraph" and (key.lower() in JANUSGRAPH_RESERVED_PROPERTY_NAMES
+                                  or key.startswith(JANUSGRAPH_PROPERTY_PREFIX)):
+        return JANUSGRAPH_PROPERTY_PREFIX + key
+    return key
+
+
+def logical_gremlin_property_key(key: str, target: str) -> str:
+    """Invert encoded native property names for independent graph diagnostics."""
+    if target == "janusgraph" and key.startswith(JANUSGRAPH_PROPERTY_PREFIX):
+        logical = key[len(JANUSGRAPH_PROPERTY_PREFIX):]
+        if gremlin_property_key(logical, target) == key:
+            return logical
+    return key
 
 
 class UnsupportedLanguage(QueryError):
@@ -57,7 +83,10 @@ class CompiledQuery:
 def validate_language(query: QueryTree, dbms: str = "neo4j", language: str = "cypher", *,
                       verified_features: Iterable[str] = ()) -> frozenset[str]:
     language = language.lower()
-    if language == "gremlin" and dbms in {"janusgraph", "hugegraph"}:
+    recursive = requirements(query) & {"with_clause", "query_subquery", "recursive_row_stream", "row_limit", "call_scope"}
+    if recursive and (dbms != "neo4j" or language != "cypher"):
+        raise UnsupportedFeature(dbms, recursive)
+    if language == "gremlin" and dbms in {"janusgraph", "hugegraph", "arcadedb"}:
         from gremlin import validate_gremlin
         return validate_gremlin(query, dbms, verified_features=verified_features)
     if language != "cypher":
@@ -91,6 +120,8 @@ def validate_language(query: QueryTree, dbms: str = "neo4j", language: str = "cy
 
 
 def _alias_outputs(query: QueryTree) -> QueryTree:
+    if isinstance(query, RowLimit):
+        return replace(query, body=_alias_outputs(query.body))
     if isinstance(query, UnionAll):
         return replace(query, branches=tuple(_alias_outputs(branch) for branch in query.branches))
     if isinstance(query, ConditionalQuery):
@@ -107,7 +138,9 @@ def generate(query: QueryTree, dbms: str = "neo4j", language: str = "cypher", *,
     This check rejects known semantic mismatches; it is not a claim that every
     identified feature is implemented by every release of the target engine.
     """
-    if language.lower() == "gremlin" and dbms in {"janusgraph", "hugegraph"}:
+    verified_features = frozenset(verified_features)
+    if language.lower() == "gremlin" and dbms in {"janusgraph", "hugegraph", "arcadedb"}:
+        validate_language(query, dbms, language, verified_features=verified_features)
         from gremlin import generate_gremlin
         return generate_gremlin(query, dbms, verified_features=verified_features)
     needed = validate_language(query, dbms, language, verified_features=verified_features)
@@ -121,7 +154,7 @@ def render_saved(query: QueryTree, dbms: str = "neo4j", language: str = "cypher"
     Execution must use generate or validate_language to apply current gates.
     IR scope/type validation and known language/dialect checks remain required.
     """
-    if language.lower() == "gremlin" and dbms in {"janusgraph", "hugegraph"}:
+    if language.lower() == "gremlin" and dbms in {"janusgraph", "hugegraph", "arcadedb"}:
         from gremlin import generate_gremlin
         return generate_gremlin(query, dbms, verified_features=("gremlin_null_projection",))
     if language.lower() != "cypher":
@@ -132,6 +165,9 @@ def render_saved(query: QueryTree, dbms: str = "neo4j", language: str = "cypher"
 
 
 def _render_compiled(query: QueryTree, dbms: str, needed: frozenset[str]) -> CompiledQuery:
+    row_stream_features = needed & {"recursive_row_stream", "row_limit", "call_scope"}
+    if dbms != "neo4j" and row_stream_features:
+        raise UnsupportedFeature(dbms, row_stream_features)
     logical = projection_names(query)
     if dbms in ("neo4j", "memgraph", "falkordb"):
         return CompiledQuery(render_query(query), tuple(zip(logical, logical)), needed)

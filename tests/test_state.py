@@ -39,6 +39,7 @@ def check_value(check, nodes, edges):
                 for node in nodes if node["uid"] == check["uid"] and matches(node, check["label"])]
     if kind == "edge_count":
         return sum(edge["type"] == check["type"]
+                   and matches(edge, properties=check.get("properties"))
                    and matches(by_uid[edge["source"]], check.get("source_label"), check.get("source_properties"))
                    and matches(by_uid[edge["target"]], check.get("target_label"), check.get("target_properties"))
                    for edge in edges)
@@ -206,3 +207,95 @@ def test_recipe_rejects_invalid_or_inapplicable_input(kwargs):
     params = {"pattern": "P1", "scale": 1, "data_seed": 0, **kwargs}
     with pytest.raises(ValueError):
         GraphSpec(**params)
+
+
+def test_null_population_check_observes_both_null_and_missing_properties():
+    spec = GraphSpec('AST', 1, 0, version=2, node_groups=(
+        {'count': 1, 'labels': ['Item'], 'properties': {'uid': 1, 'flag': None}},
+        {'count': 1, 'labels': ['Item'], 'properties': {'uid': 2}},
+        {'count': 1, 'labels': ['Item'], 'properties': {'uid': 3, 'flag': False}},
+    ))
+    check = {'kind': 'node_count', 'labels': ['Item'], 'properties': {'flag': None}, 'expected': 2}
+    assert check_value(check, list(spec.iter_nodes()), []) == 2
+    rendered, = render_state_checks([check])
+    assert rendered == {'query': 'MATCH (n:Item) WHERE n.flag IS NULL RETURN count(n) AS `count`',
+                        'expected_rows': [{'count': 2}]}
+    generated = render_state_checks(spec.state_checks())
+    assert any('n.flag IS NULL' in item['query'] for item in generated)
+    assert all('flag: null' not in item['query'] for item in generated)
+
+
+def test_null_relationship_and_endpoint_checks_preserve_direction_and_nonnull_values():
+    nodes = [{'uid': 1, 'labels': ['Left'], 'properties': {'uid': 1, 'flag': None}},
+             {'uid': 2, 'labels': ['Right'], 'properties': {'uid': 2}}]
+    edges = [{'source': 1, 'target': 2, 'type': 'R', 'properties': {'score': 0}},
+             {'source': 2, 'target': 1, 'type': 'R', 'properties': {'score': 0}},
+             {'source': 1, 'target': 2, 'type': 'R', 'properties': {'score': 1}}]
+    check = {'kind': 'edge_count', 'type': 'R', 'source_label': 'Left', 'target_label': 'Right',
+             'source_properties': {'uid': 1, 'flag': None}, 'target_properties': {'uid': 2, 'flag': None},
+             'properties': {'score': 0, 'missing': None}, 'expected': 1}
+    assert check_value(check, nodes, edges) == 1
+    rendered, = render_state_checks([check])
+    assert rendered['query'] == ('MATCH (u:Left {uid: 1})-[r:R {score: 0}]->(v:Right {uid: 2}) '
+                                 'WHERE u.flag IS NULL AND r.missing IS NULL AND v.flag IS NULL '
+                                 'RETURN count(r) AS `count`')
+    assert rendered['expected_rows'] == [{'count': 1}]
+
+
+def test_null_check_does_not_drop_false_or_zero_properties():
+    check = {'kind': 'node_count', 'labels': ['Item'],
+             'properties': {'flag': False, 'rank': 0, 'missing': None}, 'expected': 1}
+    rendered, = render_state_checks([check])
+    assert rendered['query'] == ('MATCH (n:Item {flag: false, rank: 0}) WHERE n.missing IS NULL '
+                                 'RETURN count(n) AS `count`')
+
+
+def test_degree_checks_aggregate_all_groups_that_reach_the_same_endpoint_uid():
+    def affine(base, step=1):
+        return {'affine': {'base': base, 'step': step}}
+
+    def edge(count, source, target):
+        return {'count': count, 'source': source, 'target': target,
+                'source_label': 'Source', 'target_label': 'Target', 'type': 'R'}
+
+    spec = GraphSpec('AST', 7, 0, version=2, node_groups=(
+        {'count': 7, 'labels': ['Source'], 'properties': {'uid': affine(1)}},
+        {'count': 7, 'labels': ['Target'], 'properties': {'uid': affine(9)}},
+    ), edge_groups=(
+        edge(1, 1, 9),
+        edge(6, affine(1), 9),
+        edge(6, 1, affine(9)),
+        edge(3, affine(2, 2), affine(9)),
+    ))
+    nodes, edges = list(spec.iter_nodes()), list(spec.iter_edges())
+    checks = spec.state_checks()
+    for check in checks:
+        expected = [check['properties']] if check['kind'] == 'node_properties' else check['expected']
+        assert check_value(check, nodes, edges) == expected, check
+    degree_checks = {(tuple(check['source_properties'].items()), tuple(check['target_properties'].items())):
+                     check['expected'] for check in checks if check['kind'] == 'edge_count'
+                     and 'source_properties' in check}
+    assert degree_checks[((), (('uid', 9),))] == 9
+    assert degree_checks[((('uid', 1),), ())] == 8
+    assert degree_checks[((('uid', 1),), (('uid', 9),))] == 3
+
+
+@pytest.mark.parametrize('source_base,target_base,step,contribution', [
+    (1, 9, 1, 1), (1, 10, 1, 0), (3, 11, -1, 1), (1, 9, 0, 3),
+])
+def test_pair_checks_intersect_affine_source_and_target_indices(source_base, target_base, step, contribution):
+    def affine(base):
+        return {'affine': {'base': base, 'step': step}}
+
+    spec = GraphSpec('AST', 3, 0, version=2, node_groups=tuple(
+        {'count': 1, 'labels': [label], 'properties': {'uid': uid}}
+        for label, values in [('Source', range(1, 4)), ('Target', range(9, 13))] for uid in values
+    ), edge_groups=(
+        {'count': 1, 'source': 1, 'target': 9, 'source_label': 'Source', 'target_label': 'Target', 'type': 'R'},
+        {'count': 3, 'source': affine(source_base), 'target': affine(target_base),
+         'source_label': 'Source', 'target_label': 'Target', 'type': 'R'},
+    ))
+    check = next(check for check in spec.state_checks() if check['kind'] == 'edge_count'
+                 and check.get('source_properties') == {'uid': 1} and check.get('target_properties') == {'uid': 9})
+    assert check['expected'] == 1 + contribution
+    assert check_value(check, list(spec.iter_nodes()), list(spec.iter_edges())) == check['expected']

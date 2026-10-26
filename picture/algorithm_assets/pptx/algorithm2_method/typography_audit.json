@@ -1,0 +1,35 @@
+{
+  "source": "/tmp/graphsymperf-typography/Algorithm_2_query_pair_construction.pptx",
+  "editable_native_objects": 278,
+  "fonts": [
+    "Arial",
+    "Menlo",
+    "Times New Roman"
+  ],
+  "base_sizes_source_units": [
+    14,
+    15,
+    16,
+    18,
+    20,
+    24
+  ],
+  "pictures": 0,
+  "canvas_preserved": true,
+  "flow_review": "Full construction/population, conditional additions, loops, copying, family selection and checks retained",
+  "math_style": "Times New Roman italic variables with upright numeric subscripts; copy operator upright; Menlo only for mapping/empty-set glyphs",
+  "semantic_corrections": [
+    "beta initialization matches Algorithm 2",
+    "Numeric query subscripts and roman copy operator",
+    "Binding-dependency order retained",
+    "V_x matches the pseudocode candidate pool; the prose uses the corresponding calligraphic V"
+  ],
+  "render_engine": "LibreOffice",
+  "published_file": "/Users/sakuraq/Documents/\u79d1\u7814\u5b9e\u4e60/GraphSymPerf/picture/Algorithm2.pptx",
+  "final_pptx_sha256": "c95706e784449f48805c983dda960b5199705cebe59d3851c1674c119c34f753",
+  "visual_review": "passed",
+  "independent_review": "passed",
+  "overflow_check": "passed",
+  "original_flow_preserved": true,
+  "editable": true
+}

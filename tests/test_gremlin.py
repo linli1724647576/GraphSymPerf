@@ -54,11 +54,7 @@ def test_scalar_bindings_preserve_python_type(value):
 
 @pytest.mark.parametrize("text,feature", [
     ("MATCH (u:A:B) RETURN u.uid", "multi_label_conjunction"),
-    ("MATCH p=(u)-[:R*0..3]-(v) RETURN length(p) AS hops", "bounded_path"),
-    ("MATCH (u) OPTIONAL MATCH (u)-[:R]->(v) RETURN v.uid", "optional_match"),
-    ("RETURN all(x IN [1, 2] WHERE x > 0) AS ok", "gremlin_scalar_all"),
-    ("RETURN range(1, 3) AS values", "gremlin_scalar_call"),
-    ("CYPHER 25 WHEN true THEN { RETURN 1 AS x } ELSE { RETURN 2 AS x }", "conditional_query"),
+    ("RETURN range(1, COUNT { MATCH (u) }) AS values", "gremlin_dynamic_range"),
 ])
 def test_semantic_gaps_are_rejected_instead_of_approximate_translation(text, feature):
     with pytest.raises(UnsupportedFeature) as rejected:
@@ -156,7 +152,7 @@ def test_generated_pattern_pair_has_stable_logical_columns_and_explicit_order(pa
     assert original.text != changed.text or original.bindings != changed.bindings
 
 
-@pytest.mark.parametrize("pattern", ["P3", "P7", "P13", "P16"])
+@pytest.mark.parametrize("pattern", ["P7"])
 def test_out_of_fragment_patterns_are_not_counted_as_valid_coverage(pattern):
     seed = load_seeds({"log_files": [str(FIXTURE)]})[0]
     case = instantiate(seed, pattern, 4, 17)

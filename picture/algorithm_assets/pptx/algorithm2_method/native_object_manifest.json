@@ -1,0 +1,2680 @@
+[
+  {
+    "file": "Algorithm_2_query_pair_construction.pptx",
+    "widthMm": 180,
+    "heightMm": 115.92,
+    "source": "docs/Approach.md: Algorithm 2",
+    "shapeCount": 112,
+    "textCount": 166,
+    "objectMap": [
+      {
+        "source": 0,
+        "name": "canvas_rect_0",
+        "type": "rect",
+        "group": "canvas"
+      },
+      {
+        "source": 1,
+        "name": "population_rect_1",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 2,
+        "name": "population_text_2",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_2_run0",
+        "text": "(a) Skeleton population",
+        "key": "Arial|bold|normal",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 33,
+        "sourceX": 24,
+        "sourceSize": 18,
+        "sourceAdvance": 199.001953125
+      },
+      {
+        "source": 3,
+        "name": "population_text_3",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_3_run0",
+        "text": "Input: ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 728.28125,
+        "sourceSize": 15,
+        "sourceAdvance": 41.69677734375
+      },
+      {
+        "name": "population_text_3_run1",
+        "text": "S",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 769.97802734375,
+        "sourceSize": 15,
+        "sourceAdvance": 7.5
+      },
+      {
+        "name": "population_text_3_run2",
+        "text": ", ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 777.47802734375,
+        "sourceSize": 15,
+        "sourceAdvance": 8.3349609375
+      },
+      {
+        "name": "population_text_3_run3",
+        "text": "p",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 785.81298828125,
+        "sourceSize": 15,
+        "sourceAdvance": 7.5
+      },
+      {
+        "name": "population_text_3_run4",
+        "text": ", ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 793.31298828125,
+        "sourceSize": 15,
+        "sourceAdvance": 8.3349609375
+      },
+      {
+        "name": "population_text_3_run5",
+        "text": "k",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 801.64794921875,
+        "sourceSize": 15,
+        "sourceAdvance": 6.65771484375
+      },
+      {
+        "name": "population_text_3_run6",
+        "text": ", ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 808.3056640625,
+        "sourceSize": 15,
+        "sourceAdvance": 8.3349609375
+      },
+      {
+        "name": "population_text_3_run7",
+        "text": "d",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 816.640625,
+        "sourceSize": 15,
+        "sourceAdvance": 7.5
+      },
+      {
+        "name": "population_text_3_run8",
+        "text": "; (",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 824.140625,
+        "sourceSize": 15,
+        "sourceAdvance": 13.330078125
+      },
+      {
+        "name": "population_text_3_run9",
+        "text": "G",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 837.470703125,
+        "sourceSize": 15,
+        "sourceAdvance": 10.83251953125
+      },
+      {
+        "name": "population_text_3_run10",
+        "text": ", ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 848.30322265625,
+        "sourceSize": 15,
+        "sourceAdvance": 8.3349609375
+      },
+      {
+        "name": "population_text_3_run11",
+        "text": "I",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 856.63818359375,
+        "sourceSize": 15,
+        "sourceAdvance": 4.9951171875
+      },
+      {
+        "name": "population_text_3_run12",
+        "text": ") from Algorithm 1",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 33,
+        "sourceX": 861.63330078125,
+        "sourceSize": 15,
+        "sourceAdvance": 118.36669921875
+      },
+      {
+        "source": 4,
+        "name": "population_line_4",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 5,
+        "name": "population_text_5",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_5_run0",
+        "text": "Initialize",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 75,
+        "sourceX": 73.4375,
+        "sourceSize": 16,
+        "sourceAdvance": 63.125
+      },
+      {
+        "source": 6,
+        "name": "population_rect_6",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 7,
+        "name": "population_text_7",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_7_run0",
+        "text": "S",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 12.245669291338583,
+        "sourceBaseline": 121,
+        "sourceX": 80,
+        "sourceSize": 24,
+        "sourceAdvance": 12
+      },
+      {
+        "source": 8,
+        "name": "population_rect_8",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 9,
+        "name": "population_text_9",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_9_run0",
+        "text": "x",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 121,
+        "sourceX": 118.50537109375,
+        "sourceSize": 18,
+        "sourceAdvance": 7.9892578125
+      },
+      {
+        "source": 10,
+        "name": "population_line_10",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 11,
+        "name": "population_text_11",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_11_run0",
+        "text": "Copy",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 151,
+        "sourceX": 123,
+        "sourceSize": 14,
+        "sourceAdvance": 32.6826171875
+      },
+      {
+        "source": 12,
+        "name": "population_rect_12",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 13,
+        "name": "population_text_13",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_13_run0",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 12.245669291338583,
+        "sourceBaseline": 188,
+        "sourceX": 72.01398468017578,
+        "sourceSize": 24,
+        "sourceAdvance": 17.33203125
+      },
+      {
+        "name": "population_text_13_run1",
+        "text": "1",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 8.816881889763781,
+        "sourceBaseline": 193.28,
+        "sourceX": 89.34601593017578,
+        "sourceSize": 17.28,
+        "sourceAdvance": 8.639999389648438
+      },
+      {
+        "source": 14,
+        "name": "population_rect_14",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 15,
+        "name": "population_text_15",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_15_run0",
+        "text": "x",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 189,
+        "sourceX": 118.50537109375,
+        "sourceSize": 18,
+        "sourceAdvance": 7.9892578125
+      },
+      {
+        "source": 16,
+        "name": "population_text_16",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_16_run0",
+        "text": "β",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 236,
+        "sourceX": 81.59912109375,
+        "sourceSize": 18,
+        "sourceAdvance": 8.96484375
+      },
+      {
+        "name": "population_text_16_run1",
+        "text": " ← ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 236,
+        "sourceX": 90.56396484375,
+        "sourceSize": 18,
+        "sourceAdvance": 27
+      },
+      {
+        "name": "population_text_16_run2",
+        "text": "∅",
+        "key": "Menlo|normal|normal",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 236,
+        "sourceX": 117.56396484375,
+        "sourceSize": 18,
+        "sourceAdvance": 10.8369140625
+      },
+      {
+        "source": 17,
+        "name": "population_line_17",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 18,
+        "name": "population_line_18",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 19,
+        "name": "population_line_19",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 20,
+        "name": "population_text_20",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_20_run0",
+        "text": "Role of ",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 64,
+        "sourceX": 277.1171875,
+        "sourceSize": 16,
+        "sourceAdvance": 58.6640625
+      },
+      {
+        "name": "population_text_20_run1",
+        "text": "x",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 64,
+        "sourceX": 335.78125,
+        "sourceSize": 16,
+        "sourceAdvance": 7.1015625
+      },
+      {
+        "source": 21,
+        "name": "population_line_21",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 22,
+        "name": "population_line_22",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 23,
+        "name": "population_line_23",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 24,
+        "name": "population_line_24",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 25,
+        "name": "population_rect_25",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 26,
+        "name": "population_text_26",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_26_run0",
+        "text": "L",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 98,
+        "sourceX": 238.4384765625,
+        "sourceSize": 20,
+        "sourceAdvance": 11.123046875
+      },
+      {
+        "source": 27,
+        "name": "population_line_27",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 28,
+        "name": "population_rect_28",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 29,
+        "name": "population_text_29",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_29_run0",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 151,
+        "sourceX": 236.7783203125,
+        "sourceSize": 20,
+        "sourceAdvance": 14.443359375
+      },
+      {
+        "source": 30,
+        "name": "population_line_30",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 31,
+        "name": "population_rect_31",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 32,
+        "name": "population_line_32",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 33,
+        "name": "population_line_33",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 34,
+        "name": "population_line_34",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 35,
+        "name": "population_rect_35",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 36,
+        "name": "population_text_36",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_36_run0",
+        "text": "0",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 98,
+        "sourceX": 275.828857421875,
+        "sourceSize": 15,
+        "sourceAdvance": 8.34228515625
+      },
+      {
+        "source": 37,
+        "name": "population_line_37",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 38,
+        "name": "population_line_38",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 39,
+        "name": "population_circle_39",
+        "type": "circle",
+        "group": "population"
+      },
+      {
+        "source": 40,
+        "name": "population_circle_40",
+        "type": "circle",
+        "group": "population"
+      },
+      {
+        "source": 41,
+        "name": "population_circle_41",
+        "type": "circle",
+        "group": "population"
+      },
+      {
+        "source": 42,
+        "name": "population_text_42",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_42_run0",
+        "text": "…",
+        "key": "Arial|normal|normal",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 99,
+        "sourceX": 372,
+        "sourceSize": 20,
+        "sourceAdvance": 20
+      },
+      {
+        "source": 43,
+        "name": "population_text_43",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_43_run0",
+        "text": "Forms over ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 150,
+        "sourceX": 287.578857421875,
+        "sourceSize": 15,
+        "sourceAdvance": 80.009765625
+      },
+      {
+        "name": "population_text_43_run1",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 150,
+        "sourceX": 367.588623046875,
+        "sourceSize": 15,
+        "sourceAdvance": 10.83251953125
+      },
+      {
+        "source": 44,
+        "name": "population_text_44",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_44_run0",
+        "text": "Structural choices",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 191,
+        "sourceX": 252.391845703125,
+        "sourceSize": 15,
+        "sourceAdvance": 119.21630859375
+      },
+      {
+        "source": 45,
+        "name": "population_text_45",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_45_run0",
+        "text": "labels · types · bounds",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 210,
+        "sourceX": 241.57275390625,
+        "sourceSize": 14,
+        "sourceAdvance": 140.8544921875
+      },
+      {
+        "source": 46,
+        "name": "population_text_46",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_46_run0",
+        "text": "V",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 239,
+        "sourceX": 300.6958999633789,
+        "sourceSize": 20,
+        "sourceAdvance": 12.216796875
+      },
+      {
+        "name": "population_text_46_run1",
+        "text": "x",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.34740157480315,
+        "sourceBaseline": 243.4,
+        "sourceX": 312.9126968383789,
+        "sourceSize": 14.399999999999999,
+        "sourceAdvance": 6.3914031982421875
+      },
+      {
+        "source": 47,
+        "name": "population_rect_47",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 48,
+        "name": "population_text_48",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_48_run0",
+        "text": "Filter ",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 121,
+        "sourceX": 481.7754669189453,
+        "sourceSize": 16,
+        "sourceAdvance": 43.5625
+      },
+      {
+        "name": "population_text_48_run1",
+        "text": "V",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 121,
+        "sourceX": 525.3379669189453,
+        "sourceSize": 16,
+        "sourceAdvance": 9.7734375
+      },
+      {
+        "name": "population_text_48_run2",
+        "text": "x",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 5.87792125984252,
+        "sourceBaseline": 124.52,
+        "sourceX": 535.1114044189453,
+        "sourceSize": 11.52,
+        "sourceAdvance": 5.113128662109375
+      },
+      {
+        "source": 49,
+        "name": "population_text_49",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_49_run0",
+        "text": "kind · type",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 145,
+        "sourceX": 476.400390625,
+        "sourceSize": 15,
+        "sourceAdvance": 69.19921875
+      },
+      {
+        "source": 50,
+        "name": "population_text_50",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_50_run0",
+        "text": "scope · ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 168,
+        "sourceX": 472.240234375,
+        "sourceSize": 15,
+        "sourceAdvance": 53.35693359375
+      },
+      {
+        "name": "population_text_50_run1",
+        "text": "G",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 168,
+        "sourceX": 525.59716796875,
+        "sourceSize": 15,
+        "sourceAdvance": 10.83251953125
+      },
+      {
+        "name": "population_text_50_run2",
+        "text": ", ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 168,
+        "sourceX": 536.4296875,
+        "sourceSize": 15,
+        "sourceAdvance": 8.3349609375
+      },
+      {
+        "name": "population_text_50_run3",
+        "text": "I",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 168,
+        "sourceX": 544.7646484375,
+        "sourceSize": 15,
+        "sourceAdvance": 4.9951171875
+      },
+      {
+        "source": 51,
+        "name": "population_text_51",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_51_run0",
+        "text": "nonempty",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 190,
+        "sourceX": 478.06298828125,
+        "sourceSize": 15,
+        "sourceAdvance": 65.8740234375
+      },
+      {
+        "source": 52,
+        "name": "population_line_52",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 53,
+        "name": "population_rect_53",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 54,
+        "name": "population_text_54",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_54_run0",
+        "text": "Select (",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 93,
+        "sourceX": 637.328125,
+        "sourceSize": 16,
+        "sourceAdvance": 56.9140625
+      },
+      {
+        "name": "population_text_54_run1",
+        "text": "k",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 93,
+        "sourceX": 694.2421875,
+        "sourceSize": 16,
+        "sourceAdvance": 7.1015625
+      },
+      {
+        "name": "population_text_54_run2",
+        "text": ")",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 93,
+        "sourceX": 701.34375,
+        "sourceSize": 16,
+        "sourceAdvance": 5.328125
+      },
+      {
+        "source": 55,
+        "name": "population_rect_55",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 56,
+        "name": "population_text_56",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_56_run0",
+        "text": "e",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 130,
+        "sourceX": 667.5615234375,
+        "sourceSize": 20,
+        "sourceAdvance": 8.876953125
+      },
+      {
+        "source": 57,
+        "name": "population_line_57",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 58,
+        "name": "population_rect_58",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 59,
+        "name": "population_rect_59",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 60,
+        "name": "population_rect_60",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 61,
+        "name": "population_text_61",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_61_run0",
+        "text": "e",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 129,
+        "sourceX": 788.5615234375,
+        "sourceSize": 20,
+        "sourceAdvance": 8.876953125
+      },
+      {
+        "source": 62,
+        "name": "population_text_62",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_62_run0",
+        "text": "≤ ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 174,
+        "sourceX": 665.12060546875,
+        "sourceSize": 14,
+        "sourceAdvance": 11.5732421875
+      },
+      {
+        "name": "population_text_62_run1",
+        "text": "d",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 174,
+        "sourceX": 676.69384765625,
+        "sourceSize": 14,
+        "sourceAdvance": 7
+      },
+      {
+        "name": "population_text_62_run2",
+        "text": " equivalent wrappers",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 174,
+        "sourceX": 683.69384765625,
+        "sourceSize": 14,
+        "sourceAdvance": 129.185546875
+      },
+      {
+        "source": 63,
+        "name": "population_text_63",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_63_run0",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 666.1242599487305,
+        "sourceSize": 18,
+        "sourceAdvance": 12.9990234375
+      },
+      {
+        "name": "population_text_63_run1",
+        "text": "1",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 6.612661417322835,
+        "sourceBaseline": 201.96,
+        "sourceX": 679.1232833862305,
+        "sourceSize": 12.959999999999999,
+        "sourceAdvance": 6.4799957275390625
+      },
+      {
+        "name": "population_text_63_run2",
+        "text": "[",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 685.6032791137695,
+        "sourceSize": 18,
+        "sourceAdvance": 7.0048828125
+      },
+      {
+        "name": "population_text_63_run3",
+        "text": "x",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 692.6081619262695,
+        "sourceSize": 18,
+        "sourceAdvance": 7.9892578125
+      },
+      {
+        "name": "population_text_63_run4",
+        "text": " ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 700.5974197387695,
+        "sourceSize": 18,
+        "sourceAdvance": 4.5
+      },
+      {
+        "name": "population_text_63_run5",
+        "text": "↦",
+        "key": "Menlo|normal|normal",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 705.0974197387695,
+        "sourceSize": 18,
+        "sourceAdvance": 10.8369140625
+      },
+      {
+        "name": "population_text_63_run6",
+        "text": " ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 715.9343338012695,
+        "sourceSize": 18,
+        "sourceAdvance": 4.5
+      },
+      {
+        "name": "population_text_63_run7",
+        "text": "e",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 720.4343338012695,
+        "sourceSize": 18,
+        "sourceAdvance": 7.9892578125
+      },
+      {
+        "name": "population_text_63_run8",
+        "text": "]; ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 728.4235916137695,
+        "sourceSize": 18,
+        "sourceAdvance": 17.4990234375
+      },
+      {
+        "name": "population_text_63_run9",
+        "text": "β",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 745.9226150512695,
+        "sourceSize": 18,
+        "sourceAdvance": 8.96484375
+      },
+      {
+        "name": "population_text_63_run10",
+        "text": "[",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 754.8874588012695,
+        "sourceSize": 18,
+        "sourceAdvance": 7.0048828125
+      },
+      {
+        "name": "population_text_63_run11",
+        "text": "x",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 761.8923416137695,
+        "sourceSize": 18,
+        "sourceAdvance": 7.9892578125
+      },
+      {
+        "name": "population_text_63_run12",
+        "text": "] ← ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 769.8815994262695,
+        "sourceSize": 18,
+        "sourceAdvance": 34.0048828125
+      },
+      {
+        "name": "population_text_63_run13",
+        "text": "e",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 198,
+        "sourceX": 803.8864822387695,
+        "sourceSize": 18,
+        "sourceAdvance": 7.9892578125
+      },
+      {
+        "source": 64,
+        "name": "population_text_64",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_64_run0",
+        "text": "Update bindings",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 222,
+        "sourceX": 688.4072265625,
+        "sourceSize": 14,
+        "sourceAdvance": 101.185546875
+      },
+      {
+        "source": 65,
+        "name": "population_line_65",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 66,
+        "name": "population_line_66",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 67,
+        "name": "population_line_67",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 68,
+        "name": "population_rect_68",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 69,
+        "name": "population_text_69",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_69_run0",
+        "text": "next ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 260,
+        "sourceX": 443.06591796875,
+        "sourceSize": 14,
+        "sourceAdvance": 30.3515625
+      },
+      {
+        "name": "population_text_69_run1",
+        "text": "x",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 260,
+        "sourceX": 473.41748046875,
+        "sourceSize": 14,
+        "sourceAdvance": 6.2138671875
+      },
+      {
+        "name": "population_text_69_run2",
+        "text": " · dependency order",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 260,
+        "sourceX": 479.63134765625,
+        "sourceSize": 14,
+        "sourceAdvance": 125.302734375
+      },
+      {
+        "source": 70,
+        "name": "population_line_70",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 71,
+        "name": "population_rect_71",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 72,
+        "name": "population_text_72",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_72_run0",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 12.245669291338583,
+        "sourceBaseline": 148,
+        "sourceX": 903.0139846801758,
+        "sourceSize": 24,
+        "sourceAdvance": 17.33203125
+      },
+      {
+        "name": "population_text_72_run1",
+        "text": "1",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 8.816881889763781,
+        "sourceBaseline": 153.28,
+        "sourceX": 920.3460159301758,
+        "sourceSize": 17.28,
+        "sourceAdvance": 8.639999389648438
+      },
+      {
+        "source": 73,
+        "name": "population_rect_73",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 74,
+        "name": "population_text_74",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_74_run0",
+        "text": "e",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 145,
+        "sourceX": 950.50537109375,
+        "sourceSize": 18,
+        "sourceAdvance": 7.9892578125
+      },
+      {
+        "source": 75,
+        "name": "population_text_75",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_75_run0",
+        "text": "All ",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 93,
+        "sourceX": 892.34765625,
+        "sourceSize": 16,
+        "sourceAdvance": 24.890625
+      },
+      {
+        "name": "population_text_75_run1",
+        "text": "x",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 93,
+        "sourceX": 917.23828125,
+        "sourceSize": 16,
+        "sourceAdvance": 7.1015625
+      },
+      {
+        "name": "population_text_75_run2",
+        "text": " bound",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 93,
+        "sourceX": 924.33984375,
+        "sourceSize": 16,
+        "sourceAdvance": 53.3125
+      },
+      {
+        "source": 76,
+        "name": "population_line_76",
+        "type": "line",
+        "group": "population"
+      },
+      {
+        "source": 77,
+        "name": "population_rect_77",
+        "type": "rect",
+        "group": "population"
+      },
+      {
+        "source": 78,
+        "name": "population_text_78",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_78_run0",
+        "text": "Valid ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 223,
+        "sourceX": 902.6793975830078,
+        "sourceSize": 15,
+        "sourceAdvance": 36.40869140625
+      },
+      {
+        "name": "population_text_78_run1",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 223,
+        "sourceX": 939.0880889892578,
+        "sourceSize": 15,
+        "sourceAdvance": 10.83251953125
+      },
+      {
+        "name": "population_text_78_run2",
+        "text": "1",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 5.510551181102362,
+        "sourceBaseline": 226.3,
+        "sourceX": 949.9206085205078,
+        "sourceSize": 10.799999999999999,
+        "sourceAdvance": 5.399993896484375
+      },
+      {
+        "source": 79,
+        "name": "population_text_79",
+        "type": "text",
+        "group": "population"
+      },
+      {
+        "name": "population_text_79_run0",
+        "text": "Applicable ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 243,
+        "sourceX": 888.559326171875,
+        "sourceSize": 15,
+        "sourceAdvance": 73.38134765625
+      },
+      {
+        "name": "population_text_79_run1",
+        "text": "p",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 243,
+        "sourceX": 961.940673828125,
+        "sourceSize": 15,
+        "sourceAdvance": 7.5
+      },
+      {
+        "source": 80,
+        "name": "copy-and-selector_text_80",
+        "type": "text",
+        "group": "copy-and-selector"
+      },
+      {
+        "name": "copy-and-selector_text_80_run0",
+        "text": "(b) Query-pair construction",
+        "key": "Arial|bold|normal",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 298,
+        "sourceX": 24,
+        "sourceSize": 18,
+        "sourceAdvance": 233.015625
+      },
+      {
+        "source": 81,
+        "name": "copy-and-selector_line_81",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 82,
+        "name": "copy-and-selector_line_82",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 83,
+        "name": "copy-and-selector_rect_83",
+        "type": "rect",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 84,
+        "name": "copy-and-selector_text_84",
+        "type": "text",
+        "group": "copy-and-selector"
+      },
+      {
+        "name": "copy-and-selector_text_84_run0",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 296,
+        "sourceX": 445.53221130371094,
+        "sourceSize": 18,
+        "sourceAdvance": 12.9990234375
+      },
+      {
+        "name": "copy-and-selector_text_84_run1",
+        "text": "2",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 6.612661417322835,
+        "sourceBaseline": 299.96,
+        "sourceX": 458.53123474121094,
+        "sourceSize": 12.959999999999999,
+        "sourceAdvance": 6.4799957275390625
+      },
+      {
+        "name": "copy-and-selector_text_84_run2",
+        "text": " ← ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 296,
+        "sourceX": 465.01123046875,
+        "sourceSize": 18,
+        "sourceAdvance": 27
+      },
+      {
+        "name": "copy-and-selector_text_84_run3",
+        "text": "copy",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 296,
+        "sourceX": 492.01123046875,
+        "sourceSize": 18,
+        "sourceAdvance": 34.9892578125
+      },
+      {
+        "name": "copy-and-selector_text_84_run4",
+        "text": "(",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 296,
+        "sourceX": 527.00048828125,
+        "sourceSize": 18,
+        "sourceAdvance": 5.994140625
+      },
+      {
+        "name": "copy-and-selector_text_84_run5",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 296,
+        "sourceX": 532.99462890625,
+        "sourceSize": 18,
+        "sourceAdvance": 12.9990234375
+      },
+      {
+        "name": "copy-and-selector_text_84_run6",
+        "text": "1",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 6.612661417322835,
+        "sourceBaseline": 299.96,
+        "sourceX": 545.99365234375,
+        "sourceSize": 12.959999999999999,
+        "sourceAdvance": 6.4799957275390625
+      },
+      {
+        "name": "copy-and-selector_text_84_run7",
+        "text": ")",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 296,
+        "sourceX": 552.4736480712891,
+        "sourceSize": 18,
+        "sourceAdvance": 5.994140625
+      },
+      {
+        "source": 85,
+        "name": "copy-and-selector_line_85",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 86,
+        "name": "copy-and-selector_line_86",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 87,
+        "name": "copy-and-selector_line_87",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 88,
+        "name": "copy-and-selector_line_88",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 89,
+        "name": "copy-and-selector_line_89",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 90,
+        "name": "copy-and-selector_text_90",
+        "type": "text",
+        "group": "copy-and-selector"
+      },
+      {
+        "name": "copy-and-selector_text_90_run0",
+        "text": "type(",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 338,
+        "sourceX": 479.078857421875,
+        "sourceSize": 15,
+        "sourceAdvance": 33.34716796875
+      },
+      {
+        "name": "copy-and-selector_text_90_run1",
+        "text": "p",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 338,
+        "sourceX": 512.426025390625,
+        "sourceSize": 15,
+        "sourceAdvance": 7.5
+      },
+      {
+        "name": "copy-and-selector_text_90_run2",
+        "text": ")",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 338,
+        "sourceX": 519.926025390625,
+        "sourceSize": 15,
+        "sourceAdvance": 4.9951171875
+      },
+      {
+        "source": 91,
+        "name": "copy-and-selector_line_91",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 92,
+        "name": "copy-and-selector_line_92",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 93,
+        "name": "copy-and-selector_text_93",
+        "type": "text",
+        "group": "copy-and-selector"
+      },
+      {
+        "name": "copy-and-selector_text_93_run0",
+        "text": "SY",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 326,
+        "sourceX": 304.328125,
+        "sourceSize": 16,
+        "sourceAdvance": 21.34375
+      },
+      {
+        "source": 94,
+        "name": "copy-and-selector_line_94",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 95,
+        "name": "copy-and-selector_line_95",
+        "type": "line",
+        "group": "copy-and-selector"
+      },
+      {
+        "source": 96,
+        "name": "copy-and-selector_text_96",
+        "type": "text",
+        "group": "copy-and-selector"
+      },
+      {
+        "name": "copy-and-selector_text_96_run0",
+        "text": "SC",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 326,
+        "sourceX": 677.88671875,
+        "sourceSize": 16,
+        "sourceAdvance": 22.2265625
+      },
+      {
+        "source": 97,
+        "name": "symmetry_rect_97",
+        "type": "rect",
+        "group": "symmetry"
+      },
+      {
+        "source": 98,
+        "name": "symmetry_text_98",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_98_run0",
+        "text": "Symmetry transformation",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 385,
+        "sourceX": 36,
+        "sourceSize": 16,
+        "sourceAdvance": 194.71875
+      },
+      {
+        "source": 99,
+        "name": "symmetry_text_99",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_99_run0",
+        "text": "e.g.",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 385,
+        "sourceX": 401.7451171875,
+        "sourceSize": 14,
+        "sourceAdvance": 23.3515625
+      },
+      {
+        "name": "symmetry_text_99_run1",
+        "text": ", P3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 385,
+        "sourceX": 425.0966796875,
+        "sourceSize": 14,
+        "sourceAdvance": 24.9033203125
+      },
+      {
+        "source": 100,
+        "name": "symmetry_line_100",
+        "type": "line",
+        "group": "symmetry"
+      },
+      {
+        "source": 101,
+        "name": "symmetry_text_101",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_101_run0",
+        "text": "GSP_LINK*1..3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 428,
+        "sourceX": 91.3623046875,
+        "sourceSize": 14,
+        "sourceAdvance": 97.275390625
+      },
+      {
+        "source": 102,
+        "name": "symmetry_circle_102",
+        "type": "circle",
+        "group": "symmetry"
+      },
+      {
+        "source": 103,
+        "name": "symmetry_text_103",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_103_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 454,
+        "sourceX": 90.5,
+        "sourceSize": 18,
+        "sourceAdvance": 9
+      },
+      {
+        "source": 104,
+        "name": "symmetry_text_104",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_104_run0",
+        "text": ":GspLow",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 483,
+        "sourceX": 67.3759765625,
+        "sourceSize": 14,
+        "sourceAdvance": 55.248046875
+      },
+      {
+        "source": 105,
+        "name": "symmetry_text_105",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_105_run0",
+        "text": "{id:1}",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 505,
+        "sourceX": 79.0380859375,
+        "sourceSize": 14,
+        "sourceAdvance": 31.923828125
+      },
+      {
+        "source": 106,
+        "name": "symmetry_circle_106",
+        "type": "circle",
+        "group": "symmetry"
+      },
+      {
+        "source": 107,
+        "name": "symmetry_text_107",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_107_run0",
+        "text": "v",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 454,
+        "sourceX": 181.00537109375,
+        "sourceSize": 18,
+        "sourceAdvance": 7.9892578125
+      },
+      {
+        "source": 108,
+        "name": "symmetry_text_108",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_108_run0",
+        "text": ":GspHigh",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 483,
+        "sourceX": 155.82080078125,
+        "sourceSize": 14,
+        "sourceAdvance": 58.3583984375
+      },
+      {
+        "source": 109,
+        "name": "symmetry_line_109",
+        "type": "line",
+        "group": "symmetry"
+      },
+      {
+        "source": 110,
+        "name": "symmetry_text_110",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_110_run0",
+        "text": "GSP_LINK*1..3",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 428,
+        "sourceX": 321.3623046875,
+        "sourceSize": 14,
+        "sourceAdvance": 97.275390625
+      },
+      {
+        "source": 111,
+        "name": "symmetry_circle_111",
+        "type": "circle",
+        "group": "symmetry"
+      },
+      {
+        "source": 112,
+        "name": "symmetry_text_112",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_112_run0",
+        "text": "v",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 454,
+        "sourceX": 321.00537109375,
+        "sourceSize": 18,
+        "sourceAdvance": 7.9892578125
+      },
+      {
+        "source": 113,
+        "name": "symmetry_text_113",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_113_run0",
+        "text": ":GspHigh",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 483,
+        "sourceX": 295.82080078125,
+        "sourceSize": 14,
+        "sourceAdvance": 58.3583984375
+      },
+      {
+        "source": 114,
+        "name": "symmetry_circle_114",
+        "type": "circle",
+        "group": "symmetry"
+      },
+      {
+        "source": 115,
+        "name": "symmetry_text_115",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_115_run0",
+        "text": "u",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 454,
+        "sourceX": 410.5,
+        "sourceSize": 18,
+        "sourceAdvance": 9
+      },
+      {
+        "source": 116,
+        "name": "symmetry_text_116",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_116_run0",
+        "text": ":GspLow",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 483,
+        "sourceX": 387.3759765625,
+        "sourceSize": 14,
+        "sourceAdvance": 55.248046875
+      },
+      {
+        "source": 117,
+        "name": "symmetry_text_117",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_117_run0",
+        "text": "{id:1}",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 505,
+        "sourceX": 399.0380859375,
+        "sourceSize": 14,
+        "sourceAdvance": 31.923828125
+      },
+      {
+        "source": 118,
+        "name": "symmetry_text_118",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_118_run0",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 454,
+        "sourceX": 38.26049041748047,
+        "sourceSize": 18,
+        "sourceAdvance": 12.9990234375
+      },
+      {
+        "name": "symmetry_text_118_run1",
+        "text": "1",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 6.612661417322835,
+        "sourceBaseline": 457.96,
+        "sourceX": 51.25951385498047,
+        "sourceSize": 12.959999999999999,
+        "sourceAdvance": 6.4799957275390625
+      },
+      {
+        "source": 119,
+        "name": "symmetry_text_119",
+        "type": "text",
+        "group": "symmetry"
+      },
+      {
+        "name": "symmetry_text_119_run0",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 454,
+        "sourceX": 281.26049041748047,
+        "sourceSize": 18,
+        "sourceAdvance": 12.9990234375
+      },
+      {
+        "name": "symmetry_text_119_run1",
+        "text": "2",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 6.612661417322835,
+        "sourceBaseline": 457.96,
+        "sourceX": 294.25951385498047,
+        "sourceSize": 12.959999999999999,
+        "sourceAdvance": 6.4799957275390625
+      },
+      {
+        "source": 120,
+        "name": "symmetry_line_120",
+        "type": "line",
+        "group": "symmetry"
+      },
+      {
+        "source": 121,
+        "name": "reference_rect_121",
+        "type": "rect",
+        "group": "reference"
+      },
+      {
+        "source": 122,
+        "name": "reference_text_122",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_122_run0",
+        "text": "Reference substitution",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 385,
+        "sourceX": 551,
+        "sourceSize": 16,
+        "sourceAdvance": 173.359375
+      },
+      {
+        "source": 123,
+        "name": "reference_text_123",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_123_run0",
+        "text": "e.g.",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 385,
+        "sourceX": 916.7451171875,
+        "sourceSize": 14,
+        "sourceAdvance": 23.3515625
+      },
+      {
+        "name": "reference_text_123_run1",
+        "text": ", S7",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 385,
+        "sourceX": 940.0966796875,
+        "sourceSize": 14,
+        "sourceAdvance": 24.9033203125
+      },
+      {
+        "source": 124,
+        "name": "reference_line_124",
+        "type": "line",
+        "group": "reference"
+      },
+      {
+        "source": 125,
+        "name": "reference_line_125",
+        "type": "line",
+        "group": "reference"
+      },
+      {
+        "source": 126,
+        "name": "reference_line_126",
+        "type": "line",
+        "group": "reference"
+      },
+      {
+        "source": 127,
+        "name": "reference_rect_127",
+        "type": "rect",
+        "group": "reference"
+      },
+      {
+        "source": 128,
+        "name": "reference_text_128",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_128_run0",
+        "text": "coalesce",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 420,
+        "sourceX": 600.399169921875,
+        "sourceSize": 15,
+        "sourceAdvance": 59.20166015625
+      },
+      {
+        "source": 129,
+        "name": "reference_rect_129",
+        "type": "rect",
+        "group": "reference"
+      },
+      {
+        "source": 130,
+        "name": "reference_text_130",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_130_run0",
+        "text": "NULL",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 460,
+        "sourceX": 557.103515625,
+        "sourceSize": 14,
+        "sourceAdvance": 35.79296875
+      },
+      {
+        "source": 131,
+        "name": "reference_circle_131",
+        "type": "circle",
+        "group": "reference"
+      },
+      {
+        "source": 132,
+        "name": "reference_text_132",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_132_run0",
+        "text": "0",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 460,
+        "sourceX": 620.828857421875,
+        "sourceSize": 15,
+        "sourceAdvance": 8.34228515625
+      },
+      {
+        "source": 133,
+        "name": "reference_rect_133",
+        "type": "rect",
+        "group": "reference"
+      },
+      {
+        "source": 134,
+        "name": "reference_text_134",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_134_run0",
+        "text": "COUNT",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 460,
+        "sourceX": 670.11376953125,
+        "sourceSize": 14,
+        "sourceAdvance": 49.7724609375
+      },
+      {
+        "source": 135,
+        "name": "reference_line_135",
+        "type": "line",
+        "group": "reference"
+      },
+      {
+        "source": 136,
+        "name": "reference_circle_136",
+        "type": "circle",
+        "group": "reference"
+      },
+      {
+        "source": 137,
+        "name": "reference_text_137",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_137_run0",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 502,
+        "sourceX": 688.50048828125,
+        "sourceSize": 18,
+        "sourceAdvance": 12.9990234375
+      },
+      {
+        "source": 138,
+        "name": "reference_line_138",
+        "type": "line",
+        "group": "reference"
+      },
+      {
+        "source": 139,
+        "name": "reference_line_139",
+        "type": "line",
+        "group": "reference"
+      },
+      {
+        "source": 140,
+        "name": "reference_line_140",
+        "type": "line",
+        "group": "reference"
+      },
+      {
+        "source": 141,
+        "name": "reference_rect_141",
+        "type": "rect",
+        "group": "reference"
+      },
+      {
+        "source": 142,
+        "name": "reference_text_142",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_142_run0",
+        "text": "coalesce",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 420,
+        "sourceX": 820.399169921875,
+        "sourceSize": 15,
+        "sourceAdvance": 59.20166015625
+      },
+      {
+        "source": 143,
+        "name": "reference_rect_143",
+        "type": "rect",
+        "group": "reference"
+      },
+      {
+        "source": 144,
+        "name": "reference_text_144",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_144_run0",
+        "text": "NULL",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 460,
+        "sourceX": 777.103515625,
+        "sourceSize": 14,
+        "sourceAdvance": 35.79296875
+      },
+      {
+        "source": 145,
+        "name": "reference_circle_145",
+        "type": "circle",
+        "group": "reference"
+      },
+      {
+        "source": 146,
+        "name": "reference_text_146",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_146_run0",
+        "text": "0",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 460,
+        "sourceX": 840.828857421875,
+        "sourceSize": 15,
+        "sourceAdvance": 8.34228515625
+      },
+      {
+        "source": 147,
+        "name": "reference_rect_147",
+        "type": "rect",
+        "group": "reference"
+      },
+      {
+        "source": 148,
+        "name": "reference_text_148",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_148_run0",
+        "text": "COUNT",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.143307086614174,
+        "sourceBaseline": 460,
+        "sourceX": 890.11376953125,
+        "sourceSize": 14,
+        "sourceAdvance": 49.7724609375
+      },
+      {
+        "source": 149,
+        "name": "reference_line_149",
+        "type": "line",
+        "group": "reference"
+      },
+      {
+        "source": 150,
+        "name": "reference_circle_150",
+        "type": "circle",
+        "group": "reference"
+      },
+      {
+        "source": 151,
+        "name": "reference_text_151",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_151_run0",
+        "text": "R",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 502,
+        "sourceX": 909.50244140625,
+        "sourceSize": 18,
+        "sourceAdvance": 10.9951171875
+      },
+      {
+        "source": 152,
+        "name": "reference_text_152",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_152_run0",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 420,
+        "sourceX": 555.2604904174805,
+        "sourceSize": 18,
+        "sourceAdvance": 12.9990234375
+      },
+      {
+        "name": "reference_text_152_run1",
+        "text": "1",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 6.612661417322835,
+        "sourceBaseline": 423.96,
+        "sourceX": 568.2595138549805,
+        "sourceSize": 12.959999999999999,
+        "sourceAdvance": 6.4799957275390625
+      },
+      {
+        "source": 153,
+        "name": "reference_text_153",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_153_run0",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 420,
+        "sourceX": 775.2604904174805,
+        "sourceSize": 18,
+        "sourceAdvance": 12.9990234375
+      },
+      {
+        "name": "reference_text_153_run1",
+        "text": "2",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 6.612661417322835,
+        "sourceBaseline": 423.96,
+        "sourceX": 788.2595138549805,
+        "sourceSize": 12.959999999999999,
+        "sourceAdvance": 6.4799957275390625
+      },
+      {
+        "source": 154,
+        "name": "reference_line_154",
+        "type": "line",
+        "group": "reference"
+      },
+      {
+        "source": 155,
+        "name": "reference_text_155",
+        "type": "text",
+        "group": "reference"
+      },
+      {
+        "name": "reference_text_155_run0",
+        "text": "H",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 487,
+        "sourceX": 783.08447265625,
+        "sourceSize": 18,
+        "sourceAdvance": 12.9990234375
+      },
+      {
+        "name": "reference_text_155_run1",
+        "text": " ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 487,
+        "sourceX": 796.08349609375,
+        "sourceSize": 18,
+        "sourceAdvance": 4.5
+      },
+      {
+        "name": "reference_text_155_run2",
+        "text": "↦",
+        "key": "Menlo|normal|normal",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 487,
+        "sourceX": 800.58349609375,
+        "sourceSize": 18,
+        "sourceAdvance": 10.8369140625
+      },
+      {
+        "name": "reference_text_155_run3",
+        "text": " ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 487,
+        "sourceX": 811.42041015625,
+        "sourceSize": 18,
+        "sourceAdvance": 4.5
+      },
+      {
+        "name": "reference_text_155_run4",
+        "text": "R",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 9.184251968503938,
+        "sourceBaseline": 487,
+        "sourceX": 815.92041015625,
+        "sourceSize": 18,
+        "sourceAdvance": 10.9951171875
+      },
+      {
+        "source": 156,
+        "name": "return_line_156",
+        "type": "line",
+        "group": "return"
+      },
+      {
+        "source": 157,
+        "name": "return_line_157",
+        "type": "line",
+        "group": "return"
+      },
+      {
+        "source": 158,
+        "name": "return_line_158",
+        "type": "line",
+        "group": "return"
+      },
+      {
+        "source": 159,
+        "name": "return_line_159",
+        "type": "line",
+        "group": "return"
+      },
+      {
+        "source": 160,
+        "name": "return_rect_160",
+        "type": "rect",
+        "group": "return"
+      },
+      {
+        "source": 161,
+        "name": "return_text_161",
+        "type": "text",
+        "group": "return"
+      },
+      {
+        "name": "return_text_161_run0",
+        "text": "Valid ",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 570,
+        "sourceX": 409.8273468017578,
+        "sourceSize": 15,
+        "sourceAdvance": 36.40869140625
+      },
+      {
+        "name": "return_text_161_run1",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 570,
+        "sourceX": 446.2360382080078,
+        "sourceSize": 15,
+        "sourceAdvance": 10.83251953125
+      },
+      {
+        "name": "return_text_161_run2",
+        "text": "2",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 5.510551181102362,
+        "sourceBaseline": 573.3,
+        "sourceX": 457.0685577392578,
+        "sourceSize": 10.799999999999999,
+        "sourceAdvance": 5.399993896484375
+      },
+      {
+        "name": "return_text_161_run3",
+        "text": "; structurally distinct",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 570,
+        "sourceX": 462.4685516357422,
+        "sourceSize": 15,
+        "sourceAdvance": 131.7041015625
+      },
+      {
+        "source": 162,
+        "name": "return_text_162",
+        "type": "text",
+        "group": "return"
+      },
+      {
+        "name": "return_text_162_run0",
+        "text": "Guard fails: reject",
+        "key": "Arial|normal|normal",
+        "fontPt": 7.653543307086615,
+        "sourceBaseline": 570,
+        "sourceX": 857.45361328125,
+        "sourceSize": 15,
+        "sourceAdvance": 117.54638671875
+      },
+      {
+        "source": 163,
+        "name": "return_line_163",
+        "type": "line",
+        "group": "return"
+      },
+      {
+        "source": 164,
+        "name": "return_rect_164",
+        "type": "rect",
+        "group": "return"
+      },
+      {
+        "source": 165,
+        "name": "return_text_165",
+        "type": "text",
+        "group": "return"
+      },
+      {
+        "name": "return_text_165_run0",
+        "text": "Output",
+        "key": "Arial|bold|normal",
+        "fontPt": 8.163779527559056,
+        "sourceBaseline": 621,
+        "sourceX": 24,
+        "sourceSize": 16,
+        "sourceAdvance": 52.421875
+      },
+      {
+        "source": 166,
+        "name": "return_text_166",
+        "type": "text",
+        "group": "return"
+      },
+      {
+        "name": "return_text_166_run0",
+        "text": "(",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 213.1251983642578,
+        "sourceSize": 20,
+        "sourceAdvance": 6.66015625
+      },
+      {
+        "name": "return_text_166_run1",
+        "text": "G",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 219.7853546142578,
+        "sourceSize": 20,
+        "sourceAdvance": 14.443359375
+      },
+      {
+        "name": "return_text_166_run2",
+        "text": ", ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 234.2287139892578,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "name": "return_text_166_run3",
+        "text": "I",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 244.2287139892578,
+        "sourceSize": 20,
+        "sourceAdvance": 6.66015625
+      },
+      {
+        "name": "return_text_166_run4",
+        "text": ", ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 250.8888702392578,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "name": "return_text_166_run5",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 260.8888702392578,
+        "sourceSize": 20,
+        "sourceAdvance": 14.443359375
+      },
+      {
+        "name": "return_text_166_run6",
+        "text": "1",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 7.34740157480315,
+        "sourceBaseline": 625.4,
+        "sourceX": 275.3322296142578,
+        "sourceSize": 14.399999999999999,
+        "sourceAdvance": 7.1999969482421875
+      },
+      {
+        "name": "return_text_166_run7",
+        "text": ", ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 282.5322265625,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "name": "return_text_166_run8",
+        "text": "Q",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 292.5322265625,
+        "sourceSize": 20,
+        "sourceAdvance": 14.443359375
+      },
+      {
+        "name": "return_text_166_run9",
+        "text": "2",
+        "key": "Times New Roman|normal|normal",
+        "fontPt": 7.34740157480315,
+        "sourceBaseline": 625.4,
+        "sourceX": 306.9755859375,
+        "sourceSize": 14.399999999999999,
+        "sourceAdvance": 7.1999969482421875
+      },
+      {
+        "name": "return_text_166_run10",
+        "text": ", ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 314.1755828857422,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "name": "return_text_166_run11",
+        "text": "μ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 324.1755828857422,
+        "sourceSize": 20,
+        "sourceAdvance": 10.0390625
+      },
+      {
+        "name": "return_text_166_run12",
+        "text": ")",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 334.2146453857422,
+        "sourceSize": 20,
+        "sourceAdvance": 6.66015625
+      },
+      {
+        "source": 167,
+        "name": "return_text_167",
+        "type": "text",
+        "group": "return"
+      },
+      {
+        "name": "return_text_167_run0",
+        "text": "μ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 732.1533203125,
+        "sourceSize": 20,
+        "sourceAdvance": 10.0390625
+      },
+      {
+        "name": "return_text_167_run1",
+        "text": " = (",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 742.1923828125,
+        "sourceSize": 20,
+        "sourceAdvance": 30.15625
+      },
+      {
+        "name": "return_text_167_run2",
+        "text": "p",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 772.3486328125,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "name": "return_text_167_run3",
+        "text": ", ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 782.3486328125,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "name": "return_text_167_run4",
+        "text": "k",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 792.3486328125,
+        "sourceSize": 20,
+        "sourceAdvance": 8.876953125
+      },
+      {
+        "name": "return_text_167_run5",
+        "text": ", ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 801.2255859375,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "name": "return_text_167_run6",
+        "text": "d",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 811.2255859375,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "name": "return_text_167_run7",
+        "text": ", ",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 821.2255859375,
+        "sourceSize": 20,
+        "sourceAdvance": 10
+      },
+      {
+        "name": "return_text_167_run8",
+        "text": "β",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 831.2255859375,
+        "sourceSize": 20,
+        "sourceAdvance": 9.9609375
+      },
+      {
+        "name": "return_text_167_run9",
+        "text": ")",
+        "key": "Times New Roman|normal|italic",
+        "fontPt": 10.20472440944882,
+        "sourceBaseline": 621,
+        "sourceX": 841.1865234375,
+        "sourceSize": 20,
+        "sourceAdvance": 6.66015625
+      }
+    ]
+  }
+]

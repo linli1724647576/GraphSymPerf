@@ -22,11 +22,16 @@ from mutator import PATTERNS, mutate
 from query import parse_query, render_query, split_statements
 from ir import from_data, to_data
 from languages import DBMS, LANGUAGES, UnsupportedFeature, UnsupportedLanguage, generate, render_saved
+from paper_patterns import COMPOSITION_PATTERNS, PAPER_CATALOG, LEGACY_CATALOG, compositional_rule
 
 
 ROOT = Path(__file__).resolve().parent.parent
+COMPOSITION_EXTENSION_FIELDS = ("composition", "dependency_analysis", "population_constraints", "population_evidence", "mutation_record",
+                                "pattern_catalog", "paper_pattern", "legacy_pattern", "pattern_form",
+                                "symbolic_skeleton", "construction_record", "instantiation_record")
 CASE_EXTENSION_FIELDS = ("query_ir", "graph_spec", "state_checks", "index_requirements", "language",
-                         "target_dbms", "output_columns", "required_features", "compile_error", "ir_hash", "verified_features", "source_input_hash", "query_bindings")
+                         "target_dbms", "output_columns", "required_features", "compile_error", "ir_hash", "verified_features", "source_input_hash", "query_bindings",
+                         *COMPOSITION_EXTENSION_FIELDS)
 
 
 def read_config(path: Path) -> dict:
@@ -39,9 +44,20 @@ def read_config(path: Path) -> dict:
         raise ValueError("database configuration is required")
     if database.get("dedicated") is not True or database.get("allow_reset") is not True:
         raise ValueError("use a dedicated test database and set database.allow_reset: true")
-    patterns = config.get("patterns", list(PATTERNS))
-    if not isinstance(patterns, list) or not patterns or any(p not in PATTERNS for p in patterns):
-        raise ValueError("patterns must contain supported IDs P1–P16 or S1–S10")
+    generation = config.setdefault("generation", {})
+    if not isinstance(generation, dict):
+        raise ValueError("generation must be a mapping")
+    catalog = config.setdefault("pattern_catalog", PAPER_CATALOG if "composition" in generation else LEGACY_CATALOG)
+    if catalog not in {PAPER_CATALOG, LEGACY_CATALOG}:
+        raise ValueError("pattern_catalog must be paper-v1 or legacy-v1")
+    if catalog == PAPER_CATALOG and "composition" not in generation:
+        raise ValueError("paper-v1 currently requires generation.composition")
+    if "composition" in generation and catalog != PAPER_CATALOG:
+        raise ValueError("generation.composition uses paper-v1 identifiers")
+    allowed = COMPOSITION_PATTERNS if catalog == PAPER_CATALOG else PATTERNS
+    patterns = config.get("patterns", list(allowed))
+    if not isinstance(patterns, list) or not patterns or any(p not in allowed for p in patterns):
+        raise ValueError(f"patterns must contain supported {catalog} IDs: {', '.join(allowed)}")
     config["patterns"] = list(dict.fromkeys(patterns))
     for name, default, minimum in (("scales", [100], 1), ("seeds", [0], 0)):
         values = config.get(name, default)
@@ -78,6 +94,10 @@ def read_config(path: Path) -> dict:
     generation.setdefault("complexity", 0)
     if type(generation["complexity"]) is not int or generation["complexity"] not in {0, 1, 2}:
         raise ValueError("generation.complexity must be 0, 1, or 2")
+    if "composition" in generation:
+        from composition import composition_options
+        # Validate without resolving the per-query seeded syntax choices.
+        composition_options(generation["composition"])
     generation.setdefault("state_variant", "original")
     if not isinstance(generation["state_variant"], str) or generation["state_variant"] not in {
             "original", "empty_low", "multi_low", "pruning_path"}:
@@ -86,6 +106,8 @@ def read_config(path: Path) -> dict:
     if generation["state_variant"] in state_patterns and any(
             p not in state_patterns[generation["state_variant"]] for p in config["patterns"]):
         raise ValueError(f"{generation['state_variant']} state is not defined for the selected patterns")
+    if "composition" in generation and (generation["state_variant"] != "original" or generation["complexity"] != 0):
+        raise ValueError("composition requires state_variant: original and complexity: 0; use composition.depth")
     if "cwd" in generation:
         generation["cwd"] = str((base / generation["cwd"]).resolve())
     config["output"] = str((base / config.get("output", "results")).resolve())
@@ -173,6 +195,8 @@ def read_case(directory: Path) -> tuple[dict, dict]:
         raise ValueError("saved inputs have changed; the recorded cost conditions no longer describe this case")
     extension_hash = extension_digest(case)
     if ((extension_hash is not None and record["format_version"] < 3)
+            or any(field in case for field in COMPOSITION_EXTENSION_FIELDS)
+            or case.get("graph_spec", {}).get("version") == 2
             or "extension_hash" in record):
         if extension_hash != record.get("extension_hash"):
             raise ValueError("saved execution metadata have changed or lack an extension hash")
@@ -255,6 +279,10 @@ def compile_case(case: dict, database: dict) -> dict:
         case.pop("verified_features", None)
     case["output_columns"], case["required_features"] = {}, {}
     case.pop("query_bindings", None)
+    if case.get("graph_spec", {}).get("version") == 2 and target != "neo4j":
+        case["compile_error"] = {"status": "unsupported_feature",
+                                 "reason": "explicit_state_loading_not_verified_for_target"}
+        return case
     try:
         compiled = {side: generate(from_data(value), target, language, verified_features=verified)
                     for side, value in case["query_ir"].items()}
@@ -280,13 +308,41 @@ def compile_case(case: dict, database: dict) -> dict:
     return case
 
 
-def prepare_case(source, pattern, scale, seed, data_seed, complexity=0, state_variant="original", *, database=None):
+def prepare_case(source, pattern, scale, seed, data_seed, complexity=0, state_variant="original", *, database=None,
+                 composition=None):
     case = instantiate(source, pattern, scale, seed, data_seed=data_seed, complexity=complexity,
-                       state_variant=state_variant)
+                       state_variant=state_variant, composition=composition)
     query_a = parse_query(case["query_a"]) if isinstance(case["query_a"], str) else case["query_a"]
-    query_b = mutate(query_a, pattern, bindings=case.get("bindings"))
+    if case.get("instantiation_record"):
+        query_b = case["query_b"]
+        if any(check not in case["checks"] for check in case["bindings"].get("required_state_checks", [])):
+            raise PatternNotApplicable("a required construction check was dropped before compilation")
+    else:
+        query_b = mutate(query_a, case.get("legacy_pattern", pattern), bindings=case.get("bindings"))
+    if case.get("composition") is not None and not case.get("instantiation_record"):
+        from dependencies import find_mutation_sites, propagate_equivalence
+        from executor import typed_bag
+        from population import evaluate_query
+        from state import GraphSpec
+        spec = GraphSpec.from_dict(case["graph_spec"])
+        proof_spec = GraphSpec.from_dict(case["population_evidence"]["validation_graph_spec"])
+        for tree in (query_a, query_b):
+            if typed_bag(evaluate_query(tree, proof_spec)) != typed_bag(case["expected_rows"]):
+                raise PatternNotApplicable("local rewrite did not preserve the synthesized result bag")
+        # Large states stay symbolic. Their expansion certificate is checked by
+        # the population solver; concrete DB checks remain outside query timers.
+        if spec.counts()["nodes"] <= 5000:
+            if typed_bag(evaluate_query(query_b, spec)) != typed_bag(case["expected_rows"]):
+                raise PatternNotApplicable("expanded state changed the synthesized result bag")
+        address = tuple(case["bindings"]["mutation_site"])
+        site = next(site for site in find_mutation_sites(query_a, case["paper_pattern"], case["pattern_form"])
+                    if site.address == address)
+        case["mutation_record"] = {"rule": case["pattern_form"], "paper_pattern": case["paper_pattern"],
+                                   "site": site.to_dict(),
+                                   "propagation": propagate_equivalence(query_a, site),
+                                   "relation": "bag_equal_per_binding"}
     case["query_ir"] = {"a": to_data(query_a), "b": to_data(query_b)}
-    case.update(pattern=pattern, seed=seed, scale=scale,
+    case.update(pattern=case.get("paper_pattern", pattern), seed=seed, scale=scale,
                 query_a=render_query(query_a), query_b=render_query(query_b))
     if case.get("query_ref") is not None and not isinstance(case["query_ref"], str):
         case["query_ir"]["ref"] = to_data(case["query_ref"])
@@ -302,7 +358,8 @@ def run(config: dict) -> int:
     dbms = config["database"].get("dbms", "neo4j")
     budgets = pattern_budgets(config)
     record = {"format_version": 1, "kind": "discovery", "dbms": dbms, "language": config["database"].get("language", "cypher"), "database_version": "unknown",
-              "patterns": config["patterns"], "budgets": budgets, "schedule_seed": config.get("schedule_seed", 0),
+              "patterns": config["patterns"], "pattern_catalog": config.get("pattern_catalog", PAPER_CATALOG if "composition" in generation else LEGACY_CATALOG),
+              "budgets": budgets, "schedule_seed": config.get("schedule_seed", 0),
               "per_pattern": {pattern: {"attempted": 0, "executed": 0, "elapsed_seconds": 0.0,
                                          "stop_reason": "pending"} for pattern in config["patterns"]}}
     write_run(directory, record)
@@ -314,7 +371,8 @@ def run(config: dict) -> int:
     supported = supported_patterns(config["database"])
     for pattern in order:
         stats = record["per_pattern"][pattern]
-        if pattern not in supported:
+        target_pattern = compositional_rule(pattern).legacy_pattern if "composition" in generation else pattern
+        if target_pattern not in supported:
             stats["stop_reason"] = "unsupported_feature"
             write_run(directory, record)
             continue
@@ -334,7 +392,7 @@ def run(config: dict) -> int:
                 try:
                     case = prepare_case(source, pattern, scale, seed, generation.get("data_seed", 0),
                                         generation.get("complexity", 0), generation.get("state_variant", "original"),
-                                        database=config["database"])
+                                        database=config["database"], composition=generation.get("composition"))
                     break
                 except PatternNotApplicable:
                     skipped += 1
@@ -396,13 +454,14 @@ def replay(directory: Path, config: dict) -> int:
     write_run(output.parent, {"format_version": 1, "kind": "replay", "dbms": result["dbms"],
                               "language": case.get("language", "cypher"),
                               "database_version": result.get("database_version", "unknown"),
-                              "patterns": [case["pattern"]], "budgets": {}, "per_pattern": {}})
+                              "patterns": [case["pattern"]], "pattern_catalog": case.get("pattern_catalog", LEGACY_CATALOG),
+                              "budgets": {}, "per_pattern": {}})
     print(f"Replay: {result['status']} — {output}")
     return 1 if result.get("stop_target") else 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Cost-aware graph query testing (P1–P16, SCor S1–S10).")
+    parser = argparse.ArgumentParser(description="Cost-aware graph query testing (paper catalog; legacy archive compatibility).")
     parser.add_argument("--config", type=Path, default=ROOT / "config.yaml")
     parser.add_argument("--replay", type=Path, help="replay a saved case using the configured test database")
     args = parser.parse_args(argv)
