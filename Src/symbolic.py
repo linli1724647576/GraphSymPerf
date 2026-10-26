@@ -260,7 +260,8 @@ def _recursive_scalar(pattern, anchor, options, seed):
     return kernel, produced, expected
 
 
-def build_symbolic_skeleton(pattern, options, seed=0):
+def build_local_pattern(pattern, options, seed=0):
+    """Build only a local rule envelope; no host context or graph is selected."""
     if not isinstance(options, dict):
         raise ValueError("composition requires an options dictionary")
     rule = compositional_rule(pattern, options.get("form"))
@@ -383,7 +384,7 @@ def build_symbolic_skeleton(pattern, options, seed=0):
         replacement = high
     else:
         raise ValueError(f"No symbolic grammar production for {pattern}")
-    source = compose_fragment(kernel, "rows", anchor, options["contexts"], threshold=options["threshold"])
+    source = kernel
     mark = (MutationMark("test-site:0", (*_fragment_address(source, marked_fragment), *marked_suffix))
             if marked_fragment is not None else None)
     if scalar_observation is not None:
@@ -397,6 +398,20 @@ def build_symbolic_skeleton(pattern, options, seed=0):
                        for node, present in zip(binding_observations, matched))
     options = {key: tuple(value) if isinstance(value, list) else value for key, value in options.items()}
     return SymbolicSkeleton(pattern, rule.form, source, replacement, anchor, options, seed, tuple(intents), mark, goals)
+
+
+def build_symbolic_skeleton(pattern, options, seed=0):
+    """Historical kernel-first entry retained for explicit legacy replay/tests."""
+    local = build_local_pattern(pattern, options, seed)
+    source = compose_fragment(local.source, "rows", local.anchor,
+                              local.options["contexts"], threshold=local.options["threshold"])
+    prefix = _fragment_address(source, local.source)
+    mark = (replace(local.mark, address=(*prefix, *local.mark.address))
+            if local.mark is not None else None)
+    goals = tuple({**goal, "address": ("query", *prefix, *tuple(goal["address"])[1:])}
+                  if "address" in goal and tuple(goal["address"])[:1] == ("query",) else goal
+                  for goal in local.goals)
+    return replace(local, source=source, mark=mark, goals=goals)
 
 
 def _assignment(skeleton):
@@ -441,9 +456,9 @@ def _resolve(value, assignment):
     return value
 
 
-def construct_state(skeleton, *, scale, data_seed):
+def construct_state(skeleton, *, scale, data_seed, assignment=None):
     """Algorithm 1: accept a joint model and binding before query emission."""
-    assignment = _assignment(skeleton)
+    assignment = _assignment(skeleton) if assignment is None else assignment
     candidate = _resolve(skeleton.source, assignment)
     ir.validate_query(candidate)
     dependencies = analyze_dependencies(candidate)
@@ -569,13 +584,21 @@ def _checked_observation(anchor, obligation, proof):
     return {"query": check_tree.render(), "expected_rows": evaluate_query(check_tree, proof)}
 
 
-def instantiate_pair(skeleton, solved):
-    """Algorithm 2: instantiate the accepted model, then copy and mutate."""
-    from executor import typed_bag
-    from mutator import mutate
-    from query import render_query
-    from state import GraphSpec
+@dataclass(frozen=True)
+class PreparedInstantiation:
+    """A source-only checkpoint; consuming it cannot choose new AST structure."""
+    skeleton: SymbolicSkeleton
+    solved: SolvedSkeleton
+    source: object
+    site: object
+    rule: object
+    bindings: dict
+    checks: tuple
+    proof: object
+    contract_digest: str
 
+
+def _validate_solved_contract(skeleton, solved):
     record = solved.construction_record
     if (record["skeleton_digest"] != _digest(skeleton.to_data())
             or record["assignment_digest"] != _digest(solved.assignment)
@@ -584,6 +607,24 @@ def instantiate_pair(skeleton, solved):
         raise ValueError("A skeleton, assignment or population contract changed after construction")
     if skeleton.goals and record.get("requirements") != solved.population.constraints.get("semantic_requirements"):
         raise ValueError("The accepted semantic requirement contract changed after construction")
+
+
+def _prepared_contract(skeleton, solved, source, site, bindings, checks):
+    return {"skeleton": skeleton.to_data(), "assignment": solved.assignment,
+            "construction": solved.construction_record,
+            "population": _population_contract(solved.population),
+            "source": ir.to_data(source), "site": site.to_dict(),
+            "bindings": bindings, "checks": list(checks)}
+
+
+def prepare_instantiation(skeleton, solved):
+    """Materialize the accepted source and its declared replacement, without mutation."""
+    from executor import typed_bag
+    from query import render_query
+    from state import GraphSpec
+
+    _validate_solved_contract(skeleton, solved)
+    record = solved.construction_record
     source = _resolve(skeleton.source, solved.assignment)
     ir.validate_query(source)
     if skeleton.mark is not None:
@@ -636,6 +677,28 @@ def instantiate_pair(skeleton, solved):
         bindings.update(inverse_relationship={"forward_type": forward, "reverse_type": reverse, "pair_key": key},
                         inverse_checks=inverse_checks, required_state_checks=checks,
                         validation_graph_spec=proof.to_dict(), inverse_graph_spec=solved.population.spec.to_dict())
+    contract = _prepared_contract(skeleton, solved, source, site, bindings, checks)
+    return PreparedInstantiation(skeleton, solved, source, site, rule, bindings,
+                                 tuple(checks), proof, _digest(contract))
+
+
+def finish_mutation(prepared):
+    """Apply the one declared rewrite after checking the M4 checkpoint."""
+    from copy import deepcopy
+    from executor import typed_bag
+    from mutator import mutate
+    from query import render_query
+
+    skeleton, solved = prepared.skeleton, prepared.solved
+    source, site, rule, proof = prepared.source, prepared.site, prepared.rule, prepared.proof
+    if prepared.contract_digest != _digest(_prepared_contract(
+            skeleton, solved, source, site, prepared.bindings, prepared.checks)):
+        raise ValueError("The instantiated source, bindings or construction changed before mutation")
+    _validate_solved_contract(skeleton, solved)
+    record = solved.construction_record
+    bindings, checks = deepcopy(prepared.bindings), list(deepcopy(prepared.checks))
+    if "required_state_checks" in bindings:
+        bindings["required_state_checks"] = checks
     target = mutate(source, rule.legacy_pattern, bindings=bindings)
     if skeleton.goals:
         from dependencies import premise_obligations, verify_rule_premises
@@ -667,16 +730,23 @@ def instantiate_pair(skeleton, solved):
                     raise ValueError("A semantic goal requires a supported checked fact")
                 if fact["relation"] == "equal":
                     ir.validate_query(ir.Query(None, None, (ir.Literal(expected),)))
-                if any(isinstance(part, ir.Edge) and part.relationship.max_hops is not None
-                       for _, part in _walk(tree)):
+                has_producer = any(isinstance(node_at(tree, local[:length]), ir.Query)
+                                   for length in range(len(local)))
+                if has_producer:
                     from dependencies import scalar_value_observation
                     obligation = scalar_value_observation(tree, local, fact["relation"], expected)
-                    observation = ir.Query(None, None, (ir.Alias(obligation["expression"], "scalar_fact"),))
-                    rows = [{"scalar_fact": True}]
+                    # Close the full lexical producer chain. A local rule anchor
+                    # alone cannot bind variables imported by a random outer WITH.
+                    column = ("scalar_fact" if any(isinstance(part, ir.Edge) and part.relationship.max_hops is not None
+                                                 for _, part in _walk(tree)) else "premise")
+                    observation = ir.Query(None, None, (ir.Alias(obligation["expression"], column),))
+                    rows = [{column: True}]
                     if typed_bag(evaluate_query(observation, proof)) != typed_bag(rows):
                         raise ValueError("The accepted scalar fact is false on its actual row domain")
                     check = {"query": render_query(observation), "expected_rows": rows}
                 else:
+                    # A top-level conditional query has no enclosing row stream;
+                    # its closed guard still needs the independently bound anchor.
                     fact_site = replace(site, guards={"premises": [{"address": list(local),
                                                                    "relation": fact["relation"], "value": expected}]})
                     obligation, = premise_obligations(tree, fact_site)
@@ -720,3 +790,8 @@ def instantiate_pair(skeleton, solved):
                      "skeleton_digest": record["skeleton_digest"], "graph_digest": record["graph_digest"],
                      "unchanged_graph": True, "marked_site": list(site.address)}
     return QueryPair(source, target, bindings, mutation, instantiation, tuple(checks))
+
+
+def instantiate_pair(skeleton, solved):
+    """Legacy combined entry; new six-stage callers use both checkpoints explicitly."""
+    return finish_mutation(prepare_instantiation(skeleton, solved))
