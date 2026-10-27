@@ -2,21 +2,22 @@
 \caption{Pattern embedding into an AST}
 \label{alg:pattern-embedding}
 \begin{algorithmic}[1]
-\Require Abstract AST $A_0$, typed hole $h$, Pattern $p$
-\Ensure Embedded AST $A$, mutation site $s$, record $M$, or rejection
-\If{$\neg$\Call{Compatible}{$h,p$}}\Comment{Interface categories and types}
-\State \Return \textsc{Reject}\Comment{Incompatible Pattern}
+\Require Abstract AST \textit{ast} with one typed hole; predefined Pattern \textit{pattern}
+\Ensure AST \textit{tree} with the Pattern embedded, or rejection
+\State \textit{slot} $\gets$ \Call{FindHole}{\textit{ast}}\Comment{The hole reserved by M1}
+\If{not \Call{Compatible}{\textit{slot}, \textit{pattern}}}\Comment{Check interface and output type}
+\State \Return \textsc{Reject}
 \EndIf
-\State $(K,\tau,\Phi,\sigma,\epsilon)\gets$\Call{Expand}{$p,h$}\Comment{Local source, rewrite, and premises}
-\State $(K,\tau,\Phi)\gets$\Call{AlphaRename}{$K,\tau,\Phi,\text{\textsc{Vars}}(A_0)$}\Comment{Avoid capture; retain imports}
-\State $A\gets$\Call{Replace}{$A_0,h,K$}\Comment{Preserve the outer context}
-\State $s\gets$\Call{Relocate}{$h,\sigma$}\Comment{Actual mutation site}
-\State $e\gets$\Call{Relocate}{$h,\epsilon$}\Comment{Complete semantic boundary}
-\State $M\gets$\Call{Register}{$p,s,e,\tau,\Phi$}\Comment{Premises passed to M3}
-\If{$\neg$\Call{ValidateEmbedding}{$A_0,A,h,M$}}\Comment{Types, scope, and unchanged host}
-\State \Return \textsc{Reject}\Comment{Invalid embedding}
+\State \textit{fragment} $\gets$ \Call{ExpandPattern}{\textit{pattern}, \textit{slot}}\Comment{Choose the local structure}
+\State Rename private variables in \textit{fragment} to avoid name conflicts
+\State \textit{tree} $\gets$ \Call{FillHole}{\textit{ast}, \textit{slot}, \textit{fragment}}\Comment{Preserve the outer context}
+\State Mark the mutation site inside the inserted \textit{fragment}
+\State Save the mutation rule and its full enclosing context\Comment{Used later in M5 and M6}
+\State Save the pattern conditions for graph construction\Comment{Checked later in M3}
+\If{not \Call{CheckEmbedding}{\textit{ast}, \textit{tree}, \textit{slot}}}\Comment{Types, scope, and insertion range}
+\State \Return \textsc{Reject}
 \EndIf
-\State \Call{FreezeStructure}{$A,M$}\Comment{Only declared structural rewrites}
-\State \Return $(A,s,M)$\Comment{Symbols remain unbound}
+\State Freeze the structure except for the saved mutation\Comment{Keep terminal placeholders}
+\State \Return \textit{tree}
 \end{algorithmic}
 \end{algorithm}

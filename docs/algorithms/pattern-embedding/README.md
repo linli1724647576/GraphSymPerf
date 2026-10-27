@@ -1,33 +1,46 @@
-# M2：往 AST 中嵌入 Pattern 的论文伪代码
+# M2 Pattern 嵌入：可读版伪代码
 
-本算法描述对指定 Pattern p 的一次嵌入。输入为抽象 AST A₀、带类型插槽 h 和 p；输出为嵌入后的 AST A、唯一变异位点 s、规则记录 M，或拒绝。
+参照 SCor Algorithm 1 和 GDsmith Algorithms 2–3 的表达方式，使用易懂的对象名和简短动作，不在主算法中展开位置地址、语义边界和变异记录的内部字段。算法行为仍对应当前 M2。
 
-## 符号及辅助步骤
+```text
+Algorithm 2  将 Pattern 嵌入 AST
+Input:  抽象 AST ast，待嵌入的 Pattern pattern
+Output: 嵌入后的 AST tree，或拒绝
 
-- K：将插入 h 的局部源结构。
-- τ：已声明但尚未执行的局部变异规则及其载荷。
-- Φ：Pattern 的图数据前提，由 M3 构造和检查。
-- σ、ε：相对于适配后的 K 的变异位点和完整语义边界地址。
-- s、e：上述地址嵌入整棵 AST 后的全局位置。
-- M：保存 p、s、e、τ、Φ 的记录，供后续构图、实例化、变异和依赖检查使用。
+1:  slot ← 获取 ast 中预留的插槽
+2:  if slot 与 pattern 的接口类型不兼容 then
+3:      return Reject
+4:  end if
+5:  fragment ← 将 pattern 展开为局部 AST
+6:  重命名 fragment 中的私有变量，避免与外层重名
+7:  tree ← 用 fragment 替换 ast 中的 slot
+8:  标记插入结构中后续需要变异的节点
+9:  记录变异方式及其完整保护上下文
+10: 保存后续构图需要满足的 Pattern 条件
+11: if tree 的类型、作用域或插入范围检查失败 then
+12:     return Reject
+13: end if
+14: 固定 tree 的生成结构，仅允许已记录的变异
+15: return tree
+```
 
-`Expand(p,h)` 展开预定义的局部规则，固定其中的结构选择，并处理已声明的接口适配。此时不读取图数据，不落实符号终端的具体取值。
+## 与方法对应的含义
 
-`AlphaRename` 同时重命名源结构、变异载荷和前提中的私有变量引用，避免捕获；已显式导入的外层绑定保持不变。地址 σ、ε 描述结构位置，不因私有变量改名而改变。
+- `ExpandPattern` 固定局部结构并进行已声明的接口适配，不构图、不执行变异，也不选择具体图数据。
+- 重命名覆盖局部源结构、变异备选和条件中的私有变量；显式导入的外层绑定保持原义。
+- 第8–9行一起保存“改哪里、怎么改、哪些上下文需要保留”，供 M5 变异和 M6 传播检查使用。
+- 第10行保存的条件由 M3 构造图状态时满足和检查。
+- 第11行还检查插槽以外的结构保持不变，以及局部展开未超过预留预算。
+- 第14行允许 M3／M4填充符号终端；结构变化仅限 M5 执行已登记的局部变异。
 
-`ValidateEmbedding` 检查整树类型、作用域、唯一标记、插槽外结构不变及预留预算；它不验证 Φ 已在某张图上成立。
+输入 Pattern 已由本轮实验指定。不兼容时返回拒绝，由外层重试；如需重新选择 Pattern，应在外层选择后再次调用本算法。
 
-`FreezeStructure(A,M)` 固定生成结构及允许的变异，不禁止 M5 执行 M 中已登记的变换。建议正文相应写为：
+## 参考写法与文件
 
-> 嵌入结束后，生成结构及允许的局部变换一并固定；M3 与 M4 仅求解和落实符号终端，M5 仅执行已登记的局部变异。
-
-若 p 已经由本轮实验指定，接口不兼容时本算法直接返回拒绝，由外层重采样宿主；若希望重新选择 Pattern，应由外层从候选集合中选择后重试，不能在此处静默改变测试目标。
-
-## 文件
-
-- [论文版 SVG](../../../picture/Algorithm_2_pattern_embedding.svg)
+- [SCor 正式论文](../../../reference/Scor.pdf)：Algorithm 1，印刷页184:10。
+- [GDsmith 正式论文](https://taoxiease.github.io/publications/issta23-gdsmith.pdf)：Algorithms 2–3。
+- [可编辑 SVG](../../../picture/Algorithm_2_pattern_embedding.svg)
 - [PNG 预览](../../../picture/Algorithm_2_pattern_embedding.png)
-- [可嵌入论文的 LaTeX 片段](algorithm.tex)
-- [独立编译主文件](main.tex)
+- [LaTeX 片段](algorithm.tex)／[独立主文件](main.tex)
 
-两份算法表示共用 [同一生成源](../../../picture/algorithm_assets/build_pattern_embedding_algorithm.py)，共14个编号步骤。
+SVG 和 LaTeX 共用 [同一生成源](../../../picture/algorithm_assets/build_pattern_embedding_algorithm.py)，均为15行。这里借鉴两篇论文的算法写作方式，所描述的嵌入流程为 GraphSymPerf 自身的方法。

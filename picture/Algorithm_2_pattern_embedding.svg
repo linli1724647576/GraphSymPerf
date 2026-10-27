@@ -1,51 +1,49 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="970" viewBox="0 0 1800 970" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1020" viewBox="0 0 1800 1020" role="img" aria-labelledby="title desc">
 <title id="title">Algorithm 2: Pattern embedding into an AST</title>
-<desc id="desc">Fourteen numbered steps check a typed hole, expand and alpha-rename a local Pattern, insert its source, register its mutation and complete semantic boundary, validate structure, and freeze all undeclared generation changes. Graph premises are recorded for M3 rather than checked in M2.</desc>
-<rect width="1800" height="970" fill="white"/>
+<desc id="desc">Fifteen readable steps find a slot, expand a local Pattern, rename variables, insert the fragment, mark the mutation site and save its complete context, validate structure, and freeze all undeclared generation changes. Graph premises are recorded for M3 rather than checked in M2.</desc>
+<rect width="1800" height="1020" fill="white"/>
 <path d="M28 18H1772" stroke="black" stroke-width="3.5"/>
 <text x="28" y="73" font-family="Times New Roman,Times,serif" font-size="46" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">Algorithm 2 </tspan><tspan>Pattern embedding into an AST</tspan></text>
 <path d="M28 99H1772" stroke="black" stroke-width="1.7"/>
-<text x="28" y="154" font-family="Times New Roman,Times,serif" font-size="37" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">Require: </tspan><tspan>Abstract AST </tspan><tspan font-style="italic">A₀</tspan><tspan>, typed hole </tspan><tspan font-style="italic">h</tspan><tspan>, Pattern </tspan><tspan font-style="italic">p</tspan></text>
-<text x="28" y="204" font-family="Times New Roman,Times,serif" font-size="37" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">Ensure: </tspan><tspan>Embedded AST </tspan><tspan font-style="italic">A</tspan><tspan>, mutation site </tspan><tspan font-style="italic">s</tspan><tspan>, record </tspan><tspan font-style="italic">M</tspan><tspan>, or rejection</tspan></text>
+<text x="28" y="154" font-family="Times New Roman,Times,serif" font-size="37" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">Input: </tspan><tspan>Abstract AST </tspan><tspan font-style="italic">ast</tspan><tspan> with one typed hole; predefined Pattern </tspan><tspan font-style="italic">pattern</tspan></text>
+<text x="28" y="204" font-family="Times New Roman,Times,serif" font-size="37" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">Output: </tspan><tspan>AST </tspan><tspan font-style="italic">tree</tspan><tspan> with the Pattern embedded, or rejection</tspan></text>
 <text x="78" y="262" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>1:</tspan></text>
-<text x="100" y="262" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">if </tspan><tspan font-style="italic">¬</tspan><tspan style="font-variant:small-caps">Compatible</tspan><tspan font-style="italic">(h, p)</tspan><tspan font-weight="700"> then</tspan></text>
-<text x="1770" y="262" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Interface categories and types</tspan></text>
+<text x="100" y="262" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-style="italic">slot ← </tspan><tspan style="font-variant:small-caps">FindHole</tspan><tspan font-style="italic">(ast)</tspan></text>
+<text x="1770" y="262" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ The hole reserved by M1</tspan></text>
 <text x="78" y="312" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>2:</tspan></text>
-<text x="155" y="312" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">return </tspan><tspan>Reject</tspan></text>
-<text x="1770" y="312" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Incompatible Pattern</tspan></text>
+<text x="100" y="312" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">if not </tspan><tspan style="font-variant:small-caps">Compatible</tspan><tspan font-style="italic">(slot, pattern)</tspan><tspan font-weight="700"> then</tspan></text>
+<text x="1770" y="312" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Check interface and output type</tspan></text>
 <text x="78" y="362" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>3:</tspan></text>
-<text x="100" y="362" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">end if</tspan></text>
+<text x="155" y="362" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">return </tspan><tspan>Reject</tspan></text>
 <text x="78" y="412" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>4:</tspan></text>
-<text x="100" y="412" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-style="italic">(K, τ, Φ, σ, ε) ← </tspan><tspan style="font-variant:small-caps">Expand</tspan><tspan font-style="italic">(p, h)</tspan></text>
-<text x="1770" y="412" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Local source, rewrite, and premises</tspan></text>
+<text x="100" y="412" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">end if</tspan></text>
 <text x="78" y="462" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>5:</tspan></text>
-<text x="100" y="462" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-style="italic">(K, τ, Φ) ← </tspan><tspan style="font-variant:small-caps">AlphaRename</tspan><tspan font-style="italic">(K, τ, Φ, </tspan><tspan style="font-variant:small-caps">Vars</tspan><tspan font-style="italic">(A₀))</tspan></text>
-<text x="1770" y="462" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Avoid capture; retain imports</tspan></text>
+<text x="100" y="462" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-style="italic">fragment ← </tspan><tspan style="font-variant:small-caps">ExpandPattern</tspan><tspan font-style="italic">(pattern, slot)</tspan></text>
+<text x="1770" y="462" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Choose the local structure</tspan></text>
 <text x="78" y="512" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>6:</tspan></text>
-<text x="100" y="512" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-style="italic">A ← </tspan><tspan style="font-variant:small-caps">Replace</tspan><tspan font-style="italic">(A₀, h, K)</tspan></text>
-<text x="1770" y="512" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Preserve the outer context</tspan></text>
+<text x="100" y="512" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan>Rename private variables in </tspan><tspan font-style="italic">fragment</tspan><tspan> to avoid name conflicts</tspan></text>
 <text x="78" y="562" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>7:</tspan></text>
-<text x="100" y="562" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-style="italic">s ← </tspan><tspan style="font-variant:small-caps">Relocate</tspan><tspan font-style="italic">(h, σ)</tspan></text>
-<text x="1770" y="562" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Actual mutation site</tspan></text>
+<text x="100" y="562" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-style="italic">tree ← </tspan><tspan style="font-variant:small-caps">FillHole</tspan><tspan font-style="italic">(ast, slot, fragment)</tspan></text>
+<text x="1770" y="562" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Preserve the outer context</tspan></text>
 <text x="78" y="612" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>8:</tspan></text>
-<text x="100" y="612" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-style="italic">e ← </tspan><tspan style="font-variant:small-caps">Relocate</tspan><tspan font-style="italic">(h, ε)</tspan></text>
-<text x="1770" y="612" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Complete semantic boundary</tspan></text>
+<text x="100" y="612" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan>Mark the mutation site inside the inserted </tspan><tspan font-style="italic">fragment</tspan></text>
 <text x="78" y="662" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>9:</tspan></text>
-<text x="100" y="662" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-style="italic">M ← </tspan><tspan style="font-variant:small-caps">Register</tspan><tspan font-style="italic">(p, s, e, τ, Φ)</tspan></text>
-<text x="1770" y="662" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Premises passed to M3</tspan></text>
+<text x="100" y="662" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan>Save the mutation rule and its full enclosing context</tspan></text>
+<text x="1770" y="662" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Used later in M5 and M6</tspan></text>
 <text x="78" y="712" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>10:</tspan></text>
-<text x="100" y="712" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">if </tspan><tspan font-style="italic">¬</tspan><tspan style="font-variant:small-caps">ValidateEmbedding</tspan><tspan font-style="italic">(A₀, A, h, M)</tspan><tspan font-weight="700"> then</tspan></text>
-<text x="1770" y="712" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Types, scope, and unchanged host</tspan></text>
+<text x="100" y="712" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan>Save the pattern conditions for graph construction</tspan></text>
+<text x="1770" y="712" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Checked later in M3</tspan></text>
 <text x="78" y="762" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>11:</tspan></text>
-<text x="155" y="762" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">return </tspan><tspan>Reject</tspan></text>
-<text x="1770" y="762" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Invalid embedding</tspan></text>
+<text x="100" y="762" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">if not </tspan><tspan style="font-variant:small-caps">CheckEmbedding</tspan><tspan font-style="italic">(ast, tree, slot)</tspan><tspan font-weight="700"> then</tspan></text>
+<text x="1770" y="762" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Types, scope, and insertion range</tspan></text>
 <text x="78" y="812" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>12:</tspan></text>
-<text x="100" y="812" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">end if</tspan></text>
+<text x="155" y="812" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">return </tspan><tspan>Reject</tspan></text>
 <text x="78" y="862" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>13:</tspan></text>
-<text x="100" y="862" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan style="font-variant:small-caps">FreezeStructure</tspan><tspan font-style="italic">(A, M)</tspan></text>
-<text x="1770" y="862" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Only declared structural rewrites</tspan></text>
+<text x="100" y="862" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">end if</tspan></text>
 <text x="78" y="912" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>14:</tspan></text>
-<text x="100" y="912" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">return </tspan><tspan font-style="italic">(A, s, M)</tspan></text>
-<text x="1770" y="912" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Symbols remain unbound</tspan></text>
-<path d="M28 947H1772" stroke="black" stroke-width="2.2"/>
+<text x="100" y="912" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan>Freeze the structure except for the saved mutation</tspan></text>
+<text x="1770" y="912" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>▷ Keep terminal placeholders</tspan></text>
+<text x="78" y="962" font-family="Times New Roman,Times,serif" font-size="33" text-anchor="end" fill="black" xml:space="preserve"><tspan>15:</tspan></text>
+<text x="100" y="962" font-family="Times New Roman,Times,serif" font-size="36" text-anchor="start" fill="black" xml:space="preserve"><tspan font-weight="700">return </tspan><tspan font-style="italic">tree</tspan></text>
+<path d="M28 997H1772" stroke="black" stroke-width="2.2"/>
 </svg>
