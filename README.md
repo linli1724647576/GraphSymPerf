@@ -200,10 +200,25 @@ Result statuses include:
 - `result_mismatch`: complete results differed; the pair is excluded from performance screening.
 - `timeout`: a database transaction reached its timeout.
 
+## Submitted issue registry
+
+[bugs.csv](bugs.csv) is the single maintained registry of submitted issues. Each row is one unique GitHub issue URL. Update that row when its status changes; add a row when a new issue is submitted. Historical reports remain under `BUG list/`, including local reports that have not been submitted.
+
+Pattern mappings use the current S1–S8 and Y1–Y8 catalog, introduced in commit `26f62dc`. They are based on the submitted queries and graph conditions, not the historical directory name or issue title.
+
+- `pattern_ids` contains direct semantic matches; `pattern_count` is the number of distinct IDs in that field. A match identifies a catalog symmetry or a short-circuit condition exercised by the reported pair. It does not claim that the current generator emits the exact report, or that its backend is implemented.
+- `related_pattern_ids` and `related_pattern_count` record a shared optimization mechanism without the catalog transformation. These are excluded from direct counts. Boolean identity insertion, compound reorderings, and explicit CASE guard rewrites can fall here.
+- `mapping_class` is `direct`, `related_only`, or `outside_catalog`. `mapping_notes` explains the query-level decision. IDs are separated by semicolons; an empty ID field has count zero.
+- `status` records the current disposition; `reported_status` preserves the status supplied when the row was registered. Values are `pending`, `confirmed`, `fixed`, `uninterested` (explicitly declined), and `not_a_bug` (upstream rejects the attribution to that DBMS).
+- `status_basis`, `status_evidence`, and `status_notes` distinguish an upstream reply from a user-provided status. Closed issues are not automatically fixed. Automated reproduction is not treated as human confirmation; version-specific fixes remain qualified in the notes.
+- `github_state` and `upstream_type` preserve GitHub's separate state and issue-type fields. `bug_type` retains the submitter's Performance BUG / Logical BUG classification. `duplicate_of` records upstream grouping; `last_checked` records the audit date.
+
+Count unique issue URLs for submitted-issue totals. For each pattern, count rows containing its ID in `pattern_ids`; one issue can contribute to several pattern counts. Neither total measures independent root causes. In particular, ArcadeDB #10307 and #10308 are separate submissions grouped upstream under #10309.
+
 ## Validation and retained material
 
 The rewrite uses direct checks against a dedicated Neo4j instance rather than restoring the former test framework. Local acceptance artifacts are kept under `results/validation-*`; they are not part of the source package.
 
-The original `paper/`, `BUG list/`, `reference/`, and `picture/` directories are retained unchanged. They describe earlier work and may use older pattern IDs or methods. The README and current source describe this implementation.
+Historical material remains under `paper/`, `BUG list/`, `reference/`, and `picture/`. It may use older pattern IDs or methods. The README and current source describe this implementation; `bugs.csv` records submitted-issue status and current pattern mappings.
 
 Only the Neo4j interface is implemented. Supporting another system requires checking its grammar, result semantics, and pattern prerequisites; adding a connection class alone is not sufficient.
