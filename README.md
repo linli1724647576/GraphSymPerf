@@ -1,191 +1,209 @@
 # GraphSymPerf
 
-用于论文实验的图数据库性能缺陷检测代码。默认入口 `ast-pattern-v1` 按六个阶段运行：随机生成有类型宿主 AST → 在兼容位置嵌入 Pattern → 联合构造图状态与终端绑定 → 实例化完整查询 → 单点变异 → 检查语义及工作依赖。M1 不读取 Pattern 或具体图数据；通用构图器消费完整 AST 的需求，使用显式 GraphSpec v2。规则目录采用论文 P1–P13、S1–S10，P10 另有三种形式。
+GraphSymPerf tests short-circuit and symmetry transformations on Neo4j. It generates a random symbolic query AST, inserts one compatible pattern, constructs one graph containing the required small and large regions, and compares a source query with one local mutation.
 
-新配置见 [configs/ast-pattern.yaml](configs/ast-pattern.yaml)，方法及接口规范分别见 [方法文档](docs/ast-pattern-method.md) 与 [代码技术文档](docs/ast-pattern-implementation.md)。新流程首先支持 Neo4j；其他数据库继续通过显式兼容方法使用各自的能力门槛。物理调用次数在没有可靠计划映射时记录为未知，不从 AST 求值机会推定实际执行次数。
+**Use a dedicated experiment database. Every executed case replaces all graph data in that database.** The graph and indexes remain unchanged between the two queries.
 
-宿主语法 `typed-host-v2` 增加七类匹配形状、去重形式、多列投影、联合与条件子查询、空值判断及更多比较。复合形状通过多个 MATCH 共享变量生成；候选与预算配置、直观例子和支持边界见 [外层搜索空间说明](docs/ast-host-search-space.md)。
+[中文说明](README.zh-CN.md)
 
-面向导师汇报的完整中文方法稿见 [六阶段方法汇报稿](docs/GraphSymPerf-六阶段方法汇报稿.md)（[PDF](docs/GraphSymPerf-六阶段方法汇报稿.pdf)、[离线 HTML](docs/GraphSymPerf-六阶段方法汇报稿.html)），包含两个贯穿案例、一个依赖对照、四段伪代码及两张可编辑 SVG。
+## Requirements and setup
 
-历史固定配方使用 `generation.method: legacy-v1` 和 `pattern_catalog: legacy-v1`；原递归符号流程使用 `generation.method: symbolic-v1`，配置见 [symbolic-paper.yaml](configs/symbolic-paper.yaml)。它们用于历史实验兼容与回放，新入口构造失败不会回退到旧流程。旧编号与新论文编号的对应关系单独保存。
+- Python 3.12.
+- A Neo4j server supporting Cypher 25. This implementation was checked against Neo4j Community 2026.09.0.
+- The dependencies in `requirements.txt`.
 
-## 文件
+Install the Python dependencies:
 
-```text
-Src/
-  ast_pattern/   六阶段合同、随机宿主、局部规则嵌入、构图与依赖检查
-  main.py        配置、实验预算、保存与重放
-  generator.py   模板、候选绑定、受控构图、参考查询
-  mutator.py     对称变换与高成本引用替换
-  ir.py          语言无关的受限查询结构、验证和序列化
-  query.py       受限 Cypher 解析、渲染与旧接口兼容
-  languages.py   目标方言生成、输出列映射与能力检查
-  gremlin.py     公共 IR 到受限 Gremlin 遍历的参数化生成
-  state.py       有限图状态描述、分批数据与成本检查
-  symbolic.py    递归符号骨架、算法 1/2 的共同赋值合同
-  dependencies.py AST 作用域、定义引用、局部关系与外层传播
-  population.py  路径与见证需求的有限构图和解释验证
-  relational_population.py 固定长度匹配、空值行与扩张读取闭包
-  requirements.py 输出、真假与潜在工作目标的向内传播和整数分配
-  executor.py    八种数据库执行、原生计划与重复测量
-  summarize.py   独立 BUG 与 pattern 贡献汇总
-config.yaml      单个测试目标和实验参数
-bugs.csv         人工核查后的 BUG 对应表
-tests/          离线测试与显式启用的数据库集成测试
-```
+    uv venv --python 3.12
+    uv pip install -r requirements.txt
 
-## 安装与运行
+For a new local experiment database:
 
-在仓库根目录执行：
+    docker run -d --name gsp-neo4j \
+      -p 127.0.0.1:7687:7687 \
+      -p 127.0.0.1:7474:7474 \
+      -e NEO4J_AUTH=neo4j/change-this-local-password \
+      neo4j:2026.09.0
 
-```bash
-uv sync --locked --extra test --extra falkordb --extra age --extra ladybug
-source .venv/bin/activate
-export GRAPHSYMPERF_NEO4J_PASSWORD='你的测试库密码'
-python Src/main.py --config config.yaml
-```
+Set the password and review `config.yaml` before running:
 
-先将配置指向**专用测试数据库**，显式设置 `dedicated: true` 和 `allow_reset: true`。默认配置关闭重建权限。Neo4j 和 Memgraph 每次构图清空指定测试库，拒绝未知业务索引或约束；FalkorDB 只重建配置的命名图，不清空 Redis 实例。密码仅通过配置指定的环境变量读取。一次只运行一个测试进程。
+    export GRAPHSYMPERF_NEO4J_PASSWORD='change-this-local-password'
+    .venv/bin/python main.py
 
-Neo4j 的连接配置见 `config.yaml`。Memgraph 可将其中的 `database` 替换为：
+The password is read from the named environment variable. It is not written into result files.
 
-```yaml
-database:
-  dbms: memgraph
-  uri: bolt://127.0.0.1:7687
-  database: memgraph
-  dedicated: true
-  allow_reset: true
-```
+## Running and replaying
 
-上述 Memgraph 示例用于未启用认证的本地专用实例；启用认证时再填写 `user` 和 `password_env`。FalkorDB 示例：
+Run from the repository directory. All experiment settings are read from `config.yaml`:
 
-```yaml
-database:
-  dbms: falkordb
-  uri: redis://127.0.0.1:6379
-  database: gsp_paper_test
-  dedicated: true
-  allow_reset: true
-```
+    .venv/bin/python main.py
 
-FalkorDB 的 `database` 是独立图名；有认证时填写 `password_env`。服务器不能静默截断结果：执行器会检查 `RESULTSET_SIZE`，要求关闭截断或上限足够容纳本工具的结果限制。该检查不会修改 Redis 的全局配置。
+Choose the operation with `run.mode`:
 
-每个数据库版本的功能支持以实际执行为准。不支持的模式或语法记录为 `unsupported_feature`，不能计为发现 BUG，也不能以改写成另一种操作来宣称实现了原机制。
+| Mode | Behavior |
+| --- | --- |
+| `experiment` | Load each graph, compare results, and screen performance |
+| `generate` | Generate and save cases without connecting to Neo4j |
+| `check` | Load each graph and compare complete results without timing |
 
-新增目标示例在 `configs/arcadedb.yaml`、`configs/age.yaml`、`configs/ladybug.yaml`。先准备专用测试目标，填写连接与密码环境变量，再显式开启 `allow_reset`。ArcadeDB 需要预先建立指定数据库；AGE 需要在指定 PostgreSQL 库安装 AGE 扩展，`graph` 仅指定本工具重建的图；Ladybug 使用指定目录中自己创建的临时子目录，每次独立连接都重新构图。嵌入式图不会被错误地跨连接复用。
+For the Y4 generation example, change these fields in the existing configuration:
 
-ArcadeDB 的 Cypher 目标使用原生 `opencypher` 前端；框架中的语言名仍为 `cypher`。AGE 使用原生 Cypher 包装及 PostgreSQL 计划，成本入口分别验证属性映射 GIN 和属性表达式 BTree；建图后对实验表执行 `VACUUM (ANALYZE)`，清理 GIN 待处理项并刷新统计。Ladybug 使用类型化节点／关系表及主键索引，路径显式指定原生 `TRAIL`。它的多标签语义不能用于 P7。每个目标的已验证版本和支持范围见 [Cypher 实测覆盖](docs/cypher-support.md)。
+    run:
+      mode: generate
+      patterns: [Y4]
+      case_seed: 24
+    graph:
+      high_units: 100
 
-六阶段入口直接产生结构化 AST。M1 完成普通匹配、表达式与子查询的结构展开，只保留声明的 Pattern 端口和图相关终端；M2 后不再长出普通算子。M3 对源与声明备选联合求解，M4 固定使用接受的绑定。构造超出支持片段或预算时保存分阶段失败原因，未知不等于无解。可选 GDsmith 查询种子只属于 `legacy-v1`，不进入新 M1。
+Keep the other configuration fields. Then run the same command:
 
-Gremlin 已实际接入 JanusGraph 1.1.0、Apache HugeGraph 1.7.0 和 ArcadeDB 26.10.2，分别开放 25、24、22 项现有 Pattern（ArcadeDB 为原 12 项 P 加 S1–S10）；配置示例为 `configs/janusgraph.yaml`、`configs/hugegraph.yaml`、`configs/arcadedb-gremlin.yaml`。ArcadeDB 本轮增加的是已有 DBMS 的 Gremlin 语言目标，未增加 Pattern 或原生探针（Native probe）；选择依据及影响力、维护响应的证据边界见 [新增目标选择](docs/gremlin-target-selection-20261018.md)。
+    .venv/bin/python main.py
 
-公共查询中间表示（IR）直接生成受限、无匿名函数（lambda）的遍历。ArcadeDB 使用原生 HTTP 的 Java Gremlin 引擎，复用现有 SQL／JSONL 建图与索引检查；其 `constant()` 位置按目标语法生成严格类型字面量，其余谓词值仍独立绑定。2026-10-18 首轮接入门禁通过 107 项真实接口检查与 1,250 项离线测试；后续 S1–S10 接入在性能测试前另通过 290 项真实接口／语义检查，收尾补充 1 项动态 NULL 守卫回归，合计 291 项；该轮离线回归 1,362 项通过。启动、支持范围和语义证据见 [Gremlin 实测覆盖](docs/gremlin-support.md)，正式性能结果另见 [2026-10-18 Gremlin 实验记录](docs/gremlin-experiment-20261018.md)。 P10 扩规模与 S1–S10 后续结果见 [续测记录](docs/gremlin-p10-scor-20261018.md)；P3、P13、P16 随后已在 JanusGraph／HugeGraph 补齐：JanusGraph 当前完整套件 101 项通过、1 项专用测试跳过，HugeGraph 最新完整套件 102 项通过，离线回归更新为 1,422 项；实现、版本适配及测试结果见 [扩展记录](docs/gremlin-extended-20261018.md)，保留限制见 [编译边界](docs/gremlin-pattern-boundaries.md)。两库各完成 56 个既定性能输入，缩减及独立重放后新增 JanusGraph P3、HugeGraph P3／P13 三份本地报告，完整建图和查询又在新容器核验通过；三份报告对应本轮两个优化机会族，未提交上游。随后 S1–S10 已接入 JanusGraph／HugeGraph：诊断结果上限对齐后，v5 新空库的12种子、3复杂度原生门禁分别为 429 passed 和 301 passed／128 项明确不支持，离线回归 1,528 项通过；HugeGraph 保留原非索引 uid 变体的原生限制，不补索引或改变查询。[v5 冻结门禁](results/gremlin-scor-janus-huge-20261018-v5/interface-gate.json)通过后，按用户要求只续测 JanusGraph，完成 **164 个唯一原计划输入（150 主阶段＋14 条件阶段）**，另四个条件槽位明确未测、零遗漏；175 个物理存档还包括10次有限验证和一次旧外部休眠中断，不能称为175个新输入。五组原始统计审计零错误，三个最终代表各40对确认样本通过原门槛；精确新空库程序与全图验证后，本地登记 [S5／BUG004](BUG%20list/JanusGraph/S5/BUG004.md)（70.214619×）和 [S6／BUG005](BUG%20list/JanusGraph/S6/BUG005.md)（184.037156×）。S8 与 S6 的相同 EntryList 邻接预装载路径合并报告；S5 尾部 limit(0) 的高倍率未过噪声门槛，不报告或重试。最终独立格式和原生证据复核已通过，任务已完成；两份报告均未提交上游，独立跨库根因数未知。HugeGraph 停测前的80个完整输入及取消记录保留，既有 Pattern 方法、原阈值和门禁后冻结源码均保持不变。详见 [S1–S10 接入与 JanusGraph 续测记录](docs/gremlin-scor-janus-huge-20261018.md)。未实现任意 Gremlin 文本解析或全语言统一解析器；GQL 仍明确返回 `UnsupportedLanguage`。
+`run.case_seed` selects an exact case and runs one round. Leave it `null` for a campaign, where `run.seed` controls pattern order and generated case seeds. Set `run.rounds` for the number of rounds, `run.minutes` for the time limit, and `run.save_all` to archive every constructed case. Change the connection address in `database.uri`.
 
-`languages.generate()` 支持经过目标版本验证的 `verified_features` 覆盖保守语法限制；它不能覆盖已知的语义不兼容。Gremlin 的可空结果投影必须显式验证后启用；JanusGraph／HugeGraph 已支持 P3 有界 TRAIL、P13 OPTIONAL 空值延展和 P16 服务器列表／ALL；P7 多标签合取继续拒绝，动态范围端点等未验证片段仍显式拒绝。显式遍历改变起点或执行顺序时，即使结果相同、耗时差异稳定，也只记录 `timing_observation`，不自动计为遗漏优化候选或 BUG。
+To replay a saved case, set:
 
-## 模板与图状态
+    replay:
+      case: results/<run>/candidate/<case>
+      check_only: true
 
-默认 `generation.method: ast-pattern-v1` 不依赖 GDsmith 安装。它借鉴 GDsmith 的骨架、类型和作用域组织，独立实现图前结构生成。`generation.ast` 配置 AST 与求解预算、最多尝试数以及目标入口要求。`pattern_options` 仅在 M2 选择局部规则形式，例如 P10 的 `form: chain`；不能影响已经生成的 M1 候选。旧日志与模板选项须显式选择兼容方法。
+Then run:
 
-`seeds` 控制查询候选绑定；`generation.data_seed` 控制图中噪声节点的标识偏移，当前不随机改变拓扑。固定后者，同一 pattern、状态变体和规模的查询组合使用相同构图。候选池包含受控谓词写法、匹配与过滤位置、分支次序、有限路径界限、计数／存在操作和列表表达式。实际 `template_id`、`variant`、绑定和来源写入每个案例。增加种子只会枚举有限组合；不能把重复查询数当成覆盖数。
+    .venv/bin/python replay.py
 
-`generation.complexity` 可设为 0、1、2。0 保留原有限枚举序列；1/2 对每个角色独立、可复现地抽样，并增加一层／两层布尔、CASE、COALESCE 嵌套和关联条件。SCor 决定项可读取受控根节点属性；S3 使用廉价单根节点计数。动态决定事实的值与根节点唯一性必须在数据库中检查，不能只相信生成器的元数据。复杂度扩展的是受控查询结构，不是任意 Cypher 文法。
+Replay uses the current `database` connection settings. With `replay.check_only: false`, it repeats the measurement protocol saved in the case archive.
 
-P 模式主要包括端点／路径镜像、布尔操作数交换、比较对偶、标签／类型顺序、MATCH 与独立 OPTIONAL 分支重排、UNION ALL 重排、CASE 对偶和 ALL 列表分组交换。保留 NULL、重复行、变量依赖、关系匹配作用域和输出列语义。
+A seed fixes the random choices in the current implementation. A selected seed may have no compatible position for a selected pattern; the program reports a skip. Replay uses the saved graph and query text and does not regenerate them from the seed.
 
-`generation.state_variant` 默认 `original`。定向实验可设置 `empty_low`（仅 P10/P11），让受测低成本分支为零匹配，但保留高成本分支和其成功见证；P11 在另一根节点保留 LOW 边，避免全局缺失关系类型使空结果直接折叠。`multi_low`（仅 P11/P13）为受测根节点提供八个低侧匹配，检验分支重排是否导致高侧重复扫描；完整结果及 OPTIONAL 的 NULL 延展都单独检查。配置的 patterns 必须与该状态变体兼容。
+## Main flow
 
-`pruning_path`（仅 P3）构造低端入口、`keep=false` 的失败节点及后续扇出，另保留一条全 `keep=true` 的两跳见证；查询使用固定 `1..3` 界限和 `ALL(x IN nodes(p) WHERE x.keep=true)`。路径镜像保留完整节点谓词与结果多重集。当前只允许 `nodes(p)` 作为 ALL 的直接输入，谓词观察绑定节点自身的标量属性；不允许返回图实体或观察路径位置。
+Read `main.py`, starting with `prepare_case()`, to follow query construction:
 
-S 模式按 SCor 原论文十项分类对应 OR、AND、条件分支、CASE、跳过／限制扫描、COALESCE、首次匹配、空输入连接和空集合运算适配。S3 在 Cypher 目标中使用 Cypher 25 条件查询，在已验证的 ArcadeDB Gremlin 目标中使用 `choose()`；S10 使用空输入与 EXISTS／NOT EXISTS 适配，不是原生 INTERSECT／EXCEPT。
+1. `generate_ast()` creates the host query without receiving a pattern ID.
+2. `choose_site()` selects a compatible expression, match, or query position.
+3. `pattern.embed()` inserts the source form and prepares the mutation.
+4. `build_graph()` creates a random background, prepares anchors, and applies the fixed graph recipe.
+5. `instantiate()` binds symbolic names and values.
+6. `pattern.mutate()` changes the selected local region.
+7. `check_pair()` checks scopes and the output interface.
+8. `Neo4j.load()` loads one graph; `run_pair()` compares and measures both queries.
 
-S 模式以小参考区域替换高成本关系引用；LIMIT 和 EXISTS 保留足够见证。P4/P5/P15 增加由可见 `keep` 决定事实构造的参考关系，只省略已被决定项屏蔽的工作；P16 通过显式失败元素构造短列表参考。其他 P 模式继续比较对称查询对，不强行添加答案标签或低成本参考。P2 在同一状态中使用配对正／逆关系，不是整图物理反转实验。
+Each round shuffles the 16 patterns and attempts one case per pattern. An incompatible context is skipped. Unexpected implementation or database errors stop the run.
 
-## 实验预算与检测
+## Source layout
 
-`cases_per_pattern` 和 `seconds_per_pattern` 为每种模式保留独立预算；`schedule_seed` 固定模式顺序的随机排列。模式之间不转移未使用的预算。先按规模、再按查询种子执行，以便复用健康的已检查状态。每次确认候选仍重新连接和重建图。
+| Location | Responsibility |
+| --- | --- |
+| `main.py` | Configuration, scheduling, and the main flow |
+| `ast_nodes/` | Query, clause, expression, and graph-match nodes; Cypher rendering |
+| `data_structures/scope.py` | Variable visibility, imports, projections, and reference checks |
+| `data_structures/graph.py` | Nodes, relationships, indexes, and budget distribution |
+| `data_structures/case.py` | Case records, symbols, and instantiation |
+| `query_generation/` | Random AST generation and compatible-site selection |
+| `graph_generation/` | Random background data and graph-construction orchestration |
+| `mutator/` | Pattern source forms, local graph recipes, and mutations |
+| `databases/neo4j.py` | Graph loading, query execution, and profiling |
+| `executor.py` | Complete-result comparison, timings, screening, and case archives |
+| `replay.py` | Reconstruction and replay of archived cases |
 
-旧配置的 `max_cases`、`max_seconds` 仍可读取，会分配到各模式；案例预算必须至少覆盖每种模式一次。预算在案例之间检查，已经开始的案例由查询超时约束，因此实际用时可能超过配额。每个运行的 `run.json` 保存实际尝试数、执行数、用时和停止原因。
+`ast_nodes/patterns.py` represents Cypher node, relationship, and path syntax. Testing patterns are implemented in `mutator/`.
 
-先核验索引、成本条件、完整结果多重集及构造预期结果。参考查询存在时先执行参考；除对称 A/B 外，还比较 A/reference、B/reference，避免遗漏两种对称写法都慢的情况。
+The organization follows the direct entry-point and AST/module style of [ValScope](https://github.com/linli1724647576/ValScope). The implementation is written for graph construction and performance testing; it does not parse or reuse ValScope's SQL code.
 
-普通查询计时包含提交到完整消费结果，连接建立不计入查询耗时。初筛后使用两次重建状态的重复确认、平衡 AB/BA 顺序和 A/A、B/B 噪声对照。`candidate` 仅表示稳定性能差异；仍需核查执行计划、可避免工作、缩减案例和根因，才能登记为 BUG。
+## Current pattern catalog
 
-`measurement.min_delta_ms` 设置配对时间差的下限，默认 0 保持旧实验兼容；确认时要求中位时间差严格大于该值。本轮 issue 实验使用 `ratio: 5`、`ci_low: 5`、`min_delta_ms: 100`，同时保留完整结果和同查询噪声检查。Memgraph 每次装载后执行 `ANALYZE GRAPH`，保存其统计结果并清理旧计划缓存，再开始预热和测量。
+These IDs belong to the rewritten catalog. Historical files under `BUG list/` keep their original IDs.
 
-`measurement.collect_plans: true` 在计时结束后保存原生 PROFILE；性能候选默认采集计划。计划失败会单独记录，不能代替结果与性能检查。各引擎的 DB Hits、算子输出数量、loops 和缓冲区统计保留原名，不转换成一个虚假的统一工作量指标。
+| ID | Pattern | Mutation |
+| --- | --- | --- |
+| S1 | Decisive OR operand | Replace the protected low-cost operand with the high-cost operand |
+| S2 | Decisive AND operand | Replace the protected operand under a false condition |
+| S3 | Conditional expression | Replace an unselected result or a later CASE condition |
+| S4 | Non-null prefix | Replace the argument after a non-null COALESCE prefix |
+| S5 | Zero output demand | Replace the match under `LIMIT 0` |
+| S6 | Bounded output demand | Replace a UNION ALL branch after a sufficient witness branch |
+| S7 | Existence | Replace a small matching region; includes EXISTS, NOT EXISTS, and a UNION witness |
+| S8 | Empty input | Replace a mandatory downstream match after a false filter |
+| Y1 | Conjunction symmetry | Swap the AND operands |
+| Y2 | Disjunction symmetry | Swap the OR operands |
+| Y3 | Single-edge reflection | Reverse the written endpoints while matching the same relationships |
+| Y4 | Bounded-path reflection | Reverse the path and preserve reversal-invariant observations |
+| Y5 | Independent components | Swap two independent mandatory matches |
+| Y6 | Shared-anchor branches | Swap mandatory branches sharing an anchor |
+| Y7 | Chain joins | Swap two mandatory matches connected through an intermediate node |
+| Y8 | Independent optional branches | Swap two optional branches with only a mandatory anchor in common |
 
-每个比较独立保存 `pair_kind`、`status` 和测量摘要：`comparisons.ab` 保存原始 A/B 证据；`reference_comparisons` 保存 A/reference、B/reference 样本。顶层 `candidate_comparison` 仅标出差异最大的已通过比较，不能用它判断 A/B 是否命中。SCor 的 HIGH/REF 属于参考比较。P16 把失败元素从列表头移到尾，普通顺序 ALL 求值会增加谓词检查次数；这种预期工作差异不能直接登记为遗漏优化。
+The eight symmetry entries are concrete testing patterns, not eight independent algebraic laws. Y5–Y7 share a join-commutativity basis but use different graph structures.
 
-Neo4j 先分批删除关系、再分批删除节点，避免密集图清理占满单次事务内存。每次重建图并等待索引后，调用 `db.prepareForReplanning()` 更新统计并清理查询缓存；这一步不计入被测查询耗时。它避免把前一图状态的陈旧计划误算为新性能问题。
+The decisive-operand pool in `mutator/operands.py` includes constants, comparisons, small-region counts, existence checks, and eligible outer-node properties. Each data-dependent option has a matching graph preparation step. Extending a pool does not introduce a new pattern.
 
-高成本查询超时但参考正确快速时记录 `timeout_candidate` 与保守下界，不伪造精确耗时。服务器明确确认终止且健康检查成功后才继续；取消状态不明时停止目标。超时候选不等同于完整结果已核验或性能差异已重复确认。
+## Generation and construction boundaries
 
-## 保存与重放
+The generator includes MATCH, OPTIONAL MATCH, WITH, RETURN, CALL, UNWIND, UNION, UNION ALL, conditional queries, scalar expressions, basic aggregates, lists, membership, list indexing, ordering, pagination, and nested EXISTS/COUNT/COLLECT subqueries. Scalars include integers, floats, booleans, and strings. Recursion is bounded by the configured AST and subquery budgets.
 
-每次运行创建 `results/<运行>/`。每例包含 `setup.cypher`、`query_a.cypher`、`query_b.cypher`、可选的 `query_ref.cypher` 和 `result.json`，保存绑定、来源、预期结果、版本、全部样本和输入指纹。Gremlin 查询文件使用 `.gremlin` 后缀；实际参数保存在 `result.json` 的 `query_bindings` 中，重放时同时校验查询文本和参数。
+It samples a finite implemented grammar. It does not uniformly sample all Cypher, parse arbitrary user queries, or solve arbitrary graph constraints.
 
-六阶段案例使用归档格式 4，保存 M1–M6 的完整记录、阶段摘要链、联合绑定、依赖证书和源码指纹，并输出 `M1-host.json` 等独立阶段文件、`M3-state.json`、`M3-bindings.json` 和 `M6-runtime.json`。读取时同时校验记录与文件，缺失阶段或改变图、查询、规则条件会被拒绝。执行回放使用已保存输入；`ast_pattern.pipeline.reproduce_generation` 在相同源码指纹下按种子重新生成，并核对各阶段摘要。
+The random background uses symbols from the host AST. Pattern-specific labels and relationship types are allocated separately. Shared AST symbols keep the same binding.
 
-格式 1/2/3 保留历史解码与输入哈希。格式 3 保存查询 IR、图状态、方言、列映射和逻辑 `ir_hash`；`setup.cypher` 用于构图展示，显式状态通过 `graph_spec` 分批加载。旧格式不能伪装为六阶段用例。
+Correlated construction uses non-null node variables with a traceable label source. It considers the candidate anchor set, not a guessed single runtime binding. Opaque or nullable sources are not selected for recipes that require such anchors.
 
-```bash
-python Src/main.py --config config.yaml --replay results/<运行>/<案例>
-```
+The graph builder prepares the pattern's local conditions. It does not solve every outer filter or guarantee that the selected operation is reached. An empty result may be expected, especially for S5 and S8.
 
-重放读取保存输入和测量参数，输出到新的目录。输入被修改时拒绝沿用旧指纹。旧版四文件案例继续可读。重放不重新调用生成器，也不覆盖原始证据。
+`high_units` is the total number of high-cost expansion units for a case. It is divided across applicable anchors or regions. A path unit can contain several nodes and relationships. Background data, small regions, and fixed witnesses are additional; archives report the actual totals.
 
-## BUG 与 pattern 贡献
+Paths are compared in their original order. Path reflection is rejected when the enclosing query directly observes the changed path order. List order and duplicate result rows are also preserved.
 
-根 `bugs.csv` 是长期维护的 BUG 总账，包含上游 issue 和已有本地案例。原六列保持兼容，当前追加类型、本地验证状态、状态来源、更新日期和报告路径：
+The two queries share one graph and one index state. Another case can rebuild the dedicated database. Temporary loading indexes are removed before measurement; case indexes are then created and awaited.
 
-```text
-case_id,dbms,bug_id,status,issue_url,database_version,bug_type,local_status,status_source,last_updated,local_report
-```
+## Measurement defaults
 
-上游条目按完整 `issue_url` 更新，ID 使用数据库内的 `GH-<issue编号>`。未提交的本地记录保留原 `BUGxxx`；找到与上游正文一致的查询、建图和计划后合并，保留原输入指纹与本地报告路径。`dbms` 使用执行器的名称，例如 `age`、`ladybug`、`memgraph`。已提交 issue 的计数按唯一 URL 去重，同一问题的多个输入不新增 BUG 数量。
+| Setting | Default |
+| --- | ---: |
+| Background nodes | 50 |
+| Background relationships | 100 |
+| High-cost expansion units | 100,000 |
+| Discovery warmups per query | 3 |
+| Discovery pairs | 6 |
+| Confirmation warmups per query | 5 |
+| Confirmation pairs | 20 |
+| Minimum runtime ratio | **5.0** |
+| Minimum median paired difference | **100 ms** |
+| Required direction consistency | 0.8 |
+| Query timeout | 10 seconds |
 
-`case_id` 是已核查输入的 `input_hash`，也接受至少 8 位且唯一的前缀；`database_version` 必须与该输入实际记录一致。尚无可靠关联的历史 issue 留空这两列，不编造指纹、版本或 Pattern。`local_report` 只表示报告对应关系，单独填写它不产生 Pattern 贡献。同根因不同输入使用同一 `bug_id`；同一 BUG 跨版本逐条登记经过核查的案例。
+Every sample consumes the complete result. Comparison uses typed row multisets: booleans and integers remain distinct, entities retain their identities, and lists and paths retain their internal order.
 
-`status` 保存登记状态，支持 `pending/confirmed/fixed/uninterested` 及本地的 `needs_review/reproduced/rejected`。本次上游状态直接采用用户清单，`status_source=user_provided`，登记日期为 `2026-10-10`；GitHub 的 open/closed 不代替开发者的确认或修复结论。后续更新同一 URL 的状态、来源及 `last_updated`，不重复追加；同一 issue 关联多个输入时，各行保持相同上游状态。
+Discovery and confirmation alternate AB/BA execution. Both rounds must meet the configured ratio, absolute difference, and direction-consistency thresholds, with the same slower query. Timings include query execution, result transfer, and client-side result consumption; graph loading and result normalization are outside the timing interval. PROFILE is collected separately.
 
-`local_status` 独立保存实际案例的核查结果。`pending` 可以与 `local_status=reproduced` 共存；有该列时，空值表示尚未登记本地验证。只有关联了实际输入、版本且本地状态为 `reproduced/confirmed/fixed` 的性能案例进入 Pattern 贡献。`Logical BUG` 保留在总账，单列维护，不计为遗漏优化。旧六列 CSV 继续用原 `status` 判断本地验证。
+A confirmed timing gap is a performance candidate, not proof of a missed optimization. Plans and workload counts are needed to explain it. A timeout is recorded as a timeout, not converted into a measured runtime or ratio.
 
-```bash
-python Src/summarize.py --results results --bugs bugs.csv --output results/summary
-```
+## Results
 
-输出 `summary.csv`（每系统、每 pattern 的有效案例、候选、独立 BUG、独有 BUG、用时与 BUG/小时）和 `pattern_bug.csv`（BUG × pattern 对应矩阵）。Gremlin 的稳定遍历耗时差异单列 `timing_observations`，不并入性能候选。`symmetry_candidates` 与 `reference_candidates` 分别统计独立比较的命中，每案例每类最多计一次，两列可重叠。历史结果缺少独立 AB 状态时，候选还记入 `unclassified_candidates`，该列也可与明确的参考候选重叠。不能从历史顶层 winner 反推对称候选。同系统同输入的重放去重，同根因跨规模／模板归并。缺少预算清单的旧结果不计算 BUG/小时；未执行或不支持的模式保留覆盖状态。
+Each run writes `summary.csv`. Ordinary cases retain their ID, seed, status, sizes, and available measurements there. Candidates, result mismatches, and timeouts also retain:
 
-支持重复的 `--dbms` 与 `--version` 过滤。版本过滤仅计入该版本经过人工核查的对应案例，不把旧版本的确认自动归到新版。对比“仅 S”与“加入 P”时使用相同总预算；比较单个模式时使用相同模式预算。独有命中是观察结果，声称边际贡献还需移除该模式的消融实验。
+    results/<run>/<status>/<case>/
+      query_a.cypher
+      query_b.cypher
+      graph.json
+      result.json
+      plans.json
 
-新增可重复的 `--language` 过滤，旧记录默认 `cypher`。`summary.csv` 按数据库 × 语言 × Pattern 分组；`exclusive_bugs` 表示该语言内所选 Pattern 的独占命中。`pattern_bug.csv` 按 `(dbms, bug_id)` 跨语言去重；未经核验的语言案例不能借用其他语言的确认。矩阵的 `status` 是登记状态，计入贡献的依据仍是关联输入的本地验证，不能把 pending 条目说成开发者已确认。
+`plans.json` is written when profiling completes. `run.save_all: true` also archives ordinary executed cases. `run.mode: generate` always archives generated cases.
 
-汇总读取所选目录内 `EXCLUDED.json` 的显式标记：`include_in_analysis: false` 排除对应范围的结果及运行清单。无效清单报错，不根据目录名猜测。语义冒烟测试、受干扰的轮次及不同计时口径的旧结果应单独保存并标记，不能混进正式贡献统计。
+Result statuses include:
 
-本轮真实实验及报告见 [2026-10-09 实验记录](docs/detection-20261009.md) 和 [BUG list](<BUG list/README.md>)。本轮筛选后的元数据、原始配对样本、原生计划与复现输入保存在 `results/detection-20261009/`。其中 `registered/bugs.csv` 保存实验完成时的登记快照；根 `bugs.csv` 持续维护后续上游信息。原生机制使用 `native:<mechanism>` 分类，不能算成 P1–P16 的命中，也不能用于比较各 Pattern 的发现率。
+- `skipped`: no compatible position or the fixed recipe is inapplicable.
+- `equivalent`: complete results matched in check mode.
+- `no_gap`: discovery did not meet the performance thresholds.
+- `unconfirmed`: the discovery gap did not survive confirmation.
+- `candidate`: discovery and confirmation both passed.
+- `result_mismatch`: complete results differed; the pair is excluded from performance screening.
+- `timeout`: a database transaction reached its timeout.
 
-```bash
-python Src/summarize.py --results results/detection-20261009/registered --bugs bugs.csv --output results/detection-20261009/registered/summary
-```
+## Validation and retained material
 
-## 测试
+The rewrite uses direct checks against a dedicated Neo4j instance rather than restoring the former test framework. Local acceptance artifacts are kept under `results/validation-*`; they are not part of the source package.
 
-```bash
-python -m pytest -m 'not integration'
-# 仅在明确指定专用 Neo4j 时启用旧集成测试：
-GRAPHSYMPERF_TEST_URI=bolt://127.0.0.1:37687 python -m pytest -m integration tests/test_neo4j.py tests/test_scor_neo4j.py
-# 指定目录内须有 neo4j.yaml、memgraph.yaml、falkordb.yaml，连接均为独立测试库：
-GRAPHSYMPERF_TEST_CONFIG_DIR=/absolute/test/configs python -m pytest -m integration tests/test_multi_dbms.py
-```
+The original `paper/`, `BUG list/`, `reference/`, and `picture/` directories are retained unchanged. They describe earlier work and may use older pattern IDs or methods. The README and current source describe this implementation.
 
-集成测试真实执行构图、检查、测量和保存输入；通过不代表发现新 BUG。正式缺陷检测应增加图规模与查询组合预算，并保存完整环境和原始证据。
-
-## 来源与历史
-
-模板实现逻辑参考 Lai 等的 [SCor](https://doi.org/10.1145/3802061)。S1–S10 是已有机制的图查询适配，不能作为十项新贡献。实现保留结果检查与重复确认，不照搬发布包的单次异常判据。
-
-旧框架与已提交实验材料可从 Git 提交 `a916479c7d600f672b3db1679de63398549db3ed` 查看。本机额外历史归档位于 `../GraphSymPerf-archive/20260929-130411-workspace-cleanup/`；当前运行不依赖该目录。
+Only the Neo4j interface is implemented. Supporting another system requires checking its grammar, result semantics, and pattern prerequisites; adding a connection class alone is not sufficient.

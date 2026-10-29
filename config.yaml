@@ -1,87 +1,43 @@
 database:
-  dbms: neo4j
   uri: bolt://127.0.0.1:7687
   user: neo4j
   password_env: GRAPHSYMPERF_NEO4J_PASSWORD
-  database: neo4j
-  dedicated: true
-  allow_reset: false
+  name: neo4j
+  batch_size: 5000
+
 generation:
-  method: ast-pattern-v1
-  data_seed: 0
-  ast:
-    max_attempts: 64
-    require_target_entry: true
-    ast_budget:
-      clauses: 4
-      nodes: 180
-      expression_depth: 3
-      subquery_depth: 3
-      port_nodes: 128
-    solver_budget:
-      terminal_assignments: 32
-      max_nodes: 200000
-      max_edges: 1000000
-patterns:
-- P1
-- P2
-- P3
-- P4
-- P5
-- P6
-- P7
-- P8
-- P9
-- P10
-- P11
-- P12
-- P13
-- S1
-- S2
-- S3
-- S4
-- S5
-- S6
-- S7
-- S8
-- S9
-- S10
-scales:
-- 10000
-- 1000
-seeds:
-- 48700077
-- 462357283
-- 839958653
-- 300439884
-- 821642186
-- 241115555
-- 164593091
-- 714105610
-- 861777605
-- 761692545
-- 72212475
-- 311583767
-- 128496236
-- 389655739
-- 124291177
-- 215177460
-cases_per_pattern: 32
-seconds_per_pattern: 20
-schedule_seed: 20261008
-output: results
+  clauses: 4
+  nodes: 100
+  expression_depth: 3
+  subquery_depth: 3
+  conditional_queries: true
+
+graph:
+  background_nodes: 50
+  background_relationships: 100
+  high_units: 100000
+  indexes: true
+
+run:
+  mode: experiment  # experiment, generate, or check
+  seed: 0
+  case_seed: null  # Set a fixed case seed to run one round.
+  save_all: false
+  rounds: 10
+  minutes: 60
+  output: results
+  patterns: [S1, S2, S3, S4, S5, S6, S7, S8, Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8]
+
+replay:
+  case: null  # Path to an archived case directory.
+  check_only: false
+
 measurement:
-  discovery_warmups: 3
-  discovery_pairs: 6
-  screen_ratio: 2.0
-  confirmation_sessions: 2
+  warmups: 3
+  pairs: 6
   confirmation_warmups: 5
   confirmation_pairs: 20
-  control_pairs: 10
-  ratio: 3.0
-  ci_low: 2.0
-  direction_consistency: 0.75
-  bootstrap_samples: 10000
+  ratio: 5.0
+  minimum_delta_ms: 100.0
+  direction_consistency: 0.8
   timeout_seconds: 10
-  max_rows: 100000
-pattern_catalog: paper-v1

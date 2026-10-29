@@ -1,2 +1,0 @@
-S7 100000 0 candidate performance_difference_confirmed {'slow_side': 'a', 'median_ratio': 218.08164980464448, 'median_delta_ms': 219.11952050868422, 'direction_consistency': 1.0, 'ratio_ci_low': 146.7768417940835, 'ratio_ci_high': 290.93670420638057, 'noise_p99_ms': 40.393440935295075} /Users/sakuraq/Documents/科研实习/GraphSymPerf/results/detection-20261009/arcadedb/discovery/20261009T134200Z-afe43e/0001-S7-n100000-11972218
-Completed 1 /Users/sakuraq/Documents/科研实习/GraphSymPerf/results/detection-20261009/arcadedb/discovery/20261009T134200Z-afe43e
