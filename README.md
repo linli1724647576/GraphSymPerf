@@ -204,16 +204,15 @@ Result statuses include:
 
 [bugs.csv](bugs.csv) is the single maintained registry of submitted issues. Each row is one unique GitHub issue URL. Update that row when its status changes; add a row when a new issue is submitted. Historical reports remain under `BUG list/`, including local reports that have not been submitted.
 
-Pattern mappings use the current S1–S8 and Y1–Y8 catalog, introduced in commit `26f62dc`. They are based on the submitted queries and graph conditions, not the historical directory name or issue title.
+Pattern mappings use the current S1–S8 and Y1–Y8 catalog, introduced in commit `26f62dc`. The registry groups issues by related semantics or optimization mechanisms. The reported query pair need not perform the catalog's exact mutation. Each association is explained from the submitted queries, graph conditions, or optimizer behavior.
 
-- `pattern_ids` contains direct semantic matches; `pattern_count` is the number of distinct IDs in that field. A match identifies a catalog symmetry or a short-circuit condition exercised by the reported pair. It does not claim that the current generator emits the exact report, or that its backend is implemented.
-- `related_pattern_ids` and `related_pattern_count` record a shared optimization mechanism without the catalog transformation. These are excluded from direct counts. Boolean identity insertion, compound reorderings, and explicit CASE guard rewrites can fall here.
-- `mapping_class` is `direct`, `related_only`, or `outside_catalog`. `mapping_notes` explains the query-level decision. IDs are separated by semicolons; an empty ID field has count zero.
+- `pattern_ids` includes all associated patterns; `pattern_count` counts the distinct IDs. Exact transformations and mechanism-related cases share this one list. IDs are separated by semicolons; an empty field has count zero.
+- `mapping_notes` explains each association. Examples include false conjunctions under S2, CASE-controlled aggregation under S3, path-bound simplification under Y4, and shared-binding order under Y6. An issue with no identified connection keeps an empty pattern list and an explanation.
 - `status` records the current disposition; `reported_status` preserves the status supplied when the row was registered. Values are `pending`, `confirmed`, `fixed`, `uninterested` (explicitly declined), and `not_a_bug` (upstream rejects the attribution to that DBMS).
 - `status_basis`, `status_evidence`, and `status_notes` distinguish an upstream reply from a user-provided status. Closed issues are not automatically fixed. Automated reproduction is not treated as human confirmation; version-specific fixes remain qualified in the notes.
 - `github_state` and `upstream_type` preserve GitHub's separate state and issue-type fields. `bug_type` retains the submitter's Performance BUG / Logical BUG classification. `duplicate_of` records upstream grouping; `last_checked` records the audit date.
 
-Count unique issue URLs for submitted-issue totals. For each pattern, count rows containing its ID in `pattern_ids`; one issue can contribute to several pattern counts. Neither total measures independent root causes. In particular, ArcadeDB #10307 and #10308 are separate submissions grouped upstream under #10309.
+Count unique issue URLs for submitted-issue totals. For each pattern, count rows containing its ID in `pattern_ids`; one issue can contribute to several pattern counts. These counts summarize associations with the catalog, not exact generator coverage or independent root causes. The implemented transformations remain those listed in the current pattern catalog. ArcadeDB #10307 and #10308 remain separate submissions grouped upstream under #10309.
 
 ## Validation and retained material
 

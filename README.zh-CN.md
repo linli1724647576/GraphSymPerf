@@ -143,14 +143,14 @@ GraphSymPerf 从随机符号 AST 出发，选择一个兼容位置嵌入 Pattern
 
 以后统一维护根目录的 [bugs.csv](bugs.csv)，每个 GitHub issue URL 占一行。新提交增加一行，状态变化更新原行。`BUG list/` 保存历史报告，其中也有未提交的本地报告，不再维护另一份状态汇总表。
 
-Pattern 编号采用提交 `26f62dc` 引入的 S1–S8、Y1–Y8，根据 issue 中的查询对和图条件判断，不能直接沿用历史文件夹编号。
+Pattern 编号采用提交 `26f62dc` 引入的 S1–S8、Y1–Y8。只要 issue 的语义或优化机制与某个 Pattern 相关，就纳入该 Pattern，不要求查询对执行完全相同的变异。归类理由来自报告中的查询、图条件或优化器行为。
 
-- `pattern_ids` 和 `pattern_count` 记录直接语义对应的 Pattern 及其数量。对应语义不等于当前生成器能够原样生成该报告，也不代表已经实现相应数据库接口。
-- `related_pattern_ids` 和 `related_pattern_count` 记录仅优化机制相关的 Pattern，单独统计。`mapping_notes` 说明区别；`mapping_class` 区分直接对应、仅机制相关和目录外问题。
+- `pattern_ids` 统一记录全部关联 Pattern，`pattern_count` 记录其去重数量，不再区分直接对应和仅机制相关。
+- `mapping_notes` 逐项说明关联。例如，恒假合取关联 S2，CASE 条件聚合关联 S3，路径长度约束简化关联 Y4，共享变量的匹配顺序关联 Y6。暂未找到关联的 issue 保留空列表并说明原因。
 - `status` 是当前处理状态，`reported_status` 保留登记时提供的原始状态。`status_basis`、`status_evidence` 和 `status_notes` 保存判断依据、回复链接及版本限定。
 - `github_state` 单独记录是否关闭；关闭不自动等于修复。`upstream_type` 保留上游的问题类型，`bug_type` 保留提交者的性能或逻辑 BUG 分类。自动复现回复不视为人工确认。
 - `duplicate_of` 记录上游合并关系，`last_checked` 记录核对日期。多个 Pattern ID 用分号分隔，空字段对应数量为零。
 
 `uninterested` 表示上游明确不计划处理；`not_a_bug` 表示上游否认问题归属于该数据库。保留原始状态可以追踪本次核对带来的变化。
 
-提交总数按 issue URL 去重；各 Pattern 数量按 `pattern_ids` 逐行统计，不计 `related_pattern_ids`。同一 issue 可以对应多个 Pattern，因此关联数和 issue 数需要分别报告。ArcadeDB #10307、#10308 已合并到 #10309，仍保留为两条提交记录；记录数不能直接作为独立根因数。
+提交总数按 issue URL 去重；各 Pattern 数量按 `pattern_ids` 逐行统计。同一 issue 可以关联多个 Pattern，因此关联数和 issue 去重数分别报告。这是现有 issue 与 Pattern 的关联统计，当前生成器实际实现的变异仍以代码和上方目录为准。ArcadeDB #10307、#10308 已合并到 #10309，仍保留为两条提交记录；记录数不能直接作为独立根因数。
