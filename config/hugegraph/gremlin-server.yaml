@@ -1,0 +1,16 @@
+host: 0.0.0.0
+port: 8182
+evaluationTimeout: 120000
+maxContentLength: 8388608
+channelizer: org.apache.tinkerpop.gremlin.server.channel.WsAndHttpChannelizer
+graphs: {}
+scriptEngines:
+  gremlin-groovy:
+    plugins:
+      org.apache.hugegraph.plugin.HugeGraphGremlinPlugin: {}
+      org.apache.tinkerpop.gremlin.server.jsr223.GremlinServerGremlinPlugin: {}
+serializers:
+  - className: org.apache.tinkerpop.gremlin.driver.ser.GraphSONMessageSerializerV3d0
+    config:
+      ioRegistries:
+        - org.apache.hugegraph.io.HugeGraphIoRegistry

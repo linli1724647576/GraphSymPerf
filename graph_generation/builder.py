@@ -3,12 +3,12 @@ from data_structures.graph import Graph
 from .random_graph import random_graph
 
 
-def build_graph(case, pattern, options, rng):
+def build_graph(case, pattern, options, rng, support, register_schema):
     bindings = bind_symbols(case, rng)
     graph = Graph()
     # Background data uses host symbols; the pattern adds its own regions afterwards.
     # 背景图使用宿主符号，随后由 Pattern 补充自己的局部区域。
-    random_graph(graph, case.host_symbols, bindings, options, rng)
+    random_graph(graph, case.host_symbols, bindings, options, rng, support)
     payload = bind(case.payload, bindings)
     pattern.populate(graph, payload, options["high_units"])
     if options["indexes"]:
@@ -18,6 +18,12 @@ def build_graph(case, pattern, options, rng):
                     graph.index(label, "uid")
     else:
         graph.indexes.clear()
+    if not support["secondary_indexes"]:
+        graph.indexes = [index for index in graph.indexes if index[1] == "uid"]
+    for key in ("anchor_count", "anchor_uids", "high_allocations"):
+        if key in payload:
+            case.payload[key] = payload[key]
+    register_schema(graph, case, bindings, pattern)
     return graph, bindings
 
 

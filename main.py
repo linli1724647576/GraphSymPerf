@@ -7,23 +7,24 @@ from pathlib import Path
 import random
 import time
 import yaml
-from databases.neo4j import Neo4j
+import cypher
+import gremlin
+from databases import select_database
 from data_structures.case import Inapplicable, instantiate
 from executor import run_pair, save_case
 from graph_generation.builder import build_graph
-from mutator import PATTERNS
-from query_generation.embedding import choose_site, check_pair
-from query_generation.generator import generate_ast
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run the settings in config.yaml. Executed cases replace all graph data.")
     parser.parse_args()
     config = load_config()
+    backend = select_database(config["database"]["system"])
     mode = config["run"]["mode"]
     output = Path(config["run"]["output"]) / datetime.now().strftime("%Y%m%d-%H%M%S")
     output.mkdir(parents=True, exist_ok=True)
-    db = None if mode == "generate" else Neo4j(config["database"])
+    connection = {"language": config["language"]} if config["database"]["system"] == "arcadedb" else {}
+    db = None if mode == "generate" else backend.Database(config["database"], **connection)
     counts = Counter()
     try:
         with (output / "summary.csv").open("w", newline="") as stream:
@@ -33,6 +34,7 @@ def main():
             writer.writeheader()
             for number, (pattern, seed) in enumerate(schedule(config), 1):
                 row = {"case": number, "pattern": pattern.id, "seed": seed}
+                result, failure = {}, None
                 try:
                     case, graph, source, mutant = prepare_case(pattern, seed, config)
                 except Inapplicable as error:
@@ -40,18 +42,35 @@ def main():
                     # 此处只跳过不适用的随机上下文；实现中的意外错误继续抛出。
                     row.update(status="skipped", reason=str(error))
                 else:
-                    result = {"status": "generated"} if db is None else execute_case(
-                        db, graph, source, mutant, config, check_only=mode == "check")
+                    try:
+                        result = {"status": "generated"} if db is None else execute_case(
+                            db, graph, source, mutant, config, check_only=mode == "check")
+                    except (Exception, KeyboardInterrupt) as error:
+                        # Preserve a reproducible failure, then expose the original exception.
+                        # 保存可重放的失败输入后继续抛出原始异常，不把实现错误记作随机跳过。
+                        status = "interrupted" if isinstance(error, (KeyboardInterrupt, InterruptedError)) else "error"
+                        result = {"status": status, "error": {"type": type(error).__name__, "message": str(error)}}
+                        if db is not None and getattr(db, "cancellation", None):
+                            result["cancellation"] = getattr(db, "cancellation", None)
+                        failure = error
                     summary = result.get("confirmation_summary", result.get("discovery_summary", {}))
-                    row.update(status=result["status"], nodes=len(graph.nodes), relationships=len(graph.relationships),
+                    row.update(status=result["status"], reason=result.get("reason", ""), nodes=len(graph.nodes), relationships=len(graph.relationships),
                                rows=result.get("rows", ""), ratio=summary.get("ratio", ""), delta_ms=summary.get("delta_ms", ""))
-                    if config["run"]["save_all"] or mode == "generate" or result["status"] in {"candidate", "result_mismatch", "timeout"}:
+                    # A PROFILE stop must also be archived when the timing result is no_gap.
+                    # 即使计时结果为 no_gap，PROFILE 触发的停止也必须归档。
+                    if config["run"]["save_all"] or mode == "generate" or failure is not None or result.get("stop_run") or result["status"] in {"candidate", "result_mismatch", "timeout", "backend_rejected"}:
                         directory = output / result["status"] / f"{number:05d}-{pattern.id}-{seed}"
                         save_case(directory, case, graph, source, mutant, result, config, db.version if db else None)
                 writer.writerow(row)
                 counts[row["status"]] += 1
                 stream.flush()
                 print(f"{number:05d} {pattern.id} seed={seed} {row['status']} {row.get('reason', '')}", flush=True)
+                # Persist the terminal row before exposing the error or stopping the run.
+                # 先保存终止用例的汇总行，再抛出错误或停止运行。
+                if failure is not None:
+                    raise failure
+                if result.get("stop_run"):
+                    raise RuntimeError("Run stopped after saving the case: query termination is unconfirmed")
     finally:
         if db:
             db.close()
@@ -64,6 +83,7 @@ def load_config():
     # 在生成和执行之前统一校验外部配置，内部直接使用确定后的取值。
     with open("config.yaml") as file:
         config = yaml.safe_load(file)
+    language, support = language_for(config)
     if config["run"]["mode"] not in {"experiment", "generate", "check"}:
         raise ValueError("run.mode must be experiment, generate, or check")
     case_seed = config["run"]["case_seed"]
@@ -73,9 +93,10 @@ def load_config():
         config["run"]["rounds"] = 1
     if type(config["run"]["save_all"]) is not bool:
         raise ValueError("run.save_all must be a boolean")
+    patterns = language.patterns_for(support)
     for name in config["run"]["patterns"]:
-        if name not in PATTERNS:
-            raise ValueError(f"Unknown pattern: {name}")
+        if name not in patterns:
+            raise ValueError(f"Pattern {name} is unavailable for {config['language']}/{config['database']['system']}")
     for group, names in {
         "generation": ["clauses", "nodes", "expression_depth", "subquery_depth"],
         "graph": ["background_nodes", "background_relationships", "high_units"],
@@ -97,10 +118,21 @@ def load_config():
     return config
 
 
+def language_for(config):
+    backend = select_database(config["database"]["system"])
+    if config["language"] == "cypher" and config["database"]["system"] not in {"janusgraph", "hugegraph"}:
+        return cypher, backend.SUPPORT
+    if config["language"] == "gremlin" and config["database"]["system"] in {"arcadedb", "janusgraph", "hugegraph"}:
+        return gremlin, backend.GREMLIN_SUPPORT
+    raise ValueError("Unsupported language and database combination")
+
+
 def schedule(config):
     # Scheduling has its own RNG, so one case's generation does not alter later seeds.
     # 调度使用独立的随机数生成器，单个用例的生成过程不会改变后续种子。
     rng = random.Random(config["run"]["seed"])
+    language, support = language_for(config)
+    patterns = language.patterns_for(support)
     exact_seed = config["run"]["case_seed"]
     start = time.monotonic()
     for _ in range(config["run"]["rounds"]):
@@ -109,26 +141,34 @@ def schedule(config):
         for name in names:
             if time.monotonic() - start >= config["run"]["minutes"] * 60:
                 return
-            yield PATTERNS[name], exact_seed if exact_seed is not None else rng.randrange(2 ** 32)
+            yield patterns[name], exact_seed if exact_seed is not None else rng.randrange(2 ** 32)
 
 
 def prepare_case(pattern, seed, config):
     rng = random.Random(seed)
     # Generate the host without a pattern ID, then choose a compatible replacement site.
     # 先生成不依赖 Pattern 编号的宿主 AST，再选择兼容的替换位置。
-    tree = generate_ast(rng, config["generation"])
-    site = choose_site(tree, pattern, rng)
+    language, support = language_for(config)
+    tree = language.generate_ast(rng, config["generation"], support)
+    site = (cypher.choose_site(tree, pattern, rng, support["subquery_call"],
+                              support.get("subquery_unwind", True),
+                              support.get("persistent_imports", True)) if language is cypher
+            else gremlin.choose_site(tree, pattern, rng))
     if site is None:
         raise Inapplicable("No compatible AST position")
     case = pattern.embed(tree, site, seed, rng)
-    graph, bindings = build_graph(case, pattern, config["graph"], rng)
+    graph, bindings = build_graph(case, pattern, config["graph"], rng, support, language.register_schema)
     instantiate(case, bindings)
     source = case.query
     # Mutate a copy after binding; both queries retain the same constructed graph.
     # 完成绑定后只变异副本，两条查询共用已经构造好的图。
     mutant = pattern.mutate(copy.deepcopy(case))
-    check_pair(source, mutant, case)
-    return case, graph, source.to_cypher(), mutant.to_cypher()
+    if language is cypher:
+        cypher.check_pair(source, mutant, case, support.get("persistent_imports", True))
+    else:
+        gremlin.check_pair(source, mutant, case)
+    render_options = {"groovy": support.get("groovy", False)} if language is gremlin else {}
+    return case, graph, language.render(source, **render_options), language.render(mutant, **render_options)
 
 
 def execute_case(db, graph, source, mutant, config, check_only):

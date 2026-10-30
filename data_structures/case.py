@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field, fields, is_dataclass
-from ast_nodes.base import Symbol
+from data_structures.ast import Symbol
 
 
 class Inapplicable(Exception):

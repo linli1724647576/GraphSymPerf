@@ -1,12 +1,24 @@
 from collections import defaultdict
 from time import perf_counter
 import os
-from neo4j import GraphDatabase, Query
-from ast_nodes.base import identifier
+from cypher.render import identifier
+from data_structures.result import freeze
 
 
-class Neo4j:
+SUPPORT = {"subquery_call": True, "bodies": "full", "call": True, "conditional": True, "multi_label": True,
+           "work": "count", "native_limit": False, "s7": True, "secondary_indexes": True}
+
+
+class Database:
     def __init__(self, config):
+        # Load the driver only when opening a connection; generation needs no driver.
+        # 驱动只在建立连接时导入，纯生成模式无需加载驱动。
+        from neo4j import GraphDatabase, Query
+        from neo4j.exceptions import Neo4jError
+        from neo4j.graph import Node, Relationship, Path
+        self.query_type = Query
+        self.error_type = Neo4jError
+        self.entity_types = Node, Relationship, Path
         password = os.environ[config["password_env"]]
         self.driver = GraphDatabase.driver(config["uri"], auth=(config["user"], password), notifications_min_severity="OFF")
         self.session = self.driver.session(database=config["name"])
@@ -66,19 +78,45 @@ class Neo4j:
         # Auto-commit avoids managed transaction retries inside a timing sample.
         # 自动提交避免驱动的托管事务重试混入一次计时样本。
         start = perf_counter()
-        result = self.session.run(Query("CYPHER 25\n" + query, timeout=timeout))
-        columns = list(result.keys())
-        rows = [tuple(record.values()) for record in result]
-        # Stop timing after full consumption; result normalization happens in the executor.
-        # 完整读取结果后结束计时；结果规范化由执行器在计时之外完成。
-        result.consume()
-        return columns, rows, (perf_counter() - start) * 1000
+        try:
+            result = self.session.run(self.query_type("CYPHER 25\n" + query.text, timeout=timeout), query.parameters)
+            columns = list(result.keys())
+            rows = [tuple(record.values()) for record in result]
+            result.consume()
+        except self.error_type as error:
+            if "TimedOut" in (error.code or "") or "TransactionTimeout" in (error.code or ""):
+                raise TimeoutError(str(error)) from error
+            raise
+        # Normalize after full consumption and timing, preserving nested entity identities.
+        # 完整读取并停止计时后再规范化，保留嵌套实体身份。
+        elapsed = (perf_counter() - start) * 1000
+        rows = [tuple(self.normalize(value) for value in row) for row in rows]
+        return columns, rows, elapsed
 
     def profile(self, query, timeout):
-        result = self.session.run(Query("CYPHER 25 PROFILE\n" + query, timeout=timeout))
-        for _ in result:
-            pass
-        return result.consume().profile
+        try:
+            result = self.session.run(self.query_type("CYPHER 25 PROFILE\n" + query.text, timeout=timeout), query.parameters)
+            for _ in result:
+                pass
+            plan = result.consume().profile
+        except self.error_type as error:
+            if "TimedOut" in (error.code or "") or "TransactionTimeout" in (error.code or ""):
+                raise TimeoutError(str(error)) from error
+            raise
+        return {"status": "ok", "format": "neo4j_profile", "plan": plan}
+
+    def normalize(self, value):
+        node_type, relationship_type, path_type = self.entity_types
+        if isinstance(value, node_type):
+            return ("node", value.element_id)
+        if isinstance(value, relationship_type):
+            return ("relationship", value.element_id)
+        if isinstance(value, path_type):
+            # Path order is observable; never fold a path together with its reflection.
+            # 路径顺序可被观察，不能把正反路径合并为同一个值。
+            return ("path", tuple(node.element_id for node in value.nodes),
+                    tuple(edge.element_id for edge in value.relationships))
+        return freeze(value, self.normalize)
 
     def close(self):
         self.session.close()

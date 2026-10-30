@@ -1,156 +1,215 @@
-# GraphSymPerf 中文说明
+# GraphSymPerf
 
-[English README](README.md)
+GraphSymPerf 测试图数据库中的短路与对称变换。程序先生成符号查询 AST，选择一个兼容位置嵌入 Pattern，再构造包含固定见证和扩张区域的图，比较同图上的查询对。Cypher 接入 Neo4j、Memgraph、ArcadeDB、LadybugDB 和 FalkorDB；Gremlin 接入 ArcadeDB、JanusGraph 和 HugeGraph。
 
-GraphSymPerf 从随机符号 AST 出发，选择一个兼容位置嵌入 Pattern，构造包含小规模和大规模区域的同一张图，再比较原查询与一次局部变异后的查询。
+<!-- BEGIN ISSUE SUMMARY -->
+The submitted-issue ledger contains 40 issue URLs: 21 fixed, 6 confirmed, 6 pending, 6 uninterested, 1 not_a_bug. Status snapshot: 2026-10-29. Historical and merged reports are included; counts do not represent unique root causes.
+<!-- END ISSUE SUMMARY -->
 
-**程序会清空配置中指定的数据库，并为每个用例重新装载图。请使用专用实验库。** 同一个查询对执行期间，图和索引保持不变。
+下表从唯一维护的 [bugs.csv](bugs.csv) 生成，包含历史报告和合并记录，不代表当前重写版本发现的独立根因数。实现细节见[中文架构文档](docs/architecture.zh-CN.md)、[后端部署](docs/backends.md)和[验证记录](docs/validation.md)。[English](README.md)。章节顺序和表格格式参照 [ValScope](https://github.com/linli1724647576/ValScope/blob/e158a9d467a343f985427d04624fb44ac7895fa9/README.md)。
 
-## 安装与运行
+<!-- BEGIN ISSUE TABLES -->
+## Neo4j
 
-需要 Python 3.12，以及支持 Cypher 25 的 Neo4j。当前验收使用 Neo4j Community 2026.09.0。
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [13783](https://github.com/neo4j/neo4j/issues/13783) | fixed |
+| 2 | [13813](https://github.com/neo4j/neo4j/issues/13813) | uninterested |
+| 3 | [13814](https://github.com/neo4j/neo4j/issues/13814) | uninterested |
+| 4 | [13864](https://github.com/neo4j/neo4j/issues/13864) | uninterested |
+| 5 | [13865](https://github.com/neo4j/neo4j/issues/13865) | uninterested |
+| 6 | [13866](https://github.com/neo4j/neo4j/issues/13866) | confirmed |
+| 7 | [13867](https://github.com/neo4j/neo4j/issues/13867) | uninterested |
+| 8 | [14007](https://github.com/neo4j/neo4j/issues/14007) | uninterested |
+| 9 | [14008](https://github.com/neo4j/neo4j/issues/14008) | fixed |
 
-安装依赖：
+## Memgraph
 
-    uv venv --python 3.12
-    uv pip install -r requirements.txt
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [4208](https://github.com/memgraph/memgraph/issues/4208) | confirmed |
+| 2 | [4456](https://github.com/memgraph/memgraph/issues/4456) | pending |
+| 3 | [4457](https://github.com/memgraph/memgraph/issues/4457) | pending |
+| 4 | [4458](https://github.com/memgraph/memgraph/issues/4458) | pending |
+| 5 | [4459](https://github.com/memgraph/memgraph/issues/4459) | fixed |
+| 6 | [5091](https://github.com/memgraph/memgraph/issues/5091) | pending |
 
-在 `config.yaml` 中设置连接信息，并通过环境变量提供密码：
+## ArcadeDB
 
-    export GRAPHSYMPERF_NEO4J_PASSWORD='your-password'
-    .venv/bin/python main.py
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [4405](https://github.com/ArcadeData/arcadedb/issues/4405) | fixed |
+| 2 | [5116](https://github.com/ArcadeData/arcadedb/issues/5116) | fixed |
+| 3 | [5117](https://github.com/ArcadeData/arcadedb/issues/5117) | fixed |
+| 4 | [5360](https://github.com/ArcadeData/arcadedb/issues/5360) | fixed |
+| 5 | [5362](https://github.com/ArcadeData/arcadedb/issues/5362) | fixed |
+| 6 | [5363](https://github.com/ArcadeData/arcadedb/issues/5363) | fixed |
+| 7 | [9579](https://github.com/ArcadeData/arcadedb/issues/9579) | fixed |
+| 8 | [9580](https://github.com/ArcadeData/arcadedb/issues/9580) | fixed |
+| 9 | [10307](https://github.com/ArcadeData/arcadedb/issues/10307) | fixed |
+| 10 | [10308](https://github.com/ArcadeData/arcadedb/issues/10308) | fixed |
 
-所有实验参数都在 `config.yaml` 中设置。在仓库目录下运行：
+## LadybugDB
 
-    .venv/bin/python main.py
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [668](https://github.com/LadybugDB/ladybug/issues/668) | fixed |
+| 2 | [669](https://github.com/LadybugDB/ladybug/issues/669) | fixed |
+| 3 | [696](https://github.com/LadybugDB/ladybug/issues/696) | fixed |
+| 4 | [697](https://github.com/LadybugDB/ladybug/issues/697) | fixed |
+| 5 | [698](https://github.com/LadybugDB/ladybug/issues/698) | fixed |
+| 6 | [720](https://github.com/LadybugDB/ladybug/issues/720) | fixed |
+| 7 | [721](https://github.com/LadybugDB/ladybug/issues/721) | fixed |
 
-通过 `run.mode` 选择运行方式：
+## FalkorDB
 
-| 模式 | 行为 |
-| --- | --- |
-| `experiment` | 装载图，比较结果并检查性能 |
-| `generate` | 生成并保存用例，不连接数据库 |
-| `check` | 装载图并比较完整结果，不进行计时 |
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [2081](https://github.com/FalkorDB/FalkorDB/issues/2081) | fixed |
+| 2 | [3227](https://github.com/FalkorDB/FalkorDB/issues/3227) | confirmed |
+| 3 | [3228](https://github.com/FalkorDB/FalkorDB/issues/3228) | confirmed |
+| 4 | [3315](https://github.com/FalkorDB/FalkorDB/issues/3315) | confirmed |
 
-例如，生成 Y4、种子 24、100 个扩张单元的用例，修改现有配置中的这些字段，其他字段保留：
+## Apache AGE
 
-    run:
-      mode: generate
-      patterns: [Y4]
-      case_seed: 24
-    graph:
-      high_units: 100
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [2428](https://github.com/apache/age/issues/2428) | not_a_bug |
+| 2 | [2480](https://github.com/apache/age/issues/2480) | confirmed |
+| 3 | [2481](https://github.com/apache/age/issues/2481) | pending |
 
-然后仍运行 `.venv/bin/python main.py`。
+## JanusGraph
 
-`run.case_seed` 指定一个确切的用例种子，并使程序只执行一轮。批量实验时将它设为 `null`，由 `run.seed` 控制调度顺序和用例种子的生成。轮数、时长及保存全部用例分别由 `run.rounds`、`run.minutes` 和 `run.save_all` 设置；数据库地址使用 `database.uri`。
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [5113](https://github.com/JanusGraph/janusgraph/issues/5113) | pending |
+<!-- END ISSUE TABLES -->
 
-重放前在配置中指定用例目录：
+## How to Run
 
-    replay:
-      case: results/<run>/candidate/<case>
-      check_only: true
+### 1. Environment Requirements
+- Python 3.12；Ladybug CSV 装载使用 `csv.QUOTE_NOTNULL`。
+- 选择一个已接入的数据库：
+  - Neo4j Community 2026.09.0／Cypher 25，默认配置端口 7687。
+  - Memgraph 3.14.0，部署示例端口 27687。
+  - ArcadeDB 26.10.2，部署示例端口 22480。
+  - LadybugDB 0.22.1，进程内 pybind 后端。
+  - FalkorDB 6.0.3，部署示例端口 16379。
+  - JanusGraph 1.2.0／TinkerPop 3.8.2，BerkeleyJE，部署示例端口 38182。
+  - HugeGraph 1.7.0／TinkerPop 3.5.1，RocksDB，部署示例端口 48080、48182。
 
-运行命令：
+### DBMS Connection Parameter Configuration Locations
 
-    .venv/bin/python replay.py
+连接参数统一在 [config.yaml](config.yaml) 的 `database` 段设置，密码通过指定环境变量读取。
 
-重放使用当前配置的数据库连接。`replay.check_only` 为 `false` 时，使用用例归档中的测量参数进行性能检查。
+- **主配置**：`config.yaml` 中的 `language`、`database`、`generation`、`graph`、`run` 和 `measurement`。
+- **数据库接口**：`databases/`；能力字典决定可用语法及 Pattern 变体。
+- **服务端配置**：`config/janusgraph/`、`config/hugegraph/`。完整启动命令和连接块见[后端部署](docs/backends.md)。
 
-随机种子可能生成没有兼容位置的 AST，此时程序记录跳过，不修改外层查询来凑出目标模式。
+### 2. Install Dependencies
 
-## 从哪里阅读代码
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-先读 `main.py` 的 `prepare_case()`，再依次查看：
+主要依赖为 `neo4j==5.28.4`、`PyYAML==6.0.3`、`ladybug==0.22.1`、`falkordb==1.8.1` 和 `redis==8.1.0`。三个 HTTP 后端使用 Python 标准库。
 
-1. `query_generation/generator.py`：随机生成查询；不接收 Pattern 编号。
-2. `query_generation/embedding.py`：选择兼容位置，检查查询对。
-3. `mutator/`：各 Pattern 的源形式、局部图构造和变异。
-4. `graph_generation/builder.py`：绑定符号、生成背景图、调用固定构图配方。
-5. `databases/neo4j.py`：装载图、执行查询和获取计划。
-6. `executor.py`：比较完整结果，计时、确认并保存。
+### 3. Running Parameter Configuration
 
-`ast_nodes/` 表达语法结构；`data_structures/scope.py` 处理变量可见性。项目没有通用约束求解器、旧接口兼容层或多后端插件框架。
+保留其他配置段，按任务修改运行参数：
 
-## 当前 Pattern
+```yaml
+language: cypher
+run:
+  mode: experiment
+  seed: 0
+  case_seed: null
+  save_all: false
+  rounds: 10
+  minutes: 60
+  output: results
+  patterns: [S1, S2, S3, S4, S5, S6, S7, S8, Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8]
+measurement:
+  warmups: 3
+  pairs: 6
+  confirmation_warmups: 5
+  confirmation_pairs: 20
+  ratio: 5.0
+  minimum_delta_ms: 100.0
+  direction_consistency: 0.8
+  timeout_seconds: 10
+```
 
-| 编号 | 含义 |
-| --- | --- |
-| S1 | 真条件下的 OR |
-| S2 | 假条件下的 AND |
-| S3 | CASE 未选结果或后续条件 |
-| S4 | COALESCE 非空前缀 |
-| S5 | 零输出需求 |
-| S6 | 有限输出需求 |
-| S7 | 存在性决定，包括否定存在性和联合见证 |
-| S8 | 空输入传播 |
-| Y1 | AND 操作数交换 |
-| Y2 | OR 操作数交换 |
-| Y3 | 单边书写方向反转 |
-| Y4 | 有界路径端点反转 |
-| Y5 | 独立必选匹配交换 |
-| Y6 | 共享锚点必选分支交换 |
-| Y7 | 链式连接交换 |
-| Y8 | 独立可选分支交换 |
+`generate` 只生成归档；`check` 装载图并比较完整结果；`experiment` 继续计时和采集 PROFILE。固定 `case_seed` 时只跑一轮。Cypher S7 仅在 Neo4j 启用；Gremlin 使用 S1–S6、S8、Y1、Y2。
 
-这些是新实现的编号。`BUG list/` 中的历史编号不变，不能直接按同名编号对应。
+### 4. Database Configuration
 
-决定项候选池包含常量、比较、小区域计数、存在性检查，以及来源可追踪的外层节点属性。依赖数据的候选与其固定构图步骤共同实现。
+默认连接专用 Neo4j 实验库：
 
-## 构图与语义范围
+```yaml
+database:
+  system: neo4j
+  uri: bolt://127.0.0.1:7687
+  user: neo4j
+  password_env: GRAPHSYMPERF_NEO4J_PASSWORD
+  name: neo4j
+  batch_size: 5000
+```
 
-生成器支持已实现语法内的随机子句、表达式、匹配拓扑和嵌套子查询。它不等于完整 Cypher 语法，也不对全部查询均匀采样。
+```bash
+export GRAPHSYMPERF_NEO4J_PASSWORD='your-local-experiment-password'
+```
 
-随机小图提供背景数据。Pattern 构造器补齐局部结构，不反向求解全部外层过滤条件，因此不能保证每个随机用例都触及目标操作。
+每个执行用例会替换指定实验图的数据。Q1/Q2 之间图与索引保持不变。其他系统的连接配置见[后端部署](docs/backends.md)。
 
-相关构图只选择具有可追踪标签来源的非空节点变量。构图器为候选锚点集合准备数据，不把变量误认为永久对应某个单独节点。
+### 5. Query Generation Configuration
 
-`high_units` 表示一个用例的高成本扩张单元总数，再分配给锚点或区域。一个路径单元可能包含多个节点和多条关系；背景图、小区域及固定见证另计。结果文件记录最终节点数与关系数。
+```yaml
+generation:
+  clauses: 4
+  nodes: 100
+  expression_depth: 3
+  subquery_depth: 3
+  conditional_queries: true
+graph:
+  background_nodes: 50
+  background_relationships: 100
+  high_units: 100000
+  indexes: true
+```
 
-同一个查询对使用同一张图。下一用例可以重建实验库。装载用的临时索引在测量前删除，正式测量只保留用例指定的索引。
+`generation.nodes` 是语法展开预算。`high_units` 是用例内的高成本扩张单元总数，按锚点或区域分配，不等于节点总数。随机上下文允许不适用或无法触达目标，程序不使用求解器修补这些上下文。
 
-路径反转不能改变外层观察到的路径顺序。程序不会通过把正反路径归一化来掩盖结果差异。
+### 6. Execution Command
 
-## 性能判定
+```bash
+python main.py
+```
 
-默认参数：
+在 `replay.case` 指定归档路径，并设置 `replay.check_only` 后执行：
 
-- 随机背景图包含 50 个节点和 100 条关系。
-- 高成本扩张单元总数为 100,000。
-- 初筛每条查询预热 3 次，执行 6 对计时。
-- 确认每条查询预热 5 次，执行 20 对计时。
-- 耗时比至少为 **5 倍**，配对耗时差的中位数至少为 **100 ms**。
-- 方向一致比例至少为 0.8。
-- 单次查询超时为 10 秒。
+```bash
+python replay.py
+```
 
-两轮均交替执行 AB/BA，并要求慢查询方向保持一致。计时包含结果传输和完整读取，不包含建图、结果规范化或 PROFILE。
+固定种子／规模运行需增加[架构文档](docs/architecture.zh-CN.md#10-固定种子运行)中的 `campaign` 配置，设置 `save_all: true` 和新输出目录，然后执行：
 
-结果比较保留类型、重复行数量、实体身份，以及列表和路径内部顺序。结果不一致的用例不进入性能筛选。
+```bash
+python scripts/run_campaign.py
+```
 
-通过计时阈值的用例是性能候选，仍需结合执行计划解释。超时单独记录，不把超时上限当成实际耗时。
+维护 `bugs.csv` 后，重新生成两个 README 的 issue 表格：
 
-## 输出与复现
+```bash
+python scripts/update_readme.py
+```
 
-每轮写入 `summary.csv`。性能候选、结果差异和超时会保存查询文本、实际图数据、配置和计时结果。完成计划采集后另存 `plans.json`。
+### 7. Output Description
+- **`results/<run>/summary.csv`**：用例、Pattern、种子、状态、图规模和可用计时信息。
+- **用例归档**：原查询对、`graph.json`、`result.json`、`plans.json`；请求重放后另存 `replay-result.json`。
+- **固定清单运行**：`attempts.json` 保留所有计划项及未提交项；`report.json` 记录停止原因、计数、耗时和客户端资源。
+- **本地证据**：`results/` 被 Git 忽略，已记录实验的范围见[验证记录](docs/validation.md)。
 
-`run.save_all: true` 可以保留普通用例。重放直接读取保存的图和查询，不依赖新版本代码按旧种子重新生成。
-
-当前仅实现 Neo4j。迁移到其他系统时，还需要检查语法、结果语义和 Pattern 条件，不能只替换连接接口。
-
-历史材料保存在 `paper/`、`BUG list/`、`reference/` 和 `picture/`，其中的方法说明不自动代表新实现。新版本的功能范围以当前代码和英文 README 为准。
-
-## 已提交 issue 总表
-
-以后统一维护根目录的 [bugs.csv](bugs.csv)，每个 GitHub issue URL 占一行。新提交增加一行，状态变化更新原行。`BUG list/` 保存历史报告，其中也有未提交的本地报告，不再维护另一份状态汇总表。
-
-Pattern 编号采用提交 `26f62dc` 引入的 S1–S8、Y1–Y8。只要 issue 的语义或优化机制与某个 Pattern 相关，就纳入该 Pattern，不要求查询对执行完全相同的变异。归类理由来自报告中的查询、图条件或优化器行为。
-
-- `pattern_ids` 统一记录全部关联 Pattern，`pattern_count` 记录其去重数量，不再区分直接对应和仅机制相关。
-- `mapping_notes` 逐项说明关联。例如，恒假合取关联 S2，CASE 条件聚合关联 S3，路径长度约束简化关联 Y4，共享变量的匹配顺序关联 Y6。暂未找到关联的 issue 保留空列表并说明原因。
-- `status` 是当前处理状态，`reported_status` 保留登记时提供的原始状态。`status_basis`、`status_evidence` 和 `status_notes` 保存判断依据、回复链接及版本限定。
-- `github_state` 单独记录是否关闭；关闭不自动等于修复。`upstream_type` 保留上游的问题类型，`bug_type` 保留提交者的性能或逻辑 BUG 分类。自动复现回复不视为人工确认。
-- `duplicate_of` 记录上游合并关系，`last_checked` 记录核对日期。多个 Pattern ID 用分号分隔，空字段对应数量为零。
-
-`uninterested` 表示上游明确不计划处理；`not_a_bug` 表示上游否认问题归属于该数据库。保留原始状态可以追踪本次核对带来的变化。
-
-提交总数按 issue URL 去重；各 Pattern 数量按 `pattern_ids` 逐行统计。同一 issue 可以关联多个 Pattern，因此关联数和 issue 去重数分别报告。这是现有 issue 与 Pattern 的关联统计，当前生成器实际实现的变异仍以代码和上方目录为准。ArcadeDB #10307、#10308 已合并到 #10309，仍保留为两条提交记录；记录数不能直接作为独立根因数。
+性能候选、结果差异、查询超时、已识别拒绝、执行异常及终止未确认的用例都会归档。`run.save_all: true` 同时保留普通用例。终止未确认时停止后续请求，不重启数据库。

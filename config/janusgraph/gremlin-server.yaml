@@ -1,0 +1,20 @@
+host: 0.0.0.0
+port: 8182
+channelizer: org.apache.tinkerpop.gremlin.server.channel.WsAndHttpChannelizer
+graphManager: org.janusgraph.graphdb.management.JanusGraphManager
+graphs:
+  gsp: /etc/opt/janusgraph/gsp.properties
+# Management and loading use this deadline; measured traversals set their own option.
+# 管理与装载使用此时限；被测遍历单独设置原生时限。
+evaluationTimeout: 120000
+maxContentLength: 8388608
+scriptEngines:
+  gremlin-groovy:
+    plugins:
+      org.janusgraph.graphdb.tinkerpop.plugin.JanusGraphGremlinPlugin: {}
+      org.apache.tinkerpop.gremlin.server.jsr223.GremlinServerGremlinPlugin: {}
+serializers:
+  - className: org.apache.tinkerpop.gremlin.util.ser.GraphSONMessageSerializerV3
+    config:
+      ioRegistries:
+        - org.janusgraph.graphdb.tinkerpop.JanusGraphIoRegistry

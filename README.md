@@ -1,223 +1,243 @@
 # GraphSymPerf
 
-GraphSymPerf tests short-circuit and symmetry transformations on Neo4j. It generates a random symbolic query AST, inserts one compatible pattern, constructs one graph containing the required small and large regions, and compares a source query with one local mutation.
-
-**Use a dedicated experiment database. Every executed case replaces all graph data in that database.** The graph and indexes remain unchanged between the two queries.
-
-[中文说明](README.zh-CN.md)
-
-## Requirements and setup
-
-- Python 3.12.
-- A Neo4j server supporting Cypher 25. This implementation was checked against Neo4j Community 2026.09.0.
-- The dependencies in `requirements.txt`.
-
-Install the Python dependencies:
-
-    uv venv --python 3.12
-    uv pip install -r requirements.txt
-
-For a new local experiment database:
-
-    docker run -d --name gsp-neo4j \
-      -p 127.0.0.1:7687:7687 \
-      -p 127.0.0.1:7474:7474 \
-      -e NEO4J_AUTH=neo4j/change-this-local-password \
-      neo4j:2026.09.0
-
-Set the password and review `config.yaml` before running:
-
-    export GRAPHSYMPERF_NEO4J_PASSWORD='change-this-local-password'
-    .venv/bin/python main.py
-
-The password is read from the named environment variable. It is not written into result files.
-
-## Running and replaying
-
-Run from the repository directory. All experiment settings are read from `config.yaml`:
-
-    .venv/bin/python main.py
-
-Choose the operation with `run.mode`:
-
-| Mode | Behavior |
-| --- | --- |
-| `experiment` | Load each graph, compare results, and screen performance |
-| `generate` | Generate and save cases without connecting to Neo4j |
-| `check` | Load each graph and compare complete results without timing |
-
-For the Y4 generation example, change these fields in the existing configuration:
-
-    run:
-      mode: generate
-      patterns: [Y4]
-      case_seed: 24
-    graph:
-      high_units: 100
-
-Keep the other configuration fields. Then run the same command:
-
-    .venv/bin/python main.py
-
-`run.case_seed` selects an exact case and runs one round. Leave it `null` for a campaign, where `run.seed` controls pattern order and generated case seeds. Set `run.rounds` for the number of rounds, `run.minutes` for the time limit, and `run.save_all` to archive every constructed case. Change the connection address in `database.uri`.
-
-To replay a saved case, set:
-
-    replay:
-      case: results/<run>/candidate/<case>
-      check_only: true
-
-Then run:
-
-    .venv/bin/python replay.py
-
-Replay uses the current `database` connection settings. With `replay.check_only: false`, it repeats the measurement protocol saved in the case archive.
-
-A seed fixes the random choices in the current implementation. A selected seed may have no compatible position for a selected pattern; the program reports a skip. Replay uses the saved graph and query text and does not regenerate them from the seed.
-
-## Main flow
-
-Read `main.py`, starting with `prepare_case()`, to follow query construction:
-
-1. `generate_ast()` creates the host query without receiving a pattern ID.
-2. `choose_site()` selects a compatible expression, match, or query position.
-3. `pattern.embed()` inserts the source form and prepares the mutation.
-4. `build_graph()` creates a random background, prepares anchors, and applies the fixed graph recipe.
-5. `instantiate()` binds symbolic names and values.
-6. `pattern.mutate()` changes the selected local region.
-7. `check_pair()` checks scopes and the output interface.
-8. `Neo4j.load()` loads one graph; `run_pair()` compares and measures both queries.
-
-Each round shuffles the 16 patterns and attempts one case per pattern. An incompatible context is skipped. Unexpected implementation or database errors stop the run.
-
-## Source layout
-
-| Location | Responsibility |
-| --- | --- |
-| `main.py` | Configuration, scheduling, and the main flow |
-| `ast_nodes/` | Query, clause, expression, and graph-match nodes; Cypher rendering |
-| `data_structures/scope.py` | Variable visibility, imports, projections, and reference checks |
-| `data_structures/graph.py` | Nodes, relationships, indexes, and budget distribution |
-| `data_structures/case.py` | Case records, symbols, and instantiation |
-| `query_generation/` | Random AST generation and compatible-site selection |
-| `graph_generation/` | Random background data and graph-construction orchestration |
-| `mutator/` | Pattern source forms, local graph recipes, and mutations |
-| `databases/neo4j.py` | Graph loading, query execution, and profiling |
-| `executor.py` | Complete-result comparison, timings, screening, and case archives |
-| `replay.py` | Reconstruction and replay of archived cases |
-
-`ast_nodes/patterns.py` represents Cypher node, relationship, and path syntax. Testing patterns are implemented in `mutator/`.
-
-The organization follows the direct entry-point and AST/module style of [ValScope](https://github.com/linli1724647576/ValScope). The implementation is written for graph construction and performance testing; it does not parse or reuse ValScope's SQL code.
-
-## Current pattern catalog
-
-These IDs belong to the rewritten catalog. Historical files under `BUG list/` keep their original IDs.
-
-| ID | Pattern | Mutation |
-| --- | --- | --- |
-| S1 | Decisive OR operand | Replace the protected low-cost operand with the high-cost operand |
-| S2 | Decisive AND operand | Replace the protected operand under a false condition |
-| S3 | Conditional expression | Replace an unselected result or a later CASE condition |
-| S4 | Non-null prefix | Replace the argument after a non-null COALESCE prefix |
-| S5 | Zero output demand | Replace the match under `LIMIT 0` |
-| S6 | Bounded output demand | Replace a UNION ALL branch after a sufficient witness branch |
-| S7 | Existence | Replace a small matching region; includes EXISTS, NOT EXISTS, and a UNION witness |
-| S8 | Empty input | Replace a mandatory downstream match after a false filter |
-| Y1 | Conjunction symmetry | Swap the AND operands |
-| Y2 | Disjunction symmetry | Swap the OR operands |
-| Y3 | Single-edge reflection | Reverse the written endpoints while matching the same relationships |
-| Y4 | Bounded-path reflection | Reverse the path and preserve reversal-invariant observations |
-| Y5 | Independent components | Swap two independent mandatory matches |
-| Y6 | Shared-anchor branches | Swap mandatory branches sharing an anchor |
-| Y7 | Chain joins | Swap two mandatory matches connected through an intermediate node |
-| Y8 | Independent optional branches | Swap two optional branches with only a mandatory anchor in common |
-
-The eight symmetry entries are concrete testing patterns, not eight independent algebraic laws. Y5–Y7 share a join-commutativity basis but use different graph structures.
-
-The decisive-operand pool in `mutator/operands.py` includes constants, comparisons, small-region counts, existence checks, and eligible outer-node properties. Each data-dependent option has a matching graph preparation step. Extending a pool does not introduce a new pattern.
-
-## Generation and construction boundaries
-
-The generator includes MATCH, OPTIONAL MATCH, WITH, RETURN, CALL, UNWIND, UNION, UNION ALL, conditional queries, scalar expressions, basic aggregates, lists, membership, list indexing, ordering, pagination, and nested EXISTS/COUNT/COLLECT subqueries. Scalars include integers, floats, booleans, and strings. Recursion is bounded by the configured AST and subquery budgets.
-
-It samples a finite implemented grammar. It does not uniformly sample all Cypher, parse arbitrary user queries, or solve arbitrary graph constraints.
-
-The random background uses symbols from the host AST. Pattern-specific labels and relationship types are allocated separately. Shared AST symbols keep the same binding.
-
-Correlated construction uses non-null node variables with a traceable label source. It considers the candidate anchor set, not a guessed single runtime binding. Opaque or nullable sources are not selected for recipes that require such anchors.
-
-The graph builder prepares the pattern's local conditions. It does not solve every outer filter or guarantee that the selected operation is reached. An empty result may be expected, especially for S5 and S8.
-
-`high_units` is the total number of high-cost expansion units for a case. It is divided across applicable anchors or regions. A path unit can contain several nodes and relationships. Background data, small regions, and fixed witnesses are additional; archives report the actual totals.
-
-Paths are compared in their original order. Path reflection is rejected when the enclosing query directly observes the changed path order. List order and duplicate result rows are also preserved.
-
-The two queries share one graph and one index state. Another case can rebuild the dedicated database. Temporary loading indexes are removed before measurement; case indexes are then created and awaited.
-
-## Measurement defaults
-
-| Setting | Default |
-| --- | ---: |
-| Background nodes | 50 |
-| Background relationships | 100 |
-| High-cost expansion units | 100,000 |
-| Discovery warmups per query | 3 |
-| Discovery pairs | 6 |
-| Confirmation warmups per query | 5 |
-| Confirmation pairs | 20 |
-| Minimum runtime ratio | **5.0** |
-| Minimum median paired difference | **100 ms** |
-| Required direction consistency | 0.8 |
-| Query timeout | 10 seconds |
-
-Every sample consumes the complete result. Comparison uses typed row multisets: booleans and integers remain distinct, entities retain their identities, and lists and paths retain their internal order.
-
-Discovery and confirmation alternate AB/BA execution. Both rounds must meet the configured ratio, absolute difference, and direction-consistency thresholds, with the same slower query. Timings include query execution, result transfer, and client-side result consumption; graph loading and result normalization are outside the timing interval. PROFILE is collected separately.
-
-A confirmed timing gap is a performance candidate, not proof of a missed optimization. Plans and workload counts are needed to explain it. A timeout is recorded as a timeout, not converted into a measured runtime or ratio.
-
-## Results
-
-Each run writes `summary.csv`. Ordinary cases retain their ID, seed, status, sizes, and available measurements there. Candidates, result mismatches, and timeouts also retain:
-
-    results/<run>/<status>/<case>/
-      query_a.cypher
-      query_b.cypher
-      graph.json
-      result.json
-      plans.json
-
-`plans.json` is written when profiling completes. `run.save_all: true` also archives ordinary executed cases. `run.mode: generate` always archives generated cases.
-
-Result statuses include:
-
-- `skipped`: no compatible position or the fixed recipe is inapplicable.
-- `equivalent`: complete results matched in check mode.
-- `no_gap`: discovery did not meet the performance thresholds.
-- `unconfirmed`: the discovery gap did not survive confirmation.
-- `candidate`: discovery and confirmation both passed.
-- `result_mismatch`: complete results differed; the pair is excluded from performance screening.
-- `timeout`: a database transaction reached its timeout.
-
-## Submitted issue registry
-
-[bugs.csv](bugs.csv) is the single maintained registry of submitted issues. Each row is one unique GitHub issue URL. Update that row when its status changes; add a row when a new issue is submitted. Historical reports remain under `BUG list/`, including local reports that have not been submitted.
-
-Pattern mappings use the current S1–S8 and Y1–Y8 catalog, introduced in commit `26f62dc`. The registry groups issues by related semantics or optimization mechanisms. The reported query pair need not perform the catalog's exact mutation. Each association is explained from the submitted queries, graph conditions, or optimizer behavior.
-
-- `pattern_ids` includes all associated patterns; `pattern_count` counts the distinct IDs. Exact transformations and mechanism-related cases share this one list. IDs are separated by semicolons; an empty field has count zero.
-- `mapping_notes` explains each association. Examples include false conjunctions under S2, CASE-controlled aggregation under S3, path-bound simplification under Y4, and shared-binding order under Y6. An issue with no identified connection keeps an empty pattern list and an explanation.
-- `status` records the current disposition; `reported_status` preserves the status supplied when the row was registered. Values are `pending`, `confirmed`, `fixed`, `uninterested` (explicitly declined), and `not_a_bug` (upstream rejects the attribution to that DBMS).
-- `status_basis`, `status_evidence`, and `status_notes` distinguish an upstream reply from a user-provided status. Closed issues are not automatically fixed. Automated reproduction is not treated as human confirmation; version-specific fixes remain qualified in the notes.
-- `github_state` and `upstream_type` preserve GitHub's separate state and issue-type fields. `bug_type` retains the submitter's Performance BUG / Logical BUG classification. `duplicate_of` records upstream grouping; `last_checked` records the audit date.
-
-Count unique issue URLs for submitted-issue totals. For each pattern, count rows containing its ID in `pattern_ids`; one issue can contribute to several pattern counts. These counts summarize associations with the catalog, not exact generator coverage or independent root causes. The implemented transformations remain those listed in the current pattern catalog. ArcadeDB #10307 and #10308 remain separate submissions grouped upstream under #10309.
-
-## Validation and retained material
-
-The rewrite uses direct checks against a dedicated Neo4j instance rather than restoring the former test framework. Local acceptance artifacts are kept under `results/validation-*`; they are not part of the source package.
-
-Historical material remains under `paper/`, `BUG list/`, `reference/`, and `picture/`. It may use older pattern IDs or methods. The README and current source describe this implementation; `bugs.csv` records submitted-issue status and current pattern mappings.
-
-Only the Neo4j interface is implemented. Supporting another system requires checking its grammar, result semantics, and pattern prerequisites; adding a connection class alone is not sufficient.
+GraphSymPerf tests short-circuit and symmetry transformations in graph database management systems. It generates a symbolic query AST, inserts one compatible Pattern, constructs a graph with fixed witnesses and expandable regions, and compares two queries on that graph. Cypher targets are Neo4j, Memgraph, ArcadeDB, LadybugDB, and FalkorDB; Gremlin targets are ArcadeDB, JanusGraph, and HugeGraph.
+
+<!-- BEGIN ISSUE SUMMARY -->
+The submitted-issue ledger contains 40 issue URLs: 21 fixed, 6 confirmed, 6 pending, 6 uninterested, 1 not_a_bug. Statuses are the recorded snapshot (2026-10-29), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite.
+<!-- END ISSUE SUMMARY -->
+
+The tables below are generated from [bugs.csv](bugs.csv), the maintained issue ledger. See the [code architecture](docs/architecture.md), [backend setup](docs/backends.md), and [validation record](docs/validation.md) for implementation details. [中文说明](README.zh-CN.md) · [中文架构文档](docs/architecture.zh-CN.md). This README follows the section order and table format of [ValScope](https://github.com/linli1724647576/ValScope/blob/e158a9d467a343f985427d04624fb44ac7895fa9/README.md).
+
+<!-- BEGIN ISSUE TABLES -->
+## Neo4j
+
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [13783](https://github.com/neo4j/neo4j/issues/13783) | fixed |
+| 2 | [13813](https://github.com/neo4j/neo4j/issues/13813) | uninterested |
+| 3 | [13814](https://github.com/neo4j/neo4j/issues/13814) | uninterested |
+| 4 | [13864](https://github.com/neo4j/neo4j/issues/13864) | uninterested |
+| 5 | [13865](https://github.com/neo4j/neo4j/issues/13865) | uninterested |
+| 6 | [13866](https://github.com/neo4j/neo4j/issues/13866) | confirmed |
+| 7 | [13867](https://github.com/neo4j/neo4j/issues/13867) | uninterested |
+| 8 | [14007](https://github.com/neo4j/neo4j/issues/14007) | uninterested |
+| 9 | [14008](https://github.com/neo4j/neo4j/issues/14008) | fixed |
+
+## Memgraph
+
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [4208](https://github.com/memgraph/memgraph/issues/4208) | confirmed |
+| 2 | [4456](https://github.com/memgraph/memgraph/issues/4456) | pending |
+| 3 | [4457](https://github.com/memgraph/memgraph/issues/4457) | pending |
+| 4 | [4458](https://github.com/memgraph/memgraph/issues/4458) | pending |
+| 5 | [4459](https://github.com/memgraph/memgraph/issues/4459) | fixed |
+| 6 | [5091](https://github.com/memgraph/memgraph/issues/5091) | pending |
+
+## ArcadeDB
+
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [4405](https://github.com/ArcadeData/arcadedb/issues/4405) | fixed |
+| 2 | [5116](https://github.com/ArcadeData/arcadedb/issues/5116) | fixed |
+| 3 | [5117](https://github.com/ArcadeData/arcadedb/issues/5117) | fixed |
+| 4 | [5360](https://github.com/ArcadeData/arcadedb/issues/5360) | fixed |
+| 5 | [5362](https://github.com/ArcadeData/arcadedb/issues/5362) | fixed |
+| 6 | [5363](https://github.com/ArcadeData/arcadedb/issues/5363) | fixed |
+| 7 | [9579](https://github.com/ArcadeData/arcadedb/issues/9579) | fixed |
+| 8 | [9580](https://github.com/ArcadeData/arcadedb/issues/9580) | fixed |
+| 9 | [10307](https://github.com/ArcadeData/arcadedb/issues/10307) | fixed |
+| 10 | [10308](https://github.com/ArcadeData/arcadedb/issues/10308) | fixed |
+
+## LadybugDB
+
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [668](https://github.com/LadybugDB/ladybug/issues/668) | fixed |
+| 2 | [669](https://github.com/LadybugDB/ladybug/issues/669) | fixed |
+| 3 | [696](https://github.com/LadybugDB/ladybug/issues/696) | fixed |
+| 4 | [697](https://github.com/LadybugDB/ladybug/issues/697) | fixed |
+| 5 | [698](https://github.com/LadybugDB/ladybug/issues/698) | fixed |
+| 6 | [720](https://github.com/LadybugDB/ladybug/issues/720) | fixed |
+| 7 | [721](https://github.com/LadybugDB/ladybug/issues/721) | fixed |
+
+## FalkorDB
+
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [2081](https://github.com/FalkorDB/FalkorDB/issues/2081) | fixed |
+| 2 | [3227](https://github.com/FalkorDB/FalkorDB/issues/3227) | confirmed |
+| 3 | [3228](https://github.com/FalkorDB/FalkorDB/issues/3228) | confirmed |
+| 4 | [3315](https://github.com/FalkorDB/FalkorDB/issues/3315) | confirmed |
+
+## Apache AGE
+
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [2428](https://github.com/apache/age/issues/2428) | not_a_bug |
+| 2 | [2480](https://github.com/apache/age/issues/2480) | confirmed |
+| 3 | [2481](https://github.com/apache/age/issues/2481) | pending |
+
+## JanusGraph
+
+| ID   | Issue ID | Status |
+| ---- | -------- | ------ |
+| 1 | [5113](https://github.com/JanusGraph/janusgraph/issues/5113) | pending |
+<!-- END ISSUE TABLES -->
+
+## How to Run
+
+### 1. Environment Requirements
+- Python 3.12; Ladybug CSV loading uses `csv.QUOTE_NOTNULL`.
+- One configured database system:
+  - Neo4j Community 2026.09.0, Cypher 25 (default configuration: port 7687).
+  - Memgraph 3.14.0 (local example: port 27687).
+  - ArcadeDB 26.10.2, Cypher or Gremlin (local example: port 22480).
+  - LadybugDB 0.22.1, embedded pybind backend.
+  - FalkorDB 6.0.3 (local example: port 16379).
+  - JanusGraph 1.2.0 / TinkerPop 3.8.2, BerkeleyJE (local example: port 38182).
+  - HugeGraph 1.7.0 / TinkerPop 3.5.1, RocksDB (local examples: ports 48080 and 48182).
+
+### DBMS Connection Parameter Configuration Locations
+
+Connection settings are read from the `database` section of [config.yaml](config.yaml). Password fields name environment variables; password values are not stored in case archives.
+
+Specific configuration locations:
+
+- **Main configuration file**: `config.yaml`
+  - `language` selects `cypher` or `gremlin`.
+  - `database` selects the adapter and its connection settings.
+  - `generation`, `graph`, `run`, and `measurement` control experiments.
+- **Database adapters**: `databases/`
+  - `databases/__init__.py` selects the adapter.
+  - Adapter capability dictionaries select compatible grammar and Pattern variants.
+- **Server configuration**: `config/janusgraph/` and `config/hugegraph/`
+  - These files configure the corresponding Gremlin services.
+  - [Backend setup](docs/backends.md) provides complete connection blocks and startup commands.
+
+### 2. Install Dependencies
+
+Create a Python environment and install the pinned dependencies:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Main dependencies include:
+- `neo4j==5.28.4`: Neo4j and Memgraph Bolt connections.
+- `PyYAML==6.0.3`: configuration loading.
+- `ladybug==0.22.1`: embedded LadybugDB.
+- `falkordb==1.8.1` and `redis==8.1.0`: FalkorDB connections.
+
+ArcadeDB, JanusGraph, and HugeGraph adapters use Python's standard HTTP libraries.
+
+### 3. Running Parameter Configuration
+
+Edit these fields in `config.yaml`, retaining the other configuration sections:
+
+```yaml
+language: cypher
+run:
+  mode: experiment
+  seed: 0
+  case_seed: null
+  save_all: false
+  rounds: 10
+  minutes: 60
+  output: results
+  patterns: [S1, S2, S3, S4, S5, S6, S7, S8, Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8]
+measurement:
+  warmups: 3
+  pairs: 6
+  confirmation_warmups: 5
+  confirmation_pairs: 20
+  ratio: 5.0
+  minimum_delta_ms: 100.0
+  direction_consistency: 0.8
+  timeout_seconds: 10
+```
+
+`generate` saves cases without opening a database connection. `check` compares complete results. `experiment` also measures performance and collects PROFILE. A fixed `case_seed` selects one seed and one round. Cypher S7 is enabled only for Neo4j. Gremlin supports S1–S6, S8, Y1, and Y2; configure that subset when selecting Gremlin.
+
+### 4. Database Configuration
+
+The default connection block targets a dedicated Neo4j database:
+
+```yaml
+database:
+  system: neo4j
+  uri: bolt://127.0.0.1:7687
+  user: neo4j
+  password_env: GRAPHSYMPERF_NEO4J_PASSWORD
+  name: neo4j
+  batch_size: 5000
+```
+
+```bash
+export GRAPHSYMPERF_NEO4J_PASSWORD='your-local-experiment-password'
+```
+
+Each executed case replaces the selected experiment graph. Q1 and Q2 share unchanged graph data and indexes. Select the corresponding connection block in [backend setup](docs/backends.md) when using another system.
+
+### 5. Query Generation Configuration
+
+Configure the random host and graph expansion in `config.yaml`:
+
+```yaml
+generation:
+  clauses: 4
+  nodes: 100
+  expression_depth: 3
+  subquery_depth: 3
+  conditional_queries: true
+graph:
+  background_nodes: 50
+  background_relationships: 100
+  high_units: 100000
+  indexes: true
+```
+
+`generation.nodes` is a grammar expansion budget. `high_units` is the total Pattern expansion budget, divided across anchors or regions; it is not the total number of graph nodes. The generator permits incompatible or unproductive random contexts. Such contexts are reported rather than repaired by a solver. [Architecture](docs/architecture.md) explains the grammar, scope rules, and graph recipes.
+
+### 6. Execution Command
+
+```bash
+python main.py
+```
+
+For replay, set `replay.case` to an archive directory and `replay.check_only` to the required mode, then run:
+
+```bash
+python replay.py
+```
+
+For a fixed seed/scale campaign, add the `campaign` settings described in [architecture](docs/architecture.md#10-fixed-seed-campaigns), set `run.save_all: true` and a new output directory, then run:
+
+```bash
+python scripts/run_campaign.py
+```
+
+After editing the submitted-issue ledger, regenerate the README tables:
+
+```bash
+python scripts/update_readme.py
+```
+
+### 7. Output Description
+- **`results/<run>/summary.csv`**:
+  - Case IDs, Patterns, seeds, outcomes, graph sizes, and available timing summaries.
+- **Archived case directories**:
+  - `query_a.cypher` / `query_b.cypher`, or `.gremlin` equivalents.
+  - `graph.json` — actual graph, schema, and requested indexes.
+  - `result.json` — configuration, bindings, workload metadata, outcome, and timings.
+  - `plans.json` — native PROFILE results and any recognized PROFILE failure.
+  - `replay-result.json` — a new replay result when replay is requested.
+- **Fixed campaign output**:
+  - `attempts.json` — the complete fixed manifest, including unsubmitted cases.
+  - `report.json` — stopping reason, counts, wall time, and client CPU/peak RSS.
+- **Local evidence**:
+  - `results/` is ignored by Git. The [validation record](docs/validation.md) distinguishes recorded local runs from shipped code and new verification.
+
+Candidates, mismatches, query timeouts, recognized backend rejections, unexpected execution failures, and unconfirmed-stop cases are archived. Use `run.save_all: true` to retain ordinary cases too. An unconfirmed termination stops further requests without restarting the database.

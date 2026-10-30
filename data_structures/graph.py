@@ -7,6 +7,9 @@ class Graph:
     nodes: list = field(default_factory=list)
     relationships: list = field(default_factory=list)
     indexes: list = field(default_factory=list)
+    # Declarations can describe empty regions independently of stored instances.
+    # 声明与实例分离，使没有节点或关系的区域也能保留结构信息。
+    schema: dict = field(default_factory=lambda: {"nodes": {}, "relationships": {}})
 
     def node(self, labels=(), **properties):
         uid = len(self.nodes)
