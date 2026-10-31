@@ -3,7 +3,7 @@
 GraphSymPerf tests short-circuit and symmetry transformations in graph database management systems. It generates a symbolic query AST, inserts one compatible Pattern, constructs a graph with fixed witnesses and expandable regions, and compares two queries on that graph. Cypher targets are Neo4j, Memgraph, ArcadeDB, LadybugDB, and FalkorDB; Gremlin targets are ArcadeDB, JanusGraph, and HugeGraph.
 
 <!-- BEGIN ISSUE SUMMARY -->
-The submitted-issue ledger contains 40 issue URLs: 21 fixed, 6 confirmed, 6 pending, 6 uninterested, 1 not_a_bug. Statuses are the recorded snapshot (2026-10-29), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite.
+This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Statuses are the recorded snapshot (2026-10-29), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite.
 <!-- END ISSUE SUMMARY -->
 
 The tables below are generated from [bugs.csv](bugs.csv), the maintained issue ledger. See the [code architecture](docs/architecture.md), [backend setup](docs/backends.md), and [validation record](docs/validation.md) for implementation details. [中文说明](README.zh-CN.md) · [中文架构文档](docs/architecture.zh-CN.md). This README follows the section order and table format of [ValScope](https://github.com/linli1724647576/ValScope/blob/e158a9d467a343f985427d04624fb44ac7895fa9/README.md).
@@ -14,14 +14,8 @@ The tables below are generated from [bugs.csv](bugs.csv), the maintained issue l
 | ID   | Issue ID | Status |
 | ---- | -------- | ------ |
 | 1 | [13783](https://github.com/neo4j/neo4j/issues/13783) | fixed |
-| 2 | [13813](https://github.com/neo4j/neo4j/issues/13813) | uninterested |
-| 3 | [13814](https://github.com/neo4j/neo4j/issues/13814) | uninterested |
-| 4 | [13864](https://github.com/neo4j/neo4j/issues/13864) | uninterested |
-| 5 | [13865](https://github.com/neo4j/neo4j/issues/13865) | uninterested |
-| 6 | [13866](https://github.com/neo4j/neo4j/issues/13866) | confirmed |
-| 7 | [13867](https://github.com/neo4j/neo4j/issues/13867) | uninterested |
-| 8 | [14007](https://github.com/neo4j/neo4j/issues/14007) | uninterested |
-| 9 | [14008](https://github.com/neo4j/neo4j/issues/14008) | fixed |
+| 2 | [13866](https://github.com/neo4j/neo4j/issues/13866) | confirmed |
+| 3 | [14008](https://github.com/neo4j/neo4j/issues/14008) | fixed |
 
 ## Memgraph
 
@@ -74,9 +68,8 @@ The tables below are generated from [bugs.csv](bugs.csv), the maintained issue l
 
 | ID   | Issue ID | Status |
 | ---- | -------- | ------ |
-| 1 | [2428](https://github.com/apache/age/issues/2428) | not_a_bug |
-| 2 | [2480](https://github.com/apache/age/issues/2480) | confirmed |
-| 3 | [2481](https://github.com/apache/age/issues/2481) | pending |
+| 1 | [2480](https://github.com/apache/age/issues/2480) | confirmed |
+| 2 | [2481](https://github.com/apache/age/issues/2481) | pending |
 
 ## JanusGraph
 

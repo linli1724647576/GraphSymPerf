@@ -3,7 +3,7 @@
 GraphSymPerf 测试图数据库中的短路与对称变换。程序先生成符号查询 AST，选择一个兼容位置嵌入 Pattern，再构造包含固定见证和扩张区域的图，比较同图上的查询对。Cypher 接入 Neo4j、Memgraph、ArcadeDB、LadybugDB 和 FalkorDB；Gremlin 接入 ArcadeDB、JanusGraph 和 HugeGraph。
 
 <!-- BEGIN ISSUE SUMMARY -->
-The submitted-issue ledger contains 40 issue URLs: 21 fixed, 6 confirmed, 6 pending, 6 uninterested, 1 not_a_bug. Status snapshot: 2026-10-29. Historical and merged reports are included; counts do not represent unique root causes.
+This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Status snapshot: 2026-10-29. Historical and merged reports are included; counts do not represent unique root causes.
 <!-- END ISSUE SUMMARY -->
 
 下表从唯一维护的 [bugs.csv](bugs.csv) 生成，包含历史报告和合并记录，不代表当前重写版本发现的独立根因数。实现细节见[中文架构文档](docs/architecture.zh-CN.md)、[后端部署](docs/backends.md)和[验证记录](docs/validation.md)。[English](README.md)。章节顺序和表格格式参照 [ValScope](https://github.com/linli1724647576/ValScope/blob/e158a9d467a343f985427d04624fb44ac7895fa9/README.md)。
@@ -14,14 +14,8 @@ The submitted-issue ledger contains 40 issue URLs: 21 fixed, 6 confirmed, 6 pend
 | ID   | Issue ID | Status |
 | ---- | -------- | ------ |
 | 1 | [13783](https://github.com/neo4j/neo4j/issues/13783) | fixed |
-| 2 | [13813](https://github.com/neo4j/neo4j/issues/13813) | uninterested |
-| 3 | [13814](https://github.com/neo4j/neo4j/issues/13814) | uninterested |
-| 4 | [13864](https://github.com/neo4j/neo4j/issues/13864) | uninterested |
-| 5 | [13865](https://github.com/neo4j/neo4j/issues/13865) | uninterested |
-| 6 | [13866](https://github.com/neo4j/neo4j/issues/13866) | confirmed |
-| 7 | [13867](https://github.com/neo4j/neo4j/issues/13867) | uninterested |
-| 8 | [14007](https://github.com/neo4j/neo4j/issues/14007) | uninterested |
-| 9 | [14008](https://github.com/neo4j/neo4j/issues/14008) | fixed |
+| 2 | [13866](https://github.com/neo4j/neo4j/issues/13866) | confirmed |
+| 3 | [14008](https://github.com/neo4j/neo4j/issues/14008) | fixed |
 
 ## Memgraph
 
@@ -74,9 +68,8 @@ The submitted-issue ledger contains 40 issue URLs: 21 fixed, 6 confirmed, 6 pend
 
 | ID   | Issue ID | Status |
 | ---- | -------- | ------ |
-| 1 | [2428](https://github.com/apache/age/issues/2428) | not_a_bug |
-| 2 | [2480](https://github.com/apache/age/issues/2480) | confirmed |
-| 3 | [2481](https://github.com/apache/age/issues/2481) | pending |
+| 1 | [2480](https://github.com/apache/age/issues/2480) | confirmed |
+| 2 | [2481](https://github.com/apache/age/issues/2481) | pending |
 
 ## JanusGraph
 

@@ -8,7 +8,7 @@ import re
 def main():
     root = Path(__file__).resolve().parents[1]
     with (root / "bugs.csv").open(newline="") as stream:
-        rows = list(csv.DictReader(stream))
+        rows = [row for row in csv.DictReader(stream) if row["status"] in {"pending", "confirmed", "fixed"}]
     statuses = Counter(row["status"] for row in rows)
     checked = sorted({row["last_checked"] for row in rows})
     tables = []
@@ -21,10 +21,10 @@ def main():
         tables += [f"| {i} | [{row['issue_number']}]({row['issue_url']}) | {row['status']} |"
                    for i, row in enumerate(entries, 1)]
         tables.append("")
-    counts = ", ".join(f"{statuses[name]} {name}" for name in ["fixed", "confirmed", "pending", "uninterested", "not_a_bug"])
+    counts = ", ".join(f"{statuses[name]} {name}" for name in ["fixed", "confirmed", "pending"])
     for filename, summary in [
-        ("README.md", f"The submitted-issue ledger contains {len(rows)} issue URLs: {counts}. Statuses are the recorded snapshot ({', '.join(checked)}), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite."),
-        ("README.zh-CN.md", f"The submitted-issue ledger contains {len(rows)} issue URLs: {counts}. Status snapshot: {', '.join(checked)}. Historical and merged reports are included; counts do not represent unique root causes."),
+        ("README.md", f"This README lists {len(rows)} submitted issue URLs: {counts}. Statuses are the recorded snapshot ({', '.join(checked)}), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite."),
+        ("README.zh-CN.md", f"This README lists {len(rows)} submitted issue URLs: {counts}. Status snapshot: {', '.join(checked)}. Historical and merged reports are included; counts do not represent unique root causes."),
     ]:
         path = root / filename
         text = path.read_text()
