@@ -15,6 +15,12 @@
 
 ArcadeDB 26.10.2 的 Gremlin 接入及接口门禁已通过。本轮只使用已有 Pattern，性能差异按 5 倍、置信下界 5 倍、绝对差值超过 100 ms、方向一致性及噪声门槛复核，并要求两次独立确认分别满足倍率和差值门槛。P10 完成 24 个扩大规模／种子输入，最大图为 1,500,003 个顶点，最大中位倍率只有 1.30585×，故仍不登记 P10 BUG。
 
-S1–S10 的 180 个主矩阵输入完成后，两个根因通过缩减及原存档重放：BUG003 的 A/B 配对中位倍率为 **26.66×**、差值 **154.79 ms**；BUG004 为 **65.46×**、**201.98 ms**。S6 的邻居物化线索与 S8 合并，不另编号。两份报告的独立建图代码、完整原生结果和索引均已实测核验，状态为本地复现，**未提交上游**。
+S1–S10 的 180 个主矩阵输入完成后，两个根因通过缩减及原存档重放：BUG003 的 A/B 配对中位倍率为 **26.66×**、差值 **154.79 ms**；BUG004 为 **65.46×**、**201.98 ms**。S6 的邻居物化线索与 S8 合并，不另编号。两份报告的独立建图代码、完整原生结果和索引均已实测核验，本段保留原实验记录；后续提交记录为 #10308 和 #10307，当前状态以根目录 bugs.csv 为准。
 
-首轮未报原因见 [Gremlin 实验记录](../../docs/gremlin-experiment-20261018.md) 与 [逐案例计划审查](../../docs/gremlin-optimizer-audit-20261018.md)；本次扩规模、S 模板接口检查、失败记录、严格复算及报告依据见 [续测记录](../../docs/gremlin-p10-scor-20261018.md)。
+首轮未报原因见 [Gremlin 实验记录](../evidence/legacy-notes/gremlin-experiment-20261018.md) 与 [逐案例计划审查](../evidence/legacy-notes/gremlin-optimizer-audit-20261018.md)；本次扩规模、S 模板接口检查、失败记录、严格复算及报告依据见 [续测记录](../evidence/legacy-notes/gremlin-p10-scor-20261018.md)。
+
+## Submission preparation
+
+Unsubmitted material is indexed in the [dated preparation review](../CANDIDATE_REVIEW_20261031.md). Maintain current submission states and URLs only in [bugs.csv](../../bugs.csv); the historical text above records its original experiment stage.
+
+The linked legacy experiment notes are byte-preserved archival copies. Their original relative data paths refer to the pre-refactor checkout recorded in the [legacy provenance index](../evidence/legacy-provenance-20261031.json).

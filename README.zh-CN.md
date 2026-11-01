@@ -6,8 +6,6 @@ GraphSymPerf 测试图数据库中的短路与对称变换。程序先生成符�
 This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Status snapshot: 2026-10-29. Historical and merged reports are included; counts do not represent unique root causes.
 <!-- END ISSUE SUMMARY -->
 
-下表从唯一维护的 [bugs.csv](bugs.csv) 生成，包含历史报告和合并记录，不代表当前重写版本发现的独立根因数。实现细节见[中文架构文档](docs/architecture.zh-CN.md)、[后端部署](docs/backends.md)和[验证记录](docs/validation.md)。[English](README.md)。章节顺序和表格格式参照 [ValScope](https://github.com/linli1724647576/ValScope/blob/e158a9d467a343f985427d04624fb44ac7895fa9/README.md)。
-
 <!-- BEGIN ISSUE TABLES -->
 ## Neo4j
 

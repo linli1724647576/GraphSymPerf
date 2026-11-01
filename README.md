@@ -6,7 +6,6 @@ GraphSymPerf tests short-circuit and symmetry transformations in graph database 
 This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Statuses are the recorded snapshot (2026-10-29), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite.
 <!-- END ISSUE SUMMARY -->
 
-The tables below are generated from [bugs.csv](bugs.csv), the maintained issue ledger. See the [code architecture](docs/architecture.md), [backend setup](docs/backends.md), and [validation record](docs/validation.md) for implementation details. [中文说明](README.zh-CN.md) · [中文架构文档](docs/architecture.zh-CN.md). This README follows the section order and table format of [ValScope](https://github.com/linli1724647576/ValScope/blob/e158a9d467a343f985427d04624fb44ac7895fa9/README.md).
 
 <!-- BEGIN ISSUE TABLES -->
 ## Neo4j
