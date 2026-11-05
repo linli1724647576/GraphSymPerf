@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from cypher.ast_nodes import *
 from data_structures.ast import at, replace_at
 from data_structures.graph import shares
-from .operands import prepare, rows, install, populate_regions, SCALAR_TYPES
+from .operands import prepare, rows, install, populate_regions, choose_row_source, ROW_SOURCES, SCALAR_TYPES
 
 
 @dataclass
@@ -19,9 +19,12 @@ class DemandPattern:
 
     def embed(self, query, site, seed, rng):
         case = prepare(query, site, self.id, seed, rng, "native_limit" if self.mode == "native_limit" else "count")
+        # The native LIMIT pair shares the whole path up to its terminal edge.
+        roles = ("low",) if self.mode == "native_limit" else ("low", "high")
+        two_hops = choose_row_source(case.payload, rng, roles)
         if self.mode == "native_limit":
             outputs = [item.alias for item in site.node.items]
-            tail = rows(case.payload, "low", outputs, predicate=False)
+            tail = rows(case.payload, "low", outputs, predicate=False, two_hops=two_hops)
             case.payload["limit"] = rng.randint(1, 3)
             case.payload["variant"] = "native_limit"
             tail.clauses[-1].limit = Literal(case.payload["limit"])
@@ -29,11 +32,12 @@ class DemandPattern:
             # Preserve the random prefix; only the final projection becomes MATCH + RETURN LIMIT.
             # 保留随机前缀，仅将最终投影替换为 MATCH 与 RETURN LIMIT。
             query.clauses[index:] = tail.clauses
-            case.target = ("clauses", index, "paths", 0, "relationships", 0)
+            last_edge = len(tail.clauses[0].paths[0].relationships) - 1
+            case.target = ("clauses", index, "paths", 0, "relationships", last_edge)
             return case
         outputs = site.node.output()
-        low = rows(case.payload, "low", outputs)
-        high = rows(case.payload, "high", outputs)
+        low = rows(case.payload, "low", outputs, two_hops=two_hops)
+        high = rows(case.payload, "high", outputs, two_hops=two_hops)
         case.payload["limit"] = rng.randint(1, 3)
         if self.mode == "zero":
             # Zero demand is attached to both complete branch queries, not to the graph size.
@@ -66,22 +70,28 @@ class DemandPattern:
     def populate(self, graph, payload, total):
         # Bounded demand needs n constant witness rows per correlated input anchor.
         # 有限需求模式需要为每个相关输入锚点提供 n 行常量见证。
+        two_hops = ROW_SOURCES[payload["work_candidate"]]
         if self.mode == "native_limit":
             roots = graph.candidates(payload["anchor"], create=True)
             allocations = shares(total, len(roots))
             payload.update(anchor_uids=roots, high_allocations=allocations, anchor_count=len(roots))
             for root, count in zip(roots, allocations):
+                start = root
+                if two_hops:
+                    start = graph.node([payload["low_middle_label"]])
+                    graph.edge(root, start, payload["low_first_type"])
                 # Shared witnesses supply k rows on both sides; only HIGH gets the expansion.
                 # 两侧共用 k 个见证节点，只有 HIGH 关系获得额外扩张节点。
                 for _ in range(payload["limit"]):
                     node = graph.node([payload["low_label"]], keep=True, value=1)
-                    graph.edge(root, node, payload["low_type"])
-                    graph.edge(root, node, payload["high_type"])
+                    graph.edge(start, node, payload["low_type"])
+                    graph.edge(start, node, payload["high_type"])
                 for _ in range(count):
                     node = graph.node([payload["low_label"]], keep=True, value=1)
-                    graph.edge(root, node, payload["high_type"])
+                    graph.edge(start, node, payload["high_type"])
             return
-        populate_regions(graph, payload, total, witness=payload["limit"] if self.mode == "bounded" else 0)
+        populate_regions(graph, payload, total, witness=payload["limit"] if self.mode == "bounded" else 0,
+                         two_hops=two_hops)
         if self.mode == "empty":
             graph.node([payload["empty_label"]], keep=True)
 

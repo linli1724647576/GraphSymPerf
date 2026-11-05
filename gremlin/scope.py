@@ -24,8 +24,10 @@ def analyze(query, scope=None, path=(), sites=None):
     for index, step in enumerate(query.steps):
         location = path + ("steps", index)
         before = scope
-        children = [analyze(arg, before, location + ("args", i), sites)
-                    for i, arg in enumerate(step.args) if isinstance(arg, Traversal)]
+        # match() patterns are declarative; they are typed by match_scope, not as nested sites.
+        # match() 模式是声明式的，由 match_scope 推断类型，不作为嵌套变异位置。
+        children = [] if step.name == "match" else [analyze(arg, before, location + ("args", i), sites)
+                                                    for i, arg in enumerate(step.args) if isinstance(arg, Traversal)]
         name, args = step.name, step.args
         if name == "V":
             assert query.root and index == 0, "Only root traversals may restart at V"
@@ -67,6 +69,8 @@ def analyze(query, scope=None, path=(), sites=None):
             bindings = {key: value for key, value in before.bindings.items()
                         if all(branch.bindings.get(key) == value for branch in branches)}
             scope = Scope(replace(branches[0].current, labels=labels), bindings)
+        elif name == "match":
+            scope = match_scope(args, scope)
         elif name == "is":
             value = args[0].args[0] if isinstance(args[0], Predicate) else args[0]
             assert isinstance(value, Value) and value.kind == scope.current.kind
@@ -77,3 +81,31 @@ def analyze(query, scope=None, path=(), sites=None):
         if sites is not None:
             sites.append(Site(location, step, before, scope, query.root and index == len(query.steps)-1))
     return scope
+
+
+def match_scope(patterns, scope):
+    """Bind every match() label; the step emits a map of these bindings."""
+    starts = [p.steps[0].args[0] for p in patterns]
+    ends = {step.args[0] for p in patterns for step in p.steps[1:] if step.name == "as"}
+    # Like TinkerPop, the incoming object binds the one start label that no pattern produces.
+    # 与 TinkerPop 一致，输入对象绑定到唯一一个不由其他模式产生的起始标签。
+    unbound = {label for label in starts if label not in ends and label not in scope.bindings}
+    assert len(unbound) <= 1, "match() needs one computed start label"
+    bindings = {**scope.bindings, **{label: scope.current for label in unbound}}
+    pending = list(patterns)
+    while pending:
+        ready = [p for p in pending if p.steps[0].args[0] in bindings]
+        assert ready, "Unsolvable match() pattern"
+        for pattern in ready:
+            pending.remove(pattern)
+            current = bindings[pattern.steps[0].args[0]]
+            for step in pattern.steps[1:]:
+                if step.name == "as":
+                    bindings[step.args[0]] = current
+                elif step.name == "hasLabel":
+                    current = replace(current, labels=tuple(step.args))
+                elif step.name in {"out", "in", "both", "V"}:
+                    current = Variable("it", "node")
+                elif step.name != "has":
+                    raise ValueError(f"Unsupported step inside match(): {step.name}")
+    return Scope(Variable("it", "map"), bindings)

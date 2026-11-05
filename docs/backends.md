@@ -6,24 +6,24 @@ These examples target the versions used for local acceptance. Run Docker command
 
 | System key | Version | Language | Patterns | Relevant differences |
 | --- | --- | --- | --- | --- |
-| `neo4j` | Community 2026.09.0 | Cypher 25 | S1–S8, Y1–Y8 | Full expression subqueries, CALL, conditional queries |
-| `memgraph` | 3.14.0 | Cypher | S1–S6, S8, Y1–Y8 | No CALL inside expression subqueries; no subquery work in UNWIND |
-| `arcadedb` | 26.10.2 | Cypher | S1–S6, S8, Y1–Y8 | WITH drops unprojected imports; declared result columns |
-| `ladybug` | 0.22.1, pybind | Cypher | S1–S6, S8, Y1–Y8 | MATCH-body subqueries, native S6, single labels, native CAST |
-| `falkordb` | 6.0.3 | Cypher | S1–S6, S8, Y1–Y8 | Pattern-comprehension work items and native S6 |
-| `arcadedb` | 26.10.2 | Gremlin | S1–S6, S8, Y1–Y2 | HTTP result envelope and tagged native cancellation |
-| `janusgraph` | 1.2.0 / TP 3.8.2 | Gremlin | S1–S6, S8, Y1–Y2 | BerkeleyJE, global typed keys, GraphSON 3 |
-| `hugegraph` | 1.7.0 / TP 3.5.1 | Gremlin | S1–S6, S8, Y1–Y2 | RocksDB, parent/child edge labels, REST batches |
+| `neo4j` | Community 2026.09.0 | Cypher 25 | SC1–SC8, SY1–SY8 | Full expression subqueries, CALL, conditional queries |
+| `memgraph` | 3.14.0 | Cypher | SC1–SC6, SC8, SY1–SY8 | No CALL inside expression subqueries; no subquery work in UNWIND |
+| `arcadedb` | 26.10.2 | Cypher | SC1–SC6, SC8, SY1–SY8 | WITH drops unprojected imports; declared result columns |
+| `ladybug` | 0.22.1, pybind | Cypher | SC1–SC6, SC8, SY1–SY8 | MATCH-body subqueries, native SC6, single labels, native CAST |
+| `falkordb` | 6.0.3 | Cypher | SC1–SC6, SC8, SY1–SY8 | Pattern-comprehension work items and native SC6 |
+| `arcadedb` | 26.10.2 | Gremlin | SC1–SC8, SY1, SY2, SY5–SY7 | HTTP result envelope and tagged native cancellation |
+| `janusgraph` | 1.2.0 / TP 3.8.2 | Gremlin | SC1–SC8, SY1, SY2, SY5–SY7 | BerkeleyJE, global typed keys, GraphSON 3 |
+| `hugegraph` | 1.7.0 / TP 3.5.1 | Gremlin | SC1–SC8, SY1, SY2, SY5–SY7 | RocksDB, parent/child edge labels, REST batches |
 
-Remove S7 for non-Neo4j Cypher targets. For Gremlin set:
+Remove SC7 for non-Neo4j Cypher targets. For Gremlin set:
 
 ```yaml
 language: gremlin
 run:
-  patterns: [S1, S2, S3, S4, S5, S6, S8, Y1, Y2]
+  patterns: [SC1, SC2, SC3, SC4, SC5, SC6, SC7, SC8, SY1, SY2, SY5, SY6, SY7]
 ```
 
-This is a configuration fragment, not a complete replacement for the `run` section. Other graph systems in the historical issue ledger, such as Apache AGE, do not have current adapters.
+This is a configuration fragment, not a complete replacement for the `run` section. Gremlin SY5–SY7 exchange the two patterns of a TinkerPop `match()` step; SY3, SY4, and SY8 have no Gremlin form. Other graph systems in the historical issue ledger, such as Apache AGE, do not have current adapters.
 
 ## Neo4j
 
@@ -200,4 +200,4 @@ python scripts/check_interfaces.py
 
 This manual script includes loading, result, PROFILE, and timeout/cancellation fixtures; it replaces experiment data. It supports the non-Neo4j Cypher adapters and the three Gremlin targets. For Neo4j, use ordinary generated check mode and replay.
 
-For an offline generation example, keep all required configuration fields and set `run.mode: generate`, `run.patterns: [Y4]`, `run.case_seed: 24`, and `graph.high_units: 100`, then run `python main.py`. A separate configuration directory can invoke the same script by absolute path; config is read from the current working directory.
+For an offline generation example, keep all required configuration fields and set `run.mode: generate`, `run.patterns: [SY4]`, `run.case_seed: 24`, and `graph.high_units: 100`, then run `python main.py`. A separate configuration directory can invoke the same script by absolute path; config is read from the current working directory.

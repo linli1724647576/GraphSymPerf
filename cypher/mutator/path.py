@@ -58,6 +58,8 @@ class PathPatternRule:
         replacement = PathPattern([left, right], [edge], path_variable)
         case.query = replace_at(query, site.path, replacement)
         case.payload = {"left": left, "right": right, "relation": relation, "direction": direction, "maximum": maximum}
+        candidates = ("blocked_hub", "blocked_terminals") if self.bounded else ("selected_fanout", "distractor_fanout")
+        case.payload["graph_candidate"] = rng.choice(candidates)
         if self.bounded:
             match_path = site.path[:-2]
             match = at(query, match_path)
@@ -73,26 +75,32 @@ class PathPatternRule:
         graph.nodes[root]["properties"].update(node_properties(left) | {"keep": True})
         graph.index(left.variable.labels[0], "p_anchor")
         if not self.bounded:
-            for _ in range(total):
+            def add_target(source):
                 target = graph.node(right.variable.labels, **(node_properties(right) | {"keep": True}))
-                start, end = (target, root) if payload["direction"] == "in" else (root, target)
+                start, end = (target, source) if payload["direction"] == "in" else (source, target)
                 graph.edge(start, end, payload["relation"])
+            center = root
+            if payload["graph_candidate"] == "distractor_fanout":
+                add_target(root)
+                center = graph.node(left.variable.labels, **(node_properties(left) | {"p_anchor": 0, "keep": True}))
+            for _ in range(total):
+                add_target(center)
             return
         middle = graph.node(["PatternPathMiddle"], keep=True)
         target = graph.node(right.variable.labels, **(node_properties(right) | {"keep": True}))
         graph.edge(root, middle, payload["relation"])
         graph.edge(middle, target, payload["relation"])
-        bad = graph.node(["PatternPathBlocked"], keep=False)
-        graph.edge(root, bad, payload["relation"])
-        # Every expanded branch crosses the failing node; the separate valid path remains.
-        # 每条扩张分支都经过失败节点，同时保留另一条有效路径。
+        block_at_hub = payload["graph_candidate"] == "blocked_hub"
+        hub = graph.node(["PatternPathHub"], keep=not block_at_hub)
+        graph.edge(root, hub, payload["relation"])
+        # Both layouts keep the valid path; the N additional paths fail at the hub or their ends.
         for _ in range(total):
-            previous = bad
+            previous = hub
             for step in range(payload["maximum"] - 1):
                 last = step == payload["maximum"] - 2
                 labels = right.variable.labels if last else ["PatternPathMiddle"]
                 props = node_properties(right) if last else {}
-                node = graph.node(labels, **(props | {"keep": True}))
+                node = graph.node(labels, **(props | {"keep": not last or block_at_hub}))
                 graph.edge(previous, node, payload["relation"])
                 previous = node
 

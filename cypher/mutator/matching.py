@@ -7,6 +7,14 @@ from data_structures.graph import shares
 from .path import node_properties
 
 
+GRAPH_CANDIDATES = {
+    "independent": ("selective_left", "selective_right"),
+    "shared": ("left_fanout", "right_fanout"),
+    "chain": ("detached_edges", "detached_fanout"),
+    "optional": ("left_fanout", "right_fanout"),
+}
+
+
 def nodes_in_match(match):
     result = {}
     for path in match.paths:
@@ -44,7 +52,9 @@ class MatchingPattern:
             variable = Variable(f"p_match_{i}", "node", (label,))
             nodes.append(NodePattern(variable, [label]))
         root, a = nodes[:2]
-        root.properties.append(("p_anchor", Literal(1)))
+        candidate = rng.choice(GRAPH_CANDIDATES[self.mode])
+        selective = a if candidate == "selective_right" else root
+        selective.properties.append(("p_anchor", Literal(1)))
         first_type, second_type = Symbol("p_left_edge", "relationship"), Symbol("p_right_edge", "relationship")
 
         def edge(left, right, rel, optional=False):
@@ -67,12 +77,23 @@ class MatchingPattern:
         owner.clauses[index:index + 1] = pieces
         case.target = owner_path
         case.payload = {"nodes": nodes, "first_type": first_type, "second_type": second_type,
-                        "swap_index": index + (self.mode == "optional"), "small_empty": rng.random() < .25}
+                        "swap_index": index + (self.mode == "optional"), "graph_candidate": candidate}
+        if self.mode == "independent":
+            case.payload["small_empty"] = rng.random() < .25
+            # Independent components may also be comma-separated parts of a single MATCH.
+            # 独立分量也可以写成同一 MATCH 中逗号分隔的两个部分。
+            case.payload["form"] = rng.choice(("clauses", "parts"))
+            if case.payload["form"] == "parts":
+                owner.clauses[index:index + 2] = [Match([piece.paths[0] for piece in pieces])]
+                case.target = site.path
         return case
 
     def populate(self, graph, payload, total):
         nodes = payload["nodes"]
         root_spec, a_spec = nodes[:2]
+        candidate = payload["graph_candidate"]
+        if candidate == "selective_right":
+            root_spec, a_spec = a_spec, root_spec
         root = graph.candidates(root_spec.variable, create=True)[0]
         graph.nodes[root]["properties"].update(node_properties(root_spec) | {"keep": True})
         graph.index(root_spec.variable.labels[0], "p_anchor")
@@ -96,27 +117,34 @@ class MatchingPattern:
             graph.edge(middle, target, second)
             # Extra right-hand chains have no left-hand connection to the selected root.
             # 新增右侧链没有连接到指定根节点的左侧关系，不能形成完整匹配。
+            hub = new(a_spec) if candidate == "detached_fanout" else None
             for _ in range(total):
-                graph.edge(new(a_spec), new(b_spec), second)
-        elif self.mode == "shared":
+                graph.edge(hub if hub is not None else new(a_spec), new(b_spec), second)
+            return
+        if candidate == "left_fanout":
+            a_spec, b_spec, first, second = b_spec, a_spec, second, first
+        if self.mode == "shared":
             graph.edge(root, new(a_spec), first)
             for _ in range(total):
                 graph.edge(root, new(b_spec), second)
-        else:
-            # Exercise null extension with both, left-only, right-only, and missing branches.
-            # 用双侧匹配、仅左侧、仅右侧和双侧缺失覆盖空值扩展情况。
-            roots = [root] + [new(root_spec) for _ in range(3)]
-            both, left_only, right_only, neither = roots
-            graph.edge(both, new(a_spec), first)
-            graph.edge(left_only, new(a_spec), first)
-            for anchor, quantity in zip([both, right_only], shares(total, 2)):
-                for _ in range(quantity):
-                    graph.edge(anchor, new(b_spec), second)
+            return
+        # Four fixed roots retain all null-extension cases even at the smallest budget.
+        both, narrow_only, wide_only, _ = [root] + [new(root_spec) for _ in range(3)]
+        graph.edge(both, new(a_spec), first)
+        graph.edge(narrow_only, new(a_spec), first)
+        for anchor, quantity in zip((both, wide_only), shares(total, 2)):
+            for _ in range(1 + quantity):
+                graph.edge(anchor, new(b_spec), second)
 
     def mutate(self, case):
         # Swap two recorded clauses in place; retain their boundaries and the outer query.
         # 原位交换已记录的两条子句，保留子句边界及外层查询。
         owner = at(case.query, case.target)
+        if case.payload.get("form") == "parts":
+            # Swap the two comma-separated parts; the MATCH clause itself stays in place.
+            # 交换逗号分隔的两个部分，MATCH 子句本身位置不变。
+            owner.paths[0], owner.paths[1] = owner.paths[1], owner.paths[0]
+            return case.query
         index = case.payload["swap_index"]
         owner.clauses[index], owner.clauses[index + 1] = owner.clauses[index + 1], owner.clauses[index]
         return case.query

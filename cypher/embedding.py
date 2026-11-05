@@ -13,12 +13,12 @@ def choose_site(query, pattern, rng, subquery_call=True, subquery_unwind=True, p
     # 排除 collect 参数内部的位置，避免替换常量后引入可观察的顺序差异。
     ordered_lists = [path for path, node in walk(query) if isinstance(node, Function) and node.name == "collect"]
     sites = [site for site in sites if not any(site.path[:len(path)] == path for path in ordered_lists)]
-    if not subquery_unwind and pattern.id in {"S1", "S2", "S3", "S4", "Y1", "Y2"}:
+    if not subquery_unwind and pattern.id in {"SC1", "SC2", "SC3", "SC4", "SY1", "SY2"}:
         # These backends reject subquery work items directly inside UNWIND expressions.
         # 这些后端不接受直接位于 UNWIND 表达式内部的子查询工作项。
         unwinds = [path for path, node in walk(query) if isinstance(node, Unwind)]
         sites = [site for site in sites if not any(site.path[:len(path)] == path for path in unwinds)]
-    if pattern.id == "S6" and not subquery_call:
+    if pattern.id == "SC6" and not subquery_call:
         # The bounded variant introduces CALL; Memgraph forbids it inside expression subqueries.
         # 有限需求变体引入 CALL，Memgraph 不允许它出现在表达式子查询内部。
         expressions = [path for path, node in walk(query) if isinstance(node, SubqueryExpression)]

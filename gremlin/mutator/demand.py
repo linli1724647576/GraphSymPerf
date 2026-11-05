@@ -11,21 +11,21 @@ class DemandPattern:
     def accepts(self, site):
         if not anchors(site.scope):
             return False
-        if self.id == "S8":
+        if self.id == "SC8":
             return site.node.name == "filter"
         return site.terminal and site.output.current.kind in VALUES
 
     def embed(self, query, site, seed, rng):
         case = prepare(query, site, self.id, seed, rng)
         expansion = Step("out", [case.payload["low_type"]])
-        if self.id == "S8":
+        if self.id == "SC8":
             empty = Step("not", [Traversal([Step("identity")])])
             case.payload["variant"] = "empty_input"
             return install(case, Step("filter", [Traversal(prefix(case.payload) + [empty, expansion])]), expansion)
         kind = site.output.current.kind
         case.payload["value"] = Value(rng.choice(VALUES[kind]), kind)
-        case.payload["limit"] = 0 if self.id == "S5" else rng.randint(1, 3)
-        case.payload["variant"] = "zero_limit" if self.id == "S5" else "native_limit"
+        case.payload["limit"] = 0 if self.id == "SC5" else rng.randint(1, 3)
+        case.payload["variant"] = "zero_limit" if self.id == "SC5" else "native_limit"
         # The global limit terminates the root traversal; only identical constants reach it.
         # 全局 LIMIT 位于根遍历末尾，其输入只含相同常量，不泄露被选中的节点。
         query.steps[site.path[1]:] = prefix(case.payload) + [expansion,

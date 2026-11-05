@@ -109,14 +109,15 @@ def workload_record(case, graph, high_units):
              if key.endswith(("_label", "_type")) or key == "relation"}
     conditions = {key: payload[key] for key in (
         "anchor", "correlated", "select", "guard_name", "guard_value", "nonnull_name", "nonnull_kind",
-        "prefix_name", "value", "left", "right", "nodes", "direction", "maximum", "swap_index", "small_empty"
+        "prefix_name", "value", "left", "right", "nodes", "direction", "maximum", "swap_index", "small_empty", "form"
     ) if key in payload}
-    if case.pattern in {"S5", "S6"}:
-        # S5 always renders LIMIT 0; its unused recipe draw is not the query's limit.
-        # S5 始终生成 LIMIT 0，配方中未使用的随机值不是查询的实际限制。
-        conditions["limit"] = 0 if case.pattern == "S5" else payload["limit"]
+    if case.pattern in {"SC5", "SC6"}:
+        # SC5 always renders LIMIT 0; its unused recipe draw is not the query's limit.
+        # SC5 始终生成 LIMIT 0，配方中未使用的随机值不是查询的实际限制。
+        conditions["limit"] = 0 if case.pattern == "SC5" else payload["limit"]
     return {"target_path": list(case.target), "target_kind": type(at(case.query, case.target)).__name__,
             "variant": payload.get("variant"), "work_kind": payload.get("work_kind"),
+            **{key: payload[key] for key in ("work_candidate", "graph_candidate") if key in payload},
             "roles": roles, "conditions": conditions, "configured_high_units": high_units,
             "anchor_uids": payload.get("anchor_uids"), "high_allocations": payload.get("high_allocations"),
             "graph_counts": {

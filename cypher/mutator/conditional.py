@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from cypher.ast_nodes import *
 from data_structures.ast import at
 from cypher.ast_nodes.expressions import Expression
-from .operands import prepare, guard, work, nonnull, constant, install, populate_regions, SCALAR_TYPES
+from .operands import prepare, guard, choose_work, nonnull, constant, install, populate_work, SCALAR_TYPES
 
 
 @dataclass
@@ -27,8 +27,9 @@ class ConditionalPattern:
         else:
             case.payload["variant"] = rng.choice(["unselected_result", "later_condition"])
         result_kind = "bool" if case.payload["variant"] == "later_condition" else kind
-        low = work(case.payload, "low", result_kind)
-        case.payload["high"] = work(case.payload, "high", result_kind)
+        candidate = choose_work(case.payload, result_kind, rng)
+        low = candidate.expression(case.payload, "low", result_kind)
+        case.payload["high"] = candidate.expression(case.payload, "high", result_kind)
         if self.coalesce:
             expression = Function("coalesce", [Literal(None, kind), nonnull(case.payload, kind, rng), low], kind)
         else:
@@ -43,7 +44,7 @@ class ConditionalPattern:
         return install(case, expression)
 
     def populate(self, graph, payload, total):
-        populate_regions(graph, payload, total)
+        populate_work(graph, payload, total)
 
     def mutate(self, case):
         expression = at(case.query, case.target)

@@ -29,7 +29,7 @@ run:
   rounds: 10
   minutes: 60
   output: results
-  patterns: [S1, S2, S3, S4, S5, S6, S7, S8, Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8]
+  patterns: [SC1, SC2, SC3, SC4, SC5, SC6, SC7, SC8, SY1, SY2, SY3, SY4, SY5, SY6, SY7, SY8]
 
 replay:
   case: null  # Path to an archived case directory.

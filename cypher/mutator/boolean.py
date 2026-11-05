@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from cypher.ast_nodes import Binary, at
 from cypher.ast_nodes.expressions import Expression
-from .operands import prepare, guard, work, install, populate_regions
+from .operands import prepare, guard, install, choose_work, populate_work
 
 
 @dataclass
@@ -16,15 +16,22 @@ class BooleanPattern:
 
     def embed(self, query, site, seed, rng):
         case = prepare(query, site, self.id, seed, rng, self.work_kind)
+        if self.swap:
+            case.payload["variant"] = rng.choice(("guard_swap", "predicate_swap"))
+            if case.payload["variant"] == "predicate_swap":
+                candidate = choose_work(case.payload, "bool", rng)
+                return install(case, Binary(candidate.expression(case.payload, "low"), self.operator,
+                                            candidate.expression(case.payload, "high")))
         # OR uses a true guard; AND uses a false guard, including the three-valued case.
         # OR 使用真决定项，AND 使用假决定项；另一项为空值时仍满足吸收关系。
         decisive = guard(case.payload, self.operator == "OR", rng)
-        case.payload["high"] = work(case.payload, "high", "bool")
-        other = case.payload["high"] if self.swap else work(case.payload, "low", "bool")
+        candidate = choose_work(case.payload, "bool", rng)
+        case.payload["high"] = candidate.expression(case.payload, "high")
+        other = case.payload["high"] if self.swap else candidate.expression(case.payload, "low")
         return install(case, Binary(decisive, self.operator, other))
 
     def populate(self, graph, payload, total):
-        populate_regions(graph, payload, total)
+        populate_work(graph, payload, total)
 
     def mutate(self, case):
         expression = at(case.query, case.target)

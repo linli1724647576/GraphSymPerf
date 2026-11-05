@@ -46,9 +46,9 @@ Local records: `results/calibration/report.md`, `summary.csv`, `coverage.csv`, a
 
 ## Compatibility fixes after calibration
 
-Memgraph now excludes subquery-producing work items inside UNWIND. Its original S3/seed-7 host has no remaining compatible site and correctly becomes inapplicable. Memgraph S3/seed-6 passed a fresh real comparison and both profiles with unchanged graph/query inputs.
+Memgraph now excludes subquery-producing work items inside UNWIND. Its original SC3/seed-7 host has no remaining compatible site and correctly becomes inapplicable. Memgraph SC3/seed-6 passed a fresh real comparison and both profiles with unchanged graph/query inputs.
 
-Ladybug COUNT work uses native CAST to STRING or DOUBLE. Four native conversion checks and four expressions built through the actual work-item function passed. Its original S4/seed-4 case passed real equality and both profiles on the same graph as the archived failure.
+Ladybug COUNT work uses native CAST to STRING or DOUBLE. Four native conversion checks and four expressions built through the actual work-item function passed. Its original SC4/seed-4 case passed real equality and both profiles on the same graph as the archived failure.
 
 An offline comparison preserved graphs, query text, parameters, and columns for 166 unaffected archives. These are offline comparisons, not additional DB executions. The 61 unsubmitted calibration entries were not backfilled.
 
@@ -56,7 +56,7 @@ Local record: `results/compatibility-review/completion.json`.
 
 ## Independently reproduced ArcadeDB candidate
 
-Y4/seed-5 was replayed from frozen inputs at N=1,000 in a fresh instance of the same ArcadeDB 26.10.2 image/build with two CPUs and 3 GiB. The independent instance ID differed from calibration. Smaller N=100 and N=300 controls preserved query bytes, parameters, background, fixed witnesses, schema, and indexes. Only expanded branches changed.
+SY4/seed-5 was replayed from frozen inputs at N=1,000 in a fresh instance of the same ArcadeDB 26.10.2 image/build with two CPUs and 3 GiB. The independent instance ID differed from calibration. Smaller N=100 and N=300 controls preserved query bytes, parameters, background, fixed witnesses, schema, and indexes. Only expanded branches changed.
 
 | N | Phase reported | A median ms | B median ms | Ratio | Median paired difference ms | Outcome |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
@@ -77,7 +77,7 @@ The code audit found and corrected two recording defects:
 1. `main.py` previously raised on an unconfirmed stop before writing the terminal summary row. It now archives and flushes the row before stopping or re-raising the execution failure.
 2. The fixed campaign previously let Ctrl-C escape with `stop_reason=completed` and a `running` row. It now records interruption/cancellation details, marks unsubmitted entries with that reason, and exits 130.
 
-Fresh real acceptance verified both changes. The JanusGraph test used a 1 ms native PROFILE deadline solely to reach the stop path and verified the saved `no_gap` CSV row. The ArcadeDB test interrupted an observed active generated Y4 query with SIGINT, retained the native terminated response, and verified that the next seed was unsubmitted. These controls are not performance findings.
+Fresh real acceptance verified both changes. The JanusGraph test used a 1 ms native PROFILE deadline solely to reach the stop path and verified the saved `no_gap` CSV row. The ArcadeDB test interrupted an observed active generated SY4 query with SIGINT, retained the native terminated response, and verified that the next seed was unsubmitted. These controls are not performance findings.
 
 The audit compiled 58 Python files and exercised 515 current offline Pattern/seed combinations: 231 generated and 284 were inapplicable. These were not DB executions. Both README issue tables regenerate without changes and contain all 40 ledger URLs. The local-link and ValScope heading/table checks passed, and 53 protected research files retained their byte hashes. Local audit evidence is under `results/repository-audit/`.
 

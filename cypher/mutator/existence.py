@@ -2,26 +2,23 @@ from dataclasses import dataclass
 from cypher.ast_nodes import *
 from data_structures.ast import replace_at
 from cypher.ast_nodes.expressions import Expression
-from .operands import prepare, rows, install, populate_regions
+from .operands import prepare, rows, install, populate_regions, choose_row_source, ROW_SOURCES
 
 
 @dataclass
 class ExistencePattern:
-    id: str = "S7"
+    id: str = "SC7"
 
     def accepts(self, site):
         return isinstance(site.node, Expression) and site.node.kind == "bool"
 
     def embed(self, query, site, seed, rng):
         case = prepare(query, site, self.id, seed, rng)
-        variant = rng.choice(["exists", "not_exists", "union_witness"])
+        variant = rng.choice(["exists", "not_exists"])
         case.payload["variant"] = variant
-        source, replacement = rows(case.payload, "low"), rows(case.payload, "high")
-        if variant == "union_witness":
-            # An unchanged witness determines EXISTS even if the replacement branch is empty.
-            # 固定见证已经决定 EXISTS 的结果，即使替换分支为空也不改变结论。
-            witness = rows(case.payload, "witness")
-            source, replacement = Union([witness, source]), Union([witness, replacement])
+        two_hops = choose_row_source(case.payload, rng)
+        source = rows(case.payload, "low", two_hops=two_hops)
+        replacement = rows(case.payload, "high", two_hops=two_hops)
         source, replacement = SubqueryExpression("EXISTS", source), SubqueryExpression("EXISTS", replacement)
         if variant == "not_exists":
             source, replacement = Unary("NOT", source), Unary("NOT", replacement)
@@ -30,12 +27,13 @@ class ExistencePattern:
 
     def populate(self, graph, payload, total):
         roots = graph.candidates(payload["anchor"], create=True)
-        # Direct EXISTS/NOT EXISTS requires a match on both sides for each eligible anchor.
-        # 直接存在性及否定存在性变体要求每个适用锚点在两侧都有匹配。
-        if payload["variant"] != "union_witness" and total < len(roots):
+        # EXISTS/NOT EXISTS keeps its value only if both sides match for each eligible anchor.
+        # 每个适用锚点在两侧都有匹配，EXISTS／NOT EXISTS 的取值才保持不变。
+        if total < len(roots):
             from data_structures.case import Inapplicable
-            raise Inapplicable("Direct existence needs at least one high-region witness per anchor")
-        populate_regions(graph, payload, total, witness=1 if payload["variant"] == "union_witness" else 0)
+            raise Inapplicable("Existence needs at least one high-region witness per anchor")
+        populate_regions(graph, payload, total, witness=0,
+                         two_hops=ROW_SOURCES[payload["work_candidate"]])
 
     def mutate(self, case):
         return replace_at(case.query, case.target, case.payload["replacement"])

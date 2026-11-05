@@ -10,33 +10,33 @@ from .matching import MatchingPattern
 # These are the rewritten catalog IDs, not the IDs in historical bug reports.
 # 这里使用重写后的模式编号，不对应历史 BUG 报告中的同名编号。
 PATTERNS = {
-    "S1": BooleanPattern("S1", "OR"),
-    "S2": BooleanPattern("S2", "AND"),
-    "S3": ConditionalPattern("S3"),
-    "S4": ConditionalPattern("S4", coalesce=True),
-    "S5": DemandPattern("S5", "zero"),
-    "S6": DemandPattern("S6", "bounded"),
-    "S7": ExistencePattern(),
-    "S8": DemandPattern("S8", "empty"),
-    "Y1": BooleanPattern("Y1", "AND", swap=True),
-    "Y2": BooleanPattern("Y2", "OR", swap=True),
-    "Y3": PathPatternRule("Y3"),
-    "Y4": PathPatternRule("Y4", bounded=True),
-    # Y5-Y7 share a swap operation but use different connectivity and graph recipes.
-    # Y5-Y7 共用交换操作，但变量连接关系和固定构图配方不同。
-    "Y5": MatchingPattern("Y5", "independent"),
-    "Y6": MatchingPattern("Y6", "shared"),
-    "Y7": MatchingPattern("Y7", "chain"),
-    "Y8": MatchingPattern("Y8", "optional"),
+    "SC1": BooleanPattern("SC1", "OR"),
+    "SC2": BooleanPattern("SC2", "AND"),
+    "SC3": ConditionalPattern("SC3"),
+    "SC4": ConditionalPattern("SC4", coalesce=True),
+    "SC5": DemandPattern("SC5", "zero"),
+    "SC6": DemandPattern("SC6", "bounded"),
+    "SC7": ExistencePattern(),
+    "SC8": DemandPattern("SC8", "empty"),
+    "SY1": BooleanPattern("SY1", "AND", swap=True),
+    "SY2": BooleanPattern("SY2", "OR", swap=True),
+    "SY3": PathPatternRule("SY3"),
+    "SY4": PathPatternRule("SY4", bounded=True),
+    # SY5-SY7 share a swap operation but use different connectivity and graph recipes.
+    # SY5-SY7 共用交换操作，但变量连接关系和固定构图配方不同。
+    "SY5": MatchingPattern("SY5", "independent"),
+    "SY6": MatchingPattern("SY6", "shared"),
+    "SY7": MatchingPattern("SY7", "chain"),
+    "SY8": MatchingPattern("SY8", "optional"),
 }
 
 
 def patterns_for(support):
     patterns = dict(PATTERNS)
-    for name in ("S1", "S2", "S3", "S4", "Y1", "Y2"):
+    for name in ("SC1", "SC2", "SC3", "SC4", "SY1", "SY2"):
         patterns[name] = replace(patterns[name], work_kind=support["work"])
     if support["native_limit"]:
-        patterns["S6"] = DemandPattern("S6", "native_limit")
+        patterns["SC6"] = DemandPattern("SC6", "native_limit")
     if not support["s7"]:
-        del patterns["S7"]
+        del patterns["SC7"]
     return patterns

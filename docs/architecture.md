@@ -13,7 +13,7 @@ The implementation maintains these invariants:
 1. The host generator receives grammar capabilities, budgets, and an RNG, but no target Pattern ID.
 2. One compatible AST location is selected after host generation.
 3. Symbol binding is shared by both query forms. Mutation cannot draw fresh constants or names.
-4. A case loads its graph once. Q1/Q2 and their measurements share the same data and indexes.
+4. A case loads its graph once. Q/Q′ and their measurements share the same data and indexes.
 5. Each backend may generate its own cases. No cross-system result or runtime equality is assumed.
 6. Complete typed results are compared before screening, and again during warmups and samples.
 7. Query timeouts do not become measured runtimes. Unconfirmed termination stops further requests.
@@ -130,9 +130,9 @@ Pattern names receive a `Pattern_` prefix and host names a `Random_` prefix. The
 
 The AST checks establish structure, scope, and output compatibility. Full result equality is checked by the database. They do not prove a performance difference or guarantee that the host reaches the Pattern.
 
-### Concrete example: LadybugDB S4
+### Concrete example: LadybugDB SC4
 
-With the default grammar budgets, Pattern S4, seed 4, and `high_units=1000`, the generated source is:
+The following source comes from the SC4 acceptance run with seed 4 and `high_units=1000`, recorded before the work-item pool was introduced.
 
 ```cypher
 RETURN DISTINCT coalesce(null, "kept", CAST(COUNT {
@@ -162,53 +162,55 @@ CALL imports explicitly selected variables and exposes only its declared output 
 
 By default, imports survive projections. ArcadeDB uses `persistent_imports: false`: WITH removes unprojected imported variables, and generation, site selection, and final checks all apply this rule.
 
-Memgraph and Ladybug use `subquery_unwind: false` to exclude subquery-producing work items inside UNWIND expressions. Memgraph also excludes the CALL-based bounded S6 variant from expression-subquery positions. A host with no compatible position becomes `Inapplicable` rather than receiving a repaired query skeleton.
+Memgraph and Ladybug use `subquery_unwind: false` to exclude subquery-producing work items inside UNWIND expressions. Memgraph also excludes the CALL-based bounded SC6 variant from expression-subquery positions. A host with no compatible position becomes `Inapplicable` rather than receiving a repaired query skeleton.
 
 ### Pattern catalog
 
 | Pattern | Local relation | Graph recipe or condition |
 | --- | --- | --- |
-| S1 | True OR guard protects a replaceable operand | Fixed true guard; LOW/HIGH work regions |
-| S2 | False AND guard protects a replaceable operand | Fixed false guard; LOW/HIGH work regions |
-| S3 | Change an unselected CASE result or later WHEN condition | Earlier branch decides the result |
-| S4 | Change an operand after a non-null coalesce prefix | Prefix remains non-null, including false or zero |
-| S5 | Change work under zero output demand | Local query retains LIMIT 0 |
-| S6 | Change work beyond bounded output demand | Fixed witnesses or shared native-limit witnesses satisfy k rows |
-| S7 | Change the domain under EXISTS/NOT EXISTS | Direct witnesses on both sides, or an unchanged UNION witness |
-| S8 | Change work after mandatory empty input | Pattern-owned false input remains in place |
-| Y1 | Swap the same AND operands | False decisive operand and unchanged work operand |
-| Y2 | Swap the same OR operands | True decisive operand and unchanged work operand |
-| Y3 | Reflect a one-edge path | Preserve endpoint variables, labels, constraints, and direction meaning |
-| Y4 | Reflect a bounded path | Preserve order-insensitive observation and the all-node keep condition |
-| Y5 | Swap independent MATCH clauses | Selective or empty component versus a larger component |
-| Y6 | Swap matches sharing a root | Small and large branches share the same root |
-| Y7 | Swap two connected matching stages | Large right-side chains include disconnected candidates |
-| Y8 | Swap independent OPTIONAL MATCH branches | Mandatory root retained; cover both, one, and neither branch matching |
+| SC1 | True OR guard protects a replaceable operand | Fixed true guard; LOW/HIGH work regions |
+| SC2 | False AND guard protects a replaceable operand | Fixed false guard; LOW/HIGH work regions |
+| SC3 | Change an unselected CASE result or later WHEN condition | Earlier branch decides the result |
+| SC4 | Change an operand after a non-null coalesce prefix | Prefix remains non-null, including false or zero |
+| SC5 | Change work under zero output demand | Local query retains LIMIT 0 |
+| SC6 | Change work beyond bounded output demand | Fixed witnesses or shared native-limit witnesses satisfy k rows |
+| SC7 | Change the domain under EXISTS/NOT EXISTS | Direct witnesses on both sides |
+| SC8 | Change work after mandatory empty input | Pattern-owned false input remains in place |
+| SY1 | Swap the same AND operands | False guard and work predicate, or two ordinary predicates |
+| SY2 | Swap the same OR operands | True guard and work predicate, or two ordinary predicates |
+| SY3 | Reflect a one-edge path | Preserve endpoint variables, labels, constraints, and direction meaning |
+| SY4 | Reflect a bounded path | Preserve order-insensitive observation and the all-node keep condition |
+| SY5 | Swap independent MATCH clauses | Selective or empty component versus a larger component |
+| SY6 | Swap matches sharing a root | Small and large branches share the same root |
+| SY7 | Swap two connected matching stages | Large right-side chains include disconnected candidates |
+| SY8 | Swap independent OPTIONAL MATCH branches | Mandatory root retained; cover both, one, and neither branch matching |
 
-S1–S8 use protected replacement, not strict symmetry. Y1–Y8 preserve and reorder the same operands or matching structure. Historical issue-to-Pattern mappings in `bugs.csv` are broader associations and are not executable Pattern definitions.
+SC1–SC8 use protected replacement, not strict symmetry. SY1–SY8 preserve and reorder the same operands or matching structure. Historical issue-to-Pattern mappings in `bugs.csv` are broader associations and are not executable Pattern definitions.
 
-`operands.py` owns the decisive candidate pool, anchors, work expressions, and common regional recipe. COUNT can return an integer, a Boolean comparison, or a converted scalar. Ladybug uses MATCH-body COUNT with native CAST for STRING/DOUBLE. FalkorDB uses pattern-comprehension lists, with separate true witnesses and failing work candidates.
+`operands.py` owns the decisive candidate pool, anchors, work expressions, and common regional recipe. COUNT can return an integer, a Boolean comparison, or a converted scalar. Ladybug uses MATCH-body COUNT with native CAST for STRING/DOUBLE. FalkorDB uses pattern comprehensions. Its count candidates have passing endpoints, and its existence candidate has none. The [Cypher catalog](pattern-catalog.en.md#case-construction) gives the graph layouts and budget units for all 16 patterns.
 
-The native S6 variant for Ladybug/FalkorDB retains the random prefix, adds a local MATCH, returns identical constants, and applies a global LIMIT k. LOW and HIGH share k witnesses per anchor; HIGH adds the expansion units. The CALL/UNION variant uses an unchanged witness branch before replaceable work.
+The native SC6 variant for Ladybug/FalkorDB retains the random prefix, adds a local MATCH, returns identical constants, and applies a global LIMIT k. LOW and HIGH share k witnesses per anchor; HIGH adds the expansion units. The CALL/UNION variant uses an unchanged witness branch before replaceable work.
 
-Y4 gives the graph a valid path plus expandable branches crossing a failing node. A unit can contain several nodes/edges. Path reflection rejects contexts that directly observe reversed path order; supported length and order-insensitive quantifier observations can remain.
+SY4 gives the graph a valid path plus expandable branches crossing a failing node. A unit can contain several nodes/edges. Path reflection rejects contexts that directly observe reversed path order; supported length and order-insensitive quantifier observations can remain.
 
 ## 6. Gremlin implementation
 
-`gremlin/ast_nodes/` defines `Traversal`, `Step`, `Predicate`, and typed `Value`. Root traversals start at `g.V()`; child traversals use `__`. The generator does not restart a child traversal at V.
+`gremlin/ast_nodes/` defines `Traversal`, `Step`, `Predicate`, and typed `Value`. Root traversals start at `g.V()`; child traversals use `__`. Seed generation does not restart a child traversal at V; only the SY5 `match()` patterns use a mid-traversal `V()`.
 
-`gremlin/scope.py` tracks the current object, guaranteed label bindings, and whether the current scalar is constant. `as/select` records and reads bindings. Predicate children can read outer bindings without exporting new labels. `count` and `fold` replace their traversal's current bindings; branch outputs retain only common guarantees. Constant-only fold keeps list values independent of traversal order.
+`gremlin/scope.py` tracks the current object, guaranteed label bindings, and whether the current scalar is constant. `as/select` records and reads bindings. Predicate children can read outer bindings without exporting new labels. `count` and `fold` replace their traversal's current bindings; branch outputs retain only common guarantees. Constant-only fold keeps list values independent of traversal order. `match()` binds the one start label that no pattern produces to the incoming object, binds every other pattern label, and emits a map; its patterns are not mutation sites.
 
-Only S1–S6, S8, Y1, and Y2 are implemented:
+SC1–SC8, SY1, SY2, and SY5–SY7 are implemented:
 
 | Pattern | Gremlin form |
 | --- | --- |
-| S1/S2 | `or`/`and` predicates with a decisive child and LOW/HIGH work |
-| S3 | Three-argument `choose`, changing the unselected branch |
-| S4 | `coalesce`, changing a branch after a productive prefix |
-| S5/S6 | Expansion, identical constant projection, and global `limit(0/k)` |
-| S8 | An unproductive predicate before expansion |
-| Y1/Y2 | Reverse the same two pure predicate subtrees |
+| SC1/SC2 | `or`/`and` predicates with a decisive child and LOW/HIGH work |
+| SC3 | Three-argument `choose`, changing the unselected branch |
+| SC4 | `coalesce`, changing a branch after a productive prefix |
+| SC5/SC6 | Expansion, identical constant projection, and global `limit(0/k)` |
+| SC7 | `filter`/`not` over a one-hop existence traversal; LOW and HIGH each match on every anchor |
+| SC8 | An unproductive predicate before expansion |
+| SY1/SY2 | Reverse the same two pure predicate subtrees |
+| SY5–SY7 | After `V().hasLabel(X).has('p_anchor', 1)`, exchange two `match()` patterns: independent mid-traversal `V()` lookups, two arms from the root, or a two-stage chain; `select()` restores the root |
 
 Productivity is different from truth: `constant(false)` and `constant(0)` both emit a value. Predicate work regions use `keep=false`; count work items can still consume their entire region. A traceable node is taken from the current object or an existing binding. No global fallback traversal is invented when no anchor exists.
 
@@ -278,7 +280,7 @@ Replay uses saved inputs and archived measurement settings with the current sele
 
 ## 9. Workload evidence
 
-`workload_record()` saves the AST target path/kind, local roles and conditions, expansion budget, anchors, allocation, and stored label/relationship counts. S5 records actual LIMIT 0; an unused recipe draw is not reported as its query limit.
+`workload_record()` saves the AST target path/kind, local roles and conditions, expansion budget, anchors, allocation, and stored label/relationship counts. SC5 records actual LIMIT 0; an unused recipe draw is not reported as its query limit.
 
 Construction counts describe potential work. Execution and opportunity start as `unknown`. Local review sidecars may classify a query side as `observed`, `eliminated`, `unreached`, or `unknown`, pointing to native PROFILE evidence. They do not change the measurement result.
 

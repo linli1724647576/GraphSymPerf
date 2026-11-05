@@ -3,7 +3,7 @@
 GraphSymPerf 测试图数据库中的短路与对称变换。程序先生成符号查询 AST，选择一个兼容位置嵌入 Pattern，再构造包含固定见证和扩张区域的图，比较同图上的查询对。Cypher 接入 Neo4j、Memgraph、ArcadeDB、LadybugDB 和 FalkorDB；Gremlin 接入 ArcadeDB、JanusGraph 和 HugeGraph。
 
 <!-- BEGIN ISSUE SUMMARY -->
-This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Status snapshot: 2026-10-29. Historical and merged reports are included; counts do not represent unique root causes.
+This README lists 38 submitted issue URLs: 24 fixed, 6 confirmed, 8 pending. Status snapshot: 2026-11-02. Historical and merged reports are included; counts do not represent unique root causes.
 <!-- END ISSUE SUMMARY -->
 
 <!-- BEGIN ISSUE TABLES -->
@@ -40,6 +40,9 @@ This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Sta
 | 8 | [9580](https://github.com/ArcadeData/arcadedb/issues/9580) | fixed |
 | 9 | [10307](https://github.com/ArcadeData/arcadedb/issues/10307) | fixed |
 | 10 | [10308](https://github.com/ArcadeData/arcadedb/issues/10308) | fixed |
+| 11 | [11081](https://github.com/ArcadeData/arcadedb/issues/11081) | fixed |
+| 12 | [11082](https://github.com/ArcadeData/arcadedb/issues/11082) | fixed |
+| 13 | [11083](https://github.com/ArcadeData/arcadedb/issues/11083) | fixed |
 
 ## LadybugDB
 
@@ -52,6 +55,7 @@ This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Sta
 | 5 | [698](https://github.com/LadybugDB/ladybug/issues/698) | fixed |
 | 6 | [720](https://github.com/LadybugDB/ladybug/issues/720) | fixed |
 | 7 | [721](https://github.com/LadybugDB/ladybug/issues/721) | fixed |
+| 8 | [1483](https://github.com/LadybugDB/ladybug/issues/1483) | pending |
 
 ## FalkorDB
 
@@ -61,6 +65,7 @@ This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Sta
 | 2 | [3227](https://github.com/FalkorDB/FalkorDB/issues/3227) | confirmed |
 | 3 | [3228](https://github.com/FalkorDB/FalkorDB/issues/3228) | confirmed |
 | 4 | [3315](https://github.com/FalkorDB/FalkorDB/issues/3315) | confirmed |
+| 5 | [3637](https://github.com/FalkorDB/FalkorDB/issues/3637) | pending |
 
 ## Apache AGE
 
@@ -121,7 +126,7 @@ run:
   rounds: 10
   minutes: 60
   output: results
-  patterns: [S1, S2, S3, S4, S5, S6, S7, S8, Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8]
+  patterns: [SC1, SC2, SC3, SC4, SC5, SC6, SC7, SC8, SY1, SY2, SY3, SY4, SY5, SY6, SY7, SY8]
 measurement:
   warmups: 3
   pairs: 6
@@ -133,7 +138,7 @@ measurement:
   timeout_seconds: 10
 ```
 
-`generate` 只生成归档；`check` 装载图并比较完整结果；`experiment` 继续计时和采集 PROFILE。固定 `case_seed` 时只跑一轮。Cypher S7 仅在 Neo4j 启用；Gremlin 使用 S1–S6、S8、Y1、Y2。
+`generate` 只生成归档；`check` 装载图并比较完整结果；`experiment` 继续计时和采集 PROFILE。固定 `case_seed` 时只跑一轮。Cypher SC7 仅在 Neo4j 启用；Gremlin 使用 SC1–SC8、SY1、SY2 和 SY5–SY7。
 
 ### 4. Database Configuration
 
@@ -153,7 +158,7 @@ database:
 export GRAPHSYMPERF_NEO4J_PASSWORD='your-local-experiment-password'
 ```
 
-每个执行用例会替换指定实验图的数据。Q1/Q2 之间图与索引保持不变。其他系统的连接配置见[后端部署](docs/backends.md)。
+每个执行用例会替换指定实验图的数据。Q/Q′ 之间图与索引保持不变。其他系统的连接配置见[后端部署](docs/backends.md)。
 
 ### 5. Query Generation Configuration
 

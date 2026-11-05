@@ -3,7 +3,7 @@
 GraphSymPerf tests short-circuit and symmetry transformations in graph database management systems. It generates a symbolic query AST, inserts one compatible Pattern, constructs a graph with fixed witnesses and expandable regions, and compares two queries on that graph. Cypher targets are Neo4j, Memgraph, ArcadeDB, LadybugDB, and FalkorDB; Gremlin targets are ArcadeDB, JanusGraph, and HugeGraph.
 
 <!-- BEGIN ISSUE SUMMARY -->
-This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Statuses are the recorded snapshot (2026-10-29), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite.
+This README lists 38 submitted issue URLs: 24 fixed, 6 confirmed, 8 pending. Statuses are the recorded snapshot (2026-11-02), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite.
 <!-- END ISSUE SUMMARY -->
 
 
@@ -41,6 +41,9 @@ This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Sta
 | 8 | [9580](https://github.com/ArcadeData/arcadedb/issues/9580) | fixed |
 | 9 | [10307](https://github.com/ArcadeData/arcadedb/issues/10307) | fixed |
 | 10 | [10308](https://github.com/ArcadeData/arcadedb/issues/10308) | fixed |
+| 11 | [11081](https://github.com/ArcadeData/arcadedb/issues/11081) | fixed |
+| 12 | [11082](https://github.com/ArcadeData/arcadedb/issues/11082) | fixed |
+| 13 | [11083](https://github.com/ArcadeData/arcadedb/issues/11083) | fixed |
 
 ## LadybugDB
 
@@ -53,6 +56,7 @@ This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Sta
 | 5 | [698](https://github.com/LadybugDB/ladybug/issues/698) | fixed |
 | 6 | [720](https://github.com/LadybugDB/ladybug/issues/720) | fixed |
 | 7 | [721](https://github.com/LadybugDB/ladybug/issues/721) | fixed |
+| 8 | [1483](https://github.com/LadybugDB/ladybug/issues/1483) | pending |
 
 ## FalkorDB
 
@@ -62,6 +66,7 @@ This README lists 33 submitted issue URLs: 21 fixed, 6 confirmed, 6 pending. Sta
 | 2 | [3227](https://github.com/FalkorDB/FalkorDB/issues/3227) | confirmed |
 | 3 | [3228](https://github.com/FalkorDB/FalkorDB/issues/3228) | confirmed |
 | 4 | [3315](https://github.com/FalkorDB/FalkorDB/issues/3315) | confirmed |
+| 5 | [3637](https://github.com/FalkorDB/FalkorDB/issues/3637) | pending |
 
 ## Apache AGE
 
@@ -139,7 +144,7 @@ run:
   rounds: 10
   minutes: 60
   output: results
-  patterns: [S1, S2, S3, S4, S5, S6, S7, S8, Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8]
+  patterns: [SC1, SC2, SC3, SC4, SC5, SC6, SC7, SC8, SY1, SY2, SY3, SY4, SY5, SY6, SY7, SY8]
 measurement:
   warmups: 3
   pairs: 6
@@ -151,7 +156,7 @@ measurement:
   timeout_seconds: 10
 ```
 
-`generate` saves cases without opening a database connection. `check` compares complete results. `experiment` also measures performance and collects PROFILE. A fixed `case_seed` selects one seed and one round. Cypher S7 is enabled only for Neo4j. Gremlin supports S1–S6, S8, Y1, and Y2; configure that subset when selecting Gremlin.
+`generate` saves cases without opening a database connection. `check` compares complete results. `experiment` also measures performance and collects PROFILE. A fixed `case_seed` selects one seed and one round. Cypher SC7 is enabled only for Neo4j. Gremlin supports SC1–SC8, SY1, SY2, and SY5–SY7; configure that subset when selecting Gremlin.
 
 ### 4. Database Configuration
 
@@ -171,7 +176,7 @@ database:
 export GRAPHSYMPERF_NEO4J_PASSWORD='your-local-experiment-password'
 ```
 
-Each executed case replaces the selected experiment graph. Q1 and Q2 share unchanged graph data and indexes. Select the corresponding connection block in [backend setup](docs/backends.md) when using another system.
+Each executed case replaces the selected experiment graph. Q and Q′ share unchanged graph data and indexes. Select the corresponding connection block in [backend setup](docs/backends.md) when using another system.
 
 ### 5. Query Generation Configuration
 
