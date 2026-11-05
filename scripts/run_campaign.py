@@ -12,7 +12,7 @@ import time
 import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from main import load_config, language_for, prepare_case
+from main import load_config, language_for, prepare_case, probe_scale
 from databases import select_database
 from data_structures.case import Inapplicable
 from executor import run_pair, save_case
@@ -85,6 +85,7 @@ def main():
                         row["load_seconds"] = time.monotonic() - phase_started
                         phase, phase_started = "measurement_and_profile", time.monotonic()
                         result = run_pair(db, a, b, config["measurement"])
+                        probe_scale(db, result, graph, a, b, config, patterns[row["pattern"]], row["seed"])
                     except (Exception, KeyboardInterrupt) as error:
                         # Preserve native cancellation details when the user interrupts execution.
                         # 用户中断执行时保留原生取消响应，不把中断报告为正常完成。

@@ -1,6 +1,6 @@
 # GraphSymPerf
 
-GraphSymPerf tests short-circuit and symmetry transformations in graph database management systems. It generates a symbolic query AST, inserts one compatible Pattern, constructs a graph with fixed witnesses and expandable regions, and compares two queries on that graph. Cypher targets are Neo4j, Memgraph, ArcadeDB, LadybugDB, and FalkorDB; Gremlin targets are ArcadeDB, JanusGraph, and HugeGraph.
+GraphSymPerf tests short-circuit and symmetry transformations in graph database management systems. It generates a random query AST, inserts one compatible Pattern, constructs a graph with fixed witnesses and expandable regions, and compares two queries on that graph. Cypher targets are Neo4j, Memgraph, ArcadeDB, LadybugDB, and FalkorDB; Gremlin targets are ArcadeDB, JanusGraph, and HugeGraph.
 
 <!-- BEGIN ISSUE SUMMARY -->
 This README lists 38 submitted issue URLs: 24 fixed, 6 confirmed, 8 pending. Statuses are the recorded snapshot (2026-11-02), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite.
@@ -153,6 +153,8 @@ measurement:
   ratio: 5.0
   minimum_delta_ms: 100.0
   direction_consistency: 0.8
+  scale_factor: 10        # no_gap pairs are re-measured with high_units / scale_factor; null disables
+  growth_ratio: 3.0       # growth across that scale that counts as work depending on N
   timeout_seconds: 10
 ```
 
@@ -228,8 +230,9 @@ python scripts/update_readme.py
 - **Archived case directories**:
   - `query_a.cypher` / `query_b.cypher`, or `.gremlin` equivalents.
   - `graph.json` — actual graph, schema, and requested indexes.
-  - `result.json` — configuration, bindings, workload metadata, outcome, and timings.
-  - `plans.json` — native PROFILE results and any recognized PROFILE failure.
+  - `result.json` — configuration, workload metadata, outcome, and timings.
+  - `plans.json` — native PROFILE results with operator summaries, and any recognized PROFILE failure.
+  - `plans-small.json` — plans at the smaller scale for a `scale_candidate`.
   - `replay-result.json` — a new replay result when replay is requested.
 - **Fixed campaign output**:
   - `attempts.json` — the complete fixed manifest, including unsubmitted cases.

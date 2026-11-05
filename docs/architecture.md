@@ -1,6 +1,6 @@
 # GraphSymPerf code architecture
 
-This document describes the executable code in this repository. It follows one case from a random symbolic host to a measured query pair, then explains the language and database boundaries. [中文版本](architecture.zh-CN.md) · [Backend setup](backends.md) · [Validation record](validation.md).
+This document describes the executable code in this repository. It follows one case from a random host to a measured query pair, then explains the language and database boundaries. [中文版本](architecture.zh-CN.md) · [Backend setup](backends.md) · [Validation record](validation.md).
 
 ## 1. Purpose and invariants
 
@@ -12,7 +12,7 @@ The implementation maintains these invariants:
 
 1. The host generator receives grammar capabilities, budgets, and an RNG, but no target Pattern ID.
 2. One compatible AST location is selected after host generation.
-3. Symbol binding is shared by both query forms. Mutation cannot draw fresh constants or names.
+3. Names and constants are final when created. Mutation cannot draw fresh constants or names.
 4. A case loads its graph once. Q/Q′ and their measurements share the same data and indexes.
 5. Each backend may generate its own cases. No cross-system result or runtime equality is assumed.
 6. Complete typed results are compared before screening, and again during warmups and samples.
@@ -29,24 +29,26 @@ Random background data is not a solution to all host predicates. A syntactically
 | [replay.py](../replay.py) | Load archived graph and queries through the current connection | `replay_case` |
 | [executor.py](../executor.py) | Typed comparison, paired timing, PROFILE, case serialization | `run_pair`, `save_case`, `workload_record` |
 | [data_structures/](../data_structures/) | Shared AST utilities, case/graph/query contracts, typed values | `Case`, `Graph`, `Query`, `freeze` |
-| [graph_generation/](../graph_generation/) | Symbol binding, background data, recipe dispatch | `build_graph`, `bind_symbols`, `random_graph` |
+| [graph_generation/](../graph_generation/) | Background data, recipe dispatch, schema normalization | `build_graph`, `random_graph` |
 | [cypher/](../cypher/) | Cypher AST, scopes, random grammar, Patterns, rendering, schema | language module exports |
 | [gremlin/](../gremlin/) | Traversal AST, scopes, random grammar, Patterns, rendering, schema | language module exports |
 | [databases/](../databases/) | Backend-specific loading, consumption, normalization, profiling | `Database` |
 | [databases/gremlin_http.py](../databases/gremlin_http.py) | Shared JanusGraph/HugeGraph HTTP and GraphSON decoding | `GremlinHTTP`, `decode`, `normalize` |
 | [scripts/check_interfaces.py](../scripts/check_interfaces.py) | Manual fixed checks against a real selected backend | `check` and backend-specific checks |
 | [scripts/update_readme.py](../scripts/update_readme.py) | Derive the README issue summary/tables from `bugs.csv` | `main` |
+| [databases/plans.py](../databases/plans.py) | Backend-neutral PROFILE summaries | `summarize` |
+| [graph_generation/constraints.py](../graph_generation/constraints.py) | Host witness and anchor equality filters for the graph state | `plant_host_witness`, `apply_anchor_constraints` |
 
 ```mermaid
 flowchart TD
     Config[config.yaml] --> Entry[main.py / run_campaign.py]
     Entry --> Language[cypher or gremlin]
-    Language --> Host[Symbolic host AST]
+    Language --> Host[Host AST with final names]
     Host --> Site[Scope analysis and compatible site]
     Site --> Pattern[Pattern embedding]
     Pattern --> Graph[Shared graph builder and local recipe]
-    Graph --> Bind[Bind symbols and mutate a copy]
-    Bind --> Check[Check scopes and output interface]
+    Graph --> Mutate[Mutate a copy]
+    Mutate --> Check[Check scopes and output interface]
     Check --> Render[Render two executable queries]
     Render --> Load[Database.load]
     Load --> Execute[run_pair: compare and measure]
@@ -59,25 +61,24 @@ Language modules own query meaning and syntax. Adapters own native communication
 
 ## 3. Data contracts
 
-### Symbolic AST and variables
+### AST names and variables
 
-`data_structures/ast.py` defines `ASTNode`, immutable `Symbol(name, kind)` and `Variable(name, kind, labels, nullable)`, plus `walk`, `at`, and `replace_at`.
+`data_structures/ast.py` defines `ASTNode`, `Symbol(name, kind)`, `sample_constant(rng, kind)` and `Variable(name, kind, labels, nullable)`, plus `walk`, `at`, and `replace_at`.
 
-A Symbol represents a label, relationship type, property key, or scalar constant that will be bound later. A Variable describes a query binding and its type/label provenance. It is not a permanently assigned graph node.
+A Symbol is the final name of a label, relationship type, or property key. It is a `str` that also records its kind, so schema registration and background data can collect a query's terminals by kind; `Graph` stores plain strings. Scalar constants are drawn by `sample_constant()` when the generator creates them. A Variable describes a query binding and its type/label provenance. It is not a permanently assigned graph node.
 
 An AST path is a tuple of field names and list indices. For example, `("clauses", 0, "items", 0, "expression")` addresses a Cypher projection expression. Paths avoid parent pointers. `replace_at` also handles tuple fields such as CASE branches.
 
 ### Case
 
-`Case(pattern, seed, query, target, host_symbols, payload, bindings)` holds construction state:
+`Case(pattern, seed, query, target, host_symbols, payload)` holds construction state:
 
-- `query`: the embedded symbolic source, then its bound form.
+- `query`: the embedded source query.
 - `target`: the mutation location. Matching-order Patterns store the containing query and a `swap_index` in the payload.
-- `host_symbols`: symbols retained from the original host, including those later replaced by a query-level Pattern.
+- `host_symbols`: labels, relationship types, and keys of the original host, including those later replaced by a query-level Pattern.
 - `payload`: Pattern-local roles, witnesses, guard choice, prepared replacement, anchors, and expansion allocation.
-- `bindings`: the shared terminal-value mapping.
 
-`instantiate()` recursively binds both `query` and `payload`. The mutant is produced from a deep copy, leaving the source intact.
+The mutant is produced from a deep copy, leaving the source intact.
 
 ### Graph
 
@@ -99,6 +100,8 @@ The example shows field shapes; a complete graph must contain both endpoints and
 
 Schema declarations exist independently of stored instances, so an empty label or region still has a declared type. Supported scalar property kinds are `int`, `float`, `bool`, and `string`.
 
+Before `pattern.populate()`, [graph_generation/constraints.py](../graph_generation/constraints.py) plants one host witness: the non-optional Cypher `MATCH` paths, or the Gremlin root traversal's hops and `has` filters, with literal property filters. Planted nodes reuse the first existing node with the required labels, so they are ordinary candidates. After `populate()`, short-circuit anchor roots also receive the host's equality filters on the anchor. `host_witness` and `anchor_constraints` are archived under `construction`.
+
 `Graph.candidates(variable)` selects nodes matching the variable's label provenance. It does not evaluate the host's WHERE predicates. `shares(total, count)` divides a case-wide expansion budget across distinct anchors; repeated runtime rows do not create additional graph expansion units.
 
 ### Executable query and normalized result
@@ -115,18 +118,17 @@ The executor compares `(column_names, Counter(normalized_rows))`. It does not so
 
 1. Create a case-local `random.Random(seed)`.
 2. Select the language module and backend capability dictionary.
-3. Generate the complete symbolic host AST.
+3. Generate the complete host AST with final names and constants.
 4. Analyze scopes and choose one compatible Pattern site.
 5. Embed the source form and prepare mutation metadata.
-6. Build graph data and terminal bindings.
-7. Instantiate the AST and payload.
-8. Mutate a deep copy.
-9. Check references and the output interface for both forms.
-10. Render two executable queries.
+6. Build graph data.
+7. Mutate a deep copy.
+8. Check references and the output interface for both forms.
+9. Render two executable queries.
 
-`build_graph()` first binds symbols, then creates typed random background data, invokes `pattern.populate()`, prepares requested indexes, and registers schema using the selected language. Cypher schema registration creates a bound copy and examines both source and mutant ASTs. Gremlin schema registration collects source, payload, and host symbols, then derives endpoint pairs from stored graph relationships. Final instantiation of the source happens after graph construction.
+`build_graph()` creates typed random background data, invokes `pattern.populate()` with the case payload, prepares requested indexes, and registers schema using the selected language. Cypher schema registration examines both source and mutant ASTs. Gremlin schema registration collects source, payload, and host names, then derives endpoint pairs from stored graph relationships. The finished schema is normalized to plain strings.
 
-Pattern names receive a `Pattern_` prefix and host names a `Random_` prefix. These names prevent accidental role overlap; they do not hide Pattern nodes from unrestricted host scans.
+Pattern-owned names are created with a `Pattern_` prefix and host names with a `Random_` prefix. These names prevent accidental role overlap; they do not hide Pattern nodes from unrestricted host scans.
 
 The AST checks establish structure, scope, and output compatibility. Full result equality is checked by the database. They do not prove a performance difference or guarantee that the host reaches the Pattern.
 
@@ -244,7 +246,7 @@ Schema-property types are global in JanusGraph/HugeGraph, so adapters reject con
 
 ## 8. Measurement, failures, and persistence
 
-`execute_case()` loads the graph and calls `run_pair()`. The executor first compares complete results. Check mode returns after this comparison. Experiment mode performs discovery warmups and AB/BA pairs, then confirmation only when discovery qualifies. Every measured or warmup execution is also checked against the reference result.
+`execute_case()` loads the graph and calls `run_pair()`, then `probe_scale()` for a `no_gap` pair. The executor first compares complete results. Check mode returns after this comparison. Experiment mode performs discovery warmups and AB/BA pairs, then confirmation only when discovery qualifies. Every measured or warmup execution is also checked against the reference result.
 
 For each phase:
 
@@ -255,7 +257,9 @@ For each phase:
 
 Defaults are 5x, 100 ms, and 0.8 direction consistency. Confirmation must retain the discovery phase's slower side. Discovery uses three warmups and six pairs; confirmation uses five warmups and twenty pairs.
 
-Adapters measure execution through complete result consumption. Loading, canonical normalization, and PROFILE are outside ordinary query timing. Completed timing outcomes (`no_gap`, `unconfirmed`, `candidate`) receive native profiles afterward.
+`run_pair(..., phases, gate, profile)` can run selected phases without the ratio screen. `probe_scale()` rebuilds the case with `high_units // scale_factor`, requires identical query text, and passes both graphs to `executor.scale_probe()`. The probe compares the gap between the two forms at both scales (`growth()`); a gap that grows by at least `growth_ratio`, by at least `minimum_delta_ms`, with the usual direction consistency, in discovery and in a confirmation at both scales, yields `scale_candidate`. The result's `scale` record keeps both measurements; plans at the smaller scale go to `plans-small.json`. `scale_factor: null` disables the probe; the campaign runner calls the same probe.
+
+Adapters measure execution through complete result consumption. Loading, canonical normalization, and PROFILE are outside ordinary query timing. Completed timing outcomes (`no_gap`, `unconfirmed`, `candidate`) receive native profiles afterward. [databases/plans.py](../databases/plans.py) adds a `summary` to each profile: normalized operator names, total reported work, and the hottest operator.
 
 | Outcome | Meaning and continuation |
 | --- | --- |
@@ -265,6 +269,7 @@ Adapters measure execution through complete result consumption. Loading, canonic
 | `no_gap` | Discovery did not meet all thresholds |
 | `unconfirmed` | Confirmation did not retain the qualifying gap/direction |
 | `candidate` | Both measured phases qualified; root-cause review remains |
+| `scale_candidate` | The ratio screen failed, but the gap grew with the high-cost units in discovery and confirmation |
 | `result_mismatch` | Complete typed results differ; main records it, fixed campaign stops |
 | `backend_rejected` | Recognized HugeGraph missing-index rejection; archive and continue |
 | `timeout` | A native query timeout interrupted the protocol; no censored runtime is invented |
@@ -285,6 +290,7 @@ Replay uses saved inputs and archived measurement settings with the current sele
 Construction counts describe potential work. Execution and opportunity start as `unknown`. Local review sidecars may classify a query side as `observed`, `eliminated`, `unreached`, or `unknown`, pointing to native PROFILE evidence. They do not change the measurement result.
 
 A zero-row result can follow extensive scanning. A nonempty aggregate or fold can follow empty input. Output counts for a fused expansion/filter step do not expose all candidate visits. These distinctions matter when assessing whether a Pattern had an execution opportunity. The repository does not contain a general cross-backend plan classifier or a solver for arbitrary nested host contexts.
+
 
 ## 10. Fixed-seed campaigns
 

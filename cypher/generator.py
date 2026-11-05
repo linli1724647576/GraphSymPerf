@@ -1,4 +1,5 @@
 from cypher.ast_nodes import *
+from data_structures.ast import sample_constant
 from cypher.scope import Scope
 
 
@@ -11,8 +12,8 @@ class Generator:
         # This expansion budget favors terminal choices; it is not an exact AST node count.
         # 展开预算用于让生成过程收敛到终端，不是 AST 节点数的精确上限。
         self.remaining = options["nodes"]
-        self.labels = [Symbol(f"label_{i}", "label") for i in range(4)]
-        self.types = [Symbol(f"relationship_{i}", "relationship") for i in range(3)]
+        self.labels = [Symbol(f"Random_label_{i}", "label") for i in range(4)]
+        self.types = [Symbol(f"Random_relationship_{i}", "relationship") for i in range(3)]
         self.keys = {kind: Symbol("property_" + kind, "key_" + kind) for kind in ("int", "float", "bool", "string")}
 
     def variable(self, kind, labels=(), nullable=False):
@@ -20,8 +21,7 @@ class Generator:
         return Variable("v" + str(self.number), kind, tuple(labels), nullable)
 
     def constant(self, kind, symbolic=True):
-        self.number += 1
-        value = Symbol(f"constant_{self.number}", kind) if symbolic else {"int": 1, "bool": True, "string": "x", "float": 1.0}[kind]
+        value = sample_constant(self.rng, kind) if symbolic else {"int": 1, "bool": True, "string": "x", "float": 1.0}[kind]
         return Literal(value, kind)
 
     def query(self, scope, depth=0, outputs=None, compound=True, allow_call=True):

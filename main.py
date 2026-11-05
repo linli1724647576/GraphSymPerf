@@ -10,8 +10,8 @@ import yaml
 import cypher
 import gremlin
 from databases import select_database
-from data_structures.case import Inapplicable, instantiate
-from executor import run_pair, save_case
+from data_structures.case import Inapplicable
+from executor import run_pair, scale_probe, save_case
 from graph_generation.builder import build_graph
 
 
@@ -44,7 +44,7 @@ def main():
                 else:
                     try:
                         result = {"status": "generated"} if db is None else execute_case(
-                            db, graph, source, mutant, config, check_only=mode == "check")
+                            db, graph, source, mutant, config, check_only=mode == "check", pattern=pattern, seed=seed)
                     except (Exception, KeyboardInterrupt) as error:
                         # Preserve a reproducible failure, then expose the original exception.
                         # 保存可重放的失败输入后继续抛出原始异常，不把实现错误记作随机跳过。
@@ -58,7 +58,7 @@ def main():
                                rows=result.get("rows", ""), ratio=summary.get("ratio", ""), delta_ms=summary.get("delta_ms", ""))
                     # A PROFILE stop must also be archived when the timing result is no_gap.
                     # 即使计时结果为 no_gap，PROFILE 触发的停止也必须归档。
-                    if config["run"]["save_all"] or mode == "generate" or failure is not None or result.get("stop_run") or result["status"] in {"candidate", "result_mismatch", "timeout", "backend_rejected"}:
+                    if config["run"]["save_all"] or mode == "generate" or failure is not None or result.get("stop_run") or result["status"] in {"candidate", "scale_candidate", "result_mismatch", "timeout", "backend_rejected"}:
                         directory = output / result["status"] / f"{number:05d}-{pattern.id}-{seed}"
                         save_case(directory, case, graph, source, mutant, result, config, db.version if db else None)
                 writer.writerow(row)
@@ -115,6 +115,11 @@ def load_config():
         raise ValueError("Thresholds require ratio > 1 and minimum_delta_ms >= 0")
     if not 0 < config["measurement"]["direction_consistency"] <= 1:
         raise ValueError("direction_consistency must be in (0, 1]")
+    factor = config["measurement"].setdefault("scale_factor", None)
+    if factor is not None and (type(factor) is not int or factor < 2):
+        raise ValueError("measurement.scale_factor must be null or an integer >= 2")
+    if factor is not None and config["measurement"].get("growth_ratio", 0) <= 1:
+        raise ValueError("measurement.growth_ratio must be > 1 when scale_factor is set")
     return config
 
 
@@ -157,11 +162,10 @@ def prepare_case(pattern, seed, config):
     if site is None:
         raise Inapplicable("No compatible AST position")
     case = pattern.embed(tree, site, seed, rng)
-    graph, bindings = build_graph(case, pattern, config["graph"], rng, support, language.register_schema)
-    instantiate(case, bindings)
+    graph = build_graph(case, pattern, config["graph"], rng, support, language.register_schema)
     source = case.query
-    # Mutate a copy after binding; both queries retain the same constructed graph.
-    # 完成绑定后只变异副本，两条查询共用已经构造好的图。
+    # Mutate a copy after graph construction; both queries retain the same graph.
+    # 构图完成后只变异副本，两条查询共用已经构造好的图。
     mutant = pattern.mutate(copy.deepcopy(case))
     if language is cypher:
         cypher.check_pair(source, mutant, case, support.get("persistent_imports", True))
@@ -171,11 +175,37 @@ def prepare_case(pattern, seed, config):
     return case, graph, language.render(source, **render_options), language.render(mutant, **render_options)
 
 
-def execute_case(db, graph, source, mutant, config, check_only):
+def execute_case(db, graph, source, mutant, config, check_only, pattern=None, seed=None):
     # Load once for the pair; measurement does not rebuild or modify the graph.
     # 每个查询对只装载一次图，测量期间不重建或修改图数据。
     db.load(graph)
-    return run_pair(db, source, mutant, config["measurement"], check_only=check_only)
+    result = run_pair(db, source, mutant, config["measurement"], check_only=check_only)
+    if not check_only and pattern is not None:
+        probe_scale(db, result, graph, source, mutant, config, pattern, seed)
+    return result
+
+
+def probe_scale(db, result, graph, source, mutant, config, pattern, seed):
+    """For a no_gap pair, rebuild the same case with N / scale_factor units and compare growth."""
+    factor = config["measurement"].get("scale_factor")
+    if result["status"] != "no_gap" or not factor:
+        return result
+    units = config["graph"]["high_units"]
+    small_units = max(1, units // factor)
+    smaller = {**config, "graph": {**config["graph"], "high_units": small_units}}
+    try:
+        _, small_graph, small_source, small_mutant = prepare_case(pattern, seed, smaller)
+    except Inapplicable as error:
+        result["scale"] = {"status": "inapplicable", "reason": str(error), "small_units": small_units}
+        return result
+    # The seed fixes the queries; only the number of high-cost units may differ.
+    # 种子固定了查询，两个规模之间只允许高成本单元数不同。
+    if (small_source.text, small_mutant.text) != (source.text, mutant.text):
+        result["scale"] = {"status": "query_changed", "small_units": small_units}
+        return result
+    family = "SC" if pattern.id.startswith("SC") else "SY"
+    return scale_probe(db, {"graph": small_graph, "units": small_units}, {"graph": graph, "units": units},
+                       (source, mutant), config["measurement"], family, result)
 
 
 if __name__ == "__main__":

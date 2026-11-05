@@ -51,7 +51,7 @@ class DemandPattern:
         else:
             # The empty input stays mandatory; no aggregate may create a row from it.
             # 空输入必须保留为必选输入，不能插入会从空输入产生行的聚合。
-            empty_var = Variable("p_empty", "node", (Symbol("p_empty", "label"),))
+            empty_var = Variable("p_empty", "node", (Symbol("Pattern_p_empty", "label"),))
             empty = Match([PathPattern([NodePattern(empty_var, list(empty_var.labels))], [])],
                           where=Literal(False, "bool"))
             low.clauses.insert(0, empty)

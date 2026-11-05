@@ -51,8 +51,8 @@ def choose_row_source(payload, rng, roles=("low", "high")):
 
 def prepare_two_hops(payload, roles=("low", "high")):
     for role in roles:
-        payload[role + "_middle_label"] = Symbol("p_" + role + "_middle", "label")
-        payload[role + "_first_type"] = Symbol("p_" + role + "_first_edge", "relationship")
+        payload[role + "_middle_label"] = Symbol("Pattern_p_" + role + "_middle", "label")
+        payload[role + "_first_type"] = Symbol("Pattern_p_" + role + "_first_edge", "relationship")
 
 
 def prepare(query, site, pattern, seed, rng, work_kind="count"):
@@ -60,14 +60,14 @@ def prepare(query, site, pattern, seed, rng, work_kind="count"):
     # 复用来源可追踪的外层节点，或在局部子查询中引入独立根节点。
     external = [v for v in site.variables.values() if v.kind == "node" and v.labels and not v.nullable]
     correlated = bool(external) and rng.random() < .65
-    anchor = rng.choice(external) if correlated else Variable("p_root", "node", (Symbol("p_root", "label"),))
+    anchor = rng.choice(external) if correlated else Variable("p_root", "node", (Symbol("Pattern_p_root", "label"),))
     # Host names use v...; pattern-local names use p_... to avoid variable capture.
     # 宿主变量使用 v...，Pattern 局部变量使用 p_...，避免意外引用同名变量。
     payload = {
         "anchor": anchor, "correlated": correlated, "work_kind": work_kind,
-        "low_label": Symbol("p_low", "label"), "high_label": Symbol("p_high", "label"),
-        "low_type": Symbol("p_low_edge", "relationship"), "high_type": Symbol("p_high_edge", "relationship"),
-        "witness_label": Symbol("p_witness", "label"), "witness_type": Symbol("p_witness_edge", "relationship"),
+        "low_label": Symbol("Pattern_p_low", "label"), "high_label": Symbol("Pattern_p_high", "label"),
+        "low_type": Symbol("Pattern_p_low_edge", "relationship"), "high_type": Symbol("Pattern_p_high_edge", "relationship"),
+        "witness_label": Symbol("Pattern_p_witness", "label"), "witness_type": Symbol("Pattern_p_witness_edge", "relationship"),
     }
     return Case(pattern, seed, query, site.path, set(symbols(query)), payload)
 

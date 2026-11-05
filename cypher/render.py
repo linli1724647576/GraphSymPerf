@@ -1,5 +1,4 @@
 import json
-from data_structures.ast import Symbol
 from data_structures.query import Query as ExecutableQuery
 from .ast_nodes import *
 
@@ -11,14 +10,10 @@ def render(tree):
 
 
 def identifier(value):
-    if isinstance(value, Symbol):
-        return "<" + value.name + ">"
     return chr(96) + value.replace(chr(96), chr(96) * 2) + chr(96)
 
 
 def literal(value):
-    if isinstance(value, Symbol):
-        return "<" + value.name + ">"
     if value is None:
         return "null"
     return json.dumps(value, ensure_ascii=False)

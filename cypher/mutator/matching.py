@@ -48,14 +48,14 @@ class MatchingPattern:
         count = 2 if self.mode == "independent" else 3
         while len(nodes) < count:
             i = len(nodes)
-            label = Symbol(f"p_match_label_{i}", "label")
+            label = Symbol(f"Pattern_p_match_label_{i}", "label")
             variable = Variable(f"p_match_{i}", "node", (label,))
             nodes.append(NodePattern(variable, [label]))
         root, a = nodes[:2]
         candidate = rng.choice(GRAPH_CANDIDATES[self.mode])
         selective = a if candidate == "selective_right" else root
         selective.properties.append(("p_anchor", Literal(1)))
-        first_type, second_type = Symbol("p_left_edge", "relationship"), Symbol("p_right_edge", "relationship")
+        first_type, second_type = Symbol("Pattern_p_left_edge", "relationship"), Symbol("Pattern_p_right_edge", "relationship")
 
         def edge(left, right, rel, optional=False):
             return Match([PathPattern([left, right], [RelationshipPattern([rel])])], optional)

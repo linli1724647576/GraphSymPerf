@@ -12,7 +12,6 @@ sys.path.insert(0, str(ROOT))
 import cypher
 from cypher.ast_nodes import Match, NodePattern, PathPattern, Projection, ProjectionItem, Property, Query
 from data_structures.ast import Symbol, Variable, at
-from data_structures.case import bind, instantiate
 from databases.neo4j import SUPPORT
 from graph_generation.builder import build_graph
 
@@ -39,15 +38,14 @@ def main():
         assert case.payload["correlated"] and case.payload["guard_name"] == "exists"
 
         # Reset only graph generation: the three natural embedding draws use different seeds.
-        graph, bindings = build_graph(case, pattern, options, random.Random(0), SUPPORT, cypher.register_schema)
-        instantiate(case, bindings)
+        graph = build_graph(case, pattern, options, random.Random(0), SUPPORT, cypher.register_schema)
         mutant = pattern.mutate(deepcopy(case))
         cypher.check_pair(case.query, mutant, case)
         payload = case.payload
         assert payload["anchor_uids"] == [3] and payload["high_allocations"] == [4]
         background = {"nodes": graph.nodes[:options["background_nodes"]],
                       "relationships": graph.relationships[:options["background_relationships"]]}
-        host_text = cypher.render(bind(host, bindings)).text
+        host_text = cypher.render(host).text
         controls.append((host_text, case.target, at(case.query, case.target).left, background))
 
         directory = output / candidate

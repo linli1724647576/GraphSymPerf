@@ -13,11 +13,15 @@ class Graph:
 
     def node(self, labels=(), **properties):
         uid = len(self.nodes)
-        self.nodes.append({"labels": list(dict.fromkeys(labels)), "properties": {**properties, "uid": uid}})
+        # Store plain strings so typed Symbol names never reach backend drivers.
+        # 只存普通字符串，带类型的 Symbol 不会传给后端驱动。
+        self.nodes.append({"labels": list(dict.fromkeys(map(str, labels))),
+                           "properties": {**{str(k): v for k, v in properties.items()}, "uid": uid}})
         return uid
 
     def edge(self, start, end, relation_type, **properties):
-        self.relationships.append({"start": start, "end": end, "type": relation_type, "properties": properties})
+        self.relationships.append({"start": start, "end": end, "type": str(relation_type),
+                                   "properties": {str(k): v for k, v in properties.items()}})
 
     def candidates(self, variable, create=False):
         # Labels identify candidate anchors, not the exact rows produced by outer filters.
@@ -31,7 +35,7 @@ class Graph:
         return values
 
     def index(self, label, key):
-        index = [label, key]
+        index = [str(label), str(key)]
         if index not in self.indexes:
             self.indexes.append(index)
 

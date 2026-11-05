@@ -32,8 +32,8 @@ class MatchingPattern:
     def embed(self, query, site, seed, rng):
         case = Case(self.id, seed, query, site.path, set(symbols(query)))
         anchor = site.output.current
-        labels = [Symbol(f"p_match_label_{i}", "label") for i in range(2)]
-        first, second = Symbol("p_left_edge", "relationship"), Symbol("p_right_edge", "relationship")
+        labels = [Symbol(f"Pattern_p_match_label_{i}", "label") for i in range(2)]
+        first, second = Symbol("Pattern_p_left_edge", "relationship"), Symbol("Pattern_p_right_edge", "relationship")
         candidate = rng.choice(GRAPH_CANDIDATES[self.mode])
 
         def pattern(start, steps, end):

@@ -1,9 +1,9 @@
-def random_graph(graph, host_symbols, bindings, options, rng, support):
+def random_graph(graph, host_symbols, options, rng, support):
     # Generate typed background data without solving the host query's predicates.
     # 生成类型匹配的随机背景数据，不反向求解宿主查询的谓词。
-    labels = [bindings[s.name] for s in sorted(host_symbols, key=lambda s: s.name) if s.kind == "label"] or ["Background"]
-    types = [bindings[s.name] for s in sorted(host_symbols, key=lambda s: s.name) if s.kind == "relationship"] or ["BACKGROUND" if support["multi_label"] else "BACKGROUND_EDGE"]
-    keys = [(bindings[s.name], s.kind[4:]) for s in sorted(host_symbols, key=lambda s: s.name) if s.kind.startswith("key_")]
+    labels = [s for s in sorted(host_symbols) if s.kind == "label"] or ["Background"]
+    types = [s for s in sorted(host_symbols) if s.kind == "relationship"] or ["BACKGROUND" if support["multi_label"] else "BACKGROUND_EDGE"]
+    keys = [(s, s.kind[4:]) for s in sorted(host_symbols) if s.kind.startswith("key_")]
     for _ in range(options["background_nodes"]):
         chosen = rng.sample(labels, min(len(labels), 2 if support["multi_label"] and rng.random() < .2 else 1))
         props = {"keep": rng.random() < .7, "value": rng.randint(0, 5)}

@@ -48,7 +48,7 @@ class PathPatternRule:
         # Keep endpoint variables and constraints; add one selective anchor within the pattern.
         # 保留端点变量及约束，在 Pattern 内加入一个有选择性的锚点。
         left.properties.append(("p_anchor", Literal(1)))
-        relation = Symbol("p_path_edge", "relationship")
+        relation = Symbol("Pattern_p_path_edge", "relationship")
         maximum = rng.randint(2, 4) if self.bounded else 1
         direction = "both" if self.bounded else rng.choice(["out", "in", "both"])
         path_variable = original.variable

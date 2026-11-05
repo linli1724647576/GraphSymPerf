@@ -1,6 +1,6 @@
 # GraphSymPerf 代码架构
 
-本文按当前可执行代码说明一次用例如何从随机符号 AST 进入构图、变异、执行和归档，并解释语言层与数据库接口的分工。[English](architecture.md) · [后端部署](backends.md) · [验证记录](validation.md)。
+本文按当前可执行代码说明一次用例如何从随机 AST 进入构图、变异、执行和归档，并解释语言层与数据库接口的分工。[English](architecture.md) · [后端部署](backends.md) · [验证记录](validation.md)。
 
 ## 1. 方法目标与约束
 
@@ -12,7 +12,7 @@ Q 是完成 Pattern 嵌入后的源查询，Q′ 是对它进行局部变异后�
 
 1. 随机生成器接收语法能力、预算和随机数生成器，不接收目标 Pattern 编号。
 2. 完整宿主 AST 生成后，才选择兼容位置。
-3. Q/Q′ 共用符号绑定，变异阶段不重新抽取常量或名称。
+3. 名字和常量在创建时即为最终值，变异阶段不重新抽取常量或名称。
 4. 每个用例只装载一次图，查询对及其计时期间的数据和索引不变。
 5. 各数据库独立生成兼容用例，不要求跨系统结果或耗时可比。
 6. 先比较完整带类型结果，再计时；预热和计时中的结果仍逐次比较。
@@ -29,22 +29,24 @@ Q 是完成 Pattern 嵌入后的源查询，Q′ 是对它进行局部变异后�
 | [replay.py](../replay.py) | 用当前连接执行保存的图和查询 | `replay_case` |
 | [executor.py](../executor.py) | 结果比较、交替计时、PROFILE、归档 | `run_pair`、`save_case`、`workload_record` |
 | [data_structures/](../data_structures/) | 公共 AST 工具、用例、图、查询和结果类型 | `Case`、`Graph`、`Query`、`freeze` |
-| [graph_generation/](../graph_generation/) | 符号绑定、随机背景、配方调度 | `build_graph`、`bind_symbols`、`random_graph` |
+| [graph_generation/](../graph_generation/) | 随机背景、配方调度、schema 规范化 | `build_graph`、`random_graph` |
 | [cypher/](../cypher/) | Cypher AST、作用域、生成、Pattern、渲染和 schema | 语言模块导出的函数 |
 | [gremlin/](../gremlin/) | 遍历 AST、作用域、生成、Pattern、渲染和 schema | 语言模块导出的函数 |
 | [databases/](../databases/) | 各数据库的装载、执行、解码和计划采集 | `Database` |
 | [databases/gremlin_http.py](../databases/gremlin_http.py) | JanusGraph/HugeGraph 共用的 HTTP 和 GraphSON 处理 | `GremlinHTTP`、`decode`、`normalize` |
 | [scripts/check_interfaces.py](../scripts/check_interfaces.py) | 选定数据库上的少量真实接口验收 | `check` 及各后端检查 |
 | [scripts/update_readme.py](../scripts/update_readme.py) | 从 `bugs.csv` 生成 README issue 区域 | `main` |
+| [databases/plans.py](../databases/plans.py) | 与后端无关的 PROFILE 摘要 | `summarize` |
+| [graph_generation/constraints.py](../graph_generation/constraints.py) | 图状态中的宿主见证和锚点等值过滤 | `plant_host_witness`、`apply_anchor_constraints` |
 
 ```mermaid
 flowchart TD
     A[config.yaml] --> B[入口与调度]
-    B --> C[随机符号宿主 AST]
+    B --> C[带最终名字的随机宿主 AST]
     C --> D[作用域分析与兼容位置选择]
     D --> E[Pattern 嵌入]
     E --> F[随机背景与固定构图配方]
-    F --> G[符号实例化与副本变异]
+    F --> G[副本变异]
     G --> H[依赖检查与渲染]
     H --> I[装载同一张图]
     I --> J[完整结果比较与 AB/BA 计时]
@@ -57,11 +59,11 @@ flowchart TD
 
 ## 3. 公共数据结构
 
-### 符号、变量和 AST 路径
+### 名字、变量和 AST 路径
 
-`data_structures/ast.py` 定义 `ASTNode`、不可变的 `Symbol(name, kind)` 和 `Variable(name, kind, labels, nullable)`。
+`data_structures/ast.py` 定义 `ASTNode`、`Symbol(name, kind)`、`sample_constant(rng, kind)` 和 `Variable(name, kind, labels, nullable)`。
 
-Symbol 表示稍后绑定的标签、关系类型、属性键或标量常量。Variable 保存查询变量的类型、标签来源和可空性，不代表某一个永久绑定的图节点。
+Symbol 是标签、关系类型或属性键的最终名字。它是一个同时记录类别的 `str`，schema 登记和背景图据此按类别收集查询用到的终端；`Graph` 中只存普通字符串。标量常量在生成器创建时由 `sample_constant()` 抽取。Variable 保存查询变量的类型、标签来源和可空性，不代表某一个永久绑定的图节点。
 
 `walk()` 遍历 AST，`at()` 读取路径，`replace_at()` 替换节点。路径由字段名和序号组成，例如：
 
@@ -76,13 +78,12 @@ Symbol 表示稍后绑定的标签、关系类型、属性键或标量常量。V
 `Case` 包含：
 
 - `pattern`、`seed`：用例身份。
-- `query`：嵌入后的符号源查询，随后变为绑定后的查询。
+- `query`：嵌入后的源查询。
 - `target`：局部变异位置；匹配顺序 Pattern 保存所属 Query，再用 `payload.swap_index` 定位要交换的子句。
-- `host_symbols`：原宿主使用的符号，包括后来被查询级 Pattern 替换的部分。
+- `host_symbols`：原宿主使用的标签、关系类型和属性键，包括后来被查询级 Pattern 替换的部分。
 - `payload`：局部角色、决定项、见证、预备变异、锚点及扩张分配。
-- `bindings`：两条查询共享的终端绑定。
 
-`instantiate()` 同时绑定 AST 和 payload。`pattern.mutate()` 接收深拷贝，保持源查询不变。
+`pattern.mutate()` 接收深拷贝，保持源查询不变。
 
 ### Graph
 
@@ -103,6 +104,8 @@ schema = {
 上面只展示字段形状；完整图还需包含所有端点及其声明。`Graph.node()` 将节点列表位置写为 `uid`，关系端点也使用这个位置。装载时，各后端把它映射为原生 ID。
 
 schema 与实例分开，允许空标签或空区域保留类型声明。属性标量类型为 `int`、`float`、`bool` 和 `string`。
+
+在 `pattern.populate()` 之前，[graph_generation/constraints.py](../graph_generation/constraints.py) 铺设一份宿主见证：Cypher 的非可选 `MATCH` 路径，或 Gremlin 根遍历的各跳和 `has` 过滤，连同字面量属性过滤。铺设节点复用第一个带所需标签的已有节点，因此就是普通的候选根。`populate()` 之后，短路锚点的候选根还会获得宿主对锚点的等值过滤。`host_witness` 和 `anchor_constraints` 归档在 `construction` 中。
 
 `Graph.candidates()` 按变量的标签来源选择候选节点，不执行宿主 WHERE。`shares()` 按不同锚点分配整个用例的扩张总数。一个锚点在运行时出现多次，不会使构图预算重复增加，但可能造成重复访问。
 
@@ -126,18 +129,17 @@ schema 与实例分开，允许空标签或空区域保留类型声明。属性�
 
 1. 用种子创建用例私有 RNG。
 2. 选择语言模块及数据库能力字典。
-3. 生成完整符号宿主 AST。
+3. 生成带最终名字和常量的完整宿主 AST。
 4. 分析作用域，选择兼容位置。
 5. 嵌入 Pattern 源形式，并准备变异元数据。
-6. 构造图和符号绑定。
-7. 实例化查询及 payload。
-8. 对副本执行局部变异。
-9. 检查两侧引用和输出接口。
-10. 渲染为两条可执行查询。
+6. 构造图。
+7. 对副本执行局部变异。
+8. 检查两侧引用和输出接口。
+9. 渲染为两条可执行查询。
 
-`build_graph()` 内部依次绑定符号、生成随机背景、调用 `pattern.populate()`、准备索引并登记 schema。Cypher 的 schema 登记使用已绑定副本检查源查询和变异查询；Gremlin 收集源查询、payload 和宿主符号，并从实际关系取得端点组合。最终源查询在下一步正式实例化。
+`build_graph()` 内部依次生成随机背景、用用例 payload 调用 `pattern.populate()`、准备索引并登记 schema。Cypher 的 schema 登记检查源查询和变异查询；Gremlin 收集源查询、payload 和宿主名字，并从实际关系取得端点组合。登记完成的 schema 统一转成普通字符串。
 
-Pattern 符号绑定到 `Pattern_` 前缀，宿主符号绑定到 `Random_` 前缀。名称隔离避免角色意外重叠，但不会让 Pattern 数据对无标签扫描不可见。
+Pattern 自有的名字创建时带 `Pattern_` 前缀，宿主名字带 `Random_` 前缀。名称隔离避免角色意外重叠，但不会让 Pattern 数据对无标签扫描不可见。
 
 依赖检查说明结构、作用域和输出接口满足当前约束。完整结果是否相同要由数据库验证；目标是否被执行及是否存在性能差异也分别保留证据。
 
@@ -246,11 +248,13 @@ JanusGraph/HugeGraph 的属性键类型是全局的，因此在装载边界拒�
 
 ## 8. 结果比较、计时与停止
 
-`execute_case()` 装载图后调用 `run_pair()`。检查模式在完整比较后结束；实验模式继续初筛预热和 AB/BA 配对，初筛达标后才进入确认。预热和每个计时样本都会重新核对结果。
+`execute_case()` 装载图后调用 `run_pair()`，对 `no_gap` 的查询对再调用 `probe_scale()`。检查模式在完整比较后结束；实验模式继续初筛预热和 AB/BA 配对，初筛达标后才进入确认。预热和每个计时样本都会重新核对结果。
 
 每阶段先由 A/B 各自中位耗时确定慢侧，再计算中位耗时比、沿该方向的配对差值中位数，以及方向一致比例。默认阈值为 5 倍、100 ms、0.8；确认阶段还必须保持同一慢侧。初筛每侧预热 3 次、执行 6 对；确认每侧预热 5 次、执行 20 对。
 
-普通计时覆盖执行与完整结果消费。装载、规范化和 PROFILE 不计入普通耗时。`no_gap`、`unconfirmed` 和 `candidate` 完成计时后都采集计划。
+`run_pair(..., phases, gate, profile)` 可以只运行指定阶段、不做耗时比筛选。`probe_scale()` 用 `high_units // scale_factor` 重建用例，要求查询文本完全相同，再把两张图交给 `executor.scale_probe()`。探测比较两个规模下两种写法的差距（`growth()`）：差距增长至少 `growth_ratio` 倍、至少多出 `minimum_delta_ms`、方向一致性达标，并在两个规模上的确认阶段中仍然成立，结果为 `scale_candidate`。结果中的 `scale` 记录两次测量，小规模下的计划写入 `plans-small.json`。`scale_factor: null` 关闭探测；固定活动脚本调用同一个探测。
+
+普通计时覆盖执行与完整结果消费。装载、规范化和 PROFILE 不计入普通耗时。`no_gap`、`unconfirmed` 和 `candidate` 完成计时后都采集计划。[databases/plans.py](../databases/plans.py) 为每份计划加上 `summary`：规范化算子名、报告的总工作量和工作量最大的算子。
 
 | 状态 | 含义 |
 | --- | --- |
@@ -260,6 +264,7 @@ JanusGraph/HugeGraph 的属性键类型是全局的，因此在装载边界拒�
 | `no_gap` | 初筛没有同时达到全部阈值 |
 | `unconfirmed` | 确认阶段未保持差异或方向 |
 | `candidate` | 两阶段达标，等待机制和根因核对 |
+| `scale_candidate` | 耗时比筛选未通过，但差距随高成本单元数增长，且在初筛和确认中都成立 |
 | `result_mismatch` | 完整带类型结果不同；普通入口记录，固定清单运行停止 |
 | `backend_rejected` | 已识别的 HugeGraph 缺索引拒绝，归档后继续 |
 | `timeout` | 原生查询时限中断流程，不构造被截断的耗时样本 |
@@ -280,6 +285,7 @@ ArcadeDB Gremlin 保存带标签查询的取消响应；取消或传输完成状
 构图计数只描述潜在工作，测试机会和执行判定初始均为 `unknown`。核对原生计划后，可在独立 sidecar 中记录 `observed`、`eliminated`、`unreached` 或 `unknown`，并指向原始 PROFILE 的字段位置。这些结论不会改写计时状态。
 
 空结果可能来自大量扫描后的过滤；非空聚合或 fold 也可能来自空输入。融合扩张和过滤的输出数量不能直接代表候选访问数。当前仓库没有通用的跨后端计划分类器，也不求解任意嵌套宿主的执行条件。
+
 
 ## 10. 固定种子运行
 

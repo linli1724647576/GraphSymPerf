@@ -2,20 +2,18 @@ from copy import deepcopy
 from itertools import product
 from cypher.ast_nodes import NodePattern, PathPattern, Property
 from data_structures.ast import walk
-from data_structures.case import instantiate
 
 
-def register_schema(graph, case, bindings, pattern):
-    # Types come from symbolic keys and AST expressions, never from sampled property values.
-    # 属性类型来自符号键与 AST 表达式，不根据随机实例值猜测。
-    bound = instantiate(deepcopy(case), bindings)
-    trees = [bound.query, pattern.mutate(deepcopy(bound))]
+def register_schema(graph, case, pattern):
+    # Types come from typed keys and AST expressions, never from sampled property values.
+    # 属性类型来自带类型的属性键与 AST 表达式，不根据随机实例值猜测。
+    trees = [case.query, pattern.mutate(deepcopy(case))]
     node_types = {"uid": "int", "keep": "bool", "value": "int", "p_guard": "bool", "p_anchor": "int"}
     relationship_types = {"keep": "bool"}
     for symbol in case.host_symbols:
         if symbol.kind.startswith("key_"):
-            node_types[bindings[symbol.name]] = symbol.kind[4:]
-            relationship_types[bindings[symbol.name]] = symbol.kind[4:]
+            node_types[symbol] = symbol.kind[4:]
+            relationship_types[symbol] = symbol.kind[4:]
     for tree in trees:
         for _, item in walk(tree):
             if isinstance(item, Property):
@@ -26,9 +24,9 @@ def register_schema(graph, case, bindings, pattern):
                     node_types[key] = value.kind
     nodes = graph.schema["nodes"]
     relationships = graph.schema["relationships"]
-    for symbol in sorted(case.host_symbols, key=lambda symbol: symbol.name):
+    for symbol in sorted(case.host_symbols):
         if symbol.kind == "label":
-            nodes[bindings[symbol.name]] = dict(node_types)
+            nodes[symbol] = dict(node_types)
     for node in graph.nodes:
         for label in node["labels"]:
             nodes[label] = dict(node_types)

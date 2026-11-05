@@ -16,8 +16,8 @@ def anchors(scope):
 def prepare(query, site, pattern, seed, rng):
     name, anchor = rng.choice(anchors(site.scope))
     payload = {"anchor": anchor, "select": name, "work_kind": "gremlin_traversal",
-               **{role + "_label": Symbol("p_" + role, "label") for role in ("low", "high", "witness")},
-               **{role + "_type": Symbol("p_" + role + "_edge", "relationship") for role in ("low", "high", "witness")}}
+               **{role + "_label": Symbol("Pattern_p_" + role, "label") for role in ("low", "high", "witness")},
+               **{role + "_type": Symbol("Pattern_p_" + role + "_edge", "relationship") for role in ("low", "high", "witness")}}
     return Case(pattern, seed, query, site.path, set(symbols(query)), payload)
 
 

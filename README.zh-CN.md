@@ -1,6 +1,6 @@
 # GraphSymPerf
 
-GraphSymPerf 测试图数据库中的短路与对称变换。程序先生成符号查询 AST，选择一个兼容位置嵌入 Pattern，再构造包含固定见证和扩张区域的图，比较同图上的查询对。Cypher 接入 Neo4j、Memgraph、ArcadeDB、LadybugDB 和 FalkorDB；Gremlin 接入 ArcadeDB、JanusGraph 和 HugeGraph。
+GraphSymPerf 测试图数据库中的短路与对称变换。程序先生成随机查询 AST，选择一个兼容位置嵌入 Pattern，再构造包含固定见证和扩张区域的图，比较同图上的查询对。Cypher 接入 Neo4j、Memgraph、ArcadeDB、LadybugDB 和 FalkorDB；Gremlin 接入 ArcadeDB、JanusGraph 和 HugeGraph。
 
 <!-- BEGIN ISSUE SUMMARY -->
 This README lists 38 submitted issue URLs: 24 fixed, 6 confirmed, 8 pending. Status snapshot: 2026-11-02. Historical and merged reports are included; counts do not represent unique root causes.
@@ -135,6 +135,8 @@ measurement:
   ratio: 5.0
   minimum_delta_ms: 100.0
   direction_consistency: 0.8
+  scale_factor: 10        # no_gap 的查询对用 high_units / scale_factor 重测；null 关闭
+  growth_ratio: 3.0       # 跨该规模的差距增长倍数阈值
   timeout_seconds: 10
 ```
 
@@ -204,7 +206,7 @@ python scripts/update_readme.py
 
 ### 7. Output Description
 - **`results/<run>/summary.csv`**：用例、Pattern、种子、状态、图规模和可用计时信息。
-- **用例归档**：原查询对、`graph.json`、`result.json`、`plans.json`；请求重放后另存 `replay-result.json`。
+- **用例归档**：原查询对、`graph.json`、`result.json`、`plans.json`（含算子摘要）；`scale_candidate` 另有 `plans-small.json`；请求重放后另存 `replay-result.json`。
 - **固定清单运行**：`attempts.json` 保留所有计划项及未提交项；`report.json` 记录停止原因、计数、耗时和客户端资源。
 - **本地证据**：`results/` 被 Git 忽略，已记录实验的范围见[验证记录](docs/validation.md)。
 

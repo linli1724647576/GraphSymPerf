@@ -1,4 +1,4 @@
-from data_structures.ast import Symbol
+from data_structures.ast import Symbol, sample_constant
 from .ast_nodes import Traversal, Step, Value, Predicate
 from .scope import analyze
 
@@ -10,13 +10,12 @@ class Generator:
     def __init__(self, rng, options):
         self.rng, self.options = rng, options
         self.remaining, self.number = options["nodes"], 0
-        self.labels = [Symbol(f"label_{i}", "label") for i in range(4)]
-        self.edges = [Symbol(f"relationship_{i}", "relationship") for i in range(3)]
+        self.labels = [Symbol(f"Random_label_{i}", "label") for i in range(4)]
+        self.edges = [Symbol(f"Random_relationship_{i}", "relationship") for i in range(3)]
         self.keys = {kind: Symbol("property_" + kind, "key_" + kind) for kind in SCALARS}
 
     def value(self, kind):
-        self.number += 1
-        return Value(Symbol(f"constant_{self.number}", kind), kind)
+        return Value(sample_constant(self.rng, kind), kind)
 
     def predicate(self, scope, depth):
         self.remaining -= 1

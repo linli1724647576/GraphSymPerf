@@ -1,12 +1,32 @@
 from dataclasses import dataclass, fields
 
 
-@dataclass(frozen=True)
-class Symbol:
-    # A terminal stays symbolic until graph construction assigns its name or value.
-    # 标签、常量等终端先保留为符号，由构图阶段分配具体名称或取值。
-    name: str
-    kind: str
+class Symbol(str):
+    """A final label, relationship type, or property key that remembers its kind."""
+    # The generator fixes names once; the kind lets schema and background data collect terminals.
+    # 名字在生成时一次确定；kind 供 schema 登记和背景图按类别收集终端。
+
+    def __new__(cls, name, kind):
+        value = super().__new__(cls, name)
+        value.kind = kind
+        return value
+
+    def __getnewargs__(self):
+        return str(self), self.kind
+
+    @property
+    def name(self):
+        return str(self)
+
+    def __repr__(self):
+        return f"Symbol({str(self)!r}, {self.kind!r})"
+
+
+def sample_constant(rng, kind):
+    # Constants share the value domain of random background properties.
+    # 常量与随机背景属性使用相同值域。
+    return {"int": lambda: rng.randint(-2, 4), "bool": lambda: rng.choice([True, False]),
+            "string": lambda: rng.choice(["a", "b", "c"]), "float": lambda: rng.choice([0.5, 1.5, 2.5])}[kind]()
 
 
 @dataclass(frozen=True)

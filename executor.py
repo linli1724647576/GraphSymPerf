@@ -5,9 +5,13 @@ from statistics import median
 import json
 from data_structures.ast import at
 from data_structures.query import QueryRejected
+from databases.plans import summarize as summarize_plan
 
 
-def run_pair(db, source, mutant, options, *, check_only=False):
+def run_pair(db, source, mutant, options, *, check_only=False,
+             phases=("discovery", "confirmation"), gate=True, profile=True):
+    # gate=False records the requested phases without applying the ratio screen (scale probe).
+    # gate=False 只记录指定阶段的样本，不做耗时比筛选（供规模探测使用）。
     queries = [source, mutant]
     result = {"status": "checking", "discovery": [], "confirmation": []}
     phase, active_query = "checking", "a"
@@ -32,6 +36,8 @@ def run_pair(db, source, mutant, options, *, check_only=False):
             ("discovery", options["warmups"], options["pairs"], 0),
             ("confirmation", options["confirmation_warmups"], options["confirmation_pairs"], 1),
         ):
+            if phase not in phases:
+                continue
             for iteration in range(warmups + pairs):
                 # Alternate AB/BA, excluding warmups from samples but still checking their results.
                 # 交替执行 AB/BA；预热不计入耗时样本，但仍检查其结果。
@@ -50,6 +56,8 @@ def run_pair(db, source, mutant, options, *, check_only=False):
                     result[phase].append({"order": "AB" if order[0] == 0 else "BA", "a_ms": times[0], "b_ms": times[1]})
             summary = summarize(result[phase])
             result[phase + "_summary"] = summary
+            if not gate:
+                continue
             if not qualifies(summary, options):
                 result["status"] = "no_gap" if phase == "discovery" else "unconfirmed"
                 break
@@ -57,7 +65,7 @@ def run_pair(db, source, mutant, options, *, check_only=False):
                 result["status"] = "unconfirmed"
                 break
         else:
-            result["status"] = "candidate"
+            result["status"] = "candidate" if gate else "measured"
     except QueryRejected as error:
         # A rejected side is evidence to archive, not a successful equivalence check.
         # 被拒绝的一侧需要归档，不能记作已经通过等价检查。
@@ -76,6 +84,8 @@ def run_pair(db, source, mutant, options, *, check_only=False):
             result["stop_run"] = True
         return result
 
+    if not profile:
+        return result
     # Profile completed measurements, including no_gap; profiling never changes timing status.
     # 完成计时后采集计划，包括 no_gap；PROFILE 不改变已经得到的计时状态。
     result["plans"] = {}
@@ -92,6 +102,10 @@ def run_pair(db, source, mutant, options, *, check_only=False):
                 # 保留已确认的计时证据，终止未确认时不再提交后续查询。
                 result["stop_run"] = True
                 break
+    for plan in result["plans"].values():
+        # Operator work counters support triage; they never change the timing status.
+        # 算子工作量计数只用于分诊，不改变计时结论。
+        plan["summary"] = summarize_plan(plan)
     statuses = [plan["status"] for plan in result["plans"].values()]
     if all(status == "ok" for status in statuses):
         result["profile_status"] = "ok"
@@ -140,6 +154,66 @@ def summarize(samples):
             "direction_consistency": sum(value > 0 for value in signed) / len(signed)}
 
 
+def scale_probe(db, small, large, queries, options, family, result):
+    """Re-measure a no_gap pair on a graph with fewer high-cost units.
+
+    For both families the two forms should differ by an amount that does not depend on
+    the number of high-cost units N: a short-circuited operand or a reordered component
+    should not make one form do work proportional to N. The ratio screen misses such
+    gaps when both forms share a large cost that also grows with N, such as a host scan.
+    Comparing the gap at N and N / scale_factor cancels that shared growth.
+    """
+    probe = {"small_units": small["units"], "large_units": large["units"], "family": family}
+    result["scale"] = probe
+    db.load(small["graph"])
+    measured = run_pair(db, *queries, options, phases=("discovery",), gate=False, profile=False)
+    if measured["status"] != "measured":
+        probe.update(status=measured["status"], detail={k: v for k, v in measured.items() if k in ("reason", "error")})
+        return result
+    probe["discovery"] = growth(result["discovery"], measured["discovery"])
+    if not grows(probe["discovery"], options):
+        probe["status"] = "no_growth"
+        return result
+    # Confirm on fresh samples at both scales before reporting.
+    # 在两个规模上重新采样确认后才报告。
+    small_run = run_pair(db, *queries, options, phases=("confirmation",), gate=False)
+    db.load(large["graph"])
+    large_run = run_pair(db, *queries, options, phases=("confirmation",), gate=False, profile=False)
+    if small_run["status"] != "measured" or large_run["status"] != "measured":
+        probe["status"] = "unconfirmed"
+        return result
+    probe["confirmation"] = growth(large_run["confirmation"], small_run["confirmation"])
+    probe["small_plans"] = small_run.get("plans")
+    confirmed = (grows(probe["confirmation"], options)
+                 and probe["confirmation"]["side"] == probe["discovery"]["side"])
+    probe["status"] = "confirmed" if confirmed else "unconfirmed"
+    if confirmed:
+        result["status"] = "scale_candidate"
+    return result
+
+
+def growth(large, small):
+    """How the gap between the two forms changes from the small to the large graph."""
+    sides = {side: {"large_ms": median(sample[side + "_ms"] for sample in large),
+                    "small_ms": median(sample[side + "_ms"] for sample in small)} for side in ("a", "b")}
+    side = "a" if sides["a"]["large_ms"] - sides["b"]["large_ms"] >= 0 else "b"
+    other = "b" if side == "a" else "a"
+    gap_large = sides[side]["large_ms"] - sides[other]["large_ms"]
+    gap_small = sides[side]["small_ms"] - sides[other]["small_ms"]
+    paired = [sample[side + "_ms"] > sample[other + "_ms"] for sample in large]
+    # A gap absent at the small scale counts from a 1 ms floor.
+    # 小规模下没有差距时，以 1 ms 为下限计算增长倍数。
+    return {"side": side, "gap_large_ms": gap_large, "gap_small_ms": gap_small,
+            "ratio": gap_large / max(gap_small, 1.0), "delta_ms": gap_large - gap_small,
+            "consistency": sum(paired) / len(paired), "sides": sides}
+
+
+def grows(summary, options):
+    return (summary["ratio"] >= options["growth_ratio"]
+            and summary["delta_ms"] >= options["minimum_delta_ms"]
+            and summary["consistency"] >= options["direction_consistency"])
+
+
 def qualifies(summary, options):
     return (summary["ratio"] >= options["ratio"]
             and summary["delta_ms"] >= options["minimum_delta_ms"]
@@ -166,11 +240,10 @@ def save_case(directory, case, graph, source, mutant, result, config, version):
     (directory / "graph.json").write_text(json.dumps(asdict(graph), ensure_ascii=False))
     workload = workload_record(case, graph, config["graph"]["high_units"])
     construction = {key: case.payload[key] for key in
-                    ("anchor_uids", "high_allocations") if key in case.payload}
+                    ("anchor_uids", "high_allocations", "anchor_constraints", "host_witness") if key in case.payload}
     if "limit" in workload["conditions"]:
         construction["limit"] = workload["conditions"]["limit"]
-    record = {"pattern": case.pattern, "seed": case.seed, "bindings": case.bindings,
-              "workload": workload,
+    record = {"pattern": case.pattern, "seed": case.seed, "workload": workload,
               "variant": case.payload.get("variant"), "work_kind": case.payload.get("work_kind"),
               "construction": construction,
               "nodes": len(graph.nodes), "relationships": len(graph.relationships),
@@ -178,6 +251,13 @@ def save_case(directory, case, graph, source, mutant, result, config, version):
               "parameters": {"a": source.parameters, "b": mutant.parameters},
               "columns": {"a": source.columns, "b": mutant.columns},
               **{key: value for key, value in result.items() if key != "plans"}}
+    small_plans = record.get("scale", {}).get("small_plans")
+    if small_plans is not None:
+        record["scale"] = {key: value for key, value in record["scale"].items() if key != "small_plans"}
     (directory / "result.json").write_text(json.dumps(record, ensure_ascii=False, indent=2))
     if "plans" in result:
         (directory / "plans.json").write_text(json.dumps(result["plans"], ensure_ascii=False, indent=2))
+    if small_plans is not None:
+        # Plans at the smaller scale sit beside the primary plans for the scale comparison.
+        # 小规模下的计划与主规模计划并列保存，便于对比规模影响。
+        (directory / "plans-small.json").write_text(json.dumps(small_plans, ensure_ascii=False, indent=2))
