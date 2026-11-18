@@ -156,6 +156,8 @@ def scale_probe(db, small, large, queries, options, family, result):
     measured = run_pair(db, *queries, options, phases=("discovery",), gate=False, profile=False)
     if measured["status"] != "measured":
         probe.update(status=measured["status"], detail={k: v for k, v in measured.items() if k in ("reason", "error")})
+        if measured.get("stop_run"):
+            result["stop_run"] = True
         return result
     probe["discovery"] = growth(result["discovery"], measured["discovery"])
     if not grows(probe["discovery"], options):
@@ -163,13 +165,21 @@ def scale_probe(db, small, large, queries, options, family, result):
         return result
     # Confirm on fresh samples at both scales before reporting.
     small_run = run_pair(db, *queries, options, phases=("confirmation",), gate=False)
+    probe["small_plans"] = small_run.get("plans")
+    if small_run.get("stop_run"):
+        result["stop_run"] = True
+        probe.update(status="unconfirmed", detail={k: v for k, v in small_run.items()
+                                                  if k in ("reason", "error", "profile_status")})
+        return result
     db.load(large["graph"])
     large_run = run_pair(db, *queries, options, phases=("confirmation",), gate=False, profile=False)
     if small_run["status"] != "measured" or large_run["status"] != "measured":
-        probe["status"] = "unconfirmed"
+        failed = large_run if large_run["status"] != "measured" else small_run
+        probe.update(status="unconfirmed", detail={k: v for k, v in failed.items() if k in ("reason", "error")})
+        if failed.get("stop_run"):
+            result["stop_run"] = True
         return result
     probe["confirmation"] = growth(large_run["confirmation"], small_run["confirmation"])
-    probe["small_plans"] = small_run.get("plans")
     confirmed = (grows(probe["confirmation"], options)
                  and probe["confirmation"]["side"] == probe["discovery"]["side"])
     probe["status"] = "confirmed" if confirmed else "unconfirmed"

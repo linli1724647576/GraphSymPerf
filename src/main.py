@@ -180,7 +180,7 @@ def execute_case(db, graph, source, mutant, config, check_only, pattern=None, se
 def probe_scale(db, result, graph, source, mutant, config, pattern, seed):
     """For a no_gap pair, rebuild the same case with N / scale_factor units and compare growth."""
     factor = config["measurement"].get("scale_factor")
-    if result["status"] != "no_gap" or not factor:
+    if result.get("stop_run") or result["status"] != "no_gap" or not factor:
         return result
     units = config["graph"]["high_units"]
     small_units = max(1, units // factor)

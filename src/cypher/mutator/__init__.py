@@ -7,7 +7,6 @@ from .path import PathPatternRule
 from .matching import MatchingPattern
 
 
-# Pattern IDs follow docs/pattern-catalog.en.md.
 PATTERNS = {
     "SC1": BooleanPattern("SC1", "OR"),
     "SC2": BooleanPattern("SC2", "AND"),
