@@ -22,7 +22,6 @@ class ConditionalPattern:
             if case.payload["prefix_name"] == "property":
                 chosen = Traversal([Step("values", ["p_prefix", kind])])
             # Productivity is independent of truth: constant(false) and constant(0) emit values.
-            # 是否产出值与真假无关：constant(false) 和 constant(0) 均会产出值。
             branch = Step("coalesce", [chosen, expensive])
             case.payload["variant"] = "first_productive"
         else:

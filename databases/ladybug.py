@@ -5,12 +5,24 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import perf_counter
 from cypher.render import identifier, literal
+from data_structures.query import QueryRejected
 from data_structures.result import freeze
 
 
 TYPES = {"int": "INT64", "float": "DOUBLE", "bool": "BOOL", "string": "STRING"}
+# Exact messages of engine failures reproduced on minimal valid queries (LadybugDB 0.22.1).
+ENGINE_ERRORS = {
+    # WITH coalesce(null, 0, COUNT { MATCH (x:B) WHERE coalesce(null, true, b.flag) }) AS v
+    "Cannot evaluate expression with type PROPERTY.": "engine_property_evaluation",
+    # UNWIND [..] AS u MATCH (a:A {p: 0})-[:R]-(b:A) MATCH (a), (x:C {k: 1}) RETURN a, b.p
+    "unordered_map::at: key not found": "engine_internal_lookup",
+}
 SUPPORT = {"subquery_call": False, "subquery_unwind": False, "bodies": "match", "call": False, "conditional": False, "multi_label": False,
-           "work": "match_count", "native_limit": True, "s7": False, "secondary_indexes": False}
+           "work": "match_count", "native_limit": True, "s7": False, "secondary_indexes": False,
+           # The binder requires SKIP or LIMIT after ORDER BY in a WITH clause.
+           "with_order_without_page": False,
+           # List indexes are 1-based; 0 and out-of-range positions raise runtime errors.
+           "list_index_base": 1}
 
 
 class Database:
@@ -30,7 +42,6 @@ class Database:
             raise ValueError("This Ladybug adapter supports only implicit uid primary-key indexes")
         self.close()
         # Each case owns its temporary database; both queries use this same connection.
-        # 每个用例独占一个临时数据库，两条查询始终使用同一连接。
         work = Path(self.config["directory"])
         work.mkdir(parents=True, exist_ok=True)
         self.directory = TemporaryDirectory(prefix="case-", dir=work)
@@ -72,7 +83,6 @@ class Database:
     def copy_rows(self, table, columns, records, source=None, target=None):
         path = Path(self.directory.name) / "batch.csv"
         # Native CSV distinguishes unquoted null fields from quoted empty strings.
-        # 原生 CSV 区分未加引号的空值字段和加引号的空字符串。
         with path.open("w", newline="") as stream:
             writer = csv.writer(stream, quoting=csv.QUOTE_NOTNULL)
             writer.writerow(columns)
@@ -100,15 +110,18 @@ class Database:
             finally:
                 result.close()
         except RuntimeError as error:
-            if str(error).strip() == "Interrupted.":
+            message = str(error).strip()
+            if message == "Interrupted.":
                 raise TimeoutError(str(error)) from error
+            if message in ENGINE_ERRORS:
+                # Reproduced 0.22.1 engine failures on valid Cypher; archive the case and continue.
+                raise QueryRejected(ENGINE_ERRORS[message], {"message": message}) from error
             raise
         return columns, types, rows, elapsed
 
     def execute(self, query, timeout):
         columns, types, rows, elapsed = self.read(query, timeout)
         # Conversion follows timing; metadata distinguishes entities from ordinary maps.
-        # 停止计时后再转换，按类型元数据区分实体与普通映射。
         return columns, [tuple(normalize(v, t) for v, t in zip(row, types)) for row in rows], elapsed
 
     def profile(self, query, timeout):
@@ -133,6 +146,9 @@ def normalize(value, kind):
     if kind in {"NODE", "REL"}:
         identity = value["_ID"]
         return ("node" if kind == "NODE" else "relationship", (identity["table"], identity["offset"]))
+    if kind == "INT128":
+        # sum() over integers returns INT128, which the Python binding exposes as Decimal.
+        return ("int", int(value))
     if kind == "INTERNAL_ID":
         return ("internal_id", (value["table"], value["offset"]))
     if kind == "RECURSIVE_REL":
@@ -151,7 +167,6 @@ def normalize(value, kind):
 
 def type_parts(text):
     # Split only the current type level, preserving nested map/struct descriptions.
-    # 只拆分当前类型层级，保留嵌套 MAP 和 STRUCT 的描述。
     depth, start, parts = 0, 0, []
     for i, char in enumerate(text):
         depth += (char == "(") - (char == ")")

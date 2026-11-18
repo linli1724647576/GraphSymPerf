@@ -1,6 +1,5 @@
 def random_graph(graph, host_symbols, options, rng, support):
     # Generate typed background data without solving the host query's predicates.
-    # 生成类型匹配的随机背景数据，不反向求解宿主查询的谓词。
     labels = [s for s in sorted(host_symbols) if s.kind == "label"] or ["Background"]
     types = [s for s in sorted(host_symbols) if s.kind == "relationship"] or ["BACKGROUND" if support["multi_label"] else "BACKGROUND_EDGE"]
     keys = [(s, s.kind[4:]) for s in sorted(host_symbols) if s.kind.startswith("key_")]

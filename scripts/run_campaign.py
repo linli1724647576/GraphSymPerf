@@ -73,7 +73,6 @@ def main():
                     directory = output / f"{number:05d}-{row['pattern']}-{row['seed']}-{row['high_units']}"
                     row.update(status="running", archive=str(directory))
                     # Fingerprints exclude seeds and execution metadata; equal inputs remain equal.
-                    # 指纹不包含种子和执行信息，使相同输入具有相同指纹。
                     queries = {"a": asdict(a), "b": asdict(b)}
                     row["query_fingerprint"] = sha256(json.dumps(queries, sort_keys=True).encode()).hexdigest()
                     row["input_fingerprint"] = sha256(json.dumps({"queries": queries, "graph": asdict(graph)}, sort_keys=True).encode()).hexdigest()
@@ -88,7 +87,6 @@ def main():
                         probe_scale(db, result, graph, a, b, config, patterns[row["pattern"]], row["seed"])
                     except (Exception, KeyboardInterrupt) as error:
                         # Preserve native cancellation details when the user interrupts execution.
-                        # 用户中断执行时保留原生取消响应，不把中断报告为正常完成。
                         status = "interrupted" if isinstance(error, (KeyboardInterrupt, InterruptedError)) else "error"
                         result = {"status": status, "error": {"phase": phase, "type": type(error).__name__, "message": str(error)}, "traceback": traceback.format_exc()}
                         if getattr(db, "cancellation", None):
@@ -102,7 +100,6 @@ def main():
             (output / "attempts.json").write_text(json.dumps(records, indent=2))
             print(f"{number:03d} {row['pattern']} seed={row['seed']} units={row['high_units']} {row['status']}", flush=True)
             # Stop this target without retries; the unsubmitted manifest entries remain visible.
-            # 本组停止后不重试，清单中保留尚未提交的用例。
             if row["status"] in {"error", "interrupted", "result_mismatch"} or row.get("stop_run"):
                 stop_reason = "termination_unconfirmed" if row.get("stop_run") else row["status"]
                 break

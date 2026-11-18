@@ -1,10 +1,7 @@
-"""Host equality constraints on a short-circuit anchor, applied to its candidate roots.
+"""Plant host matches and apply literal equality filters to candidate workload roots.
 
-The background graph is random, so a host filter such as `(v3:L {property_int: 2})` or
-`filter(__.has("property_int", 2))` often rejects every candidate root and the pair
-returns no rows. Step ④ can instead write those values onto the roots that already
-carry the workload. The queries are unchanged, both sides read the same graph, and the
-guards are still installed on every candidate, so equivalence is unaffected.
+Graph construction copies supported property equalities from the host query onto
+candidate roots. Pattern recipes then add guards, witnesses, and expandable regions.
 """
 from data_structures.ast import walk
 
@@ -32,7 +29,6 @@ def _cypher(query, anchor):
 
     def keep(key, literal):
         # The first value per key wins; conflicting host filters stay unsatisfiable.
-        # 每个属性键以第一个取值为准；相互矛盾的宿主过滤本来就无法满足。
         if literal.value is not None:
             found.setdefault(key, literal.value)
 
@@ -76,7 +72,6 @@ def _gremlin(case):
         if index is None:
             return {}
     # Collect has() filters in the run of steps that keep the anchor as the current object.
-    # 收集锚点仍为当前对象的那一段连续步骤中的 has() 过滤。
     start = index
     while start > 0 and steps[start - 1].name in STAY:
         start -= 1
@@ -97,14 +92,10 @@ def _gremlin(case):
 
 
 def plant_host_witness(graph, case):
-    """Add one instance of the host's mandatory matching before the pattern is populated.
+    """Plant mandatory host paths or a traversal prefix before pattern population.
 
-    Random background edges rarely complete a multi-hop host pattern, so most pairs
-    return no rows and the workload sits on roots the host never reaches. This plants
-    the host MATCH paths (Cypher) or the root traversal prefix (Gremlin) with their
-    labels and literal property filters. It runs before populate(), so a planted node
-    that carries the anchor's labels is a candidate root and receives the same guard
-    witnesses and workload as every other candidate.
+    Copy labels and supported literal property filters. Planted nodes with the
+    anchor's labels receive guards, witnesses, and workload during populate().
     """
     from gremlin.ast_nodes import Traversal
     planted = _plant_gremlin(graph, case) if isinstance(case.query, Traversal) else _plant_cypher(graph, case)
@@ -141,7 +132,6 @@ def _plant_cypher(graph, case):
         uid = nodes[name]
         for key, value in pattern.properties:
             # Pattern-owned keys such as p_anchor stay under the recipe's control.
-            # p_anchor 等 Pattern 自有属性仍由构图配方控制。
             if isinstance(value, Literal) and value.value is not None and not str(key).startswith("p_"):
                 graph.nodes[uid]["properties"][str(key)] = value.value
         return uid
@@ -158,7 +148,6 @@ def _plant_cypher(graph, case):
                     continue
                 kind = relation.types[0]
                 # A variable-length relationship gets its shortest allowed chain.
-                # 变长关系按允许的最短长度铺设。
                 hops = [start] + [graph.node([_host_label(case)], keep=True, value=1)
                                   for _ in range(max(relation.minimum, 1) - 1)] + [end]
                 for left, right in zip(hops, hops[1:]):
@@ -201,13 +190,11 @@ def _plant_gremlin(graph, case):
         step = steps[index]
         if step.name == "match":
             # The incoming object binds the patterns' start labels; their own edges are the recipe's.
-            # 输入对象绑定各模式的起始标签；模式内的边由配方构造。
             for pattern in step.args:
                 bindings.setdefault(pattern.steps[0].args[0], current)
             index += 1
         elif index == pattern_step:
             # The pattern's own step is built by its recipe; continue with the host after it.
-            # Pattern 自己的步骤由配方构造，越过它继续铺设宿主遍历。
             index += 1
         elif (step.name in {"out", "in", "both"} and not str(step.args[0]).startswith("Pattern_")
                 and index + 1 < len(steps) and steps[index + 1].name == "hasLabel"):

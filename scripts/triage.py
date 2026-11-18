@@ -52,7 +52,6 @@ def cluster(results):
     clusters = []
     for key, members in groups.items():
         # The representative is the smallest input in its cluster.
-        # 每一类以输入最小的用例作为代表。
         members.sort(key=lambda item: (item["size"], item["text"]))
         clusters.append({"signature": json.loads(key), "count": len(members),
                          "representative": members[0]["case"], "members": members})
@@ -99,13 +98,13 @@ class Reducer:
 
     def render(self, case):
         # A reduced pair keeps the archived output interface.
-        # 约简后的查询对保持归档时的输出接口。
         if self.output_interface(case.query) != self.interface:
             raise ValueError("Reduction changed the output interface")
         options = {"groovy": self.support.get("groovy", False)} if self.module is gremlin else {}
         mutant = self.pattern.mutate(copy.deepcopy(case))
         if self.module is cypher:
-            cypher.check_pair(case.query, mutant, case, self.support.get("persistent_imports", True))
+            cypher.check_pair(case.query, mutant, case, self.support.get("persistent_imports", True),
+                              self.support.get("match_after_optional", True))
         else:
             gremlin.check_pair(case.query, mutant, case)
         return self.module.render(case.query, **options), self.module.render(mutant, **options)
@@ -122,7 +121,6 @@ class Reducer:
             result = run_pair(self.db, source, mutant, self.config["measurement"], phases=("discovery",), profile=False)
         except ValueError:
             # An adapter that rejects the reduced response shape makes the trial uninteresting.
-            # 适配器拒绝约简后的结果形式时，该次尝试视为无效。
             return False
         return result["status"] == "candidate"
 
@@ -151,7 +149,6 @@ class Reducer:
                 if value is not None and not any(id(inner) in guarded for _, inner in walk(value)):
                     edits.append((path, name, None, sum(1 for _ in walk(value)) if hasattr(value, "__dataclass_fields__") else 1))
         # Try the largest removals first.
-        # 先尝试删除最大的部分。
         return sorted(edits, key=lambda edit: -edit[3])
 
     def apply(self, case, edit):
@@ -167,7 +164,6 @@ class Reducer:
         else:
             del getattr(owner, name)[index]
         # Locate the mutation point again by identity after the edit shifted positions.
-        # 编辑会移动位置，按对象身份重新定位变异点。
         trial.target = next(p for p, node in walk(trial.query) if node is target)
         if swapped is not None:
             trial.payload["swap_index"] = target.clauses.index(swapped)

@@ -25,7 +25,6 @@ def analyze(query, scope=None, path=(), sites=None):
         location = path + ("steps", index)
         before = scope
         # match() patterns are declarative; they are typed by match_scope, not as nested sites.
-        # match() 模式是声明式的，由 match_scope 推断类型，不作为嵌套变异位置。
         children = [] if step.name == "match" else [analyze(arg, before, location + ("args", i), sites)
                                                     for i, arg in enumerate(step.args) if isinstance(arg, Traversal)]
         name, args = step.name, step.args
@@ -55,7 +54,6 @@ def analyze(query, scope=None, path=(), sites=None):
             scope = replace(scope, current=Variable("it", args[0].kind), constant=True)
         elif name in {"count", "fold"}:
             # Reductions replace traversers; old label bindings must not survive them.
-            # 归约会替换遍历对象，不能继续使用归约前的标签绑定。
             if name == "fold":
                 assert scope.constant and scope.current.kind in {"int", "float", "bool", "string"}
             scope = Scope(Variable("it", "int" if name == "count" else "list_" + scope.current.kind))
@@ -77,7 +75,6 @@ def analyze(query, scope=None, path=(), sites=None):
         elif name not in {"identity", "filter", "not", "and", "or", "limit"}:
             raise ValueError(f"Unsupported Gremlin step: {name}")
         # Predicate children read the outer bindings but never export their local labels.
-        # 谓词子遍历可读外层绑定，但不向外导出自己的局部标签。
         if sites is not None:
             sites.append(Site(location, step, before, scope, query.root and index == len(query.steps)-1))
     return scope
@@ -88,7 +85,6 @@ def match_scope(patterns, scope):
     starts = [p.steps[0].args[0] for p in patterns]
     ends = {step.args[0] for p in patterns for step in p.steps[1:] if step.name == "as"}
     # Like TinkerPop, the incoming object binds the one start label that no pattern produces.
-    # 与 TinkerPop 一致，输入对象绑定到唯一一个不由其他模式产生的起始标签。
     unbound = {label for label in starts if label not in ends and label not in scope.bindings}
     assert len(unbound) <= 1, "match() needs one computed start label"
     bindings = {**scope.bindings, **{label: scope.current for label in unbound}}
@@ -106,6 +102,9 @@ def match_scope(patterns, scope):
                     current = replace(current, labels=tuple(step.args))
                 elif step.name in {"out", "in", "both", "V"}:
                     current = Variable("it", "node")
-                elif step.name != "has":
+                elif step.name == "coalesce":
+                    # An optional branch binds a node or the missing-value sentinel.
+                    current = Variable("it", "node", nullable=True)
+                elif step.name not in {"has", "where"}:
                     raise ValueError(f"Unsupported step inside match(): {step.name}")
     return Scope(Variable("it", "map"), bindings)

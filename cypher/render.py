@@ -5,7 +5,6 @@ from .ast_nodes import *
 
 def render(tree):
     # Rendering changes syntax only; pattern transformations happen on the AST.
-    # 渲染只负责语法表达，Pattern 变换在 AST 上完成。
     return ExecutableQuery(_render(tree), columns=tuple(variable.name for variable in tree.output()))
 
 
@@ -72,7 +71,6 @@ def _render(tree):
         case Union():
             separator = '\nUNION ALL\n' if tree.all else '\nUNION\n'
             # Preserve grouping when a conditional query occupies a UNION branch.
-            # 条件查询位于 UNION 分支时保留分组边界。
             rendered = [
                 '{\n' + _render(branch) + '\n}' if isinstance(branch, ConditionalQuery) else _render(branch)
                 for branch in tree.branches

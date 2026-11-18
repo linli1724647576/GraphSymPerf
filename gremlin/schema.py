@@ -3,7 +3,6 @@ from data_structures.case import symbols
 
 def register_schema(graph, case, pattern):
     # The typed AST and recipe declare properties, including currently empty regions.
-    # 类型来自 AST 与构图配方，同时登记当前没有实例的区域。
     terminals = set(symbols(case.query)) | set(symbols(case.payload)) | case.host_symbols
     properties = {"uid": "int", "keep": "bool", "value": "int", "p_gate_true": "bool", "p_gate_false": "bool", "p_anchor": "int"}
     keys = {s: s.kind[4:] for s in terminals if s.kind.startswith("key_")}

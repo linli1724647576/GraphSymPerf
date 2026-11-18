@@ -21,7 +21,6 @@ class Case:
     target: tuple
     host_symbols: set
     # Pattern-local graph requirements and the prepared mutation; names are already final.
-    # Pattern 的构图要求与预先生成的变异内容；其中名字已是最终名字。
     payload: dict = field(default_factory=dict)
 
 

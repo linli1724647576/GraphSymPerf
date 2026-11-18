@@ -11,7 +11,6 @@ def node_properties(node):
 
 def observed_path_is_safe(query, variable):
     # Accept length and supported order-insensitive quantifiers; reject direct path observation.
-    # 接受长度和已支持的顺序无关量词，拒绝直接观察完整路径的情况。
     for path, node in walk(query):
         if not isinstance(node, Reference) or node.variable.name != variable.name:
             continue
@@ -46,7 +45,6 @@ class PathPatternRule:
         case = Case(self.id, seed, query, site.path, set(symbols(query)))
         left, right = copy.deepcopy(original.nodes)
         # Keep endpoint variables and constraints; add one selective anchor within the pattern.
-        # 保留端点变量及约束，在 Pattern 内加入一个有选择性的锚点。
         left.properties.append(("p_anchor", Literal(1)))
         relation = Symbol("Pattern_p_path_edge", "relationship")
         maximum = rng.randint(2, 4) if self.bounded else 1
@@ -106,6 +104,5 @@ class PathPatternRule:
 
     def mutate(self, case):
         # Reflect only the path syntax; do not reverse or normalize returned values.
-        # 只反转路径的书写形式，不反转返回值，也不对返回值强行归一化。
         at(case.query, case.target).reverse()
         return case.query

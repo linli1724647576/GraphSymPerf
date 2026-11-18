@@ -27,7 +27,6 @@ class PathPattern(ASTNode):
 
     def reverse(self):
         # Reverse written positions and arrowheads, preserving variables and stored edges.
-        # 反转书写位置和箭头方向，保留变量身份，不修改图中实际存储的关系。
         self.nodes.reverse()
         self.relationships.reverse()
         for relationship in self.relationships:

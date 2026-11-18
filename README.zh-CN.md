@@ -1,123 +1,159 @@
 # GraphSymPerf
 
-GraphSymPerf 测试图数据库中的短路与对称变换。程序先生成随机查询 AST，选择一个兼容位置嵌入 Pattern，再构造包含固定见证和扩张区域的图，比较同图上的查询对。Cypher 接入 Neo4j、Memgraph、ArcadeDB、LadybugDB 和 FalkorDB；Gremlin 接入 ArcadeDB、JanusGraph 和 HugeGraph。
+[English](README.md) · [文档](docs/README.md) · [缺陷报告](docs/bug-reports.md)
+
+GraphSymPerf 使用短路变换和对称变换测试图数据库的性能。程序先生成种子查询的抽象语法树（abstract syntax tree, AST），嵌入一个适用的测试模式（pattern），再为查询对构造图数据。随后比较完整查询结果、测量执行时间，并采集执行计划以分析性能差异。
+
+Cypher 接入 Neo4j、Memgraph、ArcadeDB、LadybugDB 和 FalkorDB；Gremlin 接入 ArcadeDB、JanusGraph 和 HugeGraph。[模式目录](docs/pattern-catalog.zh-CN.md)说明八个短路模式（SC1–SC8）和八个对称模式（SY1–SY8）。
 
 <!-- BEGIN ISSUE SUMMARY -->
-This README lists 38 submitted issue URLs: 24 fixed, 6 confirmed, 8 pending. Status snapshot: 2026-11-02. Historical and merged reports are included; counts do not represent unique root causes.
+下表列出 48 份已提交报告：25 份已修复，10 份已确认，13 份待确认。状态核查日期：2026-11-18。完整台账、状态依据和复现报告见[报告索引](docs/bug-reports.md)。
 <!-- END ISSUE SUMMARY -->
 
 <!-- BEGIN ISSUE TABLES -->
 ## Neo4j
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [13783](https://github.com/neo4j/neo4j/issues/13783) | fixed |
-| 2 | [13866](https://github.com/neo4j/neo4j/issues/13866) | confirmed |
-| 3 | [14008](https://github.com/neo4j/neo4j/issues/14008) | fixed |
+| 序号 | 问题编号 | 状态 |
+| --- | --- | --- |
+| 1 | [13783](https://github.com/neo4j/neo4j/issues/13783) | 已修复 |
+| 2 | [13866](https://github.com/neo4j/neo4j/issues/13866) | 已确认 |
+| 3 | [14008](https://github.com/neo4j/neo4j/issues/14008) | 已修复 |
 
 ## Memgraph
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [4208](https://github.com/memgraph/memgraph/issues/4208) | confirmed |
-| 2 | [4456](https://github.com/memgraph/memgraph/issues/4456) | pending |
-| 3 | [4457](https://github.com/memgraph/memgraph/issues/4457) | pending |
-| 4 | [4458](https://github.com/memgraph/memgraph/issues/4458) | pending |
-| 5 | [4459](https://github.com/memgraph/memgraph/issues/4459) | fixed |
-| 6 | [5091](https://github.com/memgraph/memgraph/issues/5091) | pending |
+| 序号 | 问题编号 | 状态 |
+| --- | --- | --- |
+| 1 | [4208](https://github.com/memgraph/memgraph/issues/4208) | 已确认 |
+| 2 | [4456](https://github.com/memgraph/memgraph/issues/4456) | 待确认 |
+| 3 | [4457](https://github.com/memgraph/memgraph/issues/4457) | 待确认 |
+| 4 | [4458](https://github.com/memgraph/memgraph/issues/4458) | 待确认 |
+| 5 | [4459](https://github.com/memgraph/memgraph/issues/4459) | 已修复 |
+| 6 | [5091](https://github.com/memgraph/memgraph/issues/5091) | 待确认 |
 
 ## ArcadeDB
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [4405](https://github.com/ArcadeData/arcadedb/issues/4405) | fixed |
-| 2 | [5116](https://github.com/ArcadeData/arcadedb/issues/5116) | fixed |
-| 3 | [5117](https://github.com/ArcadeData/arcadedb/issues/5117) | fixed |
-| 4 | [5360](https://github.com/ArcadeData/arcadedb/issues/5360) | fixed |
-| 5 | [5362](https://github.com/ArcadeData/arcadedb/issues/5362) | fixed |
-| 6 | [5363](https://github.com/ArcadeData/arcadedb/issues/5363) | fixed |
-| 7 | [9579](https://github.com/ArcadeData/arcadedb/issues/9579) | fixed |
-| 8 | [9580](https://github.com/ArcadeData/arcadedb/issues/9580) | fixed |
-| 9 | [10307](https://github.com/ArcadeData/arcadedb/issues/10307) | fixed |
-| 10 | [10308](https://github.com/ArcadeData/arcadedb/issues/10308) | fixed |
-| 11 | [11081](https://github.com/ArcadeData/arcadedb/issues/11081) | fixed |
-| 12 | [11082](https://github.com/ArcadeData/arcadedb/issues/11082) | fixed |
-| 13 | [11083](https://github.com/ArcadeData/arcadedb/issues/11083) | fixed |
+| 序号 | 问题编号 | 状态 |
+| --- | --- | --- |
+| 1 | [4405](https://github.com/ArcadeData/arcadedb/issues/4405) | 已修复 |
+| 2 | [5116](https://github.com/ArcadeData/arcadedb/issues/5116) | 已修复 |
+| 3 | [5117](https://github.com/ArcadeData/arcadedb/issues/5117) | 已修复 |
+| 4 | [5360](https://github.com/ArcadeData/arcadedb/issues/5360) | 已修复 |
+| 5 | [5362](https://github.com/ArcadeData/arcadedb/issues/5362) | 已修复 |
+| 6 | [5363](https://github.com/ArcadeData/arcadedb/issues/5363) | 已修复 |
+| 7 | [9579](https://github.com/ArcadeData/arcadedb/issues/9579) | 已修复 |
+| 8 | [9580](https://github.com/ArcadeData/arcadedb/issues/9580) | 已修复 |
+| 9 | [10307](https://github.com/ArcadeData/arcadedb/issues/10307) | 已修复 |
+| 10 | [10308](https://github.com/ArcadeData/arcadedb/issues/10308) | 已修复 |
+| 11 | [11081](https://github.com/ArcadeData/arcadedb/issues/11081) | 已修复 |
+| 12 | [11082](https://github.com/ArcadeData/arcadedb/issues/11082) | 已修复 |
+| 13 | [11083](https://github.com/ArcadeData/arcadedb/issues/11083) | 已修复 |
 
 ## LadybugDB
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [668](https://github.com/LadybugDB/ladybug/issues/668) | fixed |
-| 2 | [669](https://github.com/LadybugDB/ladybug/issues/669) | fixed |
-| 3 | [696](https://github.com/LadybugDB/ladybug/issues/696) | fixed |
-| 4 | [697](https://github.com/LadybugDB/ladybug/issues/697) | fixed |
-| 5 | [698](https://github.com/LadybugDB/ladybug/issues/698) | fixed |
-| 6 | [720](https://github.com/LadybugDB/ladybug/issues/720) | fixed |
-| 7 | [721](https://github.com/LadybugDB/ladybug/issues/721) | fixed |
-| 8 | [1483](https://github.com/LadybugDB/ladybug/issues/1483) | pending |
+| 序号 | 问题编号 | 状态 |
+| --- | --- | --- |
+| 1 | [668](https://github.com/LadybugDB/ladybug/issues/668) | 已修复 |
+| 2 | [669](https://github.com/LadybugDB/ladybug/issues/669) | 已修复 |
+| 3 | [696](https://github.com/LadybugDB/ladybug/issues/696) | 已修复 |
+| 4 | [697](https://github.com/LadybugDB/ladybug/issues/697) | 已修复 |
+| 5 | [698](https://github.com/LadybugDB/ladybug/issues/698) | 已修复 |
+| 6 | [720](https://github.com/LadybugDB/ladybug/issues/720) | 已修复 |
+| 7 | [721](https://github.com/LadybugDB/ladybug/issues/721) | 已修复 |
+| 8 | [1483](https://github.com/LadybugDB/ladybug/issues/1483) | 已修复 |
 
 ## FalkorDB
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [2081](https://github.com/FalkorDB/FalkorDB/issues/2081) | fixed |
-| 2 | [3227](https://github.com/FalkorDB/FalkorDB/issues/3227) | confirmed |
-| 3 | [3228](https://github.com/FalkorDB/FalkorDB/issues/3228) | confirmed |
-| 4 | [3315](https://github.com/FalkorDB/FalkorDB/issues/3315) | confirmed |
-| 5 | [3637](https://github.com/FalkorDB/FalkorDB/issues/3637) | pending |
+| 序号 | 问题编号 | 状态 |
+| --- | --- | --- |
+| 1 | [2081](https://github.com/FalkorDB/FalkorDB/issues/2081) | 已修复 |
+| 2 | [3227](https://github.com/FalkorDB/FalkorDB/issues/3227) | 已确认 |
+| 3 | [3228](https://github.com/FalkorDB/FalkorDB/issues/3228) | 已确认 |
+| 4 | [3315](https://github.com/FalkorDB/FalkorDB/issues/3315) | 已确认 |
+| 5 | [3637](https://github.com/FalkorDB/FalkorDB/issues/3637) | 已确认 |
 
 ## Apache AGE
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [2480](https://github.com/apache/age/issues/2480) | confirmed |
-| 2 | [2481](https://github.com/apache/age/issues/2481) | pending |
+| 序号 | 问题编号 | 状态 |
+| --- | --- | --- |
+| 1 | [2480](https://github.com/apache/age/issues/2480) | 已确认 |
+| 2 | [2481](https://github.com/apache/age/issues/2481) | 待确认 |
 
 ## JanusGraph
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [5113](https://github.com/JanusGraph/janusgraph/issues/5113) | pending |
+| 序号 | 问题编号 | 状态 |
+| --- | --- | --- |
+| 1 | [5113](https://github.com/JanusGraph/janusgraph/issues/5113) | 待确认 |
+| 2 | [5148](https://github.com/JanusGraph/janusgraph/issues/5148) | 待确认 |
+| 3 | [5147](https://github.com/JanusGraph/janusgraph/issues/5147) | 待确认 |
+
+## TinkerPop
+
+| 序号 | 问题编号 | 状态 |
+| --- | --- | --- |
+| 1 | [TINKERPOP-3316](https://issues.apache.org/jira/browse/TINKERPOP-3316) | 待确认 |
+| 2 | [TINKERPOP-3315](https://issues.apache.org/jira/browse/TINKERPOP-3315) | 待确认 |
+| 3 | [TINKERPOP-3311](https://issues.apache.org/jira/browse/TINKERPOP-3311) | 已确认 |
+| 4 | [TINKERPOP-3312](https://issues.apache.org/jira/browse/TINKERPOP-3312) | 待确认 |
+| 5 | [TINKERPOP-3313](https://issues.apache.org/jira/browse/TINKERPOP-3313) | 已确认 |
+| 6 | [TINKERPOP-3314](https://issues.apache.org/jira/browse/TINKERPOP-3314) | 已确认 |
+
+## HugeGraph
+
+| 序号 | 问题编号 | 状态 |
+| --- | --- | --- |
+| 1 | [3479](https://github.com/apache/hugegraph/issues/3479) | 待确认 |
+| 2 | [3480](https://github.com/apache/hugegraph/issues/3480) | 待确认 |
 <!-- END ISSUE TABLES -->
 
-## How to Run
+## 运行方法
 
-### 1. Environment Requirements
-- Python 3.12；Ladybug CSV 装载使用 `csv.QUOTE_NOTNULL`。
-- 选择一个已接入的数据库：
-  - Neo4j Community 2026.09.0／Cypher 25，默认配置端口 7687。
-  - Memgraph 3.14.0，部署示例端口 27687。
-  - ArcadeDB 26.10.2，部署示例端口 22480。
-  - LadybugDB 0.22.1，进程内 pybind 后端。
-  - FalkorDB 6.0.3，部署示例端口 16379。
-  - JanusGraph 1.2.0／TinkerPop 3.8.2，BerkeleyJE，部署示例端口 38182。
-  - HugeGraph 1.7.0／TinkerPop 3.5.1，RocksDB，部署示例端口 48080、48182。
+### 1. 环境要求
 
-### DBMS Connection Parameter Configuration Locations
+使用 Python 3.12，并选择下表中的数据库。每个执行用例会替换指定实验图的数据，请使用专用数据库。
 
-连接参数统一在 [config.yaml](config.yaml) 的 `database` 段设置，密码通过指定环境变量读取。
+| 数据库 | 部署示例使用的版本 | 查询语言 |
+| --- | --- | --- |
+| Neo4j | Community 2026.09.0 | Cypher 25 |
+| Memgraph | 3.14.0 | Cypher |
+| ArcadeDB | 26.10.2 | Cypher、Gremlin |
+| LadybugDB | 0.22.1 | Cypher |
+| FalkorDB | 6.0.3 | Cypher |
+| JanusGraph | 1.2.0 / TinkerPop 3.8.2 | Gremlin |
+| HugeGraph | 1.7.0 / TinkerPop 3.5.1 | Gremlin |
 
-- **主配置**：`config.yaml` 中的 `language`、`database`、`generation`、`graph`、`run` 和 `measurement`。
-- **数据库接口**：`databases/`；能力字典决定可用语法及 Pattern 变体。
-- **服务端配置**：`config/janusgraph/`、`config/hugegraph/`。完整启动命令和连接块见[后端部署](docs/backends.md)。
+服务启动命令和连接参数见[数据库部署](docs/backends.md)。LadybugDB 在 Python 进程内运行。
 
-### 2. Install Dependencies
+### 连接参数的配置位置
+
+程序从当前工作目录的 [config.yaml](config.yaml) 读取全部运行配置。
+
+| 配置段 | 用途 |
+| --- | --- |
+| `language`、`database` | 查询语言、数据库接口与连接参数 |
+| `run` | 运行模式、种子、测试模式、时长与输出目录 |
+| `generation`、`graph` | 查询生成与图规模 |
+| `measurement` | 预热、配对测量、筛选阈值与查询超时 |
+| `replay` | 归档路径与重放方式 |
+
+`password_env` 等密码字段填写环境变量名。`config/janusgraph/` 和 `config/hugegraph/` 存放对应服务的配置文件。
+
+### 2. 安装依赖
+
+在仓库目录执行：
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-主要依赖为 `neo4j==5.28.4`、`PyYAML==6.0.3`、`ladybug==0.22.1`、`falkordb==1.8.1` 和 `redis==8.1.0`。三个 HTTP 后端使用 Python 标准库。
+[requirements.txt](requirements.txt)固定了数据库驱动和配置解析库的版本。
 
-### 3. Running Parameter Configuration
+### 3. 运行参数
 
-保留其他配置段，按任务修改运行参数：
+修改 `config.yaml` 中的 `run` 和 `measurement` 配置段：
 
 ```yaml
-language: cypher
 run:
   mode: experiment
   seed: 0
@@ -135,18 +171,27 @@ measurement:
   ratio: 5.0
   minimum_delta_ms: 100.0
   direction_consistency: 0.8
-  scale_factor: 10        # no_gap 的查询对用 high_units / scale_factor 重测；null 关闭
-  growth_ratio: 3.0       # 跨该规模的差距增长倍数阈值
+  scale_factor: 10
+  growth_ratio: 3.0
   timeout_seconds: 10
 ```
 
-`generate` 只生成归档；`check` 装载图并比较完整结果；`experiment` 继续计时和采集 PROFILE。固定 `case_seed` 时只跑一轮。Cypher SC7 仅在 Neo4j 启用；Gremlin 使用 SC1–SC8、SY1、SY2 和 SY5–SY7。
+| 运行模式 | 行为 |
+| --- | --- |
+| `generate` | 生成并归档用例，无需连接数据库 |
+| `check` | 装载图数据并比较完整查询结果 |
+| `experiment` | 检查结果、测量执行时间并采集执行计划 |
 
-### 4. Database Configuration
+`seed` 控制运行调度。设置 `case_seed` 后，程序使用同一个固定种子，对每个选定模式各尝试一次。普通运行每轮尝试所有选定模式。程序在启动新用例前检查时间预算，正在执行的用例可能晚于预算结束。
 
-默认连接专用 Neo4j 实验库：
+计时结果同时满足耗时比、中位配对耗时差和慢侧方向一致率三个阈值后，程序使用新样本复测确认。启用 `scale_factor` 时，程序还会在较小的图上重测 `no_gap` 查询对，检查耗时差是否随规模增大。设置 `scale_factor: null` 可关闭这一步。测量指标和结果状态见[架构文档](docs/architecture.zh-CN.md)。
+
+### 4. 数据库连接
+
+默认配置使用 Neo4j：
 
 ```yaml
+language: cypher
 database:
   system: neo4j
   uri: bolt://127.0.0.1:7687
@@ -160,9 +205,9 @@ database:
 export GRAPHSYMPERF_NEO4J_PASSWORD='your-local-experiment-password'
 ```
 
-每个执行用例会替换指定实验图的数据。Q/Q′ 之间图与索引保持不变。其他系统的连接配置见[后端部署](docs/backends.md)。
+其他数据库使用[数据库部署](docs/backends.md)中的对应连接块。Gremlin 运行需设置 `language: gremlin`。Cypher SC7 仅在 Neo4j 启用，其他 Cypher 数据库需从 `run.patterns` 移除 SC7；Gremlin 支持全部十六个模式。
 
-### 5. Query Generation Configuration
+### 5. 查询生成参数
 
 ```yaml
 generation:
@@ -178,36 +223,45 @@ graph:
   indexes: true
 ```
 
-`generation.nodes` 是语法展开预算。`high_units` 是用例内的高成本扩张单元总数，按锚点或区域分配，不等于节点总数。随机上下文允许不适用或无法触达目标，程序不使用求解器修补这些上下文。
+`generation.nodes` 设置语法树展开预算。`graph.high_units` 设置当前模式的图扩张预算，按锚点或区域分配。最终图还包括随机背景图和模式要求的固定结构。随机查询中没有适用的嵌入位置时，用例记为 `skipped`。
 
-### 6. Execution Command
+### 6. 执行命令
 
 ```bash
 python main.py
 ```
 
-在 `replay.case` 指定归档路径，并设置 `replay.check_only` 后执行：
+重放归档时，将 `replay.case` 设为用例目录。`replay.check_only: true` 只检查结果，`false` 则继续测量性能：
 
 ```bash
 python replay.py
 ```
 
-固定种子／规模运行需增加[架构文档](docs/architecture.zh-CN.md#10-固定种子运行)中的 `campaign` 配置，设置 `save_all: true` 和新输出目录，然后执行：
+固定种子和图规模的批量实验按[批量配置说明](docs/architecture.zh-CN.md#10-固定种子运行)设置后执行：
 
 ```bash
 python scripts/run_campaign.py
 ```
 
-维护 `bugs.csv` 后，重新生成两个 README 的 issue 表格：
+更新 [bugs.csv](bugs.csv) 后，重新生成两个 README 的缺陷摘要和表格：
 
 ```bash
 python scripts/update_readme.py
 ```
 
-### 7. Output Description
-- **`results/<run>/summary.csv`**：用例、Pattern、种子、状态、图规模和可用计时信息。
-- **用例归档**：原查询对、`graph.json`、`result.json`、`plans.json`（含算子摘要）；`scale_candidate` 另有 `plans-small.json`；请求重放后另存 `replay-result.json`。
-- **固定清单运行**：`attempts.json` 保留所有计划项及未提交项；`report.json` 记录停止原因、计数、耗时和客户端资源。
-- **本地证据**：`results/` 被 Git 忽略，已记录实验的范围见[验证记录](docs/validation.md)。
+### 7. 输出文件
 
-性能候选、结果差异、查询超时、已识别拒绝、执行异常及终止未确认的用例都会归档。`run.save_all: true` 同时保留普通用例。终止未确认时停止后续请求，不重启数据库。
+| 输出 | 内容 |
+| --- | --- |
+| `results/<run>/summary.csv` | 用例编号、模式、种子、结果状态、图规模和计时摘要 |
+| `query_a.cypher`、`query_b.cypher` | 查询对；Gremlin 用例使用 `.gremlin` 扩展名 |
+| `graph.json` | 图数据、模式定义与请求的索引 |
+| `result.json` | 配置、数据库版本、查询参数、结果状态与测量样本 |
+| `plans.json` | 执行计划和算子摘要 |
+| `plans-small.json` | 规模确认阶段采集的较小图执行计划 |
+| `replay-result.json` | 最近一次重放的结果 |
+| `attempts.json`、`report.json` | 固定批量实验的计划清单和完成摘要 |
+
+生成的用例、性能候选、结果差异、超时、数据库拒绝和执行失败都会归档。设置 `run.save_all: true` 可同时保留普通完成用例。查询终止无法确认时，程序停止运行。
+
+`results/` 存放本地输出，不纳入 Git。测试与验收步骤见[测试说明](docs/testing.md)，正式复现报告见 [bug-reports/](bug-reports/README.md)。

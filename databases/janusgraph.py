@@ -10,7 +10,6 @@ class Database:
         self.client = GremlinHTTP(config["url"], config["http_timeout_seconds"])
         self.aliases = {"graph": config["name"], "g": config["traversal_source"]}
         # A top-level Map is iterated as entries by HTTP; wrap metadata as one result row.
-        # HTTP 会把顶层 Map 按条目迭代，外包列表使版本信息保持为一行。
         self.version = self.command("""
             [[janusgraph: org.janusgraph.graphdb.configuration.JanusGraphConstants.VERSION,
              tinkerpop: org.apache.tinkerpop.gremlin.util.Gremlin.version(),
@@ -43,7 +42,6 @@ class Database:
                     raise ValueError(f"JanusGraph property type conflict: {key}")
                 properties[key] = kind
         # New keys, labels, and indexes share one schema transaction; no reindex is needed.
-        # 新属性键、标签和索引共用一次 schema 事务，无需对已有数据重建索引。
         states = self.command("""
             graph.tx().rollback()
             def mgmt = graph.openManagement()
@@ -89,7 +87,6 @@ class Database:
             """, {"rows": rows})
             ids.update(pairs)
         # Endpoints use committed native IDs, without an extra loading index on uid.
-        # 端点使用提交后的原生 ID，不额外创建 uid 装载索引。
         for start in range(0, len(graph.relationships), batch_size):
             rows = [{"start_id": ids[edge["start"]], "end_id": ids[edge["end"]],
                      "type": edge["type"], "properties": edge["properties"]}
@@ -107,7 +104,6 @@ class Database:
 
     def read(self, query, timeout, profile=False):
         # The native option covers evaluation and iterator consumption, but cannot prove termination.
-        # 原生选项覆盖求值与迭代消费，但超时响应不能证明工作线程已经终止。
         script = f"g.with('evaluationTimeout',{int(timeout*1000)})" + query.text[1:]
         if profile:
             script += ".profile()"

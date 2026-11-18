@@ -11,7 +11,6 @@ def render(query, *, groovy=False):
             parts = ["g" if value.root else "__"]
             for step in value.steps:
                 # values() carries a static output kind used only by scope analysis.
-                # values() 的输出类型只供作用域分析使用，不写入查询文本。
                 args = step.args[:1] if step.name == "values" else step.args
                 text = ",".join(emit(arg, step.name in {"has", "is"}) for arg in args)
                 parts.append(f"{step.name}({text})")
@@ -25,7 +24,6 @@ def render(query, *, groovy=False):
                 return name
             literal = json.dumps(value.value, ensure_ascii=True)
             # Groovy decimal literals otherwise become BigDecimal rather than Double.
-            # Groovy 小数字面量默认是 BigDecimal，需要后缀保持 Double 类型。
             return literal + "d" if groovy and value.kind == "float" else literal
         return json.dumps(value, ensure_ascii=True)
 

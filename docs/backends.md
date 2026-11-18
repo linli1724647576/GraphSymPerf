@@ -1,29 +1,21 @@
 # Backend setup
 
-These examples target the versions used for local acceptance. Run Docker commands from the repository directory so configuration mounts resolve. Replace the selected `database` block in `config.yaml`; retain the other sections. Every executed case replaces the selected experiment graph or database.
+These deployment examples use the versions listed below. Run Docker commands from the repository root so mounted configuration files resolve. Replace the `database` block in `config.yaml` and retain the other sections. Use a dedicated experiment graph or database: each executed case replaces its data.
 
 ## Capability matrix
 
-| System key | Version | Language | Patterns | Relevant differences |
+| System key | Version | Language | patterns | Relevant differences |
 | --- | --- | --- | --- | --- |
 | `neo4j` | Community 2026.09.0 | Cypher 25 | SC1–SC8, SY1–SY8 | Full expression subqueries, CALL, conditional queries |
 | `memgraph` | 3.14.0 | Cypher | SC1–SC6, SC8, SY1–SY8 | No CALL inside expression subqueries; no subquery work in UNWIND |
 | `arcadedb` | 26.10.2 | Cypher | SC1–SC6, SC8, SY1–SY8 | WITH drops unprojected imports; declared result columns |
 | `ladybug` | 0.22.1, pybind | Cypher | SC1–SC6, SC8, SY1–SY8 | MATCH-body subqueries, native SC6, single labels, native CAST |
-| `falkordb` | 6.0.3 | Cypher | SC1–SC6, SC8, SY1–SY8 | Pattern-comprehension work items and native SC6 |
-| `arcadedb` | 26.10.2 | Gremlin | SC1–SC8, SY1, SY2, SY5–SY7 | HTTP result envelope and tagged native cancellation |
-| `janusgraph` | 1.2.0 / TP 3.8.2 | Gremlin | SC1–SC8, SY1, SY2, SY5–SY7 | BerkeleyJE, global typed keys, GraphSON 3 |
-| `hugegraph` | 1.7.0 / TP 3.5.1 | Gremlin | SC1–SC8, SY1, SY2, SY5–SY7 | RocksDB, parent/child edge labels, REST batches |
+| `falkordb` | 6.0.3 | Cypher | SC1–SC6, SC8, SY1–SY8 | pattern-comprehension work items and native SC6 |
+| `arcadedb` | 26.10.2 | Gremlin | SC1–SC8, SY1–SY8 | HTTP result envelope and tagged native cancellation |
+| `janusgraph` | 1.2.0 / TP 3.8.2 | Gremlin | SC1–SC8, SY1–SY8 | BerkeleyJE, global typed keys, GraphSON 3 |
+| `hugegraph` | 1.7.0 / TP 3.5.1 | Gremlin | SC1–SC8, SY1–SY8 | RocksDB, parent/child edge labels, REST batches |
 
-Remove SC7 for non-Neo4j Cypher targets. For Gremlin set:
-
-```yaml
-language: gremlin
-run:
-  patterns: [SC1, SC2, SC3, SC4, SC5, SC6, SC7, SC8, SY1, SY2, SY5, SY6, SY7]
-```
-
-This is a configuration fragment, not a complete replacement for the `run` section. Gremlin SY5–SY7 exchange the two patterns of a TinkerPop `match()` step; SY3, SY4, and SY8 have no Gremlin form. Other graph systems in the historical issue ledger, such as Apache AGE, do not have current adapters.
+Remove SC7 for non-Neo4j Cypher targets. For Gremlin set `language: gremlin`; all sixteen patterns are available. Gremlin SY3–SY8 use a TinkerPop `match()` step: SY5–SY8 exchange its two patterns (SY8 with `coalesce` and a sentinel in place of null extension), and SY3/SY4 rewrite a `where()` edge or bounded-walk filter from its other endpoint. The [issue ledger](../bugs.csv) also includes reports for systems outside this adapter list.
 
 ## Neo4j
 
@@ -68,7 +60,7 @@ database:
   batch_size: 5000
 ```
 
-The connection checks the global timeout, transactional storage mode, and automatic-index flags. Each load removes unrequested temporary loading indexes and runs `ANALYZE GRAPH`. Query-level CALL is supported; expression-subquery CALL and subquery-producing work inside UNWIND are excluded by capabilities. Native timeout recognition uses the verified code/message rather than treating every driver error as a timeout.
+The connection checks the global timeout, transactional storage mode, and automatic-index flags. Each load removes unrequested temporary loading indexes and runs `ANALYZE GRAPH`. Query-level CALL is supported; expression-subquery CALL and subquery-producing work inside UNWIND are excluded by capabilities. The adapter recognizes native timeouts from their error codes and messages.
 
 ## ArcadeDB
 
@@ -94,9 +86,9 @@ database:
 
 Select either `language: cypher` or `language: gremlin`. The loader recreates only the named database, declares property types, loads graph data, and prepares requested indexes. HTTP requests use `limit: -1`; a response marked truncated is rejected.
 
-The HTTP result format requires declared columns for empty results and expanded entity rows. Ordinary projection fields are checked against those declarations. Server type hints and native RIDs determine normalization, not the AST's expected type.
+The HTTP result format requires declared columns for empty results and expanded entity rows. Ordinary projection fields are checked against those declarations. Server type hints and native RIDs determine normalization.
 
-Cypher uses the native database deadline. Gremlin traversal consumption uses a timer that requests tagged native cancellation through a separate connection. An unconfirmed cancellation stops the run. No client retry or server restart is performed. PROFILE preserves the query and stores native plan, text, and timing fields.
+Cypher uses the native database deadline. Gremlin traversal consumption uses a timer that requests tagged native cancellation through a separate connection. An unconfirmed cancellation stops the run. PROFILE preserves the query and stores native plan, text, and timing fields.
 
 ## LadybugDB
 
@@ -112,7 +104,7 @@ database:
 
 The adapter creates a temporary database below `directory` for each case and removes it on close. It declares node and relationship tables from `Graph.schema`, then uses COPY. Python 3.12 `csv.QUOTE_NOTNULL` distinguishes unquoted null fields from quoted empty strings.
 
-Nodes have one label/table. UID primary keys provide the supported indexes; additional secondary indexes are not generated. COUNT scalar work uses `CAST(value, "STRING")` and `CAST(value, "DOUBLE")`. Native query timeouts are separate from PROFILE failures.
+Nodes have one label/table. UID primary keys provide the indexes used by this adapter. COUNT scalar work uses `CAST(value, "STRING")` and `CAST(value, "DOUBLE")`. Native query timeouts are separate from PROFILE failures.
 
 ## FalkorDB
 
@@ -132,7 +124,7 @@ database:
   batch_size: 5000
 ```
 
-An optional `password_env` names the password variable. The adapter requires an unlimited result set and supplies explicit timeouts to ordinary queries and PROFILE. It replaces only the named graph, not the Redis instance. Pattern comprehensions supply Boolean work items because the tested EXISTS expression forms were rejected by this version.
+An optional `password_env` names the password variable. The adapter requires an unlimited result set and supplies explicit timeouts to ordinary queries and PROFILE. It replaces the named graph. Boolean work items use pattern comprehensions.
 
 ## JanusGraph
 
@@ -157,7 +149,7 @@ database:
   http_timeout_seconds: 130
 ```
 
-`graph_config` is a path inside the server. Each load drops/reopens the configured experiment graph, recreates schema, and registers graph/traversal bindings. SINGLE property keys and MULTI edges preserve scalar types and parallel relationships. Vertex batches return committed IDs for subsequent edge batches; no extra UID index is needed.
+`graph_config` is a path inside the server. Each load drops/reopens the configured experiment graph, recreates schema, and registers graph/traversal bindings. SINGLE property keys and MULTI edges preserve scalar types and parallel relationships. Vertex batches return committed IDs for subsequent edge batches.
 
 Fresh requested composite indexes must be ENABLED. The server configuration's default deadline covers management/loading; measured traversals set their own deadline. A recognized native timeout records unconfirmed termination and stops subsequent requests. PROFILE stores decoded TraversalMetrics and raw GraphSON.
 
@@ -188,16 +180,14 @@ database:
 
 Native clear removes data, schema, and indexes for each case. REST batches return native vertex IDs for edge endpoints. Logical relationship types are parent labels; endpoint-specific children store edges. A shared `_gsp_eid` sort key preserves parallel edges across batches. Queries keep parent labels.
 
-Label indexes are enabled. Requested property indexes must reach CREATED before loading. Recognized missing-index errors are archived as `backend_rejected`; no automatic index supplement is added. Gremlin queries and PROFILE use the direct Gremlin HTTP port. Returned server request IDs are kept separate from client-generated IDs. Native timeout termination is unconfirmed, so the run stops.
+Label indexes are enabled. Requested property indexes must reach CREATED before loading. Recognized missing-index errors are archived as `backend_rejected`; no automatic index supplement is added. Gremlin queries and PROFILE use the direct Gremlin HTTP port. The archive records both server request IDs and client-generated IDs. Native timeout termination is unconfirmed, so the run stops.
 
-## Verification commands
+## Verify the connection
 
-After selecting a dedicated supported target in `config.yaml`:
+After selecting a dedicated target in `config.yaml`, run:
 
 ```sh
 python scripts/check_interfaces.py
 ```
 
-This manual script includes loading, result, PROFILE, and timeout/cancellation fixtures; it replaces experiment data. It supports the non-Neo4j Cypher adapters and the three Gremlin targets. For Neo4j, use ordinary generated check mode and replay.
-
-For an offline generation example, keep all required configuration fields and set `run.mode: generate`, `run.patterns: [SY4]`, `run.case_seed: 24`, and `graph.high_units: 100`, then run `python main.py`. A separate configuration directory can invoke the same script by absolute path; config is read from the current working directory.
+The script checks loading, results, PROFILE and timeout/cancellation behavior for the non-Neo4j Cypher adapters and all three Gremlin targets. For Neo4j, use check mode with `run.save_all: true`, then replay the saved case. The [testing guide](testing.md) covers offline generation, result checks and experimental replay.

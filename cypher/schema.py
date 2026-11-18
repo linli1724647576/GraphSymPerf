@@ -6,7 +6,6 @@ from data_structures.ast import walk
 
 def register_schema(graph, case, pattern):
     # Types come from typed keys and AST expressions, never from sampled property values.
-    # 属性类型来自带类型的属性键与 AST 表达式，不根据随机实例值猜测。
     trees = [case.query, pattern.mutate(deepcopy(case))]
     node_types = {"uid": "int", "keep": "bool", "value": "int", "p_guard": "bool", "p_anchor": "int"}
     relationship_types = {"keep": "bool"}
@@ -42,7 +41,6 @@ def register_schema(graph, case, pattern):
             declaration["endpoints"].append([start, end])
 
     # Register written paths even when their regions contain no stored relationships.
-    # 即使区域中没有关系实例，也登记查询路径声明的端点；箭头决定存储方向。
     for tree in trees:
         for _, path in walk(tree):
             if not isinstance(path, PathPattern):

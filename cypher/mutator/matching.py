@@ -30,7 +30,6 @@ class MatchingPattern:
 
     def accepts(self, site):
         # This recipe replaces plain matches; it does not relocate attached predicates.
-        # 此配方替换普通匹配，不通过移动附属谓词来完成交换。
         match = site.node
         if not isinstance(match, Match) or match.optional or match.where:
             return False
@@ -44,7 +43,6 @@ class MatchingPattern:
         case = Case(self.id, seed, query, site.path, set(symbols(query)))
         nodes = copy.deepcopy(nodes_in_match(site.node))
         # Reuse exported node variables and add private variables only for missing roles.
-        # 复用对外提供的节点变量，只为缺少的局部角色增加私有变量。
         count = 2 if self.mode == "independent" else 3
         while len(nodes) < count:
             i = len(nodes)
@@ -68,7 +66,6 @@ class MatchingPattern:
             pieces = [edge(root, a, first_type), edge(NodePattern(root.variable), nodes[2], second_type)]
             if self.mode == "optional":
                 # Keep the mandatory root outside the pair of independent optional branches.
-                # 必选根节点位于两个独立可选分支之外，不参与分支交换。
                 pieces = [Match([PathPattern([root], [])]),
                           edge(NodePattern(root.variable), a, first_type, True),
                           edge(NodePattern(root.variable), nodes[2], second_type, True)]
@@ -81,7 +78,6 @@ class MatchingPattern:
         if self.mode == "independent":
             case.payload["small_empty"] = rng.random() < .25
             # Independent components may also be comma-separated parts of a single MATCH.
-            # 独立分量也可以写成同一 MATCH 中逗号分隔的两个部分。
             case.payload["form"] = rng.choice(("clauses", "parts"))
             if case.payload["form"] == "parts":
                 owner.clauses[index:index + 2] = [Match([piece.paths[0] for piece in pieces])]
@@ -104,7 +100,6 @@ class MatchingPattern:
         if self.mode == "independent":
             if payload["small_empty"]:
                 # Remove the selective match, not the root node, to create an empty component.
-                # 让选择性条件不再命中以构造空分量，不需要删除根节点。
                 graph.nodes[root]["properties"]["p_anchor"] = 0
             for _ in range(total):
                 new(a_spec)
@@ -116,7 +111,6 @@ class MatchingPattern:
             graph.edge(root, middle, first)
             graph.edge(middle, target, second)
             # Extra right-hand chains have no left-hand connection to the selected root.
-            # 新增右侧链没有连接到指定根节点的左侧关系，不能形成完整匹配。
             hub = new(a_spec) if candidate == "detached_fanout" else None
             for _ in range(total):
                 graph.edge(hub if hub is not None else new(a_spec), new(b_spec), second)
@@ -138,11 +132,9 @@ class MatchingPattern:
 
     def mutate(self, case):
         # Swap two recorded clauses in place; retain their boundaries and the outer query.
-        # 原位交换已记录的两条子句，保留子句边界及外层查询。
         owner = at(case.query, case.target)
         if case.payload.get("form") == "parts":
             # Swap the two comma-separated parts; the MATCH clause itself stays in place.
-            # 交换逗号分隔的两个部分，MATCH 子句本身位置不变。
             owner.paths[0], owner.paths[1] = owner.paths[1], owner.paths[0]
             return case.query
         index = case.payload["swap_index"]

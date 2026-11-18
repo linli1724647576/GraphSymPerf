@@ -7,7 +7,9 @@ from data_structures.result import freeze
 
 
 SUPPORT = {"subquery_call": False, "subquery_unwind": False, "bodies": "full", "call": True, "conditional": False, "multi_label": True,
-           "work": "count", "native_limit": False, "s7": False, "secondary_indexes": True}
+           "work": "count", "native_limit": False, "s7": False, "secondary_indexes": True,
+           # Memgraph rejects a mandatory MATCH after OPTIONAL MATCH in one query part.
+           "match_after_optional": False}
 TIMEOUT_CODE = "Memgraph.TransientError.MemgraphError.MemgraphError"
 TIMEOUT_MESSAGE = "Transaction was asked to abort because of transaction timeout."
 
@@ -29,7 +31,6 @@ class Database:
                         "protocol": list(server.protocol_version),
                         "engine": self.session.run("SHOW VERSION").single()["version"]}
         # A global limit would shorten the per-query deadline; validate the experiment once.
-        # 全局时限可能缩短逐查询时限，因此在连接入口核对一次实验配置。
         settings = dict(self.session.run("SHOW DATABASE SETTINGS").values())
         self.version["query_timeout"] = settings["query.timeout"]
         storage = dict(self.session.run("SHOW STORAGE INFO").values())
@@ -52,7 +53,6 @@ class Database:
             suffix = "".join(":" + identifier(label) for label in labels)
             self.write_batches("UNWIND $rows AS row CREATE (n:__GSP" + suffix + ") SET n = row", records)
         # uid is unique within the case; CREATE preserves every parallel relationship.
-        # uid 在用例内唯一，关系使用 CREATE 保留所有平行边。
         self.session.run("CREATE INDEX ON :__GSP(uid)").consume()
         edges = defaultdict(list)
         for edge in graph.relationships:
@@ -66,7 +66,6 @@ class Database:
         for label, key in graph.indexes:
             self.session.run(f"CREATE INDEX ON :{identifier(label)}({identifier(key)})").consume()
         # Analyze only after loading and index creation; neither query changes these conditions.
-        # 装载和索引创建完成后再更新统计信息，两条查询之间不改变这些条件。
         self.session.run("ANALYZE GRAPH").consume()
 
     def write_batches(self, query, records):
@@ -83,7 +82,6 @@ class Database:
             result.consume()
         except self.error_type as error:
             # The generic transient code alone also covers failures other than timeout.
-            # 通用瞬态错误码还涵盖其他故障，必须同时匹配原生超时消息。
             if error.code == TIMEOUT_CODE and error.message == TIMEOUT_MESSAGE:
                 raise TimeoutError(f"{error.code}: {error.message}") from error
             raise
@@ -92,7 +90,6 @@ class Database:
     def execute(self, query, timeout):
         columns, rows, elapsed_ms = self.read(query, timeout)
         # Normalize after complete consumption and timing, including nested entities.
-        # 完整读取并停止计时后再规范化，同时保留嵌套实体身份。
         rows = [tuple(self.normalize(value) for value in row) for row in rows]
         return columns, rows, elapsed_ms
 

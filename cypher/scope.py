@@ -7,7 +7,6 @@ from data_structures.case import Site
 @dataclass
 class Scope:
     # Most backends keep imports across WITH; ArcadeDB requires explicit projection.
-    # 多数后端在 WITH 后保留导入变量，ArcadeDB 则要求显式投影。
     local: dict = field(default_factory=dict)
     imported: dict = field(default_factory=dict)
     persistent_imports: bool = True
@@ -29,7 +28,6 @@ class Scope:
 
 def analyze(query, initial=None, persistent_imports=True):
     # Record the variables visible at each candidate site while checking references.
-    # 检查变量引用的同时，记录各候选插入位置可见的变量。
     sites = []
     _query(query, Scope(imported=initial or {}, persistent_imports=persistent_imports), (), sites)
     return sites
@@ -65,7 +63,6 @@ def _query(query, scope, path, sites):
         sites.append(Site(location, clause, before))
         if isinstance(clause, Match):
             # A replacement sees the input scope; WHERE also sees this MATCH's variables.
-            # 匹配结构替换使用输入作用域；WHERE 还可以引用本 MATCH 引入的变量。
             for pattern in clause.paths:
                 for variable in pattern.variables():
                     if variable.name not in scope.visible():
@@ -94,7 +91,6 @@ def _query(query, scope, path, sites):
                     assert isinstance(expression, Literal) and expression.kind == "int"
         elif isinstance(clause, Call):
             # CALL imports explicitly and exposes only its declared output columns.
-            # CALL 显式导入变量，只把声明的返回列提供给外层。
             imported = {}
             for variable in clause.imports:
                 assert variable.name in before, f"Undefined CALL import: {variable.name}"
@@ -119,7 +115,6 @@ def _expression(expression, scope, path, sites):
         assert scope.visible()[variable.name].kind == variable.kind, f"Variable type mismatch: {variable.name}"
     elif isinstance(expression, PatternComprehension):
         # Imports remain visible; variables introduced by the pattern cannot escape the list.
-        # 保留外层变量可见性，模式推导新引入的变量不能泄露到列表之外。
         child = scope.child()
         _pattern(expression.pattern, child, path + ("pattern",), sites)
         _expression(expression.where, child, path + ("where",), sites)
@@ -131,7 +126,6 @@ def _expression(expression, scope, path, sites):
             assert len(expression.query.output()) == 1
     elif isinstance(expression, Quantifier):
         # The iteration variable exists only inside the quantifier predicate.
-        # 迭代变量只在量词谓词内部可见，不能泄露到外层表达式。
         _expression(expression.source, scope, path + ("source",), sites)
         child = scope.child()
         child.add(expression.variable)

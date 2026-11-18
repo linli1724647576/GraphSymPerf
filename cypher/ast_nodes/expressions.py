@@ -11,7 +11,6 @@ class Expression(ASTNode):
 @dataclass
 class Literal(Expression):
     # Typed nulls retain the expected expression type during generation.
-    # NULL 也携带预期表达式类型，便于生成时保持类型一致。
     value: object
     value_type: str = "int"
 

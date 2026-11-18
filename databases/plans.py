@@ -11,7 +11,6 @@ import re
 
 def normalize(name):
     # Keep the operator kind; drop arguments, identifiers and backend suffixes.
-    # 只保留算子类别，去掉参数、标识符和后端后缀。
     name = re.sub(r"[({\[].*$", "", str(name)).split("@")[0]
     return re.sub(r"[\s*|\\]+", " ", name).strip()
 
@@ -21,8 +20,7 @@ def summarize(plan):
         return None
     operators = list(_operators(plan))
     counted = [(index, name, count) for index, (name, count) in enumerate(operators) if count is not None]
-    # Ties go to the later operator, which is the nested step that does the work.
-    # 计数相同时取靠后的算子，即真正做工作的内层步骤。
+    # Prefer the later operator when reported counts tie.
     hot = max(counted, key=lambda item: (item[2], item[0])) if counted else None
     work = sum(count for _, _, count in counted) if counted else None
     if plan["format"] == "ladybug_profile":
@@ -51,7 +49,6 @@ def _operators(plan):
     elif kind == "ladybug_profile":
         text = "\n".join(str(cell) for row in plan["rows"] for cell in row)
         # Side-by-side boxes make per-operator pairing unreliable; summarize() reports the total only.
-        # 并排的方框无法可靠地把计数对应到算子，summarize() 只报告总量。
         for name in re.findall(r"([A-Z][A-Z_]+)\[\d+\]", text):
             yield normalize(name), None
     elif kind == "arcadedb_profile":
@@ -82,7 +79,7 @@ def totals(plan):
 
 
 def signature(system, pattern, plans, slower):
-    """Cluster key for a confirmed gap: the operator whose work grows most on the slower side."""
+    """Cluster by the operator with the largest counter difference on the slower side."""
     faster = "a" if slower == "b" else "b"
     slow, fast = totals(plans.get(slower, {})), totals(plans.get(faster, {}))
     if slow is None or fast is None:

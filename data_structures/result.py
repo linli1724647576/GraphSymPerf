@@ -3,7 +3,6 @@ def freeze(value, normalize=None):
     if value is None:
         return ("null",)
     # bool is an int subclass; preserve the observed value type before comparison.
-    # bool 是 int 的子类；比较前保留数据库实际返回的值类型。
     if isinstance(value, bool):
         return ("bool", value)
     if isinstance(value, int):
@@ -14,7 +13,6 @@ def freeze(value, normalize=None):
         return ("string", value)
     convert = normalize or freeze
     # Containers recurse through the adapter so nested entities keep their identity.
-    # 容器元素递归经过适配器，保留嵌套实体的身份。
     if isinstance(value, (list, tuple)):
         return ("list", tuple(convert(item) for item in value))
     if isinstance(value, dict):

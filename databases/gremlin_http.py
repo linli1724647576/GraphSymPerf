@@ -28,7 +28,6 @@ class GremlinHTTP:
             data = json.loads(response.read())
         except (OSError, HTTPException) as error:
             # A socket timeout does not establish a native query timeout or termination.
-            # socket 等待超时不能证明原生查询超时或已经终止。
             self.connection.close()
             raise ConnectionError(f"Gremlin HTTP failed; completion is unknown (request {request_id})") from error
         elapsed = (perf_counter() - started) * 1000

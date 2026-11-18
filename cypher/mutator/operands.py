@@ -57,12 +57,10 @@ def prepare_two_hops(payload, roles=("low", "high")):
 
 def prepare(query, site, pattern, seed, rng, work_kind="count"):
     # Reuse a traceable outer node or introduce a private root inside the local subquery.
-    # 复用来源可追踪的外层节点，或在局部子查询中引入独立根节点。
     external = [v for v in site.variables.values() if v.kind == "node" and v.labels and not v.nullable]
     correlated = bool(external) and rng.random() < .65
     anchor = rng.choice(external) if correlated else Variable("p_root", "node", (Symbol("Pattern_p_root", "label"),))
     # Host names use v...; pattern-local names use p_... to avoid variable capture.
-    # 宿主变量使用 v...，Pattern 局部变量使用 p_...，避免意外引用同名变量。
     payload = {
         "anchor": anchor, "correlated": correlated, "work_kind": work_kind,
         "low_label": Symbol("Pattern_p_low", "label"), "high_label": Symbol("Pattern_p_high", "label"),
@@ -88,7 +86,6 @@ def rows(payload, role, outputs=None, predicate=True, *, two_hops=False):
     where = Binary(Property(node, "keep", "bool"), "=", Literal(True, "bool")) if predicate else None
     outputs = outputs or [Variable("p_value", "int")]
     # Constant projections preserve values and duplicates when a limit selects any n rows.
-    # 各分支投影同一常量，使 LIMIT 任取 n 行时仍保持值和重复次数一致。
     items = [ProjectionItem(constant(variable.kind), variable) for variable in outputs]
     return Query([Match([path], where=where), Projection("RETURN", items)])
 
@@ -103,7 +100,6 @@ def measure_rows(payload, role, mode, *, two_hops=False):
     if payload["work_kind"] == "pattern_list":
         if mode == "EXISTS":
             # FalkorDB expresses existential quantification over a pattern comprehension.
-            # FalkorDB 用模式推导式上的 any 表达存在性判断。
             flags = PatternComprehension(match.paths[0], Literal(True, "bool"), match.where)
             flag = Variable("p_keep", "bool")
             return Quantifier("any", flag, flags, Reference(flag))
@@ -121,7 +117,6 @@ def work(payload, role, kind, *, two_hops=False):
         return count
     if payload["work_kind"] == "match_count":
         # Ladybug uses native CAST for scalar COUNT results; keep the declared AST type.
-        # Ladybug 使用原生 CAST 转换 COUNT 标量结果，保持 AST 声明的类型。
         target_type = "DOUBLE" if kind == "float" else "STRING"
         return Function("CAST", [count, Literal(target_type, "string")], kind)
     return Function("toFloat" if kind == "float" else "toString", [count], kind)
@@ -129,7 +124,6 @@ def work(payload, role, kind, *, two_hops=False):
 
 def guard(payload, truth, rng):
     # Each candidate supplies a known truth value under the matching graph recipe.
-    # 每个候选在配套构图条件下具有确定真值，不能把任意表达式当作决定项。
     choices = ["literal", "comparison", "exists"] if payload["work_kind"] == "pattern_list" else ["literal", "comparison", "count", "exists"]
     if payload["correlated"]:
         choices.append("property")
@@ -145,7 +139,6 @@ def guard(payload, truth, rng):
     if name == "exists":
         if payload["work_kind"] == "pattern_list":
             # The decisive witness must stay separate from the deliberately failing work region.
-            # 决定项见证与故意不满足谓词的工作区域分离。
             expression = work(payload, "witness", "bool")
         else:
             expression = measure_rows(payload, "witness", "EXISTS")
@@ -156,7 +149,6 @@ def guard(payload, truth, rng):
 
 def nonnull(payload, kind, rng):
     # A zero count is still non-null; the prefix need not be true or numerically positive.
-    # 计数为零仍然是非空值；非空前缀不要求为真或大于零。
     choices = ["literal"] if payload["work_kind"] == "pattern_list" else ["literal", "count"]
     if payload["correlated"]:
         choices.append("property")
@@ -191,7 +183,6 @@ def populate_regions(graph, payload, total, *, witness=0, low_keep=True, high_ke
     payload["anchor_uids"] = roots
     payload["high_allocations"] = allocations
     # Guards and witnesses apply per anchor; only the high-cost total is shared across anchors.
-    # 守卫与见证条件逐锚点满足，只有高成本总预算在锚点之间分配。
     for root, count in zip(roots, allocations):
         if "guard_value" in payload:
             graph.nodes[root]["properties"]["p_guard"] = payload["guard_value"]

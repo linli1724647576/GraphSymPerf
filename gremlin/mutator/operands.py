@@ -71,7 +71,6 @@ def populate(graph, payload, total):
         if payload.get("prefix_name") == "property":
             props["p_prefix"] = payload["value"].value
         # Count distinct graph anchors once, even if the host emits an anchor repeatedly.
-        # 按不同图锚点分配总预算，宿主重复输出锚点不会重复扩张。
         if payload.get("variant") == "native_limit":
             for _ in range(payload["limit"]):
                 node = graph.node([payload["low_label"]], keep=False)

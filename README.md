@@ -1,141 +1,159 @@
 # GraphSymPerf
 
-GraphSymPerf tests short-circuit and symmetry transformations in graph database management systems. It generates a random query AST, inserts one compatible Pattern, constructs a graph with fixed witnesses and expandable regions, and compares two queries on that graph. Cypher targets are Neo4j, Memgraph, ArcadeDB, LadybugDB, and FalkorDB; Gremlin targets are ArcadeDB, JanusGraph, and HugeGraph.
+[中文](README.zh-CN.md) · [Documentation](docs/README.md) · [Bug reports](docs/bug-reports.md)
+
+GraphSymPerf tests graph database performance using short-circuit and symmetry transformations. It generates a seed query as an abstract syntax tree (AST), applies a compatible test pattern, and builds a graph for the resulting query pair. It compares complete query results, measures execution times, and collects execution plans to investigate performance differences.
+
+Cypher adapters support Neo4j, Memgraph, ArcadeDB, LadybugDB, and FalkorDB. Gremlin adapters support ArcadeDB, JanusGraph, and HugeGraph. The [pattern catalog](docs/pattern-catalog.en.md) describes the eight short-circuit patterns (SC1–SC8) and eight symmetry patterns (SY1–SY8).
 
 <!-- BEGIN ISSUE SUMMARY -->
-This README lists 38 submitted issue URLs: 24 fixed, 6 confirmed, 8 pending. Statuses are the recorded snapshot (2026-11-02), not a new upstream audit. Historical reports and merged issues are included; these totals are not unique root causes or bugs discovered by the current rewrite.
+The tables below list 48 submitted reports: 25 fixed, 10 confirmed, and 13 pending. Status review dates: 2026-11-18. See the [report index](docs/bug-reports.md) for the complete registry, status evidence, and reproduction reports.
 <!-- END ISSUE SUMMARY -->
-
 
 <!-- BEGIN ISSUE TABLES -->
 ## Neo4j
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [13783](https://github.com/neo4j/neo4j/issues/13783) | fixed |
-| 2 | [13866](https://github.com/neo4j/neo4j/issues/13866) | confirmed |
-| 3 | [14008](https://github.com/neo4j/neo4j/issues/14008) | fixed |
+| ID | Issue ID | Status |
+| --- | --- | --- |
+| 1 | [13783](https://github.com/neo4j/neo4j/issues/13783) | Fixed |
+| 2 | [13866](https://github.com/neo4j/neo4j/issues/13866) | Confirmed |
+| 3 | [14008](https://github.com/neo4j/neo4j/issues/14008) | Fixed |
 
 ## Memgraph
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [4208](https://github.com/memgraph/memgraph/issues/4208) | confirmed |
-| 2 | [4456](https://github.com/memgraph/memgraph/issues/4456) | pending |
-| 3 | [4457](https://github.com/memgraph/memgraph/issues/4457) | pending |
-| 4 | [4458](https://github.com/memgraph/memgraph/issues/4458) | pending |
-| 5 | [4459](https://github.com/memgraph/memgraph/issues/4459) | fixed |
-| 6 | [5091](https://github.com/memgraph/memgraph/issues/5091) | pending |
+| ID | Issue ID | Status |
+| --- | --- | --- |
+| 1 | [4208](https://github.com/memgraph/memgraph/issues/4208) | Confirmed |
+| 2 | [4456](https://github.com/memgraph/memgraph/issues/4456) | Pending |
+| 3 | [4457](https://github.com/memgraph/memgraph/issues/4457) | Pending |
+| 4 | [4458](https://github.com/memgraph/memgraph/issues/4458) | Pending |
+| 5 | [4459](https://github.com/memgraph/memgraph/issues/4459) | Fixed |
+| 6 | [5091](https://github.com/memgraph/memgraph/issues/5091) | Pending |
 
 ## ArcadeDB
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [4405](https://github.com/ArcadeData/arcadedb/issues/4405) | fixed |
-| 2 | [5116](https://github.com/ArcadeData/arcadedb/issues/5116) | fixed |
-| 3 | [5117](https://github.com/ArcadeData/arcadedb/issues/5117) | fixed |
-| 4 | [5360](https://github.com/ArcadeData/arcadedb/issues/5360) | fixed |
-| 5 | [5362](https://github.com/ArcadeData/arcadedb/issues/5362) | fixed |
-| 6 | [5363](https://github.com/ArcadeData/arcadedb/issues/5363) | fixed |
-| 7 | [9579](https://github.com/ArcadeData/arcadedb/issues/9579) | fixed |
-| 8 | [9580](https://github.com/ArcadeData/arcadedb/issues/9580) | fixed |
-| 9 | [10307](https://github.com/ArcadeData/arcadedb/issues/10307) | fixed |
-| 10 | [10308](https://github.com/ArcadeData/arcadedb/issues/10308) | fixed |
-| 11 | [11081](https://github.com/ArcadeData/arcadedb/issues/11081) | fixed |
-| 12 | [11082](https://github.com/ArcadeData/arcadedb/issues/11082) | fixed |
-| 13 | [11083](https://github.com/ArcadeData/arcadedb/issues/11083) | fixed |
+| ID | Issue ID | Status |
+| --- | --- | --- |
+| 1 | [4405](https://github.com/ArcadeData/arcadedb/issues/4405) | Fixed |
+| 2 | [5116](https://github.com/ArcadeData/arcadedb/issues/5116) | Fixed |
+| 3 | [5117](https://github.com/ArcadeData/arcadedb/issues/5117) | Fixed |
+| 4 | [5360](https://github.com/ArcadeData/arcadedb/issues/5360) | Fixed |
+| 5 | [5362](https://github.com/ArcadeData/arcadedb/issues/5362) | Fixed |
+| 6 | [5363](https://github.com/ArcadeData/arcadedb/issues/5363) | Fixed |
+| 7 | [9579](https://github.com/ArcadeData/arcadedb/issues/9579) | Fixed |
+| 8 | [9580](https://github.com/ArcadeData/arcadedb/issues/9580) | Fixed |
+| 9 | [10307](https://github.com/ArcadeData/arcadedb/issues/10307) | Fixed |
+| 10 | [10308](https://github.com/ArcadeData/arcadedb/issues/10308) | Fixed |
+| 11 | [11081](https://github.com/ArcadeData/arcadedb/issues/11081) | Fixed |
+| 12 | [11082](https://github.com/ArcadeData/arcadedb/issues/11082) | Fixed |
+| 13 | [11083](https://github.com/ArcadeData/arcadedb/issues/11083) | Fixed |
 
 ## LadybugDB
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [668](https://github.com/LadybugDB/ladybug/issues/668) | fixed |
-| 2 | [669](https://github.com/LadybugDB/ladybug/issues/669) | fixed |
-| 3 | [696](https://github.com/LadybugDB/ladybug/issues/696) | fixed |
-| 4 | [697](https://github.com/LadybugDB/ladybug/issues/697) | fixed |
-| 5 | [698](https://github.com/LadybugDB/ladybug/issues/698) | fixed |
-| 6 | [720](https://github.com/LadybugDB/ladybug/issues/720) | fixed |
-| 7 | [721](https://github.com/LadybugDB/ladybug/issues/721) | fixed |
-| 8 | [1483](https://github.com/LadybugDB/ladybug/issues/1483) | pending |
+| ID | Issue ID | Status |
+| --- | --- | --- |
+| 1 | [668](https://github.com/LadybugDB/ladybug/issues/668) | Fixed |
+| 2 | [669](https://github.com/LadybugDB/ladybug/issues/669) | Fixed |
+| 3 | [696](https://github.com/LadybugDB/ladybug/issues/696) | Fixed |
+| 4 | [697](https://github.com/LadybugDB/ladybug/issues/697) | Fixed |
+| 5 | [698](https://github.com/LadybugDB/ladybug/issues/698) | Fixed |
+| 6 | [720](https://github.com/LadybugDB/ladybug/issues/720) | Fixed |
+| 7 | [721](https://github.com/LadybugDB/ladybug/issues/721) | Fixed |
+| 8 | [1483](https://github.com/LadybugDB/ladybug/issues/1483) | Fixed |
 
 ## FalkorDB
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [2081](https://github.com/FalkorDB/FalkorDB/issues/2081) | fixed |
-| 2 | [3227](https://github.com/FalkorDB/FalkorDB/issues/3227) | confirmed |
-| 3 | [3228](https://github.com/FalkorDB/FalkorDB/issues/3228) | confirmed |
-| 4 | [3315](https://github.com/FalkorDB/FalkorDB/issues/3315) | confirmed |
-| 5 | [3637](https://github.com/FalkorDB/FalkorDB/issues/3637) | pending |
+| ID | Issue ID | Status |
+| --- | --- | --- |
+| 1 | [2081](https://github.com/FalkorDB/FalkorDB/issues/2081) | Fixed |
+| 2 | [3227](https://github.com/FalkorDB/FalkorDB/issues/3227) | Confirmed |
+| 3 | [3228](https://github.com/FalkorDB/FalkorDB/issues/3228) | Confirmed |
+| 4 | [3315](https://github.com/FalkorDB/FalkorDB/issues/3315) | Confirmed |
+| 5 | [3637](https://github.com/FalkorDB/FalkorDB/issues/3637) | Confirmed |
 
 ## Apache AGE
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [2480](https://github.com/apache/age/issues/2480) | confirmed |
-| 2 | [2481](https://github.com/apache/age/issues/2481) | pending |
+| ID | Issue ID | Status |
+| --- | --- | --- |
+| 1 | [2480](https://github.com/apache/age/issues/2480) | Confirmed |
+| 2 | [2481](https://github.com/apache/age/issues/2481) | Pending |
 
 ## JanusGraph
 
-| ID   | Issue ID | Status |
-| ---- | -------- | ------ |
-| 1 | [5113](https://github.com/JanusGraph/janusgraph/issues/5113) | pending |
+| ID | Issue ID | Status |
+| --- | --- | --- |
+| 1 | [5113](https://github.com/JanusGraph/janusgraph/issues/5113) | Pending |
+| 2 | [5148](https://github.com/JanusGraph/janusgraph/issues/5148) | Pending |
+| 3 | [5147](https://github.com/JanusGraph/janusgraph/issues/5147) | Pending |
+
+## TinkerPop
+
+| ID | Issue ID | Status |
+| --- | --- | --- |
+| 1 | [TINKERPOP-3316](https://issues.apache.org/jira/browse/TINKERPOP-3316) | Pending |
+| 2 | [TINKERPOP-3315](https://issues.apache.org/jira/browse/TINKERPOP-3315) | Pending |
+| 3 | [TINKERPOP-3311](https://issues.apache.org/jira/browse/TINKERPOP-3311) | Confirmed |
+| 4 | [TINKERPOP-3312](https://issues.apache.org/jira/browse/TINKERPOP-3312) | Pending |
+| 5 | [TINKERPOP-3313](https://issues.apache.org/jira/browse/TINKERPOP-3313) | Confirmed |
+| 6 | [TINKERPOP-3314](https://issues.apache.org/jira/browse/TINKERPOP-3314) | Confirmed |
+
+## HugeGraph
+
+| ID | Issue ID | Status |
+| --- | --- | --- |
+| 1 | [3479](https://github.com/apache/hugegraph/issues/3479) | Pending |
+| 2 | [3480](https://github.com/apache/hugegraph/issues/3480) | Pending |
 <!-- END ISSUE TABLES -->
 
 ## How to Run
 
 ### 1. Environment Requirements
-- Python 3.12; Ladybug CSV loading uses `csv.QUOTE_NOTNULL`.
-- One configured database system:
-  - Neo4j Community 2026.09.0, Cypher 25 (default configuration: port 7687).
-  - Memgraph 3.14.0 (local example: port 27687).
-  - ArcadeDB 26.10.2, Cypher or Gremlin (local example: port 22480).
-  - LadybugDB 0.22.1, embedded pybind backend.
-  - FalkorDB 6.0.3 (local example: port 16379).
-  - JanusGraph 1.2.0 / TinkerPop 3.8.2, BerkeleyJE (local example: port 38182).
-  - HugeGraph 1.7.0 / TinkerPop 3.5.1, RocksDB (local examples: ports 48080 and 48182).
+
+Use Python 3.12 and one database from the following configuration examples. Each executed case replaces the selected experiment graph; use a dedicated database.
+
+| Database | Version used in the setup examples | Language |
+| --- | --- | --- |
+| Neo4j | Community 2026.09.0 | Cypher 25 |
+| Memgraph | 3.14.0 | Cypher |
+| ArcadeDB | 26.10.2 | Cypher, Gremlin |
+| LadybugDB | 0.22.1 | Cypher |
+| FalkorDB | 6.0.3 | Cypher |
+| JanusGraph | 1.2.0 / TinkerPop 3.8.2 | Gremlin |
+| HugeGraph | 1.7.0 / TinkerPop 3.5.1 | Gremlin |
+
+Server startup commands and connection settings are in [Backend setup](docs/backends.md). LadybugDB runs inside the Python process.
 
 ### DBMS Connection Parameter Configuration Locations
 
-Connection settings are read from the `database` section of [config.yaml](config.yaml). Password fields name environment variables; password values are not stored in case archives.
+All run settings are read from [config.yaml](config.yaml) in the current working directory.
 
-Specific configuration locations:
+| Section | Purpose |
+| --- | --- |
+| `language`, `database` | Query language, adapter, and connection settings |
+| `run` | Run mode, seeds, patterns, duration, and output directory |
+| `generation`, `graph` | Query generation and graph size |
+| `measurement` | Warmups, paired measurements, thresholds, and query timeout |
+| `replay` | Archived case and replay mode |
 
-- **Main configuration file**: `config.yaml`
-  - `language` selects `cypher` or `gremlin`.
-  - `database` selects the adapter and its connection settings.
-  - `generation`, `graph`, `run`, and `measurement` control experiments.
-- **Database adapters**: `databases/`
-  - `databases/__init__.py` selects the adapter.
-  - Adapter capability dictionaries select compatible grammar and Pattern variants.
-- **Server configuration**: `config/janusgraph/` and `config/hugegraph/`
-  - These files configure the corresponding Gremlin services.
-  - [Backend setup](docs/backends.md) provides complete connection blocks and startup commands.
+Password fields such as `password_env` name environment variables. The `config/janusgraph/` and `config/hugegraph/` directories contain server configuration files.
 
 ### 2. Install Dependencies
 
-Create a Python environment and install the pinned dependencies:
+Run from the repository directory:
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-Main dependencies include:
-- `neo4j==5.28.4`: Neo4j and Memgraph Bolt connections.
-- `PyYAML==6.0.3`: configuration loading.
-- `ladybug==0.22.1`: embedded LadybugDB.
-- `falkordb==1.8.1` and `redis==8.1.0`: FalkorDB connections.
-
-ArcadeDB, JanusGraph, and HugeGraph adapters use Python's standard HTTP libraries.
+[requirements.txt](requirements.txt) pins the database drivers and configuration parser.
 
 ### 3. Running Parameter Configuration
 
-Edit these fields in `config.yaml`, retaining the other configuration sections:
+Edit the `run` and `measurement` sections of `config.yaml`:
 
 ```yaml
-language: cypher
 run:
   mode: experiment
   seed: 0
@@ -153,18 +171,27 @@ measurement:
   ratio: 5.0
   minimum_delta_ms: 100.0
   direction_consistency: 0.8
-  scale_factor: 10        # no_gap pairs are re-measured with high_units / scale_factor; null disables
-  growth_ratio: 3.0       # growth across that scale that counts as work depending on N
+  scale_factor: 10
+  growth_ratio: 3.0
   timeout_seconds: 10
 ```
 
-`generate` saves cases without opening a database connection. `check` compares complete results. `experiment` also measures performance and collects PROFILE. A fixed `case_seed` selects one seed and one round. Cypher SC7 is enabled only for Neo4j. Gremlin supports SC1–SC8, SY1, SY2, and SY5–SY7; configure that subset when selecting Gremlin.
+| Mode | Behavior |
+| --- | --- |
+| `generate` | Generate and archive cases without connecting to a database |
+| `check` | Load each graph and compare complete query results |
+| `experiment` | Check results, measure execution times, and collect execution plans |
+
+`seed` controls the run schedule. Set `case_seed` to try every selected pattern once with the same fixed seed. Each ordinary round attempts every selected pattern. The time budget is checked before starting each case; an active case can finish after that budget.
+
+A timing candidate must meet all three thresholds: runtime ratio, median paired difference, and direction consistency. It then undergoes confirmation with fresh samples. With `scale_factor` enabled, `no_gap` pairs are also tested at a smaller graph size for growth in the timing difference. Set `scale_factor: null` to disable this step. [Architecture](docs/architecture.md) defines the measurements and outcomes.
 
 ### 4. Database Configuration
 
-The default connection block targets a dedicated Neo4j database:
+The default configuration uses Neo4j:
 
 ```yaml
+language: cypher
 database:
   system: neo4j
   uri: bolt://127.0.0.1:7687
@@ -178,11 +205,9 @@ database:
 export GRAPHSYMPERF_NEO4J_PASSWORD='your-local-experiment-password'
 ```
 
-Each executed case replaces the selected experiment graph. Q and Q′ share unchanged graph data and indexes. Select the corresponding connection block in [backend setup](docs/backends.md) when using another system.
+For another database, use its connection block from [Backend setup](docs/backends.md). Set `language: gremlin` for Gremlin runs. Cypher SC7 is available on Neo4j; remove it from `run.patterns` for other Cypher targets. All sixteen patterns are available for Gremlin.
 
 ### 5. Query Generation Configuration
-
-Configure the random host and graph expansion in `config.yaml`:
 
 ```yaml
 generation:
@@ -198,7 +223,7 @@ graph:
   indexes: true
 ```
 
-`generation.nodes` is a grammar expansion budget. `high_units` is the total Pattern expansion budget, divided across anchors or regions; it is not the total number of graph nodes. The generator permits incompatible or unproductive random contexts. Such contexts are reported rather than repaired by a solver. [Architecture](docs/architecture.md) explains the grammar, scope rules, and graph recipes.
+`generation.nodes` sets the AST expansion budget. `graph.high_units` sets the graph expansion budget for the selected pattern, distributed across its anchors or regions. The resulting graph also includes the background graph and fixed structures required by the pattern. A sampled query with no compatible pattern position is recorded as `skipped`.
 
 ### 6. Execution Command
 
@@ -206,38 +231,37 @@ graph:
 python main.py
 ```
 
-For replay, set `replay.case` to an archive directory and `replay.check_only` to the required mode, then run:
+To replay an archived case, set `replay.case` to its directory and `replay.check_only` to `true` for result checking or `false` for a performance run:
 
 ```bash
 python replay.py
 ```
 
-For a fixed seed/scale campaign, add the `campaign` settings described in [architecture](docs/architecture.md#10-fixed-seed-campaigns), set `run.save_all: true` and a new output directory, then run:
+For fixed seed and graph-size campaigns, follow the [campaign configuration](docs/architecture.md#10-fixed-seed-campaigns), then run:
 
 ```bash
 python scripts/run_campaign.py
 ```
 
-After editing the submitted-issue ledger, regenerate the README tables:
+After updating [bugs.csv](bugs.csv), regenerate the issue summaries and tables in both READMEs:
 
 ```bash
 python scripts/update_readme.py
 ```
 
 ### 7. Output Description
-- **`results/<run>/summary.csv`**:
-  - Case IDs, Patterns, seeds, outcomes, graph sizes, and available timing summaries.
-- **Archived case directories**:
-  - `query_a.cypher` / `query_b.cypher`, or `.gremlin` equivalents.
-  - `graph.json` — actual graph, schema, and requested indexes.
-  - `result.json` — configuration, workload metadata, outcome, and timings.
-  - `plans.json` — native PROFILE results with operator summaries, and any recognized PROFILE failure.
-  - `plans-small.json` — plans at the smaller scale for a `scale_candidate`.
-  - `replay-result.json` — a new replay result when replay is requested.
-- **Fixed campaign output**:
-  - `attempts.json` — the complete fixed manifest, including unsubmitted cases.
-  - `report.json` — stopping reason, counts, wall time, and client CPU/peak RSS.
-- **Local evidence**:
-  - `results/` is ignored by Git. The [validation record](docs/validation.md) distinguishes recorded local runs from shipped code and new verification.
 
-Candidates, mismatches, query timeouts, recognized backend rejections, unexpected execution failures, and unconfirmed-stop cases are archived. Use `run.save_all: true` to retain ordinary cases too. An unconfirmed termination stops further requests without restarting the database.
+| Output | Contents |
+| --- | --- |
+| `results/<run>/summary.csv` | Case IDs, patterns, seeds, outcomes, graph sizes, and timing summaries |
+| `query_a.cypher`, `query_b.cypher` | Archived query pair; Gremlin cases use `.gremlin` |
+| `graph.json` | Graph data, schema, and requested indexes |
+| `result.json` | Configuration, database version, query parameters, outcome, and measurements |
+| `plans.json` | Execution plans and operator summaries |
+| `plans-small.json` | Smaller-graph confirmation plans, when collected |
+| `replay-result.json` | Result of the most recent replay |
+| `attempts.json`, `report.json` | Fixed campaign manifest and completion summary |
+
+Generated cases, performance candidates, result mismatches, timeouts, backend rejections, and execution failures are archived. Set `run.save_all: true` to retain ordinary completed cases as well. A run stops if query termination cannot be confirmed.
+
+The `results/` directory holds local output and is excluded from Git. Verification procedures are described in [Testing and validation](docs/testing.md). Formal reproduction reports are in [bug-reports/](bug-reports/README.md).

@@ -10,7 +10,6 @@ class Generator:
         self.support = support
         self.number = 0
         # This expansion budget favors terminal choices; it is not an exact AST node count.
-        # 展开预算用于让生成过程收敛到终端，不是 AST 节点数的精确上限。
         self.remaining = options["nodes"]
         self.labels = [Symbol(f"Random_label_{i}", "label") for i in range(4)]
         self.types = [Symbol(f"Random_relationship_{i}", "relationship") for i in range(3)]
@@ -28,7 +27,6 @@ class Generator:
         self.remaining -= 1
         if compound and self.remaining > 12 and self.rng.random() < .18:
             # Generate each branch against the same output names and types.
-            # 各分支共用输出列名与类型，再分别随机生成内部结构。
             outputs = outputs or [self.variable(self.rng.choice(["int", "float", "bool", "string"]))]
             branches = [self.query(scope.child(), depth, outputs, False, allow_call) for _ in range(2)]
             if self.support["conditional"] and self.options["conditional_queries"] and self.rng.random() < .35:
@@ -54,7 +52,6 @@ class Generator:
                     clause.where = self.expression("bool", scope, 1, depth)
             elif choice == "call":
                 # Only explicitly selected outer variables enter a CALL subquery.
-                # CALL 子查询只能访问这里显式选中的外层变量。
                 visible = list(scope.visible().values())
                 imported = self.rng.sample(visible, self.rng.randint(0, len(visible)))
                 child = Scope(imported={v.name: v for v in imported}, persistent_imports=scope.persistent_imports)
@@ -75,11 +72,9 @@ class Generator:
         optional = bool(scope.visible()) and self.rng.random() < .2
         shapes = ["node", "edge", "chain", "branch", "join", "cycle", "disconnected"]
         # FalkorDB comprehensions require a relationship; ordinary MATCH still allows nodes.
-        # FalkorDB 的模式推导必须包含关系，普通 MATCH 仍可只匹配节点。
         shape = self.rng.choice(shapes[1:] if require_edge else shapes)
         visible_nodes = [v for v in scope.visible().values() if v.kind == "node"]
         # Reusing variables creates shared anchors, joins, and cycles without fixed query templates.
-        # 通过复用变量形成共享锚点、汇合或闭环，不依赖整条查询的固定模板。
         if visible_nodes and self.rng.random() < .5:
             a = self.rng.choice(visible_nodes)
             first = NodePattern(a)
@@ -135,7 +130,6 @@ class Generator:
         aggregate = outputs is None and self.rng.random() < .15
         if aggregate:
             # Constant aggregate inputs keep collect order-insensitive in this grammar.
-            # 当前语法使用常量作为聚合输入，使 collect 的结果不依赖输入行顺序。
             name = self.rng.choice(["count", "sum", "min", "max", "collect"])
             value = self.constant("int", symbolic=False)
             kind = "list_int" if name == "collect" else "int"
@@ -155,12 +149,14 @@ class Generator:
         sortable = all(item.alias.kind in {"int", "float", "bool", "string"} for item in items)
         if sortable and self.rng.random() < .2:
             # Sort all projected scalar columns before pagination; tied rows have equal values.
-            # 分页前按全部标量输出列排序，使排序并列行的返回值相同。
             result.order = [(Reference(item.alias), self.rng.random() < .5) for item in items]
             if self.rng.random() < .6:
                 result.limit = Literal(self.rng.randint(0, 5))
                 if self.rng.random() < .3:
                     result.skip = Literal(self.rng.randint(0, 2))
+            if keyword == "WITH" and result.limit is None and not self.support.get("with_order_without_page", True):
+                # Without SKIP/LIMIT, WITH ... ORDER BY does not change the row multiset; LadybugDB rejects it.
+                result.order = []
         return result
 
     def expression(self, kind, scope, depth, query_depth):
@@ -176,7 +172,6 @@ class Generator:
             return self.constant(kind)
         subqueries = query_depth < self.options["subquery_depth"] and self.remaining > 8
         # Choose productions by the expected type; nested queries recurse through query().
-        # 按预期类型选择产生式；遇到子查询时递归调用同一个查询生成过程。
         choices = ["case", "coalesce", "leaf"]
         if kind == "bool":
             choices += ["compare", "and", "or", "not", "null", "quantifier", "membership"]
@@ -209,7 +204,11 @@ class Generator:
             return Binary(child("int"), "IN", values)
         if choice == "index":
             values = ListExpression([child() for _ in range(3)])
-            return ListIndex(values, Literal(self.rng.randint(-1, 3)))
+            index = self.rng.randint(-1, 3)
+            if self.support.get("list_index_base", 0) == 1 and index == 0:
+                # 1-based targets reject index 0; -1..3 then stays within the three-element list.
+                index = 1
+            return ListIndex(values, Literal(index))
         if choice == "arithmetic":
             return Binary(child(), self.rng.choice(["+", "-", "*"]), child())
         if choice == "length":
@@ -238,7 +237,6 @@ class Generator:
                 query = self.query(scope.child(), query_depth + 1, [output], False,
                                    allow_call=self.support["subquery_call"])
                 # COLLECT exposes element order, so its single output column is sorted.
-                # COLLECT 的元素顺序可被观察，因此先按唯一输出列排序。
                 query.clauses[-1].order = [(Reference(output), False)]
                 values = SubqueryExpression("COLLECT", query)
             else:

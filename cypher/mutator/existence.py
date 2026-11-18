@@ -28,7 +28,6 @@ class ExistencePattern:
     def populate(self, graph, payload, total):
         roots = graph.candidates(payload["anchor"], create=True)
         # EXISTS/NOT EXISTS keeps its value only if both sides match for each eligible anchor.
-        # 每个适用锚点在两侧都有匹配，EXISTS／NOT EXISTS 的取值才保持不变。
         if total < len(roots):
             from data_structures.case import Inapplicable
             raise Inapplicable("Existence needs at least one high-region witness per anchor")

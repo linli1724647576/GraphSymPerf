@@ -27,7 +27,6 @@ class BooleanPattern:
     def mutate(self, case):
         if self.swap:
             # Swap the same two pure predicate subtrees; do not change either operand.
-            # 只交换原有的两个纯谓词子树，不改写任一操作数。
             at(case.query, case.target).args.reverse()
             return case.query
         return mutate(case)

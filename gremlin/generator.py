@@ -93,7 +93,6 @@ class Generator:
                 args = [self.scalar(scope, self.rng.choice(SCALARS), 0)]
             elif name == "union":
                 # Branches retain the same input kind while independently filtering rows.
-                # 各分支保留输入类型，独立随机生成过滤条件，允许产生重复行。
                 args = [Traversal([Step("filter", [self.predicate(scope, 0)])]) for _ in range(2)]
             elif name in {"out", "in", "both", "outE"}:
                 args = [self.rng.choice(self.edges)]
@@ -110,7 +109,6 @@ class Generator:
             tree.steps.append(Step("constant", [self.value(self.rng.choice(SCALARS))]))
             if final == "fold":
                 # Only repeated constants are collected, so graph iteration order is unobservable.
-                # 只收集重复常量，避免图遍历顺序成为可观察的列表差异。
                 tree.steps.append(Step("fold"))
         else:
             tree.steps.append(Step("identity"))

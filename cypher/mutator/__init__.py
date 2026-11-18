@@ -7,8 +7,7 @@ from .path import PathPatternRule
 from .matching import MatchingPattern
 
 
-# These are the rewritten catalog IDs, not the IDs in historical bug reports.
-# 这里使用重写后的模式编号，不对应历史 BUG 报告中的同名编号。
+# Pattern IDs follow docs/pattern-catalog.en.md.
 PATTERNS = {
     "SC1": BooleanPattern("SC1", "OR"),
     "SC2": BooleanPattern("SC2", "AND"),
@@ -23,7 +22,6 @@ PATTERNS = {
     "SY3": PathPatternRule("SY3"),
     "SY4": PathPatternRule("SY4", bounded=True),
     # SY5-SY7 share a swap operation but use different connectivity and graph recipes.
-    # SY5-SY7 共用交换操作，但变量连接关系和固定构图配方不同。
     "SY5": MatchingPattern("SY5", "independent"),
     "SY6": MatchingPattern("SY6", "shared"),
     "SY7": MatchingPattern("SY7", "chain"),

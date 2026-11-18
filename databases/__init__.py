@@ -1,6 +1,5 @@
 def select_database(system):
     # Select only implemented backends; selection itself opens no connection.
-    # 只选择已实现的后端；选择过程不建立数据库连接。
     if system == "neo4j":
         from . import neo4j
         return neo4j

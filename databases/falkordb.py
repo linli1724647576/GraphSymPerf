@@ -23,7 +23,6 @@ class Database:
         self.error_type = ResponseError
         password = os.environ[config["password_env"]] if config.get("password_env") else None
         # A sample is one request; transport failures must not cause hidden retries.
-        # 一个样本只提交一次请求，传输失败不能触发隐式重试。
         self.client = FalkorDB(host=config["host"], port=config["port"], password=password,
                               retry=Retry(NoBackoff(), 0))
         self.name = config["name"]
@@ -39,7 +38,6 @@ class Database:
 
     def load(self, graph):
         # Replace only this experiment graph; never clear the Redis instance.
-        # 只替换当前实验图，不清理整个 Redis 实例。
         if self.client.connection.exists(self.name):
             self.graph.delete()
         self.graph = self.client.select_graph(self.name)
@@ -53,7 +51,6 @@ class Database:
             self.write_batches(f"UNWIND $rows AS row CREATE (n{suffix} {{{properties}}})", records)
 
         # uid indexes support loading; only requested indexes survive into measurement.
-        # uid 索引辅助装载，只有用例要求的索引保留到测量阶段。
         loading = {(label, "uid") for node in graph.nodes for label in node["labels"]}
         for label, key in sorted(loading):
             self.graph.query(f"CREATE INDEX FOR (n:{identifier(label)}) ON (n.{identifier(key)})")
@@ -107,7 +104,6 @@ class Database:
 
     def profile(self, query, timeout):
         # The pinned SDK encodes bindings but omits PROFILE's server-side timeout argument.
-        # 固定版本 SDK 负责参数编码，但未暴露 PROFILE 的服务端超时参数。
         text = self.graph._build_params_header(query.parameters) + query.text
         try:
             lines = self.graph.execute_command("GRAPH.PROFILE", self.name, text, "timeout", int(timeout * 1000))

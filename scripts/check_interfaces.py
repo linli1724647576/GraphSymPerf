@@ -126,8 +126,7 @@ def check(config, output):
         assert len(rows) == 1 and rows[0][0][0] == "path" and rows[0][1] == ("int", 2)
         checks["multi_endpoint_path"] = "passed"
 
-        # Native snippets check interfaces only; generated-pattern coverage is a later batch.
-        # 原生片段只验证接口；生成器的 Pattern 覆盖留待下一批。
+        # Native snippets exercise the adapter's result and execution interfaces.
         query = Query("MATCH (u:Root {uid:0}) RETURN EXISTS {MATCH (u)-[:E_LOW]->(x:Item) WHERE x.keep=true} AS low, "
                       "EXISTS {MATCH (u)-[:E_HIGH]->(x:Item) WHERE x.keep=true} AS high, "
                       "EXISTS {MATCH (u)-[:D_TRUE]->(:Witness)} AS decisive", columns=("low", "high", "decisive"))
@@ -253,8 +252,7 @@ def check_arcadedb(db, checks):
     assert len(rows) == 1 and rows[0][0][0] == "node"
     checks["flattened_entity"] = "passed"
 
-    # A worker exists only in this acceptance check to exercise native cancellation.
-    # 仅在验收中使用工作线程，触发并观察原生取消。
+    # Keep the query active in a worker while the control connection cancels it.
     tag = "gsp-cancel-" + uuid4().hex
     payload = {"language": "cypher", "command": "WITH range(1,30000) AS xs UNWIND xs AS x UNWIND xs AS y RETURN sum(x*y)", "limit": -1}
     control = HTTPConnection(*db.address, timeout=10)
@@ -317,8 +315,7 @@ def check_gremlin(config, output):
             ("empty_count", "g.V().hasLabel('Empty').count()", {}, [0]),
             ("bound_labels", "g.V().hasLabel('Root').has('uid',p0).as('u').out('L_HIGH').select('u').values('uid')", {"p0": 0}, [0,0,0]),
             ("constant_fold", "g.V().hasLabel('Item').constant(1).fold()", {}, [[1]*6]),
-            # Fixed stress snippets exercise consumption, not the random generator grammar.
-            # 固定压力片段验证完整消费，不扩展随机生成器的语法范围。
+            # Return a large result stream to check complete consumption.
             ("full_consumption", "g.inject(1).repeat(__.union(__.identity(),__.identity())).times(15)", {}, [1]*32768),
         ]:
             columns, rows, elapsed = db.execute(Query(text, params, ("result",)), 10)
@@ -489,7 +486,6 @@ def check_janusgraph(config, output):
         save_case(output / "archive", Case("interface", 0, None, (), set()), graph, query, query,
                   {"status": "equivalent"}, config, db.version)
         # Recreating schema must also permit a different type for the same property name.
-        # 重建 schema 后，同名属性应能采用新用例要求的另一种类型。
         for kind, value in [("int", 1), ("string", "changed")]:
             small = Graph(schema={"nodes": {"Root": {"uid": "int", "p_prefix": kind}}, "relationships": {}})
             small.node(["Root"], p_prefix=value)
@@ -586,7 +582,6 @@ def check_hugegraph(config, output):
         save_case(output / "archive",Case("interface",0,None,(),set()),graph,q,q,{"status":"equivalent"},config,db.version)
         checks["profile"] = "passed"
         # A second load must discard old children, properties, and indexes as well as instances.
-        # 再次装载必须清理旧子标签、属性和索引，而不仅清理实例。
         for kind,value in [("int",1),("string","changed")]:
             small = Graph(schema={"nodes":{"Root":{"uid":"int","p_prefix":kind}},"relationships":{}})
             small.node(["Root"],p_prefix=value)

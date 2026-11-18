@@ -52,7 +52,6 @@ class Database:
             raw = response.read()
         except (OSError, HTTPException) as error:
             # Socket timeouts also inherit TimeoutError; keep them out of performance samples.
-            # socket 超时同样继承 TimeoutError，必须与数据库查询超时分开。
             connection.close()
             raise ConnectionError("HTTP request failed; query completion is unknown") from error
         except KeyboardInterrupt:
@@ -79,7 +78,6 @@ class Database:
 
     def cancel(self, tag):
         # The data connection still has a pending response; cancellation uses a separate connection.
-        # 数据连接仍在等待响应，取消操作使用独立连接。
         control = HTTPConnection(*self.address, timeout=self.config["http_timeout_seconds"])
         try:
             self.cancellation, _ = self.request("POST", "/api/v1/server",
@@ -112,7 +110,6 @@ class Database:
             suffix = "".join(":" + identifier(label) for label in labels)
             self.write_batches("UNWIND $rows AS row CREATE (n" + suffix + ") SET n = row", records)
         # Native multi-label creation keeps one vertex; loading indexes use real labels.
-        # 原生多标签创建保留单个顶点，装载索引使用实际标签。
         loading = {(label, "uid") for node in graph.nodes for label in node["labels"]}
         for label, key in sorted(loading):
             self.command("sql", f"CREATE INDEX ON {identifier(label)} ({identifier(key)}) NOTUNIQUE")
@@ -140,7 +137,6 @@ class Database:
         timeout_ms = int(timeout * 1000)
         if self.language == "cypher" and self.timeout_ms != timeout_ms:
             # A dedicated serial experiment can set the database deadline outside query timing.
-            # 专用串行实验在查询计时之外设置数据库级时限。
             self.command("sql", f"ALTER DATABASE `arcadedb.command.timeout` {timeout_ms}")
             self.timeout_ms = timeout_ms
         payload = {"language": self.language, "command": query.text, "params": query.parameters,
@@ -157,7 +153,6 @@ class Database:
 
         def cancel_at_deadline():
             # Java Gremlin iteration ignores command.timeout; cancel the tagged native query.
-            # Java Gremlin 遍历不受 command.timeout 约束，改为取消带标签的原生查询。
             try:
                 deadline["response"] = self.cancel(tag)
             except Exception as error:
@@ -172,7 +167,6 @@ class Database:
             interrupted = error
         finally:
             # Keep the response socket open and join before starting another serial query.
-            # 保持响应连接打开，等待取消线程结束后才进入下一条串行查询。
             timer.cancel()
             timer.join()
         if "error" in deadline:
@@ -188,7 +182,6 @@ class Database:
             error.cancellation = deadline["response"]
             raise error from interrupted
         # A complete response can win the cancellation race; retain its cancellation record.
-        # 完整响应可能先于取消完成；保留取消记录并使用完整结果。
         return response
 
     def execute(self, query, timeout):
@@ -210,7 +203,6 @@ class Database:
                 hints = dict(item.split(":", 1) for item in record.get("@props", "").split(",") if item)
             rows.append(tuple(normalize(value, hints.get(column)) for column, value in zip(query.columns, values)))
         # Empty results and flattened entity aliases use declarations, not server column metadata.
-        # 空结果和展开实体的别名来自声明，不冒充服务端列元数据。
         return list(query.columns), rows, elapsed_ms
 
     def profile(self, query, timeout):

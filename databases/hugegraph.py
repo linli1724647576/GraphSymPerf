@@ -43,6 +43,9 @@ class Database:
         return decode(data["result"]["data"])
 
     def load(self, graph):
+        # Timing uses only the Gremlin port, so the server may close the idle REST keep-alive meanwhile;
+        # start each load on a fresh connection instead of retrying a request.
+        self.rest.close()
         self.request("DELETE", "/clear?confirm_message=" + quote("I'm sure to delete all data", safe=""))
         properties = {"_gsp_eid": "int"}
         declarations = list(graph.schema["nodes"].values()) + [r["properties"] for r in graph.schema["relationships"].values()]
@@ -61,7 +64,6 @@ class Database:
                 children.append({"name": child, "source": source, "target": target})
             relations.append({"name": name, "keys": list(declaration["properties"]) + ["_gsp_eid"], "children": children})
         # Queries retain logical parent labels; only stored edges use endpoint-specific children.
-        # 查询保留逻辑父标签，仅在存储边时按端点组合选择子标签。
         states = self.command("""
             def schema = graph.schema()
             def methods = [int:'asLong', float:'asDouble', bool:'asBoolean', string:'asText']
@@ -90,7 +92,6 @@ class Database:
             indexes.withIndex().collect { index, i -> schema.getIndexLabel('gsp_index_' + i).status().name() }
         """, {"properties": properties, "labels": graph.schema["nodes"], "relations": relations, "indexes": graph.indexes})
         # HugeGraph calls a usable index CREATED after its synchronous create has completed.
-        # HugeGraph 的同步创建完成后，可用索引状态名为 CREATED。
         if any(state != "CREATED" for state in states):
             raise RuntimeError(f"HugeGraph indexes are not ready: {states}")
         self.vertex_ids = {}
@@ -109,7 +110,6 @@ class Database:
                 source = graph.nodes[edge["start"]]["labels"][0]
                 target = graph.nodes[edge["end"]]["labels"][0]
                 # The archived edge position distinguishes parallel edges across batch boundaries.
-                # 归档边的位置编号区分平行边，跨批次时也不重复编号。
                 rows.append({"label": self.edge_labels[edge["type"], source, target],
                     "outV": self.vertex_ids[edge["start"]], "outVLabel": source,
                     "inV": self.vertex_ids[edge["end"]], "inVLabel": target,

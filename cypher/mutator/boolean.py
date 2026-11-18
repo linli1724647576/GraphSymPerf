@@ -23,7 +23,6 @@ class BooleanPattern:
                 return install(case, Binary(candidate.expression(case.payload, "low"), self.operator,
                                             candidate.expression(case.payload, "high")))
         # OR uses a true guard; AND uses a false guard, including the three-valued case.
-        # OR 使用真决定项，AND 使用假决定项；另一项为空值时仍满足吸收关系。
         decisive = guard(case.payload, self.operator == "OR", rng)
         candidate = choose_work(case.payload, "bool", rng)
         case.payload["high"] = candidate.expression(case.payload, "high")
@@ -36,7 +35,6 @@ class BooleanPattern:
     def mutate(self, case):
         expression = at(case.query, case.target)
         # Symmetry swaps unchanged operands; short-circuit mutation substitutes the protected one.
-        # 对称变换只交换原操作数；短路变异替换受决定项保护的操作数。
         if self.swap:
             expression.left, expression.right = expression.right, expression.left
         else:

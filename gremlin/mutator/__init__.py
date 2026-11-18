@@ -16,11 +16,14 @@ PATTERNS = {
     "SC8": DemandPattern("SC8"),
     "SY1": BooleanPattern("SY1", "and", swap=True),
     "SY2": BooleanPattern("SY2", "or", swap=True),
-    # SY5-SY7 exchange the two patterns of a declarative match() step.
-    # SY5-SY7 交换声明式 match() 步骤中的两个模式。
+    # SY3/SY4 rewrite a where() edge or walk filter from its other endpoint inside match().
+    "SY3": MatchingPattern("SY3", "edge"),
+    "SY4": MatchingPattern("SY4", "walk"),
+    # SY5-SY8 exchange the two patterns of a declarative match() step.
     "SY5": MatchingPattern("SY5", "independent"),
     "SY6": MatchingPattern("SY6", "shared"),
     "SY7": MatchingPattern("SY7", "chain"),
+    "SY8": MatchingPattern("SY8", "optional"),
 }
 
 

@@ -27,7 +27,6 @@ class DemandPattern:
         case.payload["limit"] = 0 if self.id == "SC5" else rng.randint(1, 3)
         case.payload["variant"] = "zero_limit" if self.id == "SC5" else "native_limit"
         # The global limit terminates the root traversal; only identical constants reach it.
-        # 全局 LIMIT 位于根遍历末尾，其输入只含相同常量，不泄露被选中的节点。
         query.steps[site.path[1]:] = prefix(case.payload) + [expansion,
             Step("constant", [case.payload["value"]]), Step("limit", [case.payload["limit"]])]
         case.target = next(path for path, node in walk(query) if node is expansion)

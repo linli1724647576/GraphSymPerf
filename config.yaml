@@ -43,6 +43,6 @@ measurement:
   ratio: 5.0
   minimum_delta_ms: 100.0
   direction_consistency: 0.8
-  scale_factor: 10        # no_gap pairs are re-measured with high_units / scale_factor; null disables
-  growth_ratio: 3.0       # growth across that scale that counts as work depending on N
+  scale_factor: 10        # Re-measure no_gap pairs at high_units / scale_factor; null disables.
+  growth_ratio: 3.0       # Minimum increase in the runtime gap between the two scales.
   timeout_seconds: 10

@@ -1,24 +1,24 @@
 # GraphSymPerf 代码架构
 
-本文按当前可执行代码说明一次用例如何从随机 AST 进入构图、变异、执行和归档，并解释语言层与数据库接口的分工。[English](architecture.md) · [后端部署](backends.md) · [验证记录](validation.md)。
+本文说明一次用例如何从随机抽象语法树（Abstract Syntax Tree，AST）进入构图、变异、执行和归档，并解释语言层与数据库接口的分工。[English](architecture.md) · [后端部署](backends.md) · [测试说明](testing.md)。
 
 ## 1. 方法目标与约束
 
-GraphSymPerf 寻找短路或严格对称 Pattern 所关联的查询性能差异。每个用例只有一个目标 Pattern 和一个局部变异。图中包含保证该 Pattern 条件的固定结构，以及随 `high_units` 扩张的候选区域。
+GraphSymPerf 寻找短路或严格对称测试模式所关联的查询性能差异。每个用例只有一个目标测试模式和一个局部变异。图中包含保证该测试模式条件的固定结构，以及随 `high_units` 扩张的候选区域。
 
-Q 是完成 Pattern 嵌入后的源查询，Q′ 是对它进行局部变异后的查询。两者需要在构造出的同一张图上等价；未嵌入 Pattern 的原随机宿主不参与这项等价要求。
+Q 是完成测试模式嵌入后的源查询，Q′ 是对它进行局部变异后的查询。两者需要在构造出的同一张图上返回相同结果。
 
 实现遵守以下约束：
 
-1. 随机生成器接收语法能力、预算和随机数生成器，不接收目标 Pattern 编号。
+1. 随机生成器接收语法能力、预算和随机数生成器，不接收目标测试模式编号。
 2. 完整宿主 AST 生成后，才选择兼容位置。
 3. 名字和常量在创建时即为最终值，变异阶段不重新抽取常量或名称。
 4. 每个用例只装载一次图，查询对及其计时期间的数据和索引不变。
-5. 各数据库独立生成兼容用例，不要求跨系统结果或耗时可比。
+5. 各数据库按自己的语法和能力独立生成兼容用例。
 6. 先比较完整带类型结果，再计时；预热和计时中的结果仍逐次比较。
 7. 超时不折算成实际耗时，终止未确认时停止后续请求。
 
-随机背景图不求解全部宿主谓词。因此，语法合法、位置兼容的查询仍可能返回空结果，或无法到达目标区域。程序保留这类结果，不自动换种子或补图来制造成功样本。
+随机背景图可能使部分宿主谓词不成立，查询也可能无法到达目标区域。程序记录这些情况并保留原种子。
 
 ## 2. 目录与依赖关系
 
@@ -30,12 +30,12 @@ Q 是完成 Pattern 嵌入后的源查询，Q′ 是对它进行局部变异后�
 | [executor.py](../executor.py) | 结果比较、交替计时、PROFILE、归档 | `run_pair`、`save_case`、`workload_record` |
 | [data_structures/](../data_structures/) | 公共 AST 工具、用例、图、查询和结果类型 | `Case`、`Graph`、`Query`、`freeze` |
 | [graph_generation/](../graph_generation/) | 随机背景、配方调度、schema 规范化 | `build_graph`、`random_graph` |
-| [cypher/](../cypher/) | Cypher AST、作用域、生成、Pattern、渲染和 schema | 语言模块导出的函数 |
-| [gremlin/](../gremlin/) | 遍历 AST、作用域、生成、Pattern、渲染和 schema | 语言模块导出的函数 |
+| [cypher/](../cypher/) | Cypher AST、作用域、生成、测试模式、渲染和 schema | 语言模块导出的函数 |
+| [gremlin/](../gremlin/) | 遍历 AST、作用域、生成、测试模式、渲染和 schema | 语言模块导出的函数 |
 | [databases/](../databases/) | 各数据库的装载、执行、解码和计划采集 | `Database` |
 | [databases/gremlin_http.py](../databases/gremlin_http.py) | JanusGraph/HugeGraph 共用的 HTTP 和 GraphSON 处理 | `GremlinHTTP`、`decode`、`normalize` |
-| [scripts/check_interfaces.py](../scripts/check_interfaces.py) | 选定数据库上的少量真实接口验收 | `check` 及各后端检查 |
-| [scripts/update_readme.py](../scripts/update_readme.py) | 从 `bugs.csv` 生成 README issue 区域 | `main` |
+| [scripts/check_interfaces.py](../scripts/check_interfaces.py) | 选定数据库上的接口检查 | `check` 及各后端检查 |
+| [scripts/update_readme.py](../scripts/update_readme.py) | 从 `bugs.csv` 生成 README 缺陷表和报告索引 | `main` |
 | [databases/plans.py](../databases/plans.py) | 与后端无关的 PROFILE 摘要 | `summarize` |
 | [graph_generation/constraints.py](../graph_generation/constraints.py) | 图状态中的宿主见证和锚点等值过滤 | `plant_host_witness`、`apply_anchor_constraints` |
 
@@ -44,7 +44,7 @@ flowchart TD
     A[config.yaml] --> B[入口与调度]
     B --> C[带最终名字的随机宿主 AST]
     C --> D[作用域分析与兼容位置选择]
-    D --> E[Pattern 嵌入]
+    D --> E[测试模式嵌入]
     E --> F[随机背景与固定构图配方]
     F --> G[副本变异]
     G --> H[依赖检查与渲染]
@@ -55,7 +55,7 @@ flowchart TD
     K --> L
 ```
 
-语言层负责查询的结构和语义，数据库接口负责原生通信与存储约定。执行器不选择变异方式，也不解释某个后端的优化器实现。
+语言层定义查询结构、变换和渲染，数据库接口处理通信、装载和结果转换，执行器比较结果、测量查询对并采集执行计划。
 
 ## 3. 公共数据结构
 
@@ -63,7 +63,7 @@ flowchart TD
 
 `data_structures/ast.py` 定义 `ASTNode`、`Symbol(name, kind)`、`sample_constant(rng, kind)` 和 `Variable(name, kind, labels, nullable)`。
 
-Symbol 是标签、关系类型或属性键的最终名字。它是一个同时记录类别的 `str`，schema 登记和背景图据此按类别收集查询用到的终端；`Graph` 中只存普通字符串。标量常量在生成器创建时由 `sample_constant()` 抽取。Variable 保存查询变量的类型、标签来源和可空性，不代表某一个永久绑定的图节点。
+Symbol 是标签、关系类型或属性键的最终名字。它是一个同时记录类别的 `str`，schema 登记和背景图据此按类别收集查询用到的终端；`Graph` 中只存普通字符串。标量常量在生成器创建时由 `sample_constant()` 抽取。Variable 保存查询变量的类型、标签来源和可空性；执行时由每一行提供具体的值。
 
 `walk()` 遍历 AST，`at()` 读取路径，`replace_at()` 替换节点。路径由字段名和序号组成，例如：
 
@@ -71,7 +71,7 @@ Symbol 是标签、关系类型或属性键的最终名字。它是一个同时�
 ("clauses", 0, "items", 0, "expression")
 ```
 
-这条路径定位到 Cypher 第一个投影项的表达式。CASE 分支包含元组，`replace_at()` 会重建相应元组，而不是试图原位修改元组成员。
+这条路径定位到 Cypher 第一个投影项的表达式。CASE 分支包含元组，`replace_at()` 通过重建元组完成替换。
 
 ### Case
 
@@ -79,8 +79,8 @@ Symbol 是标签、关系类型或属性键的最终名字。它是一个同时�
 
 - `pattern`、`seed`：用例身份。
 - `query`：嵌入后的源查询。
-- `target`：局部变异位置；匹配顺序 Pattern 保存所属 Query，再用 `payload.swap_index` 定位要交换的子句。
-- `host_symbols`：原宿主使用的标签、关系类型和属性键，包括后来被查询级 Pattern 替换的部分。
+- `target`：局部变异位置；匹配顺序测试模式保存所属 Query，再用 `payload.swap_index` 定位要交换的子句。
+- `host_symbols`：原宿主使用的标签、关系类型和属性键，包括后来被查询级测试模式替换的部分。
 - `payload`：局部角色、决定项、见证、预备变异、锚点及扩张分配。
 
 `pattern.mutate()` 接收深拷贝，保持源查询不变。
@@ -131,7 +131,7 @@ schema 与实例分开，允许空标签或空区域保留类型声明。属性�
 2. 选择语言模块及数据库能力字典。
 3. 生成带最终名字和常量的完整宿主 AST。
 4. 分析作用域，选择兼容位置。
-5. 嵌入 Pattern 源形式，并准备变异元数据。
+5. 嵌入测试模式源形式，并准备变异元数据。
 6. 构造图。
 7. 对副本执行局部变异。
 8. 检查两侧引用和输出接口。
@@ -139,23 +139,10 @@ schema 与实例分开，允许空标签或空区域保留类型声明。属性�
 
 `build_graph()` 内部依次生成随机背景、用用例 payload 调用 `pattern.populate()`、准备索引并登记 schema。Cypher 的 schema 登记检查源查询和变异查询；Gremlin 收集源查询、payload 和宿主名字，并从实际关系取得端点组合。登记完成的 schema 统一转成普通字符串。
 
-Pattern 自有的名字创建时带 `Pattern_` 前缀，宿主名字带 `Random_` 前缀。名称隔离避免角色意外重叠，但不会让 Pattern 数据对无标签扫描不可见。
+测试模式使用 `Pattern_` 前缀，宿主使用 `Random_` 前缀，区分两者的标签和关系类型。无标签扫描仍可访问两类数据。
 
-依赖检查说明结构、作用域和输出接口满足当前约束。完整结果是否相同要由数据库验证；目标是否被执行及是否存在性能差异也分别保留证据。
+AST 检查覆盖结构、作用域和输出接口。数据库执行核对结果，计时和执行计划提供性能证据。
 
-### 具体示例：LadybugDB SC4
-
-下面的查询取自引入工作项候选池前的 SC4 验收记录，使用种子 4 和 `high_units=1000`。
-
-```cypher
-RETURN DISTINCT coalesce(null, "kept", CAST(COUNT {
-MATCH (p_root:`Pattern_p_root`)-[:`Pattern_p_low_edge`]->(p_low_node:`Pattern_p_low`) WHERE (p_low_node.`keep` = true)
-}, "STRING")) AS v2
-```
-
-变异查询将 LOW 区域替换为 HIGH 区域，非空前缀 `"kept"` 保持不变。图中有 50 个背景节点、一个独立锚点、一个 LOW 节点和 1,000 个 HIGH 节点，共 1,052 个节点；加上 100 条背景关系，共 1,101 条关系。两种区域始终同时存在。
-
-AST 声明字符串输出，原生 CAST 保持该类型。真实验收中，两侧返回一行相同结果。构图说明潜在工作存在，受保护 COUNT 是否实际求值仍要看原生执行证据。
 
 ## 5. Cypher 语言层
 
@@ -163,7 +150,7 @@ AST 声明字符串输出，原生 CAST 保持该类型。真实验收中，两�
 
 `cypher/ast_nodes/` 分别定义查询、子句、表达式和图匹配结构。语法包括 MATCH/OPTIONAL MATCH、WITH、UNWIND、RETURN、UNION、受后端能力约束的 CALL、CASE/coalesce、谓词、列表、量词和表达式子查询。
 
-`generation.nodes` 是逐步递减的展开预算，不是精确的 AST 节点数。表达式深度和子查询深度单独限制；预算减少后，生成更倾向于终端。
+`generation.nodes` 控制语法展开预算。表达式深度和子查询深度单独限制；预算减少后，生成更倾向于终端。
 
 分页前按全部投影标量排序，使排序并列行具有相同返回值。生成的聚合分支使用常量输入；嵌入时排除 collect 参数内部位置，避免改变列表顺序的可观察性。
 
@@ -177,9 +164,9 @@ CALL 只导入显式选中的变量，只向外暴露返回列。UNION 分支使
 
 Memgraph 与 Ladybug 设置 `subquery_unwind: false`，排除 UNWIND 表达式内部的子查询工作项。Memgraph 的 CALL/UNION SC6 变体也不能嵌入表达式子查询。无兼容位置时返回 `Inapplicable`。
 
-### Pattern 目录
+### 测试模式目录
 
-| Pattern | 变换 | 构图与条件 |
+| 测试模式 | 变换 | 构图与条件 |
 | --- | --- | --- |
 | SC1 | 真决定项保护 OR 的另一个操作数 | 保留决定项，替换 LOW/HIGH 工作项 |
 | SC2 | 假决定项保护 AND 的另一个操作数 | 保留决定项，替换 LOW/HIGH 工作项 |
@@ -188,7 +175,7 @@ Memgraph 与 Ladybug 设置 `subquery_unwind: false`，排除 UNWIND 表达式�
 | SC5 | 替换零输出需求下的工作 | 局部查询始终保留 LIMIT 0 |
 | SC6 | 替换有限需求之后的工作 | 固定见证或共享见证满足 k 行需求 |
 | SC7 | 改变 EXISTS/NOT EXISTS 的查询域 | 两侧直接见证 |
-| SC8 | 替换必选空输入之后的工作 | 保留 Pattern 自身的空输入 |
+| SC8 | 替换必选空输入之后的工作 | 保留测试模式自身的空输入 |
 | SY1/SY2 | 交换原有 AND/OR 操作数 | 不改写操作数和图区域 |
 | SY3 | 反射单边路径 | 保留端点变量、约束和方向含义 |
 | SY4 | 反射有界路径 | 保留顺序无关观察和全路径节点条件 |
@@ -197,7 +184,7 @@ Memgraph 与 Ladybug 设置 `subquery_unwind: false`，排除 UNWIND 表达式�
 | SY7 | 交换链式匹配阶段 | 大量右侧候选没有连接到指定左侧根 |
 | SY8 | 交换独立 OPTIONAL MATCH 分支 | 根保持必选，覆盖双侧、单侧和无匹配 |
 
-SC1–SC8 是受条件保护的替换；SY1–SY8 是保留原操作数或结构的严格对称变换。`bugs.csv` 中历史 issue 与 Pattern 的宽泛关联，不替代这里的可执行定义。
+SC1–SC8 替换受条件保护的工作项；SY1–SY8 保留并重排相同的操作数或匹配结构。模式目录定义可执行变换，`bugs.csv` 记录缺陷报告与模式的关联。
 
 `operands.py` 集中实现决定项候选池、锚点、工作表达式和公共区域配方。COUNT 可用于整数、布尔比较或转换后的标量。Ladybug 使用 MATCH 子查询体和原生 STRING/DOUBLE CAST；FalkorDB 使用模式推导列表。计数候选的末端通过过滤，无匹配存在性候选的末端均不通过。各模式的候选和预算单位见 [Cypher 目录](pattern-catalog.zh-CN.md#一次用例怎样构造)。
 
@@ -211,9 +198,9 @@ SY4 同时构造有效路径和经过失败节点的扩张分支，一个扩张�
 
 作用域保存当前对象、保证可用的标签绑定和当前标量是否为常量。`as/select` 写入和读取绑定；谓词子遍历可读外层绑定，但不导出自身新标签。count/fold 清除其遍历内的旧绑定，分支只保留共同保证的绑定。fold 仅处理常量标量，避免图迭代顺序影响列表结果。`match()` 把唯一一个不由其他模式产生的起始标签绑定到输入对象，再绑定其余模式标签并输出 map；其中的模式不作为变异位置。
 
-当前实现 SC1–SC8、SY1、SY2 和 SY5–SY7：
+当前实现全部 16 个测试模式：
 
-| Pattern | 原生形式 |
+| 测试模式 | 原生形式 |
 | --- | --- |
 | SC1/SC2 | 带决定项和工作项的 or/and |
 | SC3 | 三参数 choose 的未选分支 |
@@ -222,9 +209,11 @@ SY4 同时构造有效路径和经过失败节点的扩张分支，一个扩张�
 | SC7 | 一跳存在性遍历上的 filter/not；LOW 与 HIGH 在每个锚点上都有匹配 |
 | SC8 | 不产出值的谓词之后的扩张 |
 | SY1/SY2 | 交换原有两个纯谓词子树 |
+| SY3/SY4 | 在 `V().hasLabel(X).has('p_anchor', 1)` 之后插入 `match()`：第一个模式绑定一个目标，第二个模式是单边（SY3）或有界 `repeat(both())` 游走（SY4）上的 `where()` 过滤；变异从目标一端反向重写该过滤。`where()` 使起始标签不依赖模式顺序 |
 | SY5–SY7 | 在 `V().hasLabel(X).has('p_anchor', 1)` 之后交换 `match()` 的两个模式：两个独立的中途 `V()` 查找、根部两臂或两段链；`select()` 取回根节点 |
+| SY8 | 交换两个形如 `coalesce(out(R).hasLabel(L), constant(哨兵))` 的 `match()` 分支；四个工作根覆盖两臂都匹配、仅一臂匹配和都不匹配 |
 
-Gremlin 的 `constant(false)` 和 `constant(0)` 都会产出值。`coalesce()` 选择首个有产出的分支。谓词工作区域使用 `keep=false`；COUNT 工作项仍可能消费整个区域。锚点来自当前对象或已有绑定，必须是来源可追踪的节点；没有锚点就跳过，不构造全局扫描兜底。
+Gremlin 的 `constant(false)` 和 `constant(0)` 都会产出值。`coalesce()` 选择首个有产出的分支。谓词工作区域使用 `keep=false`；COUNT 工作项仍可能消费整个区域。锚点来自当前对象或已有节点绑定；缺少适用锚点时跳过该上下文。
 
 谓词值通过参数绑定传递。JanusGraph/HugeGraph 的 Groovy 浮点字面量带 `d` 后缀。输出接口统一为 `result` 列。
 
@@ -252,7 +241,7 @@ JanusGraph/HugeGraph 的属性键类型是全局的，因此在装载边界拒�
 
 每阶段先由 A/B 各自中位耗时确定慢侧，再计算中位耗时比、沿该方向的配对差值中位数，以及方向一致比例。默认阈值为 5 倍、100 ms、0.8；确认阶段还必须保持同一慢侧。初筛每侧预热 3 次、执行 6 对；确认每侧预热 5 次、执行 20 对。
 
-`run_pair(..., phases, gate, profile)` 可以只运行指定阶段、不做耗时比筛选。`probe_scale()` 用 `high_units // scale_factor` 重建用例，要求查询文本完全相同，再把两张图交给 `executor.scale_probe()`。探测比较两个规模下两种写法的差距（`growth()`）：差距增长至少 `growth_ratio` 倍、至少多出 `minimum_delta_ms`、方向一致性达标，并在两个规模上的确认阶段中仍然成立，结果为 `scale_candidate`。结果中的 `scale` 记录两次测量，小规模下的计划写入 `plans-small.json`。`scale_factor: null` 关闭探测；固定活动脚本调用同一个探测。
+`run_pair(..., phases, gate, profile)` 可以只运行指定阶段、不做耗时比筛选。`probe_scale()` 用 `high_units // scale_factor` 重建用例，要求查询文本完全相同，再把两张图交给 `executor.scale_probe()`。探测比较两个规模下两种写法的差距（`growth()`）：差距增长至少 `growth_ratio` 倍、至少多出 `minimum_delta_ms`、方向一致性达标，并在两个规模上的确认阶段中仍然成立，结果为 `scale_candidate`。结果中的 `scale` 记录两次测量，小规模下的计划写入 `plans-small.json`。`scale_factor: null` 关闭探测；固定种子运行脚本调用同一个探测。
 
 普通计时覆盖执行与完整结果消费。装载、规范化和 PROFILE 不计入普通耗时。`no_gap`、`unconfirmed` 和 `candidate` 完成计时后都采集计划。[databases/plans.py](../databases/plans.py) 为每份计划加上 `summary`：规范化算子名、报告的总工作量和工作量最大的算子。
 
@@ -270,21 +259,21 @@ JanusGraph/HugeGraph 的属性键类型是全局的，因此在装载边界拒�
 | `timeout` | 原生查询时限中断流程，不构造被截断的耗时样本 |
 | `error` / `interrupted` | 意外失败或中断，归档并停止 |
 
-`stop_run` 与计时状态分开。JanusGraph/HugeGraph 的原生超时响应不能证明工作线程结束，因此记录 `termination_confirmed=false` 并停止。PROFILE 超时可能保留 `no_gap` 或 `candidate`，同时设置停止标志。终止用例先写入汇总表并刷新，再暴露停止异常。
+`stop_run` 与计时状态分开。JanusGraph/HugeGraph 的原生超时记录 `termination_confirmed=false` 并停止后续请求。PROFILE 超时可能保留 `no_gap` 或 `candidate`，同时设置停止标志。终止用例先写入汇总表并刷新，再暴露停止异常。
 
-ArcadeDB Gremlin 保存带标签查询的取消响应；取消或传输完成状态未确认时停止。其他后端已验收的普通原生超时路径可按现有规则继续后续用例。程序没有自动重启数据库的恢复逻辑。
+ArcadeDB Gremlin 保存带标签查询的取消响应；取消或传输完成状态未确认时停止。其他后端在确认终止后，可按其原生超时处理规则继续后续用例。
 
-`save_case()` 保存实际查询、参数、列、图/schema/索引、配置、版本、构图信息和测量值，原生计划单独保存。配置记录的是密码环境变量名称，不是密码值。
+`save_case()` 保存实际查询、参数、列、图/schema/索引、配置、版本、构图信息和测量值，原生计划单独保存。配置记录密码环境变量的名称，密码值在连接时读取。
 
 重放要求系统和语言相同，使用当前连接和归档中的测量设置，直接读取图和查询，不按旧种子重新生成。新结果写入 `replay-result.json`，工作量执行判定重置。
 
 ## 9. 工作量证据
 
-`workload_record()` 记录目标路径/节点类型、局部角色和条件、预算、锚点分配及实际图计数。SC5 写入真正的 LIMIT 0，不把配方中未使用的随机值当作需求限制。
+`workload_record()` 记录目标路径/节点类型、局部角色和条件、预算、锚点分配及实际图计数。SC5 记录其 `LIMIT 0` 需求。
 
-构图计数只描述潜在工作，测试机会和执行判定初始均为 `unknown`。核对原生计划后，可在独立 sidecar 中记录 `observed`、`eliminated`、`unreached` 或 `unknown`，并指向原始 PROFILE 的字段位置。这些结论不会改写计时状态。
+构图计数只描述潜在工作，测试机会和执行判定初始均为 `unknown`。核对原生计划后，可在独立审查文件中记录 `observed`、`eliminated`、`unreached` 或 `unknown`，并指向原始 PROFILE 的字段位置。这些结论不会改写计时状态。
 
-空结果可能来自大量扫描后的过滤；非空聚合或 fold 也可能来自空输入。融合扩张和过滤的输出数量不能直接代表候选访问数。当前仓库没有通用的跨后端计划分类器，也不求解任意嵌套宿主的执行条件。
+空结果可能来自大量扫描后的过滤；非空聚合或 fold 也可能来自空输入。融合扩张和过滤的输出数量不能直接代表候选访问数。计划审查据此判断目标是否有执行机会。
 
 
 ## 10. 固定种子运行
@@ -300,24 +289,26 @@ campaign:
   max_relationships: 1000000
 ```
 
-`scripts/run_campaign.py` 要求 experiment 模式、`save_all=true` 和一个新输出目录。它先写出完整清单，按种子轮次打乱 Pattern，再依次尝试各规模。不因跳过或失败替换种子。
+`scripts/run_campaign.py` 要求 experiment 模式、`save_all=true` 和一个新输出目录。它先写出完整清单，按种子轮次打乱测试模式，再依次尝试各规模。不因跳过或失败替换种子。
 
 预算在新用例开始前检查；当前用例可能在预算边界后完成。生成、装载、测量/PROFILE 和总耗时分别记录，规模上限作用于构造后的节点与关系数量。
 
 意外错误、结果不一致和终止未确认会停止本组。生成、装载或测量期间的 Ctrl-C 记录为 `interrupted`，保存已有取消证据，未提交项也注明中断原因，进程退出码为 130。清单保留所有未执行项。报告记录客户端 CPU 和峰值 RSS，数据库资源采样属于独立实验记录。
 
-输入和查询指纹不包含种子及执行信息，只识别序列化输入相同，不代表查询语义等价。规模对照还需核对查询指纹和固定图结构。
+输入和查询指纹识别相同的序列化输入，其中排除种子及执行信息。规模对照检查查询指纹和固定图结构是否保持一致。
 
 ## 11. 扩展方式
 
 接入使用现有语言的数据库时，实现适配器、注册模块、声明能力并启用入口中的语言/系统组合。先验证 schema、装载、完整带类型结果、原生超时和 PROFILE，再接入真实生成。原生 ID、全局标签、CSV 空值和取消机制都由适配器处理。
 
-增加 Pattern 时，在对应语言包实现 `accepts`、`embed`、`populate` 和 `mutate`，登记目录并明确构图条件。宿主生成仍不接收 Pattern 编号。先验证作用域与结果等价，再分别检查实际工作量和性能阈值。
+增加测试模式时，在对应语言包实现 `accepts`、`embed`、`populate` 和 `mutate`，登记目录并明确构图条件。宿主生成仍不接收测试模式编号。先验证作用域与结果等价，再分别检查实际工作量和性能阈值。
 
-增加语言时，需要提供 `prepare_case()` 使用的生成、位置选择、Pattern 查找、schema 登记、检查和渲染接口。当前入口显式处理两种语言的差异，不需要为此建立插件框架。
+增加语言时，需要提供 `prepare_case()` 使用的生成、位置选择、测试模式查找、schema 登记、检查和渲染接口。`main.py` 的两个语言分支展示了这些接口的接入方式。
 
-## 12. 验证与文档维护
+## 12. 验证入口
 
-[验证记录](validation.md) 区分已完成的本地运行与新验收。`scripts/check_interfaces.py` 是真实接口的手动验收工具，不等于随机生成覆盖。纯生成和离线图/查询核对不连接数据库。
+修改生成器、变换或数据库接口后，按[测试说明](testing.md)检查：
 
-`bugs.csv` 是 issue 总表，README 中带标记的摘要和表格由 `scripts/update_readme.py` 生成。修改 CSV 后重新生成，不手改生成区域。架构和部署文档直接维护。保留的 `paper/`、`BUG list/`、`reference/`、`picture/` 是研究材料，其内容不自动代表当前可执行行为。
+1. 离线生成小规模用例，检查查询、图和构图元数据。
+2. 按[后端配置](backends.md)选择专用实验库，比较查询对的完整结果。
+3. 重放保存的用例；使用实验模式采集耗时与原生执行计划。

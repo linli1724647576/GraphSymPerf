@@ -12,7 +12,6 @@ SUPPORT = {"subquery_call": True, "bodies": "full", "call": True, "conditional":
 class Database:
     def __init__(self, config):
         # Load the driver only when opening a connection; generation needs no driver.
-        # 驱动只在建立连接时导入，纯生成模式无需加载驱动。
         from neo4j import GraphDatabase, Query
         from neo4j.exceptions import Neo4jError
         from neo4j.graph import Node, Relationship, Path
@@ -29,7 +28,6 @@ class Database:
 
     def load(self, graph):
         # Reset the dedicated database once per case, before either query is measured.
-        # 每个用例只在测量前重建一次专用数据库，不在查询对之间重建。
         indexes = self.session.run("SHOW INDEXES YIELD name WHERE name STARTS WITH 'gsp_' RETURN name").value()
         for name in indexes:
             self.session.run("DROP INDEX " + identifier(name)).consume()
@@ -38,7 +36,6 @@ class Database:
         ).consume()
         self.session.run("CREATE INDEX gsp_load FOR (n:__GSP) ON (n.uid)").consume()
         # The temporary index makes relationship endpoint lookup efficient during bulk loading.
-        # 临时索引用于批量装载关系时快速查找两端节点。
         self.session.run("CALL db.awaitIndexes(120)").consume()
 
         node_groups = defaultdict(list)
@@ -60,7 +57,6 @@ class Database:
             )
             self.write_batches(query, edges)
         # Remove loading aids and prepare the same experiment indexes for both queries.
-        # 删除装载辅助结构，再为两条查询准备同一套实验索引。
         self.session.run("DROP INDEX gsp_load").consume()
         self.session.run("MATCH (n:__GSP) REMOVE n:__GSP").consume()
         for i, (label, key) in enumerate(graph.indexes):
@@ -76,7 +72,6 @@ class Database:
 
     def execute(self, query, timeout):
         # Auto-commit avoids managed transaction retries inside a timing sample.
-        # 自动提交避免驱动的托管事务重试混入一次计时样本。
         start = perf_counter()
         try:
             result = self.session.run(self.query_type("CYPHER 25\n" + query.text, timeout=timeout), query.parameters)
@@ -88,7 +83,6 @@ class Database:
                 raise TimeoutError(str(error)) from error
             raise
         # Normalize after full consumption and timing, preserving nested entity identities.
-        # 完整读取并停止计时后再规范化，保留嵌套实体身份。
         elapsed = (perf_counter() - start) * 1000
         rows = [tuple(self.normalize(value) for value in row) for row in rows]
         return columns, rows, elapsed
@@ -113,7 +107,6 @@ class Database:
             return ("relationship", value.element_id)
         if isinstance(value, path_type):
             # Path order is observable; never fold a path together with its reflection.
-            # 路径顺序可被观察，不能把正反路径合并为同一个值。
             return ("path", tuple(node.element_id for node in value.nodes),
                     tuple(edge.element_id for edge in value.relationships))
         return freeze(value, self.normalize)

@@ -22,7 +22,6 @@ class ConditionalPattern:
             case.payload["variant"] = "coalesce"
         elif self.work_kind == "pattern_list" and kind != "bool":
             # A Boolean work item fits a WHEN condition even when the CASE result is scalar.
-            # 即使 CASE 返回其他标量类型，布尔工作项仍可放入 WHEN 条件。
             case.payload["variant"] = "later_condition"
         else:
             case.payload["variant"] = rng.choice(["unselected_result", "later_condition"])
@@ -36,7 +35,6 @@ class ConditionalPattern:
             decisive = guard(case.payload, True, rng)
             if case.payload["variant"] == "later_condition":
                 # The first true branch also makes later WHEN conditions unnecessary.
-                # 首个真分支确定结果后，后续 WHEN 条件也无需参与求值。
                 expression = CaseExpression([(decisive, constant(kind)),
                                              (low, constant(kind))], constant(kind))
             else:
@@ -49,7 +47,6 @@ class ConditionalPattern:
     def mutate(self, case):
         expression = at(case.query, case.target)
         # Keep the selected result or non-null prefix intact while increasing unused work.
-        # 增加未使用部分的潜在工作量，保持已选结果或非空前缀不变。
         if self.coalesce:
             expression.arguments[-1] = case.payload["high"]
         elif case.payload["variant"] == "later_condition":
