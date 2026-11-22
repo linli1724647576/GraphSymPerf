@@ -12,8 +12,8 @@ The tables list 48 submitted reports: 25 fixed, 10 confirmed and 13 pending.
 
 | ID | Issue | Status |
 | --- | --- | --- |
-| 1 | [2480](https://github.com/apache/age/issues/2480) | Confirmed |
-| 2 | [2481](https://github.com/apache/age/issues/2481) | Pending |
+| 1 | [2480](https://github.com/apache/age/issues/2480) | Pending |
+| 2 | [2481](https://github.com/apache/age/issues/2481) | Confirmed |
 
 ### ArcadeDB
 
