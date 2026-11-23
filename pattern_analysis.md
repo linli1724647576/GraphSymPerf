@@ -2,8 +2,6 @@
 
 To demonstrate how GraphSymPerf's short-circuit (`SC1`–`SC8`) and symmetry (`SY1`–`SY8`) patterns uncover missed optimizations and optimizer instabilities across graph DBMSs, we present 13 representative case studies drawn from our submitted public issue reports ([Reported issues](readme.md#reported-issues)). The selected cases span eight graph database engines—Neo4j, Memgraph, LadybugDB, FalkorDB, ArcadeDB, TinkerGraph, JanusGraph, and HugeGraph—covering both Cypher and Gremlin, with 10 fixed and 3 confirmed reports.
 
-**Conventions.** Each listing reproduces the exact query pair, dataset configuration, measurements, and native `EXPLAIN`/`PROFILE` excerpts from the corresponding public report. To preserve direct traceability when cross-checking upstream tickets, `Q1` and `Q2` keep their original identifiers from each report, and every query header explicitly marks its role (`baseline`/`fast` vs. `high-cost`/`slow`). Unless noted otherwise, reported timings are median runtimes and degradation factors are ratios of those medians (paired median ratios are labeled explicitly when reported upstream).
-
 ## Overview of Case Studies
 
 | Listing | Pattern Group | System (Version) | Lang. | Issue | Fast → Slow (Factor) | Status / Fix | Root-Cause Class |
